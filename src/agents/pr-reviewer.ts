@@ -8,7 +8,10 @@ import { fetchFile, fetchPr, postReview } from '../tools/github.ts';
 export function PrReviewer() {
 	// Routed through the Workers AI binding -> your named Cloudflare AI Gateway
 	// (see setProvider in src/app.ts). Swap the model id to change reviewer.
-	useModel('cloudflare/anthropic/claude-sonnet-5', { thinkingLevel: 'medium' });
+	// thinkingLevel stays 'off': claude-sonnet-5 rejects the legacy
+	// thinking.type=enabled param the current pi-ai serialization emits for
+	// non-off levels — revisit after a pi-ai bump adds adaptive thinking.
+	useModel('cloudflare/anthropic/claude-sonnet-5', { thinkingLevel: 'off' });
 
 	useTool(fetchPr);
 	useTool(fetchFile);
