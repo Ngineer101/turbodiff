@@ -78,18 +78,8 @@ const CSS = `
 	main { flex: 1; display: flex; align-items: center; }
 	.hero { max-width: 36rem; }
 	@media (min-width: 900px) { .hero { max-width: min(36rem, 48vw); } }
-	.eyebrow {
-		display: inline-flex; align-items: center; gap: 0.6em;
-		font-size: 0.78rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted);
-		animation: rise 0.7s 0.08s cubic-bezier(0.2, 0.7, 0.2, 1) both;
-	}
-	.eyebrow::before {
-		content: ""; width: 0.55em; height: 0.55em; border-radius: 50%;
-		background: var(--green-bright); box-shadow: 0 0 12px var(--green);
-		animation: blink 2.4s ease-in-out infinite;
-	}
 	h1 {
-		margin: 0.6rem 0 1.1rem -0.04em;
+		margin: 0 0 1.1rem -0.04em;
 		font-family: "Instrument Serif", Georgia, serif; font-weight: 400;
 		font-size: clamp(2.6rem, 6.2vw, 4.4rem); line-height: 1.02; letter-spacing: -0.01em;
 		animation: rise 0.7s 0.16s cubic-bezier(0.2, 0.7, 0.2, 1) both;
@@ -136,14 +126,24 @@ const CSS = `
 	footer a { color: inherit; text-decoration: none; border-bottom: 1px solid #2a3830; }
 	footer a:hover { color: var(--ink); border-color: var(--green); }
 	@keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
-	@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 	@media (max-width: 899px) {
 		#scene { display: none; }
 		footer { gap: 0.4rem 1.4rem; }
 	}
+	@media (max-width: 720px) {
+		body { overflow-y: auto; }
+		.frame { height: auto; min-height: 100dvh; }
+		header { margin-bottom: 1rem; }
+		main { padding: 3rem 0 3.5rem; }
+		h1 { margin-bottom: 1.6rem; }
+		.sub { font-size: 1rem; line-height: 1.8; }
+		.cta-row { margin-top: 2.75rem; gap: 1rem; }
+		.cta, .cta-ghost { width: 100%; justify-content: center; padding: 1rem 1.4rem; }
+		.cta-note { margin-top: 1.4rem; }
+		footer { margin-top: 1.5rem; padding-top: 1.5rem; gap: 0.9rem 1.4rem; padding-bottom: 0.5rem; }
+	}
 	@media (prefers-reduced-motion: reduce) {
-		header, .eyebrow, h1, .sub, .cta-row, .cta-note, footer { animation: none; }
-		.eyebrow::before { animation: none; }
+		header, h1, .sub, .cta-row, .cta-note, footer { animation: none; }
 	}
 `;
 
@@ -459,7 +459,7 @@ function Landing({ appSlug }: { appSlug: string }) {
 				<title>Turbodiff — open-source AI code review for every pull request</title>
 				<meta
 					name="description"
-					content="Turbodiff is an open-source GitHub App that reviews every pull request with inline AI comments, seconds after it opens. Runs on Cloudflare Workers."
+					content="Open-source AI code review for teams that ship constantly. Turbodiff reviews every pull request with inline comments as it opens. Fully built and hosted on Cloudflare Workers, and self-hostable."
 				/>
 				<link rel="icon" type="image/png" href="/logo-small.png" />
 				<link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -491,14 +491,13 @@ function Landing({ appSlug }: { appSlug: string }) {
 
 					<main>
 						<div class="hero">
-							<p class="eyebrow">Open-source GitHub App &middot; AI code review</p>
 							<h1>
 								Every diff, <em>reviewed</em> in seconds.
 							</h1>
 							<p class="sub">
-								Turbodiff reads each pull request the moment it opens and leaves{' '}
-								<span class="add">inline comments</span> where it matters &mdash; before a human
-								reviewer has even <span class="del">seen the notification</span>.
+                Ship more code than you can review? Let Turbodiff handle the review queue.
+                Using state of the art AI models, you can review code faster than ever before.
+                Open source, self-hostable &amp; built on Cloudflare.
 							</p>
 							<div class="cta-row">
 								<a class="cta" href={installUrl}>
@@ -510,16 +509,16 @@ function Landing({ appSlug }: { appSlug: string }) {
 									Star on GitHub
 								</a>
 							</div>
-							<span class="cta-note">free &middot; open source &middot; first review in &lt; 60s</span>
+							<span class="cta-note">free &middot; MIT-licensed &middot; yours to run</span>
 						</div>
 					</main>
 
 					<footer>
 						<span>
-							MIT-licensed &mdash; <a href={REPO_URL}>Ngineer101/turbodiff</a>
+							open source &mdash; <a href={REPO_URL}>Ngineer101/turbodiff</a>
 						</span>
-						<span>runs at the edge on Cloudflare Workers</span>
-						<span>your keys, your gateway &mdash; BYOK</span>
+						<span>fully built &amp; hosted on Cloudflare</span>
+						<span>self-host it &mdash; your keys, your gateway</span>
 					</footer>
 				</div>
 
