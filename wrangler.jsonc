@@ -9,9 +9,24 @@
 	// Workers AI binding — model calls dispatch through env.AI into the named
 	// AI Gateway (see setProvider in src/app.ts).
 	"ai": { "binding": "AI" },
+	// Installation/repo config store. Apply migrations with:
+	//   npx wrangler d1 migrations apply turbodiff [--local | --remote]
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "turbodiff",
+			"database_id": "e4ec5e43-95c5-46de-bb1d-7984b384c0d9",
+			"migrations_dir": "migrations"
+		}
+	],
 	"vars": {
 		// The name of your existing Cloudflare AI Gateway.
-		"AI_GATEWAY_ID": "default"
+		"AI_GATEWAY_ID": "default",
+		// URL slug of your GitHub App (github.com/apps/<slug>) — used for
+		// install/manage links in the settings UI.
+		"GITHUB_APP_SLUG": "turbodiff",
+		// Max auto-triggered reviews per installation per rolling 24h.
+		"REVIEW_DAILY_LIMIT": "50"
 	},
 	// Every agent generates a Durable Object class named after its identity
 	// (PrReviewer -> FluePrReviewerAgent), and Cloudflare requires a migration
