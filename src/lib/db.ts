@@ -131,11 +131,64 @@ export async function recordReview(
 	trigger: string,
 ): Promise<void> {
 	await env.DB.prepare(
-		`INSERT INTO reviews (repository_id, installation_id, pr_number, trigger_event)
-		 VALUES (?1, ?2, ?3, ?4)`,
+		`INSERT INTO reviews (repository_id, installation_id, pr_number, trigger_event, status)
+		 VALUES (?1, ?2, ?3, ?4, 'running')`,
 	)
 		.bind(repositoryId, installationId, prNumber, trigger)
 		.run();
+}
+
+// Called by the post_review tool once the agent has published to GitHub.
+// Completes the most recent running review for this repo/PR.
+export async function completeReview(
+	repositoryId: number,
+	prNumber: number,
+	reviewUrl: string | null,
+): Promise<void> {
+	await env.DB.prepare(
+		`UPDATE reviews
+		 SET status = 'completed', completed_at = datetime('now'), review_url = ?3
+		 WHERE id = (
+			SELECT id FROM reviews
+			WHERE repository_id = ?1 AND pr_number = ?2 AND status = 'running'
+			ORDER BY id DESC LIMIT 1
+		 )`,
+	)
+		.bind(repositoryId, prNumber, reviewUrl)
+		.run();
+}
+
+export interface ReviewActivityRow {
+	id: number;
+	repository_id: number;
+	installation_id: number;
+	pr_number: number;
+	trigger_event: string;
+	status: string;
+	created_at: string;
+	completed_at: string | null;
+	review_url: string | null;
+	repo_owner: string | null; // null if the repo was since removed
+	repo_name: string | null;
+}
+
+export async function listRecentReviews(
+	installationIds: number[],
+	limit = 50,
+): Promise<ReviewActivityRow[]> {
+	if (installationIds.length === 0) return [];
+	const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+	const res = await env.DB.prepare(
+		`SELECT r.*, repo.owner AS repo_owner, repo.name AS repo_name
+		 FROM reviews r
+		 LEFT JOIN repositories repo ON repo.id = r.repository_id
+		 WHERE r.installation_id IN (${placeholders})
+		 ORDER BY r.id DESC
+		 LIMIT ${limit}`,
+	)
+		.bind(...installationIds)
+		.all<ReviewActivityRow>();
+	return res.results;
 }
 
 // Reviews dispatched for this installation in the last 24h (backs the daily cap).

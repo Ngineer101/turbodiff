@@ -1,6 +1,6 @@
 import { defineTool } from '@flue/runtime';
 import * as v from 'valibot';
-import { getRepoByFullName } from '../lib/db.ts';
+import { completeReview, getRepoByFullName } from '../lib/db.ts';
 import { installationToken } from '../lib/github-app.ts';
 
 const API = 'https://api.github.com';
@@ -190,6 +190,9 @@ export const postReview = defineTool({
 				fallback: 'inline comments failed to anchor; findings were folded into the review body',
 			};
 		}
+		// Flip the dispatch row to completed so /reviews stops showing it as running.
+		const row = await getRepoByFullName(data.owner, data.repo);
+		if (row) await completeReview(row.id, data.number, output.url);
 		return { output };
 	},
 });

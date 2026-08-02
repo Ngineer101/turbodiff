@@ -9,6 +9,8 @@
 		"types": [
 			"node"
 		],
+		"jsx": "react-jsx",
+		"jsxImportSource": "hono/jsx",
 		"allowImportingTsExtensions": true,
 		"verbatimModuleSyntax": true,
 		"strict": true,
