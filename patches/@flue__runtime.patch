@@ -1,0 +1,13 @@
+diff --git a/dist/cloudflare/workers-ai-provider.mjs b/dist/cloudflare/workers-ai-provider.mjs
+index acfc3f9038ddcc1923a3e6c6d123c12fab747ee1..58d9bb318d66b0a555303851208f04b62e487599 100644
+--- a/dist/cloudflare/workers-ai-provider.mjs
++++ b/dist/cloudflare/workers-ai-provider.mjs
+@@ -486,7 +486,7 @@ function streamCloudflareAnthropicAi(ai, binding, model, context, options) {
+ 	const anthropicOptions = {
+ 		...options,
+ 		client,
+-		cacheRetention: "none",
++		cacheRetention: "short",
+ 		thinkingEnabled: Boolean(options?.reasoning),
+ 		onPayload: async (payload, payloadModel) => {
+ 			const normalized = normalizeAnthropicGatewayPayload(payload);

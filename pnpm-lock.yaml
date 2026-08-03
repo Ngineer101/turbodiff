@@ -4,13 +4,18 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@flue/runtime':
+    hash: 6bfbc4c1e00a6c521d7070d99ee25af60a34df651b4b2e5814c18dfa46cc32a9
+    path: patches/@flue__runtime.patch
+
 importers:
 
   .:
     dependencies:
       '@flue/runtime':
         specifier: ^2.0.1
-        version: 2.0.1(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(typescript@7.0.2)(ws@8.21.1)(zod@4.4.3)
+        version: 2.0.1(patch_hash=6bfbc4c1e00a6c521d7070d99ee25af60a34df651b4b2e5814c18dfa46cc32a9)(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(typescript@7.0.2)(ws@8.21.1)(zod@4.4.3)
       agents:
         specifier: ^0.14.2
         version: 0.14.5(@babel/core@7.29.7)(@babel/runtime@7.29.7)(@cloudflare/workers-types@5.20260801.1)(ai@6.0.240(zod@4.4.3))(react@19.2.8)(rolldown@1.2.2)(vite@8.2.0(@types/node@22.20.1)(esbuild@0.28.1)(yaml@2.9.0))(zod@4.4.3)
@@ -2968,7 +2973,7 @@ snapshots:
 
   '@flue/cli@2.0.1(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@types/node@22.20.1)(esbuild@0.28.1)(hono@4.12.34)(typescript@7.0.2)(ws@8.21.1)(yaml@2.9.0)(zod@4.4.3)':
     dependencies:
-      '@flue/runtime': 2.0.1(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(typescript@7.0.2)(ws@8.21.1)(zod@4.4.3)
+      '@flue/runtime': 2.0.1(patch_hash=6bfbc4c1e00a6c521d7070d99ee25af60a34df651b4b2e5814c18dfa46cc32a9)(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(typescript@7.0.2)(ws@8.21.1)(zod@4.4.3)
       '@flue/vite': 2.0.1(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(hono@4.12.34)(typescript@7.0.2)(vite@8.2.0(@types/node@22.20.1)(esbuild@0.28.1)(yaml@2.9.0))(ws@8.21.1)(zod@4.4.3)
       '@vercel/detect-agent': 1.2.3
       cac: 7.0.0
@@ -2999,7 +3004,7 @@ snapshots:
       - yaml
       - zod
 
-  '@flue/runtime@2.0.1(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(typescript@7.0.2)(ws@8.21.1)(zod@4.4.3)':
+  '@flue/runtime@2.0.1(patch_hash=6bfbc4c1e00a6c521d7070d99ee25af60a34df651b4b2e5814c18dfa46cc32a9)(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(typescript@7.0.2)(ws@8.21.1)(zod@4.4.3)':
     dependencies:
       '@earendil-works/pi-agent-core': 0.83.0(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ws@8.21.1)(zod@4.4.3)
       '@earendil-works/pi-ai': 0.83.0(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(ws@8.21.1)(zod@4.4.3)
@@ -3021,7 +3026,7 @@ snapshots:
 
   '@flue/vite@2.0.1(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(hono@4.12.34)(typescript@7.0.2)(vite@8.2.0(@types/node@22.20.1)(esbuild@0.28.1)(yaml@2.9.0))(ws@8.21.1)(zod@4.4.3)':
     dependencies:
-      '@flue/runtime': 2.0.1(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(typescript@7.0.2)(ws@8.21.1)(zod@4.4.3)
+      '@flue/runtime': 2.0.1(patch_hash=6bfbc4c1e00a6c521d7070d99ee25af60a34df651b4b2e5814c18dfa46cc32a9)(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(typescript@7.0.2)(ws@8.21.1)(zod@4.4.3)
       '@hono/node-server': 2.0.12(hono@4.12.34)
       magic-string: 1.1.0
       tinyglobby: 0.2.17
