@@ -6,13 +6,14 @@ Workers at <https://turbodiff.dev> (repo: <https://github.com/Ngineer101/turbodi
 
 ## Layout
 
-- `src/agents/` — agent modules. A module whose first line is the `'use agent'` directive exports agents: every exported capitalized function is one, and the function name is its durable identity.
+- `src/agents/` — agent modules. A module whose first line is the `'use agent'` directive exports agents: every exported capitalized function is one, and the function name is its durable identity. `PrReviewer` is the one generic reviewer: every configured agent (built-in persona or user-created row in the `agents` table) runs through it, config delivered per dispatch as a `review.request` signal and read at render time via `useDelivery()`. Instance ids are `<agent-slug>--<owner>--<repo>--<pr>`.
+- `src/lib/personas.ts` — built-in personas (review/security/a11y/o11y) seeded lazily per installation; `review` is the default agent and defaults on per repo, others default off (see `resolveAgentEnabled` in db.ts).
 - `src/tools/github.ts` — the agent's GitHub tools (`fetch_pr`, `fetch_file`, `post_review`); all calls use per-installation App tokens. `post_review` also marks the review row completed in D1.
 - `src/routes/webhooks.ts` — GitHub App webhook receiver: mirrors installations/repos into D1, auto-dispatches reviews on PR open/ready (daily cap per installation), and dispatches on-demand reviews when a collaborator comments `@<app-slug> review` on a PR (works even with auto-review toggled off; acknowledges with a 👀 reaction — needs the App subscribed to Issue comment events with Issues read & write).
 - `src/routes/landing.tsx` — signed-out home page, server-rendered with hono/jsx (`jsxImportSource: hono/jsx` in tsconfig; no client-side React). The CSS and Three.js client script are plain strings injected via `dangerouslySetInnerHTML`; the script string must not contain backticks or `${` sequences.
 - `src/routes/settings.ts` — signed-in UI (hono/html templates): `/` metrics dashboard (cost/tokens/duration tiles, monthly cost, 5 most recent reviews and repos), `/reviews` paginated history, `/settings` per-repo auto-review toggles. Reviews render running / done / stalled and auto-refresh while running. `DEV_FAKE_INSTALLATIONS` in .dev.vars fakes sign-in locally (never set in prod).
 - `src/lib/` — D1 access (`db.ts`), GitHub App auth (`github-app.ts`), session cookies (`session.ts`).
-- `src/app.ts` — the route map; every route is mounted here explicitly. `/agents/*` and `/review` require `Authorization: Bearer $REVIEW_SECRET`.
+- `src/app.ts` — the route map; every route is mounted here explicitly, plus `dispatchReviewAgent` (programmatic `dispatch()`, records the review row). `/internal/*` (agent conversation reads — debugging: GET `/internal/pr-reviewer/<instance-id>`) and `/review` require `Authorization: Bearer $REVIEW_SECRET`; the signed-in UI owns `/agents`.
 - `src/cloudflare.ts` — Worker-level exports and non-HTTP handlers.
 - `migrations/` — D1 schema (`installations`, `repositories`, `reviews` with lifecycle status). Apply with `npx wrangler d1 migrations apply turbodiff [--local | --remote]`.
 - `public/` — static assets (logo), auto-served by the Cloudflare Vite plugin.

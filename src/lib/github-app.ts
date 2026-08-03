@@ -162,7 +162,7 @@ export async function reactToIssueComment(
 	installationId: number,
 	repoFullName: string,
 	commentId: number,
-	content: 'eyes' | '+1' | 'rocket',
+	content: 'eyes' | 'confused' | '+1' | 'rocket',
 ): Promise<void> {
 	const token = await installationToken(installationId);
 	const res = await fetch(`${API}/repos/${repoFullName}/issues/comments/${commentId}/reactions`, {

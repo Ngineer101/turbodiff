@@ -1,11 +1,18 @@
-import { setProvider } from '@flue/runtime';
+import { dispatch, setProvider } from '@flue/runtime';
 import { cloudflareBindingProvider } from '@flue/runtime/cloudflare/workers-ai';
 import { createAgentRouter } from '@flue/runtime/routing';
 import { env } from 'cloudflare:workers';
 import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { PrReviewer } from './agents/pr-reviewer.ts';
-import { getRepoByFullName, recordReview } from './lib/db.ts';
+import {
+	getAgentBySlug,
+	getRepoByFullName,
+	listAgentsForRepo,
+	recordReview,
+	type AgentRow,
+	type RepositoryRow,
+} from './lib/db.ts';
 import { registerReviewMetering } from './lib/metering.ts';
 import { createSettingsRoutes } from './routes/settings.ts';
 import { createWebhookRoutes } from './routes/webhooks.ts';
@@ -28,32 +35,50 @@ const reviewer = createAgentRouter(PrReviewer);
 
 app.get('/healthz', (c) => c.json({ ok: true }));
 
-// Sends the review request into the per-PR agent instance. Used by both the
-// webhook auto-trigger and the manual /review endpoint.
-async function dispatchReview(
-	owner: string,
-	repo: string,
-	number: number,
+// Dispatches one configured agent against one PR and records the review row.
+// The message is a signal carrying the config snapshot: attributes feed the
+// render (model, agent name), the body carries the request plus the agent's
+// focus instructions. Returns false when admission fails.
+export async function dispatchReviewAgent(
+	agent: AgentRow,
+	repo: RepositoryRow,
+	prNumber: number,
 	prUrl: string,
+	trigger: string,
 ): Promise<boolean> {
-	const agentId = `${owner}--${repo}--${number}`.toLowerCase();
-	const res = await reviewer.request(
-		`/${agentId}`,
-		{
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({
-				kind: 'user',
-				body: `Review pull request #${number} in ${owner}/${repo} (${prUrl}) and post your review to GitHub.`,
-			}),
-		},
-		env,
-	);
-	return res.ok;
+	const instanceId = `${agent.slug}--${repo.owner}--${repo.name}--${prNumber}`.toLowerCase();
+	try {
+		await dispatch(PrReviewer, {
+			id: instanceId,
+			message: {
+				kind: 'signal',
+				type: 'review.request',
+				tagName: 'review-request',
+				attributes: {
+					agent_slug: agent.slug,
+					agent_name: agent.name,
+					model: agent.model,
+					pull_request: `${repo.owner}/${repo.name}#${prNumber}`,
+					trigger,
+				},
+				body:
+					`Review pull request #${prNumber} in ${repo.owner}/${repo.name} (${prUrl}) and post your review to GitHub.\n\n` +
+					`Agent focus — ${agent.name}:\n${agent.instructions}`,
+			},
+		});
+	} catch (err) {
+		console.error(
+			`turbodiff: dispatch failed for ${instanceId} (${agent.slug} on ${repo.owner}/${repo.name}#${prNumber}):`,
+			err,
+		);
+		return false;
+	}
+	await recordReview(repo.id, repo.installation_id, prNumber, trigger, agent.slug, instanceId);
+	return true;
 }
 
 // GitHub App webhooks — authenticated by HMAC signature, not the bearer secret.
-app.route('/webhooks', createWebhookRoutes(dispatchReview));
+app.route('/webhooks', createWebhookRoutes(dispatchReviewAgent));
 
 // Settings UI + OAuth sign-in (session cookie auth).
 app.route('/', createSettingsRoutes());
@@ -66,39 +91,56 @@ const requireSecret = createMiddleware(async (c, next) => {
 	}
 	await next();
 });
-app.use('/agents/*', requireSecret);
+// The agent conversation surface (debugging: GET /internal/pr-reviewer/<instance-id>
+// returns the durable conversation incl. settlements). Lives under /internal
+// because the signed-in UI owns /agents.
+app.use('/internal/*', requireSecret);
 app.use('/review', requireSecret);
 
-app.route('/agents/pr-reviewer', reviewer);
+app.route('/internal/pr-reviewer', reviewer);
 
 // Manual trigger (e.g. re-review after pushes, or CI callers):
-//   POST /review { "pr_url": "https://github.com/<owner>/<repo>/pull/<number>" }
-// The repo must have the GitHub App installed — tokens are minted per
-// installation, so unknown repos can't be reviewed.
+//   POST /review { "pr_url": "https://github.com/<owner>/<repo>/pull/<n>", "agent"?: "<slug>" }
+// Without "agent", every agent enabled for the repo runs; with it, exactly
+// that agent (enabled or not — an explicit call is explicit intent). The repo
+// must have the GitHub App installed — tokens are minted per installation.
 app.post('/review', async (c) => {
-	const payload = await c.req.json<{ pr_url?: string }>().catch(() => null);
+	const payload = await c.req.json<{ pr_url?: string; agent?: string }>().catch(() => null);
 	const match = payload?.pr_url?.match(
 		/^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/,
 	);
 	if (!match) {
 		return c.json(
-			{ error: 'body must be {"pr_url": "https://github.com/<owner>/<repo>/pull/<n>"}' },
+			{ error: 'body must be {"pr_url": "https://github.com/<owner>/<repo>/pull/<n>", "agent"?: "<slug>"}' },
 			400,
 		);
 	}
-	const [, owner, repo, number] = match;
+	const [, owner, repoName, number] = match;
+	const prNumber = Number(number);
 
-	const row = await getRepoByFullName(owner, repo);
-	if (!row) {
-		return c.json({ error: `Turbodiff is not installed on ${owner}/${repo}` }, 404);
+	const repo = await getRepoByFullName(owner, repoName);
+	if (!repo) {
+		return c.json({ error: `Turbodiff is not installed on ${owner}/${repoName}` }, 404);
 	}
 
-	const ok = await dispatchReview(owner, repo, Number(number), payload!.pr_url!);
-	if (!ok) return c.json({ error: 'dispatch failed' }, 502);
+	let agents: AgentRow[];
+	if (payload?.agent) {
+		const agent = await getAgentBySlug(repo.installation_id, payload.agent);
+		if (!agent) return c.json({ error: `no agent "${payload.agent}" in this installation` }, 404);
+		agents = [agent];
+	} else {
+		agents = (await listAgentsForRepo(repo)).filter((a) => a.enabled);
+		if (agents.length === 0) return c.json({ error: 'no agents enabled for this repository' }, 409);
+	}
 
-	await recordReview(row.id, row.installation_id, Number(number), 'manual');
-	const agentId = `${owner}--${repo}--${number}`.toLowerCase();
-	return c.json({ accepted: true, agent: `/agents/pr-reviewer/${agentId}`, pr: payload!.pr_url });
+	const dispatched: string[] = [];
+	for (const agent of agents) {
+		if (await dispatchReviewAgent(agent, repo, prNumber, payload!.pr_url!, 'manual')) {
+			dispatched.push(agent.slug);
+		}
+	}
+	if (dispatched.length === 0) return c.json({ error: 'dispatch failed' }, 502);
+	return c.json({ accepted: true, agents: dispatched, pr: payload!.pr_url });
 });
 
 export default app;

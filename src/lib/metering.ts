@@ -2,24 +2,13 @@ import { observe } from '@flue/runtime';
 import { addReviewUsage, markReviewFailed } from './db.ts';
 
 // Meters model usage per review. Every completed model call emits a `turn`
-// event carrying provider-reported tokens and catalog-priced cost; we
-// attribute it to the review row via the agent instance id and accumulate
-// in D1 (columns added in migrations/0003_review_usage.sql).
+// event carrying provider-reported tokens and catalog-priced cost; review
+// rows store their exact agent instance id (recordReview), so attribution is
+// a direct match on event.instanceId — no id parsing.
 //
 // On Cloudflare each agent conversation runs in its own Durable Object
 // isolate; this subscriber registers in every isolate and sees only that
-// isolate's turns — exactly the per-PR attribution we want.
-
-// Instance ids are `${owner}--${repo}--${number}` lowercased (dispatchReview
-// in app.ts). GitHub logins can't contain '--', so the first separator ends
-// the owner; repo names can, so the middle keeps any remaining separators.
-function parseInstanceId(id: string): { owner: string; repo: string; pr: number } | null {
-	const parts = id.split('--');
-	if (parts.length < 3) return null;
-	const pr = Number(parts[parts.length - 1]);
-	if (!Number.isInteger(pr) || pr < 1) return null;
-	return { owner: parts[0], repo: parts.slice(1, -1).join('--'), pr };
-}
+// isolate's turns — exactly the per-review attribution we want.
 
 export function registerReviewMetering(): void {
 	observe((event) => {
@@ -28,20 +17,16 @@ export function registerReviewMetering(): void {
 		// (agent error, abort, or a run that ended without posting), flip it to
 		// failed so it doesn't sit "running" until the stall cutoff.
 		if (event.type === 'submission_settled') {
-			const target = parseInstanceId(event.instanceId);
-			if (!target) return;
-			void markReviewFailed(target.owner, target.repo, target.pr).catch((err) =>
+			void markReviewFailed(event.instanceId).catch((err) =>
 				console.error('turbodiff: marking review failed errored', err),
 			);
 			return;
 		}
 		if (event.type !== 'turn' || !event.response.usage) return;
-		const target = parseInstanceId(event.instanceId);
-		if (!target) return;
 		const { usage } = event.response;
 		// Subscribers run synchronously on the emission path — queue the D1
 		// write and contain failures; metering must never affect the agent.
-		void addReviewUsage(target.owner, target.repo, target.pr, {
+		void addReviewUsage(event.instanceId, {
 			inputTokens: usage.input,
 			outputTokens: usage.output,
 			cacheReadTokens: usage.cacheRead,

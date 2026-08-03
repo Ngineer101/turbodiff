@@ -3,21 +3,27 @@ import { Hono } from 'hono';
 import {
 	addRepositories,
 	deleteInstallation,
+	ensureBuiltinAgents,
+	getAgentBySlug,
 	getInstallation,
 	getRepoById,
 	hasActiveReview,
-	recordReview,
+	listAgentsForRepo,
 	removeRepositories,
 	reviewCountLastDay,
 	setInstallationSuspended,
 	upsertInstallation,
+	type AgentRow,
+	type RepositoryRow,
 } from '../lib/db.ts';
+import { DEFAULT_AGENT_SLUG } from '../lib/personas.ts';
 import { reactToIssueComment, verifyWebhookSignature } from '../lib/github-app.ts';
 
 // GitHub App webhook receiver. Three jobs:
 //   1. Mirror installation / repository-selection changes into D1.
-//   2. Auto-dispatch a review when a PR opens or leaves draft on an enabled repo.
-//   3. Dispatch on-demand reviews when a collaborator comments "@<app-slug> review"
+//   2. Auto-dispatch every repo-enabled agent when a PR opens or leaves draft.
+//   3. Dispatch on-demand reviews when a collaborator comments
+//      "@<app-slug> review", "@<app-slug> <agent-slug>", or "@<app-slug> all"
 //      on a PR (requires the App to subscribe to the Issue comment event and
 //      hold Issues read & write — write for the 👀 acknowledgement reaction).
 
@@ -72,10 +78,11 @@ interface HandlerResult {
 }
 
 export type ReviewDispatcher = (
-	owner: string,
-	repo: string,
-	number: number,
+	agent: AgentRow,
+	repo: RepositoryRow,
+	prNumber: number,
 	prUrl: string,
+	trigger: string,
 ) => Promise<boolean>;
 
 // A Hono sub-app; the caller supplies dispatch so this module doesn't need to
@@ -131,6 +138,7 @@ async function handleInstallation(p: InstallationEvent): Promise<HandlerResult> 
 		case 'created':
 			await upsertInstallation(p.installation.id, p.installation.account);
 			await addRepositories(p.installation.id, p.repositories ?? []);
+			await ensureBuiltinAgents(p.installation.id);
 			return { body: { ok: true, installed: p.installation.account.login } };
 		case 'deleted':
 			await deleteInstallation(p.installation.id);
@@ -177,34 +185,58 @@ async function handlePullRequest(
 		return { body: { ok: true, skipped: 'installation missing or suspended' } };
 	}
 
-	const limit = Number(env.REVIEW_DAILY_LIMIT) || 50;
-	const used = await reviewCountLastDay(repo.installation_id);
-	if (used >= limit) {
+	const agents = (await listAgentsForRepo(repo)).filter((a) => a.enabled);
+	if (agents.length === 0) return { body: { ok: true, skipped: 'no agents enabled' } };
+
+	// The daily cap counts agent-runs, so N enabled agents consume N units.
+	const budget = await remainingDailyBudget(repo.installation_id, installation.account_login);
+	if (budget <= 0) return { body: { ok: true, skipped: 'daily review limit reached' } };
+	if (agents.length > budget) {
 		console.warn(
-			`turbodiff: daily review cap (${limit}) reached for installation ${repo.installation_id} (${installation.account_login}); skipping ${p.repository.full_name}#${p.number}`,
+			`turbodiff: daily cap leaves budget for ${budget} of ${agents.length} agents on ${p.repository.full_name}#${p.number}`,
 		);
-		return { body: { ok: true, skipped: 'daily review limit reached' } };
 	}
 
-	const dispatched = await dispatch(repo.owner, repo.name, p.number, p.pull_request.html_url);
-	if (!dispatched) return { body: { error: 'dispatch failed' }, status: 502 };
+	const dispatched: string[] = [];
+	for (const agent of agents.slice(0, budget)) {
+		if (await dispatch(agent, repo, p.number, p.pull_request.html_url, p.action)) {
+			dispatched.push(agent.slug);
+		}
+	}
+	if (dispatched.length === 0) return { body: { error: 'dispatch failed' }, status: 502 };
+	return {
+		body: { ok: true, review: `${p.repository.full_name}#${p.number}`, agents: dispatched },
+	};
+}
 
-	await recordReview(repo.id, repo.installation_id, p.number, p.action);
-	return { body: { ok: true, review: `${p.repository.full_name}#${p.number}` } };
+// Agent-runs left under the installation's daily cap.
+async function remainingDailyBudget(installationId: number, accountLogin: string): Promise<number> {
+	const limit = Number(env.REVIEW_DAILY_LIMIT) || 50;
+	const used = await reviewCountLastDay(installationId);
+	const remaining = limit - used;
+	if (remaining <= 0) {
+		console.warn(
+			`turbodiff: daily review cap (${limit}) reached for installation ${installationId} (${accountLogin})`,
+		);
+	}
+	return remaining;
 }
 
 // Only these author associations may spend the installation's tokens by
 // tagging the app — drive-by commenters on public repos cannot.
 const MENTION_ALLOWED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
 
-function mentionCommandRegex(): RegExp {
+// "@<app-slug> <command>" — command is an agent slug, "review" (the default
+// agent), or "all" (every repo-enabled agent).
+function parseMentionCommand(body: string): string | null {
 	const slug = (env.GITHUB_APP_SLUG || 'turbodiff').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-	return new RegExp(`@${slug}\\s+review\\b`, 'i');
+	const match = body.match(new RegExp(`@${slug}\\s+([a-z0-9][a-z0-9_-]*)`, 'i'));
+	return match ? match[1].toLowerCase() : null;
 }
 
-// "@<app-slug> review" in a PR comment dispatches an on-demand review.
-// Deliberately ignores the per-repo auto-review toggle (a mention is explicit
-// intent — the toggle only gates automatic dispatch) and allows draft PRs.
+// A mention in a PR comment dispatches on-demand reviews. Deliberately
+// ignores the per-repo auto-review toggles for a named agent (a mention is
+// explicit intent — toggles only gate automatic dispatch) and allows drafts.
 async function handleIssueComment(
 	p: IssueCommentEvent,
 	dispatch: ReviewDispatcher,
@@ -214,9 +246,8 @@ async function handleIssueComment(
 	if (!p.issue.pull_request) return { body: { ok: true, ignored: 'not a PR comment' } };
 	// Never react to bots — including our own review posts (loop prevention).
 	if (p.comment.user.type === 'Bot') return { body: { ok: true, ignored: 'bot comment' } };
-	if (!mentionCommandRegex().test(p.comment.body)) {
-		return { body: { ok: true, ignored: 'no review command' } };
-	}
+	const command = parseMentionCommand(p.comment.body);
+	if (!command) return { body: { ok: true, ignored: 'no review command' } };
 	if (!MENTION_ALLOWED_ASSOCIATIONS.has(p.comment.author_association)) {
 		return { body: { ok: true, skipped: 'commenter is not a collaborator' } };
 	}
@@ -230,38 +261,64 @@ async function handleIssueComment(
 		return { body: { ok: true, skipped: 'installation missing or suspended' } };
 	}
 
-	if (await hasActiveReview(repo.id, p.issue.number)) {
+	// Resolve the command to agents. An unknown slug gets a 😕 so the
+	// commenter learns the tag was seen but matched nothing.
+	await ensureBuiltinAgents(repo.installation_id);
+	let agents: AgentRow[];
+	if (command === 'all') {
+		agents = (await listAgentsForRepo(repo)).filter((a) => a.enabled);
+		if (agents.length === 0) return { body: { ok: true, skipped: 'no agents enabled' } };
+	} else {
+		const agent = await getAgentBySlug(repo.installation_id, command);
+		if (!agent) {
+			await react(repo.installation_id, p.repository.full_name, p.comment.id, 'confused');
+			return { body: { ok: true, skipped: `unknown agent "${command}"` } };
+		}
+		agents = [agent];
+	}
+
+	// Skip agents already reviewing this PR (a re-tag can't double-dispatch).
+	const idle: AgentRow[] = [];
+	for (const agent of agents) {
+		if (!(await hasActiveReview(repo.id, p.issue.number, agent.slug))) idle.push(agent);
+	}
+	if (idle.length === 0) {
 		return { body: { ok: true, skipped: 'review already running for this PR' } };
 	}
 
-	const limit = Number(env.REVIEW_DAILY_LIMIT) || 50;
-	const used = await reviewCountLastDay(repo.installation_id);
-	if (used >= limit) {
-		console.warn(
-			`turbodiff: daily review cap (${limit}) reached for installation ${repo.installation_id} (${installation.account_login}); ignoring mention on ${p.repository.full_name}#${p.issue.number}`,
-		);
-		return { body: { ok: true, skipped: 'daily review limit reached' } };
+	const budget = await remainingDailyBudget(repo.installation_id, installation.account_login);
+	if (budget <= 0) return { body: { ok: true, skipped: 'daily review limit reached' } };
+
+	const dispatched: string[] = [];
+	for (const agent of idle.slice(0, budget)) {
+		if (await dispatch(agent, repo, p.issue.number, p.issue.pull_request.html_url, 'mention')) {
+			dispatched.push(agent.slug);
+		}
 	}
+	if (dispatched.length === 0) return { body: { error: 'dispatch failed' }, status: 502 };
 
-	const dispatched = await dispatch(
-		repo.owner,
-		repo.name,
-		p.issue.number,
-		p.issue.pull_request.html_url,
-	);
-	if (!dispatched) return { body: { error: 'dispatch failed' }, status: 502 };
-
-	await recordReview(repo.id, repo.installation_id, p.issue.number, 'mention');
-
-	// Best-effort 👀 so the commenter knows we heard; failure (e.g. the App
-	// lacks Issues:write until re-approved) must not fail the dispatch.
-	try {
-		await reactToIssueComment(repo.installation_id, p.repository.full_name, p.comment.id, 'eyes');
-	} catch (err) {
-		console.warn(`turbodiff: could not react to comment ${p.comment.id}:`, err);
-	}
-
+	await react(repo.installation_id, p.repository.full_name, p.comment.id, 'eyes');
 	return {
-		body: { ok: true, review: `${p.repository.full_name}#${p.issue.number}`, trigger: 'mention' },
+		body: {
+			ok: true,
+			review: `${p.repository.full_name}#${p.issue.number}`,
+			agents: dispatched,
+			trigger: 'mention',
+		},
 	};
+}
+
+// Best-effort acknowledgement reaction; failure (e.g. the App lacks
+// Issues:write until re-approved) must never fail the webhook.
+async function react(
+	installationId: number,
+	repoFullName: string,
+	commentId: number,
+	content: 'eyes' | 'confused',
+): Promise<void> {
+	try {
+		await reactToIssueComment(installationId, repoFullName, commentId, content);
+	} catch (err) {
+		console.warn(`turbodiff: could not react to comment ${commentId}:`, err);
+	}
 }
