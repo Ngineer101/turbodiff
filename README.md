@@ -100,6 +100,8 @@ static assets. To self-host, create your own GitHub App and deploy:
    npx wrangler secret put GITHUB_OAUTH_CLIENT_SECRET
    npx wrangler secret put SESSION_SECRET           # openssl rand -hex 32
    npx wrangler secret put REVIEW_SECRET            # openssl rand -hex 32 (operator endpoints)
+   # Only needed if agents will use authenticated external MCP connections:
+   npx wrangler secret put TOKEN_ENCRYPTION_KEY     # openssl rand -hex 32 (seals MCP tokens)
    ```
 
 6. **Custom domain** (optional) — add a custom domain to the Worker (turbodiff.dev in the
@@ -146,6 +148,25 @@ curl -X POST https://turbodiff.dev/review \
 ```
 
 Inspect a PR's conversation at `GET /agents/pr-reviewer/owner--repo--123` (same auth header).
+
+## External tools (MCP)
+
+Any agent can mount remote [MCP](https://modelcontextprotocol.io) servers as extra review
+tools — a dependency database, an internal policy service, whatever your reviews need.
+On an agent's edit page, add a connection: a server name, its MCP endpoint URL, an
+optional bearer token (encrypted at rest with `TOKEN_ENCRYPTION_KEY`, write-only in the
+UI), and an optional tool allowlist. The **Test** button performs the MCP handshake and
+lists the tools the agent would see, without mounting anything.
+
+The featured path is [Executor](https://executor.sh): configure your integrations (MCP
+servers, OpenAPI, GraphQL) with per-tool policies in Executor's catalog, then hand
+Turbodiff the single hosted MCP endpoint + token it gives you. Secrets for the underlying
+services stay in Executor; rotating or re-scoping tools never touches Turbodiff.
+
+Two things to know before connecting a server: the agent sends it PR context (that's data
+egress to wherever the URL points — connect only servers you trust), and everything the
+server returns is treated as untrusted content, same as the PR itself. Connections are
+`optional` — if a server is down, the review runs without it and notes the gap.
 
 ## Learn more
 

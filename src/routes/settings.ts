@@ -5,14 +5,19 @@ import { html } from 'hono/html';
 import type { HtmlEscapedString } from 'hono/utils/html';
 import {
 	agentUsageForMonth,
+	connectionSnapshot,
 	countReviews,
 	createAgent,
+	createAgentConnection,
 	dashboardStats,
 	deleteAgent,
+	deleteAgentConnection,
 	ensureBuiltinAgents,
 	getAgentById,
 	getAgentBySlug,
+	getAgentConnection,
 	getRepoById,
+	listAgentConnections,
 	listAgents,
 	listInstallationsWithRepos,
 	listRecentReviews,
@@ -23,9 +28,12 @@ import {
 	setRepoAgentEnabled,
 	setRepoEnabled,
 	updateAgent,
+	type AgentConnectionRow,
 	type AgentRow,
 	type ReviewActivityRow,
 } from '../lib/db.ts';
+import { encryptionConfigured, openToken, sealToken } from '../lib/crypto.ts';
+import { testMcpEndpoint } from '../lib/mcp-test.ts';
 import { DEFAULT_MODEL, RESERVED_AGENT_SLUGS } from '../lib/personas.ts';
 import {
 	exchangeOAuthCode,
@@ -679,16 +687,64 @@ export function createSettingsRoutes() {
 		return agent;
 	}
 
-	app.get('/agents/:id/edit', async (c) => {
-		const user = await requireUser(c);
-		if (!user) return c.redirect('/auth/login');
-		const agent = await requireAgent(c, user);
-		if (!agent) return c.text('unknown agent', 404);
+	function connectionsSection(agent: AgentRow, connections: AgentConnectionRow[], error?: string) {
+		return html`<h2>external tools <span class="muted">(MCP)</span></h2>
+			<p class="muted">
+				Give this agent extra tools by connecting remote MCP servers — e.g. your
+				<a href="https://executor.sh">Executor</a> catalog endpoint (one URL + token for all
+				your integrations, with per-tool policies managed there). Tokens are encrypted and
+				write-only. Anything a connected server returns is treated as untrusted content, and
+				a connected server does see PR context the agent sends it — connect only servers you
+				control or trust.
+			</p>
+			${connections.length > 0
+				? html`<table>
+						<tr><th>server</th><th>tools</th><th>auth</th><th class="num"></th></tr>
+						${connections.map((conn) => {
+							const snap = connectionSnapshot(conn);
+							return html`<tr>
+								<td><span class="pill">${conn.name}</span>
+									<div class="muted">${conn.url}</div></td>
+								<td class="muted">${snap.tools ? snap.tools.join(', ') : 'all tools'}</td>
+								<td>${conn.auth_ciphertext ? html`<span class="pill on">token set</span>` : html`<span class="pill">none</span>`}</td>
+								<td class="num">
+									<form method="post" action="/agents/${agent.id}/connections/${conn.id}/test"><button class="secondary">Test</button></form>
+									<form method="post" action="/agents/${agent.id}/connections/${conn.id}/delete"
+										onsubmit="return confirm('Remove this connection?');"><button class="secondary">Remove</button></form>
+								</td>
+							</tr>`;
+						})}
+					</table>`
+				: html`<p class="muted">No connections yet.</p>`}
+			<form method="post" action="/agents/${agent.id}/connections" style="display: block; margin-top: 1rem;">
+				<label>server name <span class="muted">(tools mount as mcp__&lt;name&gt;__&lt;tool&gt;)</span>
+					<input type="text" name="name" required maxlength="31" placeholder="executor" />
+				</label>
+				<label>endpoint URL <span class="muted">(https; the server's MCP endpoint)</span>
+					<input type="text" name="url" required placeholder="https://mcp.executor.sh/..." />
+				</label>
+				<label>bearer token <span class="muted">(optional; stored encrypted, never shown again)</span>
+					<input type="text" name="token" autocomplete="off" />
+				</label>
+				<label>tool allowlist <span class="muted">(optional, comma-separated server tool names; empty = all)</span>
+					<input type="text" name="tools" placeholder="search_deps, check_license" />
+				</label>
+				${error ? html`<p class="form-error">${error}</p>` : ''}
+				<p style="margin-top: 1.25rem;"><button>Add connection</button></p>
+			</form>`;
+	}
 
+	async function renderAgentEditPage(
+		c: Context,
+		login: string,
+		agent: AgentRow,
+		opts: { connError?: string; status?: 200 | 400 } = {},
+	) {
+		const connections = await listAgentConnections(agent.id);
 		return c.html(
 			page(
 				'Turbodiff — edit agent',
-				html`${topbar(user.session.login)} ${tabs('agents')}
+				html`${topbar(login)} ${tabs('agents')}
 					<h2>edit agent ${agent.is_builtin ? html`<span class="pill">built-in</span>` : ''}</h2>
 					${agentForm({
 						action: `/agents/${agent.id}/edit`,
@@ -701,9 +757,19 @@ export function createSettingsRoutes() {
 						},
 						slugEditable: false,
 						deleteAction: agent.is_builtin ? undefined : `/agents/${agent.id}/delete`,
-					})}`,
+					})}
+					${connectionsSection(agent, connections, opts.connError)}`,
 			),
+			opts.status ?? 200,
 		);
+	}
+
+	app.get('/agents/:id/edit', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+		const agent = await requireAgent(c, user);
+		if (!agent) return c.text('unknown agent', 404);
+		return renderAgentEditPage(c, user.session.login, agent);
 	});
 
 	app.post('/agents/:id/edit', async (c) => {
@@ -737,6 +803,115 @@ export function createSettingsRoutes() {
 		if (agent.is_builtin) return c.text('built-in agents cannot be deleted', 403);
 		await deleteAgent(agent.id);
 		return c.redirect('/agents');
+	});
+
+	// --- Agent MCP connections ---
+
+	const CONNECTION_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,30}$/;
+
+	function validConnectionUrl(raw: string): boolean {
+		try {
+			const url = new URL(raw);
+			if (url.protocol === 'https:') return true;
+			// Plain http only for local development targets.
+			return url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname);
+		} catch {
+			return false;
+		}
+	}
+
+	app.post('/agents/:id/connections', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+		const agent = await requireAgent(c, user);
+		if (!agent) return c.text('unknown agent', 404);
+
+		const form = await c.req.formData();
+		const get = (k: string) => String(form.get(k) ?? '').trim();
+		const name = get('name').toLowerCase();
+		const url = get('url');
+		const token = get('token');
+		const tools = get('tools')
+			.split(',')
+			.map((t) => t.trim())
+			.filter(Boolean);
+
+		let error: string | null = null;
+		if (!CONNECTION_NAME_RE.test(name)) {
+			error = 'server name must be 1-31 chars: lowercase letters, digits, dashes, underscores';
+		} else if (!validConnectionUrl(url)) {
+			error = 'endpoint must be an https:// URL';
+		} else if (token && !encryptionConfigured()) {
+			error =
+				'token storage needs the TOKEN_ENCRYPTION_KEY secret (openssl rand -hex 32, then wrangler secret put TOKEN_ENCRYPTION_KEY)';
+		} else if ((await listAgentConnections(agent.id)).some((conn) => conn.name === name)) {
+			error = `a connection named "${name}" already exists on this agent`;
+		}
+		if (error) {
+			return renderAgentEditPage(c, user.session.login, agent, { connError: error, status: 400 });
+		}
+
+		await createAgentConnection(agent.id, {
+			name,
+			url,
+			toolAllowlist: tools.length > 0 ? tools : null,
+			authCiphertext: token ? await sealToken(token) : null,
+			optional: true,
+		});
+		return c.redirect(`/agents/${agent.id}/edit`);
+	});
+
+	// Resolves a connection under an agent the user may manage.
+	async function requireConnection(c: Context, agent: AgentRow): Promise<AgentConnectionRow | null> {
+		const id = Number(c.req.param('cid'));
+		const conn = Number.isInteger(id) ? await getAgentConnection(id) : null;
+		return conn && conn.agent_id === agent.id ? conn : null;
+	}
+
+	app.post('/agents/:id/connections/:cid/delete', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+		const agent = await requireAgent(c, user);
+		if (!agent) return c.text('unknown agent', 404);
+		const conn = await requireConnection(c, agent);
+		if (!conn) return c.text('unknown connection', 404);
+		await deleteAgentConnection(conn.id);
+		return c.redirect(`/agents/${agent.id}/edit`);
+	});
+
+	// Handshakes the server (initialize + tools/list) and reports what the
+	// agent would see — without mounting anything.
+	app.post('/agents/:id/connections/:cid/test', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+		const agent = await requireAgent(c, user);
+		if (!agent) return c.text('unknown agent', 404);
+		const conn = await requireConnection(c, agent);
+		if (!conn) return c.text('unknown connection', 404);
+
+		const token = conn.auth_ciphertext ? await openToken(conn.auth_ciphertext) : undefined;
+		const result = await testMcpEndpoint(conn.url, token);
+		return c.html(
+			page(
+				'Turbodiff — connection test',
+				html`${topbar(user.session.login)} ${tabs('agents')}
+					<h2>connection test <span class="pill">${conn.name}</span></h2>
+					<p>${result.ok ? html`<span class="pill on">ok</span>` : html`<span class="pill red">failed</span>`}
+						${result.detail}</p>
+					${result.tools && result.tools.length > 0
+						? html`<table>
+								<tr><th>tool</th><th>mounts as</th></tr>
+								${result.tools.map(
+									(t) => html`<tr>
+										<td>${t}</td>
+										<td class="muted">mcp__${conn.name}__${t}</td>
+									</tr>`,
+								)}
+							</table>`
+						: ''}
+					<p style="margin-top: 1.25rem;"><a class="button secondary" href="/agents/${agent.id}/edit">&larr; back to agent</a></p>`,
+			),
+		);
 	});
 
 	// Per-repo config: master auto-review switch plus per-agent toggles.

@@ -6,8 +6,10 @@ import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { PrReviewer } from './agents/pr-reviewer.ts';
 import {
+	connectionSnapshot,
 	getAgentBySlug,
 	getRepoByFullName,
+	listAgentConnections,
 	listAgentsForRepo,
 	recordReview,
 	type AgentRow,
@@ -47,6 +49,9 @@ export async function dispatchReviewAgent(
 	trigger: string,
 ): Promise<boolean> {
 	const instanceId = `${agent.slug}--${repo.owner}--${repo.name}--${prNumber}`.toLowerCase();
+	// Snapshot the agent's external MCP connections (non-secret fields only;
+	// tokens are resolved from D1 at request time by the agent's auth resolver).
+	const connections = (await listAgentConnections(agent.id)).map(connectionSnapshot);
 	try {
 		await dispatch(PrReviewer, {
 			id: instanceId,
@@ -60,6 +65,7 @@ export async function dispatchReviewAgent(
 					model: agent.model,
 					pull_request: `${repo.owner}/${repo.name}#${prNumber}`,
 					trigger,
+					...(connections.length > 0 ? { connections: JSON.stringify(connections) } : {}),
 				},
 				body:
 					`Review pull request #${prNumber} in ${repo.owner}/${repo.name} (${prUrl}) and post your review to GitHub.\n\n` +
