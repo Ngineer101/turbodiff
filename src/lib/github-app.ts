@@ -155,3 +155,28 @@ export async function fetchUserInstallationIds(token: string): Promise<number[]>
 	);
 	return data.installations.map((i) => i.id);
 }
+
+// Acknowledge a comment-triggered review with an emoji reaction (👀 while
+// dispatching). Requires the App's Issues permission to be read & write.
+export async function reactToIssueComment(
+	installationId: number,
+	repoFullName: string,
+	commentId: number,
+	content: 'eyes' | '+1' | 'rocket',
+): Promise<void> {
+	const token = await installationToken(installationId);
+	const res = await fetch(`${API}/repos/${repoFullName}/issues/comments/${commentId}/reactions`, {
+		method: 'POST',
+		headers: {
+			accept: 'application/vnd.github+json',
+			authorization: `Bearer ${token}`,
+			'user-agent': 'turbodiff-pr-reviewer',
+			'x-github-api-version': '2022-11-28',
+			'content-type': 'application/json',
+		},
+		body: JSON.stringify({ content }),
+	});
+	if (!res.ok) {
+		throw new Error(`GitHub reaction API ${res.status}: ${(await res.text()).slice(0, 200)}`);
+	}
+}

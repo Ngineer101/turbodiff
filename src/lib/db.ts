@@ -17,6 +17,7 @@ export interface RepositoryRow {
 	name: string;
 	enabled: number;
 	model: string | null;
+	created_at: string; // when the repo was connected (mirrored into D1)
 }
 
 interface WebhookAccount {
@@ -158,6 +159,52 @@ export async function completeReview(
 		.run();
 }
 
+// Accumulates one model turn's usage onto the latest review row for a PR.
+// Fired from the observe() metering subscriber; owner/repo arrive lowercased
+// (they come from the agent instance id), hence COLLATE NOCASE.
+export async function addReviewUsage(
+	owner: string,
+	repo: string,
+	prNumber: number,
+	usage: {
+		inputTokens: number;
+		outputTokens: number;
+		cacheReadTokens: number;
+		cacheWriteTokens: number;
+		costUsd: number;
+		model: string;
+	},
+): Promise<void> {
+	await env.DB.prepare(
+		`UPDATE reviews SET
+			input_tokens = input_tokens + ?4,
+			output_tokens = output_tokens + ?5,
+			cache_read_tokens = cache_read_tokens + ?6,
+			cache_write_tokens = cache_write_tokens + ?7,
+			cost_usd = cost_usd + ?8,
+			model = ?9
+		 WHERE id = (
+			SELECT r.id FROM reviews r
+			JOIN repositories repo ON repo.id = r.repository_id
+			WHERE repo.owner = ?1 COLLATE NOCASE AND repo.name = ?2 COLLATE NOCASE
+				AND r.pr_number = ?3
+			ORDER BY r.id DESC LIMIT 1
+		 )`,
+	)
+		.bind(
+			owner,
+			repo,
+			prNumber,
+			usage.inputTokens,
+			usage.outputTokens,
+			usage.cacheReadTokens,
+			usage.cacheWriteTokens,
+			usage.costUsd,
+			usage.model,
+		)
+		.run();
+}
+
 export interface ReviewActivityRow {
 	id: number;
 	repository_id: number;
@@ -168,6 +215,12 @@ export interface ReviewActivityRow {
 	created_at: string;
 	completed_at: string | null;
 	review_url: string | null;
+	input_tokens: number;
+	output_tokens: number;
+	cache_read_tokens: number;
+	cache_write_tokens: number;
+	cost_usd: number;
+	model: string | null;
 	repo_owner: string | null; // null if the repo was since removed
 	repo_name: string | null;
 }
@@ -175,6 +228,7 @@ export interface ReviewActivityRow {
 export async function listRecentReviews(
 	installationIds: number[],
 	limit = 50,
+	offset = 0,
 ): Promise<ReviewActivityRow[]> {
 	if (installationIds.length === 0) return [];
 	const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
@@ -184,11 +238,161 @@ export async function listRecentReviews(
 		 LEFT JOIN repositories repo ON repo.id = r.repository_id
 		 WHERE r.installation_id IN (${placeholders})
 		 ORDER BY r.id DESC
-		 LIMIT ${limit}`,
+		 LIMIT ${limit} OFFSET ${offset}`,
 	)
 		.bind(...installationIds)
 		.all<ReviewActivityRow>();
 	return res.results;
+}
+
+export async function countReviews(installationIds: number[]): Promise<number> {
+	if (installationIds.length === 0) return 0;
+	const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+	const row = await env.DB.prepare(
+		`SELECT COUNT(*) AS n FROM reviews WHERE installation_id IN (${placeholders})`,
+	)
+		.bind(...installationIds)
+		.first<{ n: number }>();
+	return row?.n ?? 0;
+}
+
+export interface MonthlyUsageRow {
+	month: string; // 'YYYY-MM' (UTC)
+	reviews: number;
+	completed: number;
+	total_tokens: number;
+	cost_usd: number;
+}
+
+export async function monthlyUsage(
+	installationIds: number[],
+	months = 6,
+): Promise<MonthlyUsageRow[]> {
+	if (installationIds.length === 0) return [];
+	const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+	const res = await env.DB.prepare(
+		`SELECT strftime('%Y-%m', created_at) AS month,
+			COUNT(*) AS reviews,
+			SUM(status = 'completed') AS completed,
+			SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens) AS total_tokens,
+			SUM(cost_usd) AS cost_usd
+		 FROM reviews
+		 WHERE installation_id IN (${placeholders})
+		 GROUP BY month
+		 ORDER BY month DESC
+		 LIMIT ${months}`,
+	)
+		.bind(...installationIds)
+		.all<MonthlyUsageRow>();
+	return res.results;
+}
+
+export interface RepoUsageRow {
+	repository_id: number;
+	repo_owner: string | null;
+	repo_name: string | null;
+	reviews: number;
+	total_tokens: number;
+	cost_usd: number;
+}
+
+// Per-repo usage for one 'YYYY-MM' month, costliest first.
+export async function repoUsageForMonth(
+	installationIds: number[],
+	month: string,
+): Promise<RepoUsageRow[]> {
+	if (installationIds.length === 0) return [];
+	const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+	const res = await env.DB.prepare(
+		`SELECT r.repository_id,
+			repo.owner AS repo_owner, repo.name AS repo_name,
+			COUNT(*) AS reviews,
+			SUM(r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_write_tokens) AS total_tokens,
+			SUM(r.cost_usd) AS cost_usd
+		 FROM reviews r
+		 LEFT JOIN repositories repo ON repo.id = r.repository_id
+		 WHERE r.installation_id IN (${placeholders})
+			AND strftime('%Y-%m', r.created_at) = ?${installationIds.length + 1}
+		 GROUP BY r.repository_id
+		 ORDER BY cost_usd DESC`,
+	)
+		.bind(...installationIds, month)
+		.all<RepoUsageRow>();
+	return res.results;
+}
+
+export interface DashboardStats {
+	month_reviews: number;
+	month_cost_usd: number;
+	month_tokens: number;
+	avg_duration_s: number | null; // completed reviews this month
+	running: number;
+}
+
+export async function dashboardStats(installationIds: number[]): Promise<DashboardStats> {
+	const empty: DashboardStats = {
+		month_reviews: 0,
+		month_cost_usd: 0,
+		month_tokens: 0,
+		avg_duration_s: null,
+		running: 0,
+	};
+	if (installationIds.length === 0) return empty;
+	const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+	const row = await env.DB.prepare(
+		`SELECT
+			COALESCE(SUM(strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')), 0) AS month_reviews,
+			COALESCE(SUM(CASE WHEN strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now') THEN cost_usd ELSE 0 END), 0) AS month_cost_usd,
+			COALESCE(SUM(CASE WHEN strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
+				THEN input_tokens + output_tokens + cache_read_tokens + cache_write_tokens ELSE 0 END), 0) AS month_tokens,
+			AVG(CASE WHEN status = 'completed' AND completed_at IS NOT NULL
+				AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
+				THEN (julianday(completed_at) - julianday(created_at)) * 86400 END) AS avg_duration_s,
+			COALESCE(SUM(status = 'running'), 0) AS running
+		 FROM reviews
+		 WHERE installation_id IN (${placeholders})`,
+	)
+		.bind(...installationIds)
+		.first<DashboardStats>();
+	return row ?? empty;
+}
+
+// Marks the latest still-running review for a PR as failed. Fired from the
+// metering subscriber when the agent's submission settles without post_review
+// having completed the row (agent error, abort, or a run that never posted).
+// No-op when post_review already flipped the row to completed.
+export async function markReviewFailed(
+	owner: string,
+	repo: string,
+	prNumber: number,
+): Promise<void> {
+	await env.DB.prepare(
+		`UPDATE reviews SET status = 'failed', completed_at = datetime('now')
+		 WHERE id = (
+			SELECT r.id FROM reviews r
+			JOIN repositories repo ON repo.id = r.repository_id
+			WHERE repo.owner = ?1 COLLATE NOCASE AND repo.name = ?2 COLLATE NOCASE
+				AND r.pr_number = ?3 AND r.status = 'running'
+			ORDER BY r.id DESC LIMIT 1
+		 )`,
+	)
+		.bind(owner, repo, prNumber)
+		.run();
+}
+
+// True when a review for this PR is running and young enough to still be
+// live (older running rows are presumed dead — the /reviews stall rule).
+// Backs mention-trigger dedupe so a re-tag can't double-dispatch.
+export async function hasActiveReview(repositoryId: number, prNumber: number): Promise<boolean> {
+	const row = await env.DB.prepare(
+		`SELECT id FROM reviews
+		 WHERE repository_id = ?1 AND pr_number = ?2 AND status = 'running'
+			AND created_at > datetime('now', '-20 minutes')
+		 LIMIT 1`,
+	)
+		.bind(repositoryId, prNumber)
+		.first<{ id: number }>();
+	return row !== null;
 }
 
 // Reviews dispatched for this installation in the last 24h (backs the daily cap).

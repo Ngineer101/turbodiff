@@ -137,7 +137,8 @@ export const postReview = defineTool({
 	name: 'post_review',
 	description:
 		'Post the finished review to the pull request: a short summary body plus inline comments ' +
-		'anchored to specific lines of the diff. Call this exactly once. Each comment must anchor to ' +
+		'anchored to specific lines of the diff. Call this exactly once per review request (a re-review ' +
+		'of the same PR posts a new review). Each comment must anchor to ' +
 		'a line that is part of the diff (use side RIGHT with new-file line numbers for added/context ' +
 		'lines, side LEFT with old-file line numbers for deleted lines). Findings about code outside ' +
 		'the diff belong in the summary body instead.',
