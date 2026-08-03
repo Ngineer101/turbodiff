@@ -5,17 +5,21 @@ import {
 	deleteInstallation,
 	getInstallation,
 	getRepoById,
+	hasActiveReview,
 	recordReview,
 	removeRepositories,
 	reviewCountLastDay,
 	setInstallationSuspended,
 	upsertInstallation,
 } from '../lib/db.ts';
-import { verifyWebhookSignature } from '../lib/github-app.ts';
+import { reactToIssueComment, verifyWebhookSignature } from '../lib/github-app.ts';
 
-// GitHub App webhook receiver. Two jobs:
+// GitHub App webhook receiver. Three jobs:
 //   1. Mirror installation / repository-selection changes into D1.
 //   2. Auto-dispatch a review when a PR opens or leaves draft on an enabled repo.
+//   3. Dispatch on-demand reviews when a collaborator comments "@<app-slug> review"
+//      on a PR (requires the App to subscribe to the Issue comment event and
+//      hold Issues read & write — write for the 👀 acknowledgement reaction).
 
 interface WebhookAccount {
 	login: string;
@@ -41,6 +45,24 @@ interface PullRequestEvent {
 	action: string;
 	number: number;
 	pull_request: { draft: boolean; html_url: string };
+	repository: { id: number; full_name: string };
+}
+
+interface IssueCommentEvent {
+	action: string;
+	issue: {
+		number: number;
+		state: string;
+		// Present only when the "issue" is actually a pull request.
+		pull_request?: { html_url: string };
+	};
+	comment: {
+		id: number;
+		body: string;
+		// OWNER | MEMBER | COLLABORATOR | CONTRIBUTOR | NONE | ...
+		author_association: string;
+		user: { login: string; type: string };
+	};
 	repository: { id: number; full_name: string };
 }
 
@@ -87,6 +109,8 @@ async function handleEvent(
 			return handleInstallationRepositories(payload as InstallationEvent);
 		case 'pull_request':
 			return handlePullRequest(payload as PullRequestEvent, dispatch);
+		case 'issue_comment':
+			return handleIssueComment(payload as IssueCommentEvent, dispatch);
 		case 'repository': {
 			// Keep owner/name current when a repo is renamed or transferred.
 			const p = payload as { action: string; repository: WebhookRepoRef };
@@ -167,4 +191,77 @@ async function handlePullRequest(
 
 	await recordReview(repo.id, repo.installation_id, p.number, p.action);
 	return { body: { ok: true, review: `${p.repository.full_name}#${p.number}` } };
+}
+
+// Only these author associations may spend the installation's tokens by
+// tagging the app — drive-by commenters on public repos cannot.
+const MENTION_ALLOWED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+
+function mentionCommandRegex(): RegExp {
+	const slug = (env.GITHUB_APP_SLUG || 'turbodiff').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	return new RegExp(`@${slug}\\s+review\\b`, 'i');
+}
+
+// "@<app-slug> review" in a PR comment dispatches an on-demand review.
+// Deliberately ignores the per-repo auto-review toggle (a mention is explicit
+// intent — the toggle only gates automatic dispatch) and allows draft PRs.
+async function handleIssueComment(
+	p: IssueCommentEvent,
+	dispatch: ReviewDispatcher,
+): Promise<HandlerResult> {
+	// Only fresh comments; edits and deletions never (re-)trigger.
+	if (p.action !== 'created') return { body: { ok: true, ignored: p.action } };
+	if (!p.issue.pull_request) return { body: { ok: true, ignored: 'not a PR comment' } };
+	// Never react to bots — including our own review posts (loop prevention).
+	if (p.comment.user.type === 'Bot') return { body: { ok: true, ignored: 'bot comment' } };
+	if (!mentionCommandRegex().test(p.comment.body)) {
+		return { body: { ok: true, ignored: 'no review command' } };
+	}
+	if (!MENTION_ALLOWED_ASSOCIATIONS.has(p.comment.author_association)) {
+		return { body: { ok: true, skipped: 'commenter is not a collaborator' } };
+	}
+	if (p.issue.state !== 'open') return { body: { ok: true, skipped: 'PR is closed' } };
+
+	const repo = await getRepoById(p.repository.id);
+	if (!repo) return { body: { ok: true, skipped: 'repo not tracked' } };
+
+	const installation = await getInstallation(repo.installation_id);
+	if (!installation || installation.suspended) {
+		return { body: { ok: true, skipped: 'installation missing or suspended' } };
+	}
+
+	if (await hasActiveReview(repo.id, p.issue.number)) {
+		return { body: { ok: true, skipped: 'review already running for this PR' } };
+	}
+
+	const limit = Number(env.REVIEW_DAILY_LIMIT) || 50;
+	const used = await reviewCountLastDay(repo.installation_id);
+	if (used >= limit) {
+		console.warn(
+			`turbodiff: daily review cap (${limit}) reached for installation ${repo.installation_id} (${installation.account_login}); ignoring mention on ${p.repository.full_name}#${p.issue.number}`,
+		);
+		return { body: { ok: true, skipped: 'daily review limit reached' } };
+	}
+
+	const dispatched = await dispatch(
+		repo.owner,
+		repo.name,
+		p.issue.number,
+		p.issue.pull_request.html_url,
+	);
+	if (!dispatched) return { body: { error: 'dispatch failed' }, status: 502 };
+
+	await recordReview(repo.id, repo.installation_id, p.issue.number, 'mention');
+
+	// Best-effort 👀 so the commenter knows we heard; failure (e.g. the App
+	// lacks Issues:write until re-approved) must not fail the dispatch.
+	try {
+		await reactToIssueComment(repo.installation_id, p.repository.full_name, p.comment.id, 'eyes');
+	} catch (err) {
+		console.warn(`turbodiff: could not react to comment ${p.comment.id}:`, err);
+	}
+
+	return {
+		body: { ok: true, review: `${p.repository.full_name}#${p.issue.number}`, trigger: 'mention' },
+	};
 }

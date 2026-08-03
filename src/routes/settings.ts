@@ -1,12 +1,16 @@
 import { env } from 'cloudflare:workers';
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { html } from 'hono/html';
 import type { HtmlEscapedString } from 'hono/utils/html';
 import {
+	countReviews,
+	dashboardStats,
+	getRepoById,
 	listInstallationsWithRepos,
 	listRecentReviews,
-	getRepoById,
+	monthlyUsage,
+	repoUsageForMonth,
 	setRepoEnabled,
 	type ReviewActivityRow,
 } from '../lib/db.ts';
@@ -26,9 +30,10 @@ import {
 } from '../lib/session.ts';
 import { renderLanding } from './landing.tsx';
 
-// Settings UI: sign in with GitHub (the App's OAuth), see the installations
-// you belong to, and toggle auto-review per repository. Repo *selection*
-// happens in GitHub's own install flow; this page only holds Turbodiff config.
+// Signed-in UI: / is the dashboard (metrics first, drill-downs below),
+// /reviews is the full review history, /settings holds per-repo config.
+// Repo *selection* happens in GitHub's own install flow; these pages only
+// hold Turbodiff config and usage data.
 
 const STATE_COOKIE = 'turbodiff_oauth_state';
 
@@ -42,7 +47,7 @@ function page(title: string, body: HtmlEscapedString | Promise<HtmlEscapedString
 				<link rel="preconnect" href="https://fonts.googleapis.com" />
 				<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 				<link
-					href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap"
+					href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap"
 					rel="stylesheet"
 				/>
 				<style>
@@ -50,11 +55,12 @@ function page(title: string, body: HtmlEscapedString | Promise<HtmlEscapedString
 					body {
 						font: 14px/1.6 'IBM Plex Mono', ui-monospace, monospace;
 						background: #070b09; color: #e6efe9;
-						max-width: 720px; margin: 3rem auto; padding: 0 1rem;
+						max-width: 860px; margin: 3rem auto; padding: 0 1rem;
 					}
 					h1 { font-size: 1.25rem; font-weight: 500; letter-spacing: 0.02em; }
-					h2 { font-size: 0.95rem; font-weight: 500; margin-top: 2rem; color: #b8c4bc; }
+					h2 { font-size: 0.95rem; font-weight: 500; margin-top: 2.25rem; color: #b8c4bc; }
 					h2::before { content: '// '; color: #3fb950; }
+					.list-nav { margin-top: 0.75rem; text-align: right; }
 					a { color: #56d364; }
 					a.button, button {
 						display: inline-block; padding: 0.45rem 1rem; border-radius: 6px;
@@ -67,16 +73,30 @@ function page(title: string, body: HtmlEscapedString | Promise<HtmlEscapedString
 					}
 					a.button.secondary:hover, button.secondary:hover { background: #131a16; border-color: #3fb95066; }
 					table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
-					td { padding: 0.5rem 0.25rem; border-top: 1px solid #1c2620; }
-					td:last-child { text-align: right; }
+					td, th { padding: 0.5rem 0.4rem; border-top: 1px solid #1c2620; }
+					th { text-align: left; font-weight: 400; font-size: 0.75rem; color: #7d8f85; border-top: none; padding-bottom: 0.15rem; }
+					td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 					.muted { color: #7d8f85; font-size: 0.85rem; }
 					.pill { font-size: 0.75rem; padding: 0.1rem 0.55rem; border-radius: 999px; border: 1px solid #2a3830; color: #7d8f85; white-space: nowrap; }
 					.pill.red { border-color: #f8514966; color: #f85149; }
+					.pill.on { border-color: #3fb95066; color: #56d364; }
 					.pill.running { border-color: #3fb95066; color: #56d364; }
 					.pill.running::before { content: '● '; animation: pulse 1.6s ease-in-out infinite; }
 					@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 					.topbar { display: flex; justify-content: space-between; align-items: center; }
 					form { display: inline; }
+					nav.tabs { margin: 0.75rem 0 0; display: flex; gap: 1.25rem; border-bottom: 1px solid #1c2620; padding-bottom: 0.6rem; }
+					nav.tabs a { color: #7d8f85; text-decoration: none; font-size: 0.85rem; }
+					nav.tabs a:hover { color: #e6efe9; }
+					nav.tabs a.active { color: #56d364; }
+					.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.75rem; margin-top: 1.25rem; }
+					.tile { border: 1px solid #1c2620; border-radius: 8px; padding: 0.85rem 1rem; background: #0a100d; }
+					.tile .label { font-size: 0.72rem; color: #7d8f85; }
+					.tile .value { font-size: 1.45rem; font-weight: 600; margin-top: 0.15rem; font-variant-numeric: tabular-nums; }
+					.tile .sub { font-size: 0.72rem; color: #7d8f85; margin-top: 0.1rem; }
+					.bar-track { display: inline-block; width: 100%; }
+					.bar { height: 14px; background: #2ea043; border-radius: 0 4px 4px 0; min-width: 2px; }
+					.pager { display: flex; justify-content: space-between; margin-top: 1rem; }
 				</style>
 			</head>
 			<body>${body}</body>
@@ -96,15 +116,68 @@ function ago(sql: string): string {
 	return `${Math.floor(s / 86400)}d ago`;
 }
 
+function fmtUsd(n: number): string {
+	if (n >= 1) return `$${n.toFixed(2)}`;
+	if (n >= 0.01) return `$${n.toFixed(3)}`;
+	if (n > 0) return `$${n.toFixed(4)}`;
+	return '$0.00';
+}
+
+function fmtTokens(n: number): string {
+	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+	if (n >= 10_000) return `${Math.round(n / 1000)}K`;
+	if (n >= 1_000) return `${(n / 1000).toFixed(1)}K`;
+	return String(n);
+}
+
+function fmtDuration(seconds: number): string {
+	const s = Math.max(1, Math.round(seconds));
+	if (s < 60) return `${s}s`;
+	return `${Math.floor(s / 60)}m ${s % 60}s`;
+}
+
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function monthLabel(ym: string): string {
+	const [y, m] = ym.split('-');
+	return `${MONTH_NAMES[Number(m) - 1] ?? m} ${y}`;
+}
+
+function currentMonth(): string {
+	return new Date().toISOString().slice(0, 7);
+}
+
 // A dispatch that never completed and is older than this is presumed dead
 // (agent error before post_review) rather than still running.
 const STALL_AFTER_MS = 20 * 60 * 1000;
 
-function reviewState(r: ReviewActivityRow): 'running' | 'completed' | 'stalled' {
+function reviewState(r: ReviewActivityRow): 'running' | 'completed' | 'stalled' | 'failed' {
+	if (r.status === 'failed') return 'failed';
 	if (r.status !== 'running') return 'completed';
 	return Date.now() - parseUtc(r.created_at) > STALL_AFTER_MS ? 'stalled' : 'running';
 }
 
+function reviewTotalTokens(r: ReviewActivityRow): number {
+	return r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_write_tokens;
+}
+
+function reviewDurationS(r: ReviewActivityRow): number | null {
+	if (r.completed_at === null) return null;
+	return (parseUtc(r.completed_at) - parseUtc(r.created_at)) / 1000;
+}
+
+function statusPill(r: ReviewActivityRow) {
+	const state = reviewState(r);
+	if (state === 'running') return html`<span class="pill running">reviewing</span>`;
+	if (state === 'stalled') return html`<span class="pill red">stalled</span>`;
+	if (state === 'failed') return html`<span class="pill red">failed</span>`;
+	return r.review_url
+		? html`<a href="${r.review_url}"><span class="pill">done &rarr;</span></a>`
+		: html`<span class="pill">done</span>`;
+}
+
+// One row of the reviews table: PR · status · tokens · cost · duration · age.
+// Zero-usage rows (predating metering, or not yet metered) render as "—".
 function reviewRow(r: ReviewActivityRow) {
 	const repoFull =
 		r.repo_owner && r.repo_name ? `${r.repo_owner}/${r.repo_name}` : '(removed repository)';
@@ -112,26 +185,72 @@ function reviewRow(r: ReviewActivityRow) {
 		r.repo_owner && r.repo_name
 			? `https://github.com/${r.repo_owner}/${r.repo_name}/pull/${r.pr_number}`
 			: null;
-	const state = reviewState(r);
-	const duration =
-		r.completed_at !== null
-			? `${Math.max(1, Math.round((parseUtc(r.completed_at) - parseUtc(r.created_at)) / 1000))}s`
-			: null;
+	const tokens = reviewTotalTokens(r);
+	const duration = reviewDurationS(r);
 	return html`<tr>
 		<td>
 			${prUrl ? html`<a href="${prUrl}">${repoFull}#${r.pr_number}</a>` : html`${repoFull}#${r.pr_number}`}
-			<span class="muted">&middot; ${r.trigger_event} &middot; ${ago(r.created_at)}</span>
+			<span class="muted">&middot; ${r.trigger_event}</span>
 		</td>
-		<td>
-			${state === 'running'
-				? html`<span class="pill running">reviewing</span>`
-				: state === 'stalled'
-					? html`<span class="pill red">stalled</span>`
-					: r.review_url
-						? html`<a href="${r.review_url}"><span class="pill">done${duration ? ` in ${duration}` : ''} &rarr;</span></a>`
-						: html`<span class="pill">done${duration ? ` in ${duration}` : ''}</span>`}
-		</td>
+		<td>${statusPill(r)}</td>
+		<td class="num">${tokens > 0 ? fmtTokens(tokens) : html`<span class="muted">—</span>`}</td>
+		<td class="num">${r.cost_usd > 0 ? fmtUsd(r.cost_usd) : html`<span class="muted">—</span>`}</td>
+		<td class="num">${duration !== null ? fmtDuration(duration) : html`<span class="muted">—</span>`}</td>
+		<td class="num muted">${ago(r.created_at)}</td>
 	</tr>`;
+}
+
+const reviewsHead = html`<tr>
+	<th>pull request</th>
+	<th>status</th>
+	<th class="num">tokens</th>
+	<th class="num">cost</th>
+	<th class="num">time</th>
+	<th class="num">when</th>
+</tr>`;
+
+function topbar(login: string) {
+	return html`<div class="topbar">
+		<h1>Turbodiff</h1>
+		<div>
+			<span class="muted">@${login}</span>
+			<form method="post" action="/auth/logout"><button class="secondary">Sign out</button></form>
+		</div>
+	</div>`;
+}
+
+function tabs(active: 'dashboard' | 'reviews' | 'settings') {
+	return html`<nav class="tabs">
+		<a href="/" class="${active === 'dashboard' ? 'active' : ''}">dashboard</a>
+		<a href="/reviews" class="${active === 'reviews' ? 'active' : ''}">reviews</a>
+		<a href="/settings" class="${active === 'settings' ? 'active' : ''}">settings</a>
+	</nav>`;
+}
+
+type AuthedUser = { session: Session; installationIds: number[] };
+
+// GitHub is the source of truth for which installations this user may manage;
+// D1 only supplies Turbodiff's per-repo settings and usage. Returns null after
+// sending a redirect when the session is missing or the token expired.
+async function requireUser(c: Context): Promise<AuthedUser | null> {
+	// Local-only escape hatch for developing the signed-in UI without GitHub
+	// OAuth: DEV_FAKE_INSTALLATIONS="1001,1002" in .dev.vars signs you in as
+	// @dev with those installation ids. Must never be set in production.
+	const fake = (env as { DEV_FAKE_INSTALLATIONS?: string }).DEV_FAKE_INSTALLATIONS;
+	if (fake) {
+		return {
+			session: { userId: 0, login: 'dev', ghToken: '', exp: 0 },
+			installationIds: fake.split(',').map(Number).filter((n) => Number.isInteger(n)),
+		};
+	}
+	const session = await openSession(getCookie(c, SESSION_COOKIE));
+	if (!session) return null;
+	try {
+		return { session, installationIds: await fetchUserInstallationIds(session.ghToken) };
+	} catch {
+		deleteCookie(c, SESSION_COOKIE, { path: '/' });
+		return null;
+	}
 }
 
 export function createSettingsRoutes() {
@@ -181,38 +300,187 @@ export function createSettingsRoutes() {
 		return c.redirect('/');
 	});
 
+	// Dashboard: headline metrics, monthly cost, per-repo cost, recent reviews.
 	app.get('/', async (c) => {
-		const session = await openSession(getCookie(c, SESSION_COOKIE));
-		if (!session) {
-			return c.html(renderLanding(env.GITHUB_APP_SLUG));
-		}
+		const user = await requireUser(c);
+		if (!user) return c.html(renderLanding(env.GITHUB_APP_SLUG));
+		const { session, installationIds } = user;
 
-		// GitHub is the source of truth for which installations this user may
-		// manage; D1 only supplies Turbodiff's per-repo settings.
-		let installationIds: number[];
-		try {
-			installationIds = await fetchUserInstallationIds(session.ghToken);
-		} catch {
-			deleteCookie(c, SESSION_COOKIE, { path: '/' });
-			return c.redirect('/auth/login');
-		}
+		const month = currentMonth();
+		const [stats, months, repoUsage, groups, recent] = await Promise.all([
+			dashboardStats(installationIds),
+			monthlyUsage(installationIds, 6),
+			repoUsageForMonth(installationIds, month),
+			listInstallationsWithRepos(installationIds),
+			listRecentReviews(installationIds, 5),
+		]);
+
+		const repoCount = groups.reduce((n, g) => n + g.repos.length, 0);
+		const enabledCount = groups.reduce((n, g) => n + g.repos.filter((r) => r.enabled).length, 0);
+		const maxMonthCost = Math.max(...months.map((m) => m.cost_usd), 0);
+		const usageByRepo = new Map(repoUsage.map((u) => [u.repository_id, u]));
+		const anyRunning = recent.some((r) => reviewState(r) === 'running');
+
+		// The 5 most recently connected repos; the rest live on /settings.
+		const recentRepos = groups
+			.flatMap(({ installation, repos }) => repos.map((repo) => ({ installation, repo })))
+			.sort((a, b) => b.repo.created_at.localeCompare(a.repo.created_at))
+			.slice(0, 5);
+
+		return c.html(
+			page(
+				'Turbodiff — dashboard',
+				html`${topbar(session.login)} ${tabs('dashboard')}
+
+					<div class="tiles">
+						<div class="tile">
+							<div class="label">cost this month</div>
+							<div class="value">${fmtUsd(stats.month_cost_usd)}</div>
+							<div class="sub">${monthLabel(month)}</div>
+						</div>
+						<div class="tile">
+							<div class="label">reviews this month</div>
+							<div class="value">${stats.month_reviews}</div>
+							<div class="sub">${stats.running > 0 ? html`${stats.running} running now` : html`&nbsp;`}</div>
+						</div>
+						<div class="tile">
+							<div class="label">avg review time</div>
+							<div class="value">${stats.avg_duration_s !== null ? fmtDuration(stats.avg_duration_s) : '—'}</div>
+							<div class="sub">${fmtTokens(stats.month_tokens)} tokens this month</div>
+						</div>
+						<div class="tile">
+							<div class="label">connected repos</div>
+							<div class="value">${repoCount}</div>
+							<div class="sub">${enabledCount} with reviews on</div>
+						</div>
+					</div>
+
+					<h2>monthly cost</h2>
+					${months.length === 0
+						? html`<p class="muted">No reviews yet — costs will accumulate here per calendar month.</p>`
+						: html`<table>
+								<tr>
+									<th>month</th>
+									<th style="width: 40%"></th>
+									<th class="num">cost</th>
+									<th class="num">reviews</th>
+									<th class="num">tokens</th>
+								</tr>
+								${months.map(
+									(m) => html`<tr>
+										<td>${monthLabel(m.month)}</td>
+										<td><span class="bar-track"><span
+											class="bar"
+											style="display:block; width:${maxMonthCost > 0 ? Math.max(1, Math.round((m.cost_usd / maxMonthCost) * 100)) : 1}%"
+										></span></span></td>
+										<td class="num">${fmtUsd(m.cost_usd)}</td>
+										<td class="num">${m.reviews}</td>
+										<td class="num">${fmtTokens(m.total_tokens)}</td>
+									</tr>`,
+								)}
+							</table>`}
+
+					<h2>recent reviews</h2>
+					${recent.length === 0
+						? html`<p class="muted">No reviews yet — open a pull request on an enabled repository
+								and it will show up here.</p>`
+						: html`<table>
+								${reviewsHead}
+								${recent.map((r) => reviewRow(r))}
+							</table>
+							<p class="list-nav"><a class="button secondary" href="/reviews">view all reviews &rarr;</a></p>`}
+
+					<h2>repositories</h2>
+					${repoCount === 0
+						? html`<p class="muted">No installations yet —
+								<a href="https://github.com/apps/${env.GITHUB_APP_SLUG}/installations/new">install the app</a>
+								on an organization or account.</p>`
+						: html`<table>
+								<tr>
+									<th>repository</th>
+									<th>auto-review</th>
+									<th class="num">reviews (${monthLabel(month)})</th>
+									<th class="num">cost (${monthLabel(month)})</th>
+								</tr>
+								${recentRepos.map(({ installation, repo: r }) => {
+									const u = usageByRepo.get(r.id);
+									return html`<tr>
+										<td>${r.owner}/${r.name}
+											${installation.suspended ? html`<span class="pill red">suspended</span>` : ''}</td>
+										<td>${r.enabled ? html`<span class="pill on">on</span>` : html`<span class="pill">off</span>`}</td>
+										<td class="num">${u ? u.reviews : html`<span class="muted">0</span>`}</td>
+										<td class="num">${u && u.cost_usd > 0 ? fmtUsd(u.cost_usd) : html`<span class="muted">—</span>`}</td>
+									</tr>`;
+								})}
+							</table>
+							<p class="list-nav"><a class="button secondary" href="/settings">view all repos &rarr;</a></p>`}
+					${anyRunning
+						? html`<p class="muted">A review is running — this page refreshes every 10 seconds.</p>
+								<script>
+									setTimeout(function () { location.reload(); }, 10000);
+								</script>`
+						: ''}`,
+			),
+		);
+	});
+
+	// Full review history, newest first, paginated.
+	const PER_PAGE = 25;
+	app.get('/reviews', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+		const { session, installationIds } = user;
+
+		const total = await countReviews(installationIds);
+		const pages = Math.max(1, Math.ceil(total / PER_PAGE));
+		const pageNo = Math.min(pages, Math.max(1, Number(c.req.query('page')) || 1));
+		const reviews = await listRecentReviews(installationIds, PER_PAGE, (pageNo - 1) * PER_PAGE);
+		const anyRunning = reviews.some((r) => reviewState(r) === 'running');
+
+		return c.html(
+			page(
+				'Turbodiff — reviews',
+				html`${topbar(session.login)} ${tabs('reviews')}
+					<h2>all reviews <span class="muted">(${total})</span></h2>
+					${reviews.length === 0
+						? html`<p class="muted">No reviews yet — open a pull request on an enabled repository
+								and it will show up here.</p>`
+						: html`<table>
+								${reviewsHead}
+								${reviews.map((r) => reviewRow(r))}
+							</table>`}
+					${pages > 1
+						? html`<div class="pager">
+								<span>${pageNo > 1 ? html`<a href="/reviews?page=${pageNo - 1}">&larr; newer</a>` : html`&nbsp;`}</span>
+								<span class="muted">page ${pageNo} of ${pages}</span>
+								<span>${pageNo < pages ? html`<a href="/reviews?page=${pageNo + 1}">older &rarr;</a>` : html`&nbsp;`}</span>
+							</div>`
+						: ''}
+					${anyRunning
+						? html`<p class="muted">A review is running — this page refreshes every 10 seconds.</p>
+								<script>
+									setTimeout(function () { location.reload(); }, 10000);
+								</script>`
+						: ''}`,
+			),
+		);
+	});
+
+	// Per-repo config: toggle auto-review on/off, manage the GitHub installation.
+	app.get('/settings', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+		const { session, installationIds } = user;
 		const groups = await listInstallationsWithRepos(installationIds);
 
 		return c.html(
 			page(
 				'Turbodiff — settings',
-				html`<div class="topbar">
-						<h1>Turbodiff settings</h1>
-						<div>
-							<span class="muted">@${session.login}</span>
-							<form method="post" action="/auth/logout"><button class="secondary">Sign out</button></form>
-						</div>
-					</div>
-					<p>
+				html`${topbar(session.login)} ${tabs('settings')}
+					<p style="margin-top: 1.25rem;">
 						<a class="button secondary" href="https://github.com/apps/${env.GITHUB_APP_SLUG}/installations/new">
 							Add or manage repositories on GitHub
 						</a>
-						<a class="button secondary" href="/reviews">Review activity</a>
 					</p>
 					${groups.length === 0
 						? html`<p class="muted">No installations yet — install the app on an organization or
@@ -228,7 +496,7 @@ export function createSettingsRoutes() {
 											: repos.map(
 													(r) => html`<tr>
 														<td>${r.owner}/${r.name}</td>
-														<td>
+														<td class="num">
 															<form method="post" action="/repos/${r.id}/toggle">
 																<button class="${r.enabled ? 'secondary' : ''}">
 																	${r.enabled ? 'Disable reviews' : 'Enable reviews'}
@@ -243,64 +511,20 @@ export function createSettingsRoutes() {
 		);
 	});
 
-	app.get('/reviews', async (c) => {
-		const session = await openSession(getCookie(c, SESSION_COOKIE));
-		if (!session) return c.redirect('/auth/login');
-
-		let installationIds: number[];
-		try {
-			installationIds = await fetchUserInstallationIds(session.ghToken);
-		} catch {
-			deleteCookie(c, SESSION_COOKIE, { path: '/' });
-			return c.redirect('/auth/login');
-		}
-		const reviews = await listRecentReviews(installationIds);
-		const anyRunning = reviews.some((r) => reviewState(r) === 'running');
-
-		return c.html(
-			page(
-				'Turbodiff — review activity',
-				html`<div class="topbar">
-						<h1>Review activity</h1>
-						<div>
-							<span class="muted">@${session.login}</span>
-							<form method="post" action="/auth/logout"><button class="secondary">Sign out</button></form>
-						</div>
-					</div>
-					<p><a href="/">&larr; back to settings</a></p>
-					${reviews.length === 0
-						? html`<p class="muted">No reviews yet — open a pull request on an enabled repository
-								and it will show up here.</p>`
-						: html`<table>
-								${reviews.map((r) => reviewRow(r))}
-							</table>`}
-					${anyRunning
-						? html`<p class="muted">A review is running — this page refreshes every 10 seconds.</p>
-								<script>
-									setTimeout(function () { location.reload(); }, 10000);
-								</script>`
-						: ''}`,
-			),
-		);
-	});
-
 	app.post('/repos/:id/toggle', async (c) => {
-		const session = await openSession(getCookie(c, SESSION_COOKIE));
-		if (!session) return c.redirect('/auth/login');
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
 
 		const repoId = Number(c.req.param('id'));
 		const repo = Number.isInteger(repoId) ? await getRepoById(repoId) : null;
 		if (!repo) return c.text('unknown repository', 404);
 
-		const installationIds = await fetchUserInstallationIds(session.ghToken).catch(
-			(): number[] => [],
-		);
-		if (!installationIds.includes(repo.installation_id)) {
+		if (!user.installationIds.includes(repo.installation_id)) {
 			return c.text('you do not have access to this repository', 403);
 		}
 
 		await setRepoEnabled(repo.id, !repo.enabled);
-		return c.redirect('/');
+		return c.redirect('/settings');
 	});
 
 	return app;

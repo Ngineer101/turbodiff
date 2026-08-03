@@ -6,6 +6,7 @@ import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { PrReviewer } from './agents/pr-reviewer.ts';
 import { getRepoByFullName, recordReview } from './lib/db.ts';
+import { registerReviewMetering } from './lib/metering.ts';
 import { createSettingsRoutes } from './routes/settings.ts';
 import { createWebhookRoutes } from './routes/webhooks.ts';
 
@@ -18,6 +19,9 @@ setProvider(
 		gateway: { id: env.AI_GATEWAY_ID, metadata: { app: 'turbodiff' } },
 	}),
 );
+
+// Accumulate per-turn token usage and cost onto review rows in D1.
+registerReviewMetering();
 
 const app = new Hono();
 const reviewer = createAgentRouter(PrReviewer);
