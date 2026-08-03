@@ -6,3 +6,5 @@ allowBuilds:
   node-liblzma: false
   protobufjs: false
   workerd: true
+patchedDependencies:
+  '@flue/runtime': patches/@flue__runtime.patch
