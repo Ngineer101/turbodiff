@@ -126,11 +126,20 @@ approve / block) happens there rather than in Turbodiff.
 3. **Refinement** — per-agent trigger rules (path filters, event choice), repo-file
    overrides, per-agent caps, shareable agent templates.
 
+## Resolved decisions (2026-08-03)
+
+- **Model per agent**: free choice of any gateway-served coding-capable model id, with
+  `claude-sonnet-5` as the pre-selected default in the UI. Save-time validation should
+  catch broken ids early (cheap test call or catalog check) since unvetted ids
+  otherwise fail at review time.
+- **Cap**: the installation daily cap counts agent-runs (existing counter; N enabled
+  agents drain it N× faster per PR).
+- **Agent admin**: anyone in the installation (same authorization as the settings UI).
+- **Sequencing**: prompt-caching fix ships first as its own PR (priority #1 — zero
+  cache reads today, ~$1.46 per medium review, multiplied by N agents), then Phase 1
+  (multi-agent core), then Phase 2 (MCP/Executor connections).
+
 ## Open questions
 
-- Model allowlist & per-agent cap defaults (cost control for tenant-authored configs).
-- Prompt-cache economics: today reviews show zero cache reads (~715K input tokens on a
-  medium PR ≈ $1.46); N agents multiply this. Fixing caching through the AI Gateway
-  path is near-prerequisite work for multi-agent cost sanity.
 - Whether mention slugs need namespacing against future reserved commands
   (`@turbodiff help`, `@turbodiff status`).
