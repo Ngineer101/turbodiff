@@ -26,6 +26,7 @@ import {
 	repoUsageForMonth,
 	resolveAgentEnabled,
 	setRepoAgentEnabled,
+	setRepoBlockingReviews,
 	setRepoEnabled,
 	setRepoReviewOnPush,
 	updateAgent,
@@ -983,6 +984,16 @@ export function createSettingsRoutes() {
 																				&#8635; on push
 																			</button>
 																		</form>
+																		<form method="post" action="/repos/${r.id}/blocking-toggle">
+																			<button
+																				class="chip ${r.blocking_reviews ? 'on' : ''}"
+																				title="${r.blocking_reviews
+																					? 'reviews post as plain comments'
+																					: 'P1 findings request changes; clean reviews approve'} — click to ${r.blocking_reviews ? 'disable' : 'enable'}"
+																			>
+																				&#9940; blocking
+																			</button>
+																		</form>
 																	</div>`
 																: ''}
 														</td>
@@ -1037,6 +1048,20 @@ export function createSettingsRoutes() {
 		}
 
 		await setRepoReviewOnPush(repo.id, !repo.review_on_push);
+		return c.redirect('/settings');
+	});
+
+	app.post('/repos/:id/blocking-toggle', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+
+		const repoId = Number(c.req.param('id'));
+		const repo = Number.isInteger(repoId) ? await getRepoById(repoId) : null;
+		if (!repo || !user.installationIds.includes(repo.installation_id)) {
+			return c.text('unknown repository', 404);
+		}
+
+		await setRepoBlockingReviews(repo.id, !repo.blocking_reviews);
 		return c.redirect('/settings');
 	});
 
