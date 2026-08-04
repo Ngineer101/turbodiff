@@ -3,6 +3,8 @@ import * as v from 'valibot';
 import { completeReview, getRepoByFullName } from '../lib/db.ts';
 import { installationToken } from '../lib/github-app.ts';
 
+export type PostReviewTool = ReturnType<typeof makePostReview>;
+
 const API = 'https://api.github.com';
 const MAX_DIFF_CHARS = 300_000;
 const MAX_FILE_CHARS = 60_000;
@@ -133,67 +135,71 @@ function findingsAsMarkdown(findings: v.InferOutput<typeof findingSchema>[]): st
 		.join('\n\n');
 }
 
-export const postReview = defineTool({
-	name: 'post_review',
-	description:
-		'Post the finished review to the pull request: a short summary body plus inline comments ' +
-		'anchored to specific lines of the diff. Call this exactly once per review request (a re-review ' +
-		'of the same PR posts a new review). Each comment must anchor to ' +
-		'a line that is part of the diff (use side RIGHT with new-file line numbers for added/context ' +
-		'lines, side LEFT with old-file line numbers for deleted lines). Findings about code outside ' +
-		'the diff belong in the summary body instead.',
-	input: v.object({
-		owner: v.string(),
-		repo: v.string(),
-		number: v.number(),
-		body: v.pipe(v.string(), v.minLength(1)),
-		findings: v.optional(v.array(findingSchema), []),
-	}),
-	async run({ data }) {
-		const token = await tokenFor(data.owner, data.repo);
-		const path = `/repos/${data.owner}/${data.repo}/pulls/${data.number}/reviews`;
-		const comments = data.findings.map((f) => ({
-			path: f.path,
-			line: f.line,
-			side: f.side,
-			...(f.startLine !== undefined ? { start_line: f.startLine, start_side: f.side } : {}),
-			body: f.body,
-		}));
+// A per-render factory rather than a shared definition: the tool closes over
+// the agent instance id so completing the D1 review row targets exactly the
+// dispatch that ran it — concurrent agents on the same PR never collide.
+export const makePostReview = (agentInstanceId: string) =>
+	defineTool({
+		name: 'post_review',
+		description:
+			'Post the finished review to the pull request: a short summary body plus inline comments ' +
+			'anchored to specific lines of the diff. Call this exactly once per review request (a re-review ' +
+			'of the same PR posts a new review). Each comment must anchor to ' +
+			'a line that is part of the diff (use side RIGHT with new-file line numbers for added/context ' +
+			'lines, side LEFT with old-file line numbers for deleted lines). Findings about code outside ' +
+			'the diff belong in the summary body instead.',
+		input: v.object({
+			owner: v.string(),
+			repo: v.string(),
+			number: v.number(),
+			body: v.pipe(v.string(), v.minLength(1)),
+			findings: v.optional(v.array(findingSchema), []),
+		}),
+		async run({ data }) {
+			const token = await tokenFor(data.owner, data.repo);
+			const path = `/repos/${data.owner}/${data.repo}/pulls/${data.number}/reviews`;
+			const comments = data.findings.map((f) => ({
+				path: f.path,
+				line: f.line,
+				side: f.side,
+				...(f.startLine !== undefined ? { start_line: f.startLine, start_side: f.side } : {}),
+				body: f.body,
+			}));
 
-		let output: { posted: boolean; inline: number; url: string | null; fallback: string | null };
-		try {
-			const res = await gh(token, path, {
-				method: 'POST',
-				body: JSON.stringify({ body: data.body, event: 'COMMENT', comments }),
-			});
-			const review = (await res.json()) as { html_url?: string };
-			output = {
-				posted: true,
-				inline: comments.length,
-				url: review.html_url ?? null,
-				fallback: null,
-			};
-		} catch (err) {
-			// GitHub 422s the whole review if any single comment anchors outside
-			// the diff. Rather than lose the review, repost with the findings
-			// folded into the summary body.
-			if (comments.length === 0 || !String(err).includes('422')) throw err;
-			const fallbackBody = `${data.body}\n\n### Findings\n\n${findingsAsMarkdown(data.findings)}`;
-			const res = await gh(token, path, {
-				method: 'POST',
-				body: JSON.stringify({ body: fallbackBody, event: 'COMMENT' }),
-			});
-			const review = (await res.json()) as { html_url?: string };
-			output = {
-				posted: true,
-				inline: 0,
-				url: review.html_url ?? null,
-				fallback: 'inline comments failed to anchor; findings were folded into the review body',
-			};
-		}
-		// Flip the dispatch row to completed so /reviews stops showing it as running.
-		const row = await getRepoByFullName(data.owner, data.repo);
-		if (row) await completeReview(row.id, data.number, output.url);
-		return { output };
-	},
-});
+			let output: { posted: boolean; inline: number; url: string | null; fallback: string | null };
+			try {
+				const res = await gh(token, path, {
+					method: 'POST',
+					body: JSON.stringify({ body: data.body, event: 'COMMENT', comments }),
+				});
+				const review = (await res.json()) as { html_url?: string };
+				output = {
+					posted: true,
+					inline: comments.length,
+					url: review.html_url ?? null,
+					fallback: null,
+				};
+			} catch (err) {
+				// GitHub 422s the whole review if any single comment anchors outside
+				// the diff. Rather than lose the review, repost with the findings
+				// folded into the summary body.
+				if (comments.length === 0 || !String(err).includes('422')) throw err;
+				const fallbackBody = `${data.body}\n\n### Findings\n\n${findingsAsMarkdown(data.findings)}`;
+				const res = await gh(token, path, {
+					method: 'POST',
+					body: JSON.stringify({ body: fallbackBody, event: 'COMMENT' }),
+				});
+				const review = (await res.json()) as { html_url?: string };
+				output = {
+					posted: true,
+					inline: 0,
+					url: review.html_url ?? null,
+					fallback: 'inline comments failed to anchor; findings were folded into the review body',
+				};
+			}
+			// Flip this dispatch's row to completed so /reviews stops showing it
+			// as running.
+			await completeReview(agentInstanceId, output.url);
+			return { output };
+		},
+	});

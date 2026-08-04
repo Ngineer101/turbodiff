@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { BUILTIN_PERSONAS, DEFAULT_AGENT_SLUG, DEFAULT_MODEL } from './personas.ts';
 
 // Thin typed layer over the D1 config store (schema in migrations/).
 
@@ -130,42 +131,41 @@ export async function recordReview(
 	installationId: number,
 	prNumber: number,
 	trigger: string,
+	agentSlug: string,
+	agentInstanceId: string,
 ): Promise<void> {
 	await env.DB.prepare(
-		`INSERT INTO reviews (repository_id, installation_id, pr_number, trigger_event, status)
-		 VALUES (?1, ?2, ?3, ?4, 'running')`,
+		`INSERT INTO reviews (repository_id, installation_id, pr_number, trigger_event, status, agent_slug, agent_instance_id)
+		 VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6)`,
 	)
-		.bind(repositoryId, installationId, prNumber, trigger)
+		.bind(repositoryId, installationId, prNumber, trigger, agentSlug, agentInstanceId)
 		.run();
 }
 
 // Called by the post_review tool once the agent has published to GitHub.
-// Completes the most recent running review for this repo/PR.
+// Keyed by the exact agent instance so concurrent agents reviewing the same
+// PR can never complete each other's rows.
 export async function completeReview(
-	repositoryId: number,
-	prNumber: number,
+	agentInstanceId: string,
 	reviewUrl: string | null,
 ): Promise<void> {
 	await env.DB.prepare(
 		`UPDATE reviews
-		 SET status = 'completed', completed_at = datetime('now'), review_url = ?3
+		 SET status = 'completed', completed_at = datetime('now'), review_url = ?2
 		 WHERE id = (
 			SELECT id FROM reviews
-			WHERE repository_id = ?1 AND pr_number = ?2 AND status = 'running'
+			WHERE agent_instance_id = ?1 AND status = 'running'
 			ORDER BY id DESC LIMIT 1
 		 )`,
 	)
-		.bind(repositoryId, prNumber, reviewUrl)
+		.bind(agentInstanceId, reviewUrl)
 		.run();
 }
 
-// Accumulates one model turn's usage onto the latest review row for a PR.
-// Fired from the observe() metering subscriber; owner/repo arrive lowercased
-// (they come from the agent instance id), hence COLLATE NOCASE.
+// Accumulates one model turn's usage onto the latest review row for an agent
+// instance. Fired from the observe() metering subscriber.
 export async function addReviewUsage(
-	owner: string,
-	repo: string,
-	prNumber: number,
+	agentInstanceId: string,
 	usage: {
 		inputTokens: number;
 		outputTokens: number;
@@ -177,24 +177,19 @@ export async function addReviewUsage(
 ): Promise<void> {
 	await env.DB.prepare(
 		`UPDATE reviews SET
-			input_tokens = input_tokens + ?4,
-			output_tokens = output_tokens + ?5,
-			cache_read_tokens = cache_read_tokens + ?6,
-			cache_write_tokens = cache_write_tokens + ?7,
-			cost_usd = cost_usd + ?8,
-			model = ?9
+			input_tokens = input_tokens + ?2,
+			output_tokens = output_tokens + ?3,
+			cache_read_tokens = cache_read_tokens + ?4,
+			cache_write_tokens = cache_write_tokens + ?5,
+			cost_usd = cost_usd + ?6,
+			model = ?7
 		 WHERE id = (
-			SELECT r.id FROM reviews r
-			JOIN repositories repo ON repo.id = r.repository_id
-			WHERE repo.owner = ?1 COLLATE NOCASE AND repo.name = ?2 COLLATE NOCASE
-				AND r.pr_number = ?3
-			ORDER BY r.id DESC LIMIT 1
+			SELECT id FROM reviews WHERE agent_instance_id = ?1
+			ORDER BY id DESC LIMIT 1
 		 )`,
 	)
 		.bind(
-			owner,
-			repo,
-			prNumber,
+			agentInstanceId,
 			usage.inputTokens,
 			usage.outputTokens,
 			usage.cacheReadTokens,
@@ -203,6 +198,185 @@ export async function addReviewUsage(
 			usage.model,
 		)
 		.run();
+}
+
+// --- Custom agents (migration 0004; design in docs/custom-agents-design.md) ---
+
+export interface AgentRow {
+	id: number;
+	installation_id: number;
+	slug: string;
+	name: string;
+	description: string | null;
+	instructions: string;
+	model: string;
+	is_builtin: number;
+	created_at: string;
+}
+
+// Lazily seeds the built-in personas for an installation. Idempotent: the
+// UNIQUE(installation_id, slug) constraint makes re-runs no-ops, and users'
+// edits to seeded rows are never overwritten.
+export async function ensureBuiltinAgents(installationId: number): Promise<void> {
+	await env.DB.batch(
+		BUILTIN_PERSONAS.map((p) =>
+			env.DB.prepare(
+				`INSERT INTO agents (installation_id, slug, name, description, instructions, model, is_builtin)
+				 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)
+				 ON CONFLICT(installation_id, slug) DO NOTHING`,
+			).bind(installationId, p.slug, p.name, p.description, p.instructions, DEFAULT_MODEL),
+		),
+	);
+}
+
+export async function listAgents(installationIds: number[]): Promise<AgentRow[]> {
+	if (installationIds.length === 0) return [];
+	const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+	const res = await env.DB.prepare(
+		`SELECT * FROM agents WHERE installation_id IN (${placeholders})
+		 ORDER BY is_builtin DESC, name`,
+	)
+		.bind(...installationIds)
+		.all<AgentRow>();
+	return res.results;
+}
+
+export async function getAgentById(id: number): Promise<AgentRow | null> {
+	return env.DB.prepare('SELECT * FROM agents WHERE id = ?1').bind(id).first<AgentRow>();
+}
+
+export async function getAgentBySlug(
+	installationId: number,
+	slug: string,
+): Promise<AgentRow | null> {
+	return env.DB.prepare('SELECT * FROM agents WHERE installation_id = ?1 AND slug = ?2')
+		.bind(installationId, slug)
+		.first<AgentRow>();
+}
+
+export async function createAgent(
+	installationId: number,
+	fields: { slug: string; name: string; description: string; instructions: string; model: string },
+): Promise<void> {
+	await env.DB.prepare(
+		`INSERT INTO agents (installation_id, slug, name, description, instructions, model, is_builtin)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)`,
+	)
+		.bind(installationId, fields.slug, fields.name, fields.description, fields.instructions, fields.model)
+		.run();
+}
+
+export async function updateAgent(
+	id: number,
+	fields: { name: string; description: string; instructions: string; model: string },
+): Promise<void> {
+	await env.DB.prepare(
+		'UPDATE agents SET name = ?2, description = ?3, instructions = ?4, model = ?5 WHERE id = ?1',
+	)
+		.bind(id, fields.name, fields.description, fields.instructions, fields.model)
+		.run();
+}
+
+// Custom agents only — built-ins are permanent (they re-seed anyway).
+export async function deleteAgent(id: number): Promise<void> {
+	await env.DB.batch([
+		env.DB.prepare('DELETE FROM repo_agents WHERE agent_id = ?1').bind(id),
+		env.DB.prepare('DELETE FROM agents WHERE id = ?1 AND is_builtin = 0').bind(id),
+	]);
+}
+
+// Enablement semantics: an explicit repo_agents row wins; with no row, the
+// built-in 'review' agent defaults on (preserving single-agent behavior) and
+// everything else defaults off.
+export function resolveAgentEnabled(
+	agent: AgentRow,
+	override: number | null | undefined,
+): boolean {
+	if (override !== null && override !== undefined) return override === 1;
+	return agent.is_builtin === 1 && agent.slug === DEFAULT_AGENT_SLUG;
+}
+
+export interface RepoAgentOverride {
+	repository_id: number;
+	agent_id: number;
+	enabled: number;
+}
+
+// All explicit repo × agent overrides for these installations, for UIs that
+// render many repos at once without a per-repo query.
+export async function listRepoAgentOverrides(
+	installationIds: number[],
+): Promise<RepoAgentOverride[]> {
+	if (installationIds.length === 0) return [];
+	const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+	const res = await env.DB.prepare(
+		`SELECT ra.repository_id, ra.agent_id, ra.enabled
+		 FROM repo_agents ra
+		 JOIN repositories r ON r.id = ra.repository_id
+		 WHERE r.installation_id IN (${placeholders})`,
+	)
+		.bind(...installationIds)
+		.all<RepoAgentOverride>();
+	return res.results;
+}
+
+export interface RepoAgentRow extends AgentRow {
+	repo_enabled: number | null; // raw repo_agents.enabled; null = no row
+	enabled: boolean; // resolved per agentEnabledForRepo
+}
+
+export async function listAgentsForRepo(repo: RepositoryRow): Promise<RepoAgentRow[]> {
+	await ensureBuiltinAgents(repo.installation_id);
+	const res = await env.DB.prepare(
+		`SELECT a.*, ra.enabled AS repo_enabled
+		 FROM agents a
+		 LEFT JOIN repo_agents ra ON ra.agent_id = a.id AND ra.repository_id = ?2
+		 WHERE a.installation_id = ?1
+		 ORDER BY a.is_builtin DESC, a.name`,
+	)
+		.bind(repo.installation_id, repo.id)
+		.all<AgentRow & { repo_enabled: number | null }>();
+	return res.results.map((a) => ({ ...a, enabled: resolveAgentEnabled(a, a.repo_enabled) }));
+}
+
+export async function setRepoAgentEnabled(
+	repositoryId: number,
+	agentId: number,
+	enabled: boolean,
+): Promise<void> {
+	await env.DB.prepare(
+		`INSERT INTO repo_agents (repository_id, agent_id, enabled) VALUES (?1, ?2, ?3)
+		 ON CONFLICT(repository_id, agent_id) DO UPDATE SET enabled = ?3`,
+	)
+		.bind(repositoryId, agentId, enabled ? 1 : 0)
+		.run();
+}
+
+export interface AgentUsageRow {
+	agent_slug: string | null;
+	reviews: number;
+	cost_usd: number;
+}
+
+// Cost per agent for one 'YYYY-MM' month, costliest first. NULL slug groups
+// reviews recorded before multi-agent support.
+export async function agentUsageForMonth(
+	installationIds: number[],
+	month: string,
+): Promise<AgentUsageRow[]> {
+	if (installationIds.length === 0) return [];
+	const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+	const res = await env.DB.prepare(
+		`SELECT agent_slug, COUNT(*) AS reviews, SUM(cost_usd) AS cost_usd
+		 FROM reviews
+		 WHERE installation_id IN (${placeholders})
+			AND strftime('%Y-%m', created_at) = ?${installationIds.length + 1}
+		 GROUP BY agent_slug
+		 ORDER BY cost_usd DESC`,
+	)
+		.bind(...installationIds, month)
+		.all<AgentUsageRow>();
+	return res.results;
 }
 
 export interface ReviewActivityRow {
@@ -221,6 +395,8 @@ export interface ReviewActivityRow {
 	cache_write_tokens: number;
 	cost_usd: number;
 	model: string | null;
+	agent_slug: string | null; // null on rows predating multi-agent support
+	agent_instance_id: string | null;
 	repo_owner: string | null; // null if the repo was since removed
 	repo_name: string | null;
 }
@@ -357,40 +533,37 @@ export async function dashboardStats(installationIds: number[]): Promise<Dashboa
 	return row ?? empty;
 }
 
-// Marks the latest still-running review for a PR as failed. Fired from the
-// metering subscriber when the agent's submission settles without post_review
-// having completed the row (agent error, abort, or a run that never posted).
-// No-op when post_review already flipped the row to completed.
-export async function markReviewFailed(
-	owner: string,
-	repo: string,
-	prNumber: number,
-): Promise<void> {
+// Marks the latest still-running review for an agent instance as failed.
+// Fired from the metering subscriber when the agent's submission settles
+// without post_review having completed the row (agent error, abort, or a run
+// that never posted). No-op when the row is already completed.
+export async function markReviewFailed(agentInstanceId: string): Promise<void> {
 	await env.DB.prepare(
 		`UPDATE reviews SET status = 'failed', completed_at = datetime('now')
 		 WHERE id = (
-			SELECT r.id FROM reviews r
-			JOIN repositories repo ON repo.id = r.repository_id
-			WHERE repo.owner = ?1 COLLATE NOCASE AND repo.name = ?2 COLLATE NOCASE
-				AND r.pr_number = ?3 AND r.status = 'running'
-			ORDER BY r.id DESC LIMIT 1
+			SELECT id FROM reviews WHERE agent_instance_id = ?1 AND status = 'running'
+			ORDER BY id DESC LIMIT 1
 		 )`,
 	)
-		.bind(owner, repo, prNumber)
+		.bind(agentInstanceId)
 		.run();
 }
 
-// True when a review for this PR is running and young enough to still be
-// live (older running rows are presumed dead — the /reviews stall rule).
-// Backs mention-trigger dedupe so a re-tag can't double-dispatch.
-export async function hasActiveReview(repositoryId: number, prNumber: number): Promise<boolean> {
+// True when this agent's review of this PR is running and young enough to
+// still be live (older running rows are presumed dead — the /reviews stall
+// rule). Backs mention-trigger dedupe so a re-tag can't double-dispatch.
+export async function hasActiveReview(
+	repositoryId: number,
+	prNumber: number,
+	agentSlug: string,
+): Promise<boolean> {
 	const row = await env.DB.prepare(
 		`SELECT id FROM reviews
-		 WHERE repository_id = ?1 AND pr_number = ?2 AND status = 'running'
-			AND created_at > datetime('now', '-20 minutes')
+		 WHERE repository_id = ?1 AND pr_number = ?2 AND agent_slug = ?3
+			AND status = 'running' AND created_at > datetime('now', '-20 minutes')
 		 LIMIT 1`,
 	)
-		.bind(repositoryId, prNumber)
+		.bind(repositoryId, prNumber, agentSlug)
 		.first<{ id: number }>();
 	return row !== null;
 }

@@ -4,16 +4,29 @@ import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { html } from 'hono/html';
 import type { HtmlEscapedString } from 'hono/utils/html';
 import {
+	agentUsageForMonth,
 	countReviews,
+	createAgent,
 	dashboardStats,
+	deleteAgent,
+	ensureBuiltinAgents,
+	getAgentById,
+	getAgentBySlug,
 	getRepoById,
+	listAgents,
 	listInstallationsWithRepos,
 	listRecentReviews,
+	listRepoAgentOverrides,
 	monthlyUsage,
 	repoUsageForMonth,
+	resolveAgentEnabled,
+	setRepoAgentEnabled,
 	setRepoEnabled,
+	updateAgent,
+	type AgentRow,
 	type ReviewActivityRow,
 } from '../lib/db.ts';
+import { DEFAULT_MODEL, RESERVED_AGENT_SLUGS } from '../lib/personas.ts';
 import {
 	exchangeOAuthCode,
 	fetchUser,
@@ -97,6 +110,21 @@ function page(title: string, body: HtmlEscapedString | Promise<HtmlEscapedString
 					.bar-track { display: inline-block; width: 100%; }
 					.bar { height: 14px; background: #2ea043; border-radius: 0 4px 4px 0; min-width: 2px; }
 					.pager { display: flex; justify-content: space-between; margin-top: 1rem; }
+					button.chip {
+						padding: 0.1rem 0.55rem; font-size: 0.72rem; border-radius: 999px;
+						background: transparent; color: #7d8f85; border: 1px solid #2a3830;
+					}
+					button.chip:hover { background: #131a16; }
+					button.chip.on { color: #56d364; border-color: #3fb95066; }
+					.chips { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.3rem; }
+					label { display: block; margin-top: 1rem; font-size: 0.78rem; color: #7d8f85; }
+					input[type='text'], textarea {
+						width: 100%; box-sizing: border-box; margin-top: 0.25rem;
+						background: #0a100d; border: 1px solid #2a3830; border-radius: 6px;
+						color: #e6efe9; font: inherit; padding: 0.45rem 0.6rem;
+					}
+					textarea { min-height: 10rem; resize: vertical; }
+					.form-error { color: #f85149; font-size: 0.85rem; margin-top: 1rem; }
 				</style>
 			</head>
 			<body>${body}</body>
@@ -190,7 +218,7 @@ function reviewRow(r: ReviewActivityRow) {
 	return html`<tr>
 		<td>
 			${prUrl ? html`<a href="${prUrl}">${repoFull}#${r.pr_number}</a>` : html`${repoFull}#${r.pr_number}`}
-			<span class="muted">&middot; ${r.trigger_event}</span>
+			<span class="muted">&middot; ${r.agent_slug ?? 'review'} &middot; ${r.trigger_event}</span>
 		</td>
 		<td>${statusPill(r)}</td>
 		<td class="num">${tokens > 0 ? fmtTokens(tokens) : html`<span class="muted">—</span>`}</td>
@@ -219,10 +247,11 @@ function topbar(login: string) {
 	</div>`;
 }
 
-function tabs(active: 'dashboard' | 'reviews' | 'settings') {
+function tabs(active: 'dashboard' | 'reviews' | 'agents' | 'settings') {
 	return html`<nav class="tabs">
 		<a href="/" class="${active === 'dashboard' ? 'active' : ''}">dashboard</a>
 		<a href="/reviews" class="${active === 'reviews' ? 'active' : ''}">reviews</a>
+		<a href="/agents" class="${active === 'agents' ? 'active' : ''}">agents</a>
 		<a href="/settings" class="${active === 'settings' ? 'active' : ''}">settings</a>
 	</nav>`;
 }
@@ -307,10 +336,11 @@ export function createSettingsRoutes() {
 		const { session, installationIds } = user;
 
 		const month = currentMonth();
-		const [stats, months, repoUsage, groups, recent] = await Promise.all([
+		const [stats, months, repoUsage, agentUsage, groups, recent] = await Promise.all([
 			dashboardStats(installationIds),
 			monthlyUsage(installationIds, 6),
 			repoUsageForMonth(installationIds, month),
+			agentUsageForMonth(installationIds, month),
 			listInstallationsWithRepos(installationIds),
 			listRecentReviews(installationIds, 5),
 		]);
@@ -379,6 +409,24 @@ export function createSettingsRoutes() {
 									</tr>`,
 								)}
 							</table>`}
+
+					${agentUsage.length > 0
+						? html`<h2>cost by agent <span class="muted">(${monthLabel(month)})</span></h2>
+								<table>
+									<tr>
+										<th>agent</th>
+										<th class="num">reviews</th>
+										<th class="num">cost</th>
+									</tr>
+									${agentUsage.map(
+										(a) => html`<tr>
+											<td>${a.agent_slug ?? html`<span class="muted">(pre-agent reviews)</span>`}</td>
+											<td class="num">${a.reviews}</td>
+											<td class="num">${a.cost_usd > 0 ? fmtUsd(a.cost_usd) : html`<span class="muted">—</span>`}</td>
+										</tr>`,
+									)}
+								</table>`
+						: ''}
 
 					<h2>recent reviews</h2>
 					${recent.length === 0
@@ -466,12 +514,245 @@ export function createSettingsRoutes() {
 		);
 	});
 
-	// Per-repo config: toggle auto-review on/off, manage the GitHub installation.
+	// --- Agents: list, create, edit, delete (design: docs/custom-agents-design.md) ---
+
+	const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,30}$/;
+	// Gateway-only model ids: cloudflare/<provider>/<model>.
+	const MODEL_RE = /^cloudflare\/[\w.-]+\/[\w.:-]+$/;
+
+	interface AgentFormValues {
+		name: string;
+		slug: string;
+		description: string;
+		instructions: string;
+		model: string;
+	}
+
+	function agentForm(opts: {
+		action: string;
+		values: AgentFormValues;
+		slugEditable: boolean;
+		error?: string;
+		deleteAction?: string;
+	}) {
+		return html`<form method="post" action="${opts.action}" style="display: block;">
+				<label>name
+					<input type="text" name="name" value="${opts.values.name}" required maxlength="60" />
+				</label>
+				<label>slug <span class="muted">(mention handle: @turbodiff &lt;slug&gt;; lowercase letters, digits, dashes${opts.slugEditable ? '' : '; fixed after creation'})</span>
+					<input type="text" name="slug" value="${opts.values.slug}" ${opts.slugEditable ? '' : 'readonly'} required maxlength="31" />
+				</label>
+				<label>description <span class="muted">(shown in lists)</span>
+					<input type="text" name="description" value="${opts.values.description}" maxlength="200" />
+				</label>
+				<label>focus instructions <span class="muted">(what this agent hunts for — process and posting rules are fixed)</span>
+					<textarea name="instructions" required>${opts.values.instructions}</textarea>
+				</label>
+				<label>model <span class="muted">(any AI Gateway model id; default ${DEFAULT_MODEL})</span>
+					<input type="text" name="model" value="${opts.values.model}" required />
+				</label>
+				${opts.error ? html`<p class="form-error">${opts.error}</p>` : ''}
+				<p style="margin-top: 1.25rem;"><button>Save agent</button> <a class="button secondary" href="/agents">Cancel</a></p>
+			</form>
+			${opts.deleteAction
+				? html`<form method="post" action="${opts.deleteAction}"
+						onsubmit="return confirm('Delete this agent? Its review history stays.');">
+						<button class="secondary">Delete agent</button>
+					</form>`
+				: ''}`;
+	}
+
+	async function readAgentForm(c: Context): Promise<AgentFormValues> {
+		const form = await c.req.formData();
+		const get = (k: string) => String(form.get(k) ?? '').trim();
+		return {
+			name: get('name'),
+			slug: get('slug').toLowerCase(),
+			description: get('description'),
+			instructions: get('instructions'),
+			model: get('model') || DEFAULT_MODEL,
+		};
+	}
+
+	function validateAgentForm(v: AgentFormValues, checkSlug: boolean): string | null {
+		if (!v.name) return 'name is required';
+		if (checkSlug && !SLUG_RE.test(v.slug)) return 'slug must be 2-31 chars: lowercase letters, digits, dashes';
+		if (checkSlug && RESERVED_AGENT_SLUGS.has(v.slug)) return `"${v.slug}" is a reserved word`;
+		if (!v.instructions) return 'instructions are required';
+		if (!MODEL_RE.test(v.model)) return 'model must be an AI Gateway id like cloudflare/anthropic/claude-sonnet-5';
+		return null;
+	}
+
+	app.get('/agents', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+		const { session, installationIds } = user;
+		await Promise.all(installationIds.map((id) => ensureBuiltinAgents(id)));
+		const [groups, agents] = await Promise.all([
+			listInstallationsWithRepos(installationIds),
+			listAgents(installationIds),
+		]);
+
+		return c.html(
+			page(
+				'Turbodiff — agents',
+				html`${topbar(session.login)} ${tabs('agents')}
+					<p class="muted" style="margin-top: 1.25rem;">
+						Agents run on every PR of the repos they're enabled for (see
+						<a href="/settings">settings</a>), or on demand via
+						<code>@${env.GITHUB_APP_SLUG} &lt;slug&gt;</code> in a PR comment.
+					</p>
+					${groups.map(({ installation }) => {
+						const own = agents.filter((a) => a.installation_id === installation.id);
+						return html`<h2>${installation.account_login}
+								<a class="drill" href="/agents/new?installation=${installation.id}"></a></h2>
+							<p><a class="button secondary" href="/agents/new?installation=${installation.id}">New agent</a></p>
+							<table>
+								<tr><th>agent</th><th>slug</th><th>model</th><th class="num"></th></tr>
+								${own.map(
+									(a) => html`<tr>
+										<td>${a.name} ${a.is_builtin ? html`<span class="pill">built-in</span>` : ''}
+											${a.description ? html`<div class="muted">${a.description}</div>` : ''}</td>
+										<td><span class="pill">${a.slug}</span></td>
+										<td class="muted">${a.model.replace('cloudflare/', '')}</td>
+										<td class="num"><a href="/agents/${a.id}/edit">edit</a></td>
+									</tr>`,
+								)}
+							</table>`;
+					})}`,
+			),
+		);
+	});
+
+	app.get('/agents/new', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+		const installationId = Number(c.req.query('installation'));
+		if (!user.installationIds.includes(installationId)) return c.text('unknown installation', 404);
+
+		return c.html(
+			page(
+				'Turbodiff — new agent',
+				html`${topbar(user.session.login)} ${tabs('agents')}
+					<h2>new agent</h2>
+					${agentForm({
+						action: `/agents/new?installation=${installationId}`,
+						values: { name: '', slug: '', description: '', instructions: '', model: DEFAULT_MODEL },
+						slugEditable: true,
+					})}`,
+			),
+		);
+	});
+
+	app.post('/agents/new', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+		const installationId = Number(c.req.query('installation'));
+		if (!user.installationIds.includes(installationId)) return c.text('unknown installation', 404);
+
+		const values = await readAgentForm(c);
+		let error = validateAgentForm(values, true);
+		if (!error && (await getAgentBySlug(installationId, values.slug))) {
+			error = `an agent with slug "${values.slug}" already exists`;
+		}
+		if (error) {
+			return c.html(
+				page(
+					'Turbodiff — new agent',
+					html`${topbar(user.session.login)} ${tabs('agents')}
+						<h2>new agent</h2>
+						${agentForm({ action: `/agents/new?installation=${installationId}`, values, slugEditable: true, error })}`,
+				),
+				400,
+			);
+		}
+		await createAgent(installationId, values);
+		return c.redirect('/agents');
+	});
+
+	// Resolves an agent id from the URL and checks the signed-in user may
+	// manage it; null means the response was already sent.
+	async function requireAgent(c: Context, user: AuthedUser): Promise<AgentRow | null> {
+		const id = Number(c.req.param('id'));
+		const agent = Number.isInteger(id) ? await getAgentById(id) : null;
+		if (!agent || !user.installationIds.includes(agent.installation_id)) return null;
+		return agent;
+	}
+
+	app.get('/agents/:id/edit', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+		const agent = await requireAgent(c, user);
+		if (!agent) return c.text('unknown agent', 404);
+
+		return c.html(
+			page(
+				'Turbodiff — edit agent',
+				html`${topbar(user.session.login)} ${tabs('agents')}
+					<h2>edit agent ${agent.is_builtin ? html`<span class="pill">built-in</span>` : ''}</h2>
+					${agentForm({
+						action: `/agents/${agent.id}/edit`,
+						values: {
+							name: agent.name,
+							slug: agent.slug,
+							description: agent.description ?? '',
+							instructions: agent.instructions,
+							model: agent.model,
+						},
+						slugEditable: false,
+						deleteAction: agent.is_builtin ? undefined : `/agents/${agent.id}/delete`,
+					})}`,
+			),
+		);
+	});
+
+	app.post('/agents/:id/edit', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+		const agent = await requireAgent(c, user);
+		if (!agent) return c.text('unknown agent', 404);
+
+		const values = await readAgentForm(c);
+		const error = validateAgentForm(values, false);
+		if (error) {
+			return c.html(
+				page(
+					'Turbodiff — edit agent',
+					html`${topbar(user.session.login)} ${tabs('agents')}
+						<h2>edit agent</h2>
+						${agentForm({ action: `/agents/${agent.id}/edit`, values: { ...values, slug: agent.slug }, slugEditable: false, error })}`,
+				),
+				400,
+			);
+		}
+		await updateAgent(agent.id, values);
+		return c.redirect('/agents');
+	});
+
+	app.post('/agents/:id/delete', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+		const agent = await requireAgent(c, user);
+		if (!agent) return c.text('unknown agent', 404);
+		if (agent.is_builtin) return c.text('built-in agents cannot be deleted', 403);
+		await deleteAgent(agent.id);
+		return c.redirect('/agents');
+	});
+
+	// Per-repo config: master auto-review switch plus per-agent toggles.
 	app.get('/settings', async (c) => {
 		const user = await requireUser(c);
 		if (!user) return c.redirect('/auth/login');
 		const { session, installationIds } = user;
-		const groups = await listInstallationsWithRepos(installationIds);
+		await Promise.all(installationIds.map((id) => ensureBuiltinAgents(id)));
+		const [groups, agents, overrides] = await Promise.all([
+			listInstallationsWithRepos(installationIds),
+			listAgents(installationIds),
+			listRepoAgentOverrides(installationIds),
+		]);
+		const overrideMap = new Map(
+			overrides.map((o) => [`${o.repository_id}:${o.agent_id}`, o.enabled]),
+		);
 
 		return c.html(
 			page(
@@ -485,8 +766,9 @@ export function createSettingsRoutes() {
 					${groups.length === 0
 						? html`<p class="muted">No installations yet — install the app on an organization or
 								account, then come back here.</p>`
-						: groups.map(
-								({ installation, repos }) => html`<h2>
+						: groups.map(({ installation, repos }) => {
+								const instAgents = agents.filter((a) => a.installation_id === installation.id);
+								return html`<h2>
 										${installation.account_login}
 										${installation.suspended ? html`<span class="pill red">suspended</span>` : ''}
 									</h2>
@@ -495,7 +777,21 @@ export function createSettingsRoutes() {
 											? html`<tr><td class="muted">No repositories selected in this installation.</td></tr>`
 											: repos.map(
 													(r) => html`<tr>
-														<td>${r.owner}/${r.name}</td>
+														<td>
+															${r.owner}/${r.name}
+															${r.enabled
+																? html`<div class="chips">
+																		${instAgents.map((a) => {
+																			const on = resolveAgentEnabled(a, overrideMap.get(`${r.id}:${a.id}`));
+																			return html`<form method="post" action="/repos/${r.id}/agents/${a.id}/toggle">
+																				<button class="chip ${on ? 'on' : ''}" title="${on ? 'disable' : 'enable'} ${a.name} on this repo">
+																					${a.slug}
+																				</button>
+																			</form>`;
+																		})}
+																	</div>`
+																: ''}
+														</td>
 														<td class="num">
 															<form method="post" action="/repos/${r.id}/toggle">
 																<button class="${r.enabled ? 'secondary' : ''}">
@@ -505,10 +801,35 @@ export function createSettingsRoutes() {
 														</td>
 													</tr>`,
 												)}
-									</table>`,
-							)}`,
+									</table>`;
+							})}`,
 			),
 		);
+	});
+
+	app.post('/repos/:id/agents/:agentId/toggle', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+
+		const repoId = Number(c.req.param('id'));
+		const repo = Number.isInteger(repoId) ? await getRepoById(repoId) : null;
+		if (!repo || !user.installationIds.includes(repo.installation_id)) {
+			return c.text('unknown repository', 404);
+		}
+
+		const agentId = Number(c.req.param('agentId'));
+		const agent = Number.isInteger(agentId) ? await getAgentById(agentId) : null;
+		if (!agent || agent.installation_id !== repo.installation_id) {
+			return c.text('unknown agent', 404);
+		}
+
+		const overrides = await listRepoAgentOverrides([repo.installation_id]);
+		const current = resolveAgentEnabled(
+			agent,
+			overrides.find((o) => o.repository_id === repo.id && o.agent_id === agent.id)?.enabled,
+		);
+		await setRepoAgentEnabled(repo.id, agent.id, !current);
+		return c.redirect('/settings');
 	});
 
 	app.post('/repos/:id/toggle', async (c) => {
