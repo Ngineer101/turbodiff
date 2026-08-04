@@ -11,6 +11,7 @@ import {
 	listAgentsForRepo,
 	removeRepositories,
 	reviewCountLastDay,
+	reviewedRecently,
 	setInstallationSuspended,
 	upsertInstallation,
 	type AgentRow,
@@ -168,11 +169,14 @@ async function handleInstallationRepositories(p: InstallationEvent): Promise<Han
 	};
 }
 
+// A push burst re-dispatches an agent at most once per window.
+const PUSH_DEBOUNCE_MINUTES = 10;
+
 async function handlePullRequest(
 	p: PullRequestEvent,
 	dispatch: ReviewDispatcher,
 ): Promise<HandlerResult> {
-	if (p.action !== 'opened' && p.action !== 'ready_for_review') {
+	if (p.action !== 'opened' && p.action !== 'ready_for_review' && p.action !== 'synchronize') {
 		return { body: { ok: true, ignored: p.action } };
 	}
 	if (p.pull_request.draft) return { body: { ok: true, skipped: 'draft' } };
@@ -180,6 +184,9 @@ async function handlePullRequest(
 	const repo = await getRepoById(p.repository.id);
 	if (!repo) return { body: { ok: true, skipped: 'repo not tracked' } };
 	if (!repo.enabled) return { body: { ok: true, skipped: 'reviews disabled for repo' } };
+	if (p.action === 'synchronize' && !repo.review_on_push) {
+		return { body: { ok: true, skipped: 'push reviews disabled for repo' } };
+	}
 
 	const installation = await getInstallation(repo.installation_id);
 	if (!installation || installation.suspended) {
@@ -201,8 +208,25 @@ async function handlePullRequest(
 			err,
 		);
 	}
-	const agents = agentsForTier(tier, enabled);
+	let agents = agentsForTier(tier, enabled);
 	const modelOverride = tierModelOverride(tier);
+
+	// Pushes re-review with awareness (the agent reconciles against existing
+	// threads), but debounced: skip agents mid-review or dispatched within the
+	// window, so a burst of pushes costs one re-review, not one per push.
+	if (p.action === 'synchronize') {
+		const idle: typeof agents = [];
+		for (const agent of agents) {
+			const busy =
+				(await hasActiveReview(repo.id, p.number, agent.slug)) ||
+				(await reviewedRecently(repo.id, p.number, agent.slug, PUSH_DEBOUNCE_MINUTES));
+			if (!busy) idle.push(agent);
+		}
+		agents = idle;
+		if (agents.length === 0) {
+			return { body: { ok: true, skipped: 'all agents busy or within push debounce' } };
+		}
+	}
 
 	// The daily cap counts agent-runs, so N selected agents consume N units.
 	const budget = await remainingDailyBudget(repo.installation_id, installation.account_login);

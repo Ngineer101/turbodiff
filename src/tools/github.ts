@@ -168,6 +168,125 @@ export const fetchFile = defineTool({
 	},
 });
 
+// GraphQL is the only API surface that exposes review-thread resolution
+// state, which the re-review rules depend on.
+async function ghGraphql<T>(
+	token: string,
+	query: string,
+	variables: Record<string, unknown>,
+): Promise<T> {
+	const res = await fetch(`${API}/graphql`, {
+		method: 'POST',
+		headers: {
+			authorization: `Bearer ${token}`,
+			'content-type': 'application/json',
+			'user-agent': 'turbodiff-pr-reviewer',
+		},
+		body: JSON.stringify({ query, variables }),
+	});
+	const payload = (await res.json()) as { data?: T; errors?: { message: string }[] };
+	if (!res.ok || payload.errors?.length || !payload.data) {
+		const detail = payload.errors?.map((e) => e.message).join('; ') ?? `HTTP ${res.status}`;
+		throw new Error(`GitHub GraphQL error: ${detail.slice(0, 500)}`);
+	}
+	return payload.data;
+}
+
+const THREADS_QUERY = `query($owner: String!, $repo: String!, $number: Int!) {
+	repository(owner: $owner, name: $repo) {
+		pullRequest(number: $number) {
+			reviews(last: 30) {
+				nodes { author { login } state body submittedAt }
+			}
+			reviewThreads(first: 100) {
+				nodes {
+					isResolved
+					isOutdated
+					path
+					line
+					comments(first: 20) {
+						nodes { author { login } body createdAt }
+					}
+				}
+			}
+		}
+	}
+}`;
+
+interface ThreadsQueryResult {
+	repository: {
+		pullRequest: {
+			reviews: {
+				nodes: {
+					author: { login: string } | null;
+					state: string;
+					body: string;
+					submittedAt: string;
+				}[];
+			};
+			reviewThreads: {
+				nodes: {
+					isResolved: boolean;
+					isOutdated: boolean;
+					path: string;
+					line: number | null;
+					comments: {
+						nodes: { author: { login: string } | null; body: string; createdAt: string }[];
+					};
+				}[];
+			};
+		} | null;
+	} | null;
+}
+
+const MAX_THREAD_BODY_CHARS = 2_000;
+
+export const fetchReviewThreads = defineTool({
+	name: 'fetch_review_threads',
+	description:
+		'Fetch the existing reviews and inline comment threads on a pull request, including each ' +
+		"thread's resolution state and any replies. Call this on a re-review to reconcile your " +
+		'earlier findings with what happened since: which threads were resolved, and how the ' +
+		'author responded.',
+	input: v.object({
+		owner: v.string(),
+		repo: v.string(),
+		number: v.number(),
+	}),
+	async run({ data }) {
+		const token = await tokenFor(data.owner, data.repo);
+		const result = await ghGraphql<ThreadsQueryResult>(token, THREADS_QUERY, {
+			owner: data.owner,
+			repo: data.repo,
+			number: data.number,
+		});
+		const pr = result.repository?.pullRequest;
+		if (!pr) throw new Error(`pull request ${data.owner}/${data.repo}#${data.number} not found`);
+		const clip = (text: string) => truncate(text, MAX_THREAD_BODY_CHARS, 'comment');
+		return {
+			output: {
+				reviews: pr.reviews.nodes.map((r) => ({
+					author: r.author?.login ?? 'unknown',
+					state: r.state,
+					submittedAt: r.submittedAt,
+					body: clip(r.body),
+				})),
+				threads: pr.reviewThreads.nodes.map((t) => ({
+					path: t.path,
+					line: t.line,
+					resolved: t.isResolved,
+					outdated: t.isOutdated,
+					comments: t.comments.nodes.map((c) => ({
+						author: c.author?.login ?? 'unknown',
+						createdAt: c.createdAt,
+						body: clip(c.body),
+					})),
+				})),
+			},
+		};
+	},
+});
+
 const findingSchema = v.object({
 	path: v.pipe(v.string(), v.minLength(1)),
 	// Line number in the file's NEW version (side RIGHT) or OLD version (side
