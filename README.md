@@ -173,3 +173,12 @@ server returns is treated as untrusted content, same as the PR itself. Connectio
 - [Flue docs](https://flueframework.com/docs/) — or `npx flue docs` from the terminal.
 - [Cloudflare AI Gateway](https://developers.cloudflare.com/ai-gateway/)
 - [GitHub Apps](https://docs.github.com/en/apps)
+
+## License
+
+Turbodiff is licensed under the [Functional Source License, Version 1.1, ALv2 Future
+License](LICENSE.md) (FSL-1.1-ALv2). In short: you may use, modify, and self-host it
+freely — including inside your company — but you may not offer it (or a substantially
+similar service) commercially in competition with Turbodiff. Each release automatically
+becomes available under the Apache License 2.0 two years after publication. See
+[fsl.software](https://fsl.software) for the license's background.
