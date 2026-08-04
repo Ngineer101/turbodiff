@@ -134,12 +134,13 @@ export async function recordReview(
 	trigger: string,
 	agentSlug: string,
 	agentInstanceId: string,
+	riskTier: string | null = null,
 ): Promise<void> {
 	await env.DB.prepare(
-		`INSERT INTO reviews (repository_id, installation_id, pr_number, trigger_event, status, agent_slug, agent_instance_id)
-		 VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6)`,
+		`INSERT INTO reviews (repository_id, installation_id, pr_number, trigger_event, status, agent_slug, agent_instance_id, risk_tier)
+		 VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7)`,
 	)
-		.bind(repositoryId, installationId, prNumber, trigger, agentSlug, agentInstanceId)
+		.bind(repositoryId, installationId, prNumber, trigger, agentSlug, agentInstanceId, riskTier)
 		.run();
 }
 
@@ -149,17 +150,18 @@ export async function recordReview(
 export async function completeReview(
 	agentInstanceId: string,
 	reviewUrl: string | null,
+	findingsCount: number | null = null,
 ): Promise<void> {
 	await env.DB.prepare(
 		`UPDATE reviews
-		 SET status = 'completed', completed_at = datetime('now'), review_url = ?2
+		 SET status = 'completed', completed_at = datetime('now'), review_url = ?2, findings_count = ?3
 		 WHERE id = (
 			SELECT id FROM reviews
 			WHERE agent_instance_id = ?1 AND status = 'running'
 			ORDER BY id DESC LIMIT 1
 		 )`,
 	)
-		.bind(agentInstanceId, reviewUrl)
+		.bind(agentInstanceId, reviewUrl, findingsCount)
 		.run();
 }
 
@@ -499,6 +501,8 @@ export interface ReviewActivityRow {
 	model: string | null;
 	agent_slug: string | null; // null on rows predating multi-agent support
 	agent_instance_id: string | null;
+	risk_tier: string | null; // null before tiering, and on mention/manual dispatch
+	findings_count: number | null; // null until post_review completes the row
 	repo_owner: string | null; // null if the repo was since removed
 	repo_name: string | null;
 }
@@ -604,6 +608,7 @@ export interface DashboardStats {
 	month_cost_usd: number;
 	month_tokens: number;
 	avg_duration_s: number | null; // completed reviews this month
+	avg_findings: number | null; // findings per completed review this month
 	running: number;
 }
 
@@ -613,6 +618,7 @@ export async function dashboardStats(installationIds: number[]): Promise<Dashboa
 		month_cost_usd: 0,
 		month_tokens: 0,
 		avg_duration_s: null,
+		avg_findings: null,
 		running: 0,
 	};
 	if (installationIds.length === 0) return empty;
@@ -626,6 +632,9 @@ export async function dashboardStats(installationIds: number[]): Promise<Dashboa
 			AVG(CASE WHEN status = 'completed' AND completed_at IS NOT NULL
 				AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
 				THEN (julianday(completed_at) - julianday(created_at)) * 86400 END) AS avg_duration_s,
+			AVG(CASE WHEN status = 'completed' AND findings_count IS NOT NULL
+				AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
+				THEN findings_count END) AS avg_findings,
 			COALESCE(SUM(status = 'running'), 0) AS running
 		 FROM reviews
 		 WHERE installation_id IN (${placeholders})`,

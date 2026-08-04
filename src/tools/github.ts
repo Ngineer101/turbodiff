@@ -23,7 +23,7 @@ async function tokenFor(owner: string, repo: string): Promise<string> {
 	return installationToken(row.installation_id);
 }
 
-async function gh(
+export async function gh(
 	token: string,
 	path: string,
 	init?: RequestInit & { accept?: string },
@@ -50,8 +50,10 @@ function truncate(text: string, max: number, label: string): string {
 }
 
 // Files whose diffs are machine noise: no reviewable intent, and large enough
-// to eat the truncation budget before the real code gets seen.
-const NOISE_PATTERNS: { pattern: RegExp; reason: string }[] = [
+// to eat the truncation budget before the real code gets seen. Also consumed
+// by the risk-tier computation (src/lib/risk.ts) so noise churn doesn't
+// inflate a PR's reviewable size.
+export const NOISE_PATTERNS: { pattern: RegExp; reason: string }[] = [
 	{
 		pattern:
 			/(^|\/)(package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|deno\.lock|Cargo\.lock|Gemfile\.lock|poetry\.lock|uv\.lock|Pipfile\.lock|composer\.lock|flake\.lock|go\.sum|gradle\.lockfile)$/,
@@ -246,8 +248,9 @@ export const makePostReview = (agentInstanceId: string) =>
 				};
 			}
 			// Flip this dispatch's row to completed so /reviews stops showing it
-			// as running.
-			await completeReview(agentInstanceId, output.url);
+			// as running. The findings count feeds the noise metric on the
+			// dashboard (fallback-posted findings still count — they reached the PR).
+			await completeReview(agentInstanceId, output.url, data.findings.length);
 			return { output };
 		},
 	});

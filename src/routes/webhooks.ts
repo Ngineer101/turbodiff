@@ -16,8 +16,8 @@ import {
 	type AgentRow,
 	type RepositoryRow,
 } from '../lib/db.ts';
-import { DEFAULT_AGENT_SLUG } from '../lib/personas.ts';
 import { reactToIssueComment, verifyWebhookSignature } from '../lib/github-app.ts';
+import { agentsForTier, computeRiskTier, tierModelOverride, type RiskTier } from '../lib/risk.ts';
 
 // GitHub App webhook receiver. Three jobs:
 //   1. Mirror installation / repository-selection changes into D1.
@@ -83,6 +83,7 @@ export type ReviewDispatcher = (
 	prNumber: number,
 	prUrl: string,
 	trigger: string,
+	opts?: { riskTier?: string; modelOverride?: string },
 ) => Promise<boolean>;
 
 // A Hono sub-app; the caller supplies dispatch so this module doesn't need to
@@ -185,10 +186,25 @@ async function handlePullRequest(
 		return { body: { ok: true, skipped: 'installation missing or suspended' } };
 	}
 
-	const agents = (await listAgentsForRepo(repo)).filter((a) => a.enabled);
-	if (agents.length === 0) return { body: { ok: true, skipped: 'no agents enabled' } };
+	const enabled = (await listAgentsForRepo(repo)).filter((a) => a.enabled);
+	if (enabled.length === 0) return { body: { ok: true, skipped: 'no agents enabled' } };
 
-	// The daily cap counts agent-runs, so N enabled agents consume N units.
+	// Classify the PR before spending budget: small mechanical changes get one
+	// generalist, only large or security-sensitive ones the full fleet. Fail
+	// open to 'full' — a tiering hiccup must widen review, never skip it.
+	let tier: RiskTier = 'full';
+	try {
+		tier = await computeRiskTier(repo.installation_id, repo.owner, repo.name, p.number);
+	} catch (err) {
+		console.warn(
+			`turbodiff: risk tier computation failed for ${p.repository.full_name}#${p.number}, defaulting to full:`,
+			err,
+		);
+	}
+	const agents = agentsForTier(tier, enabled);
+	const modelOverride = tierModelOverride(tier);
+
+	// The daily cap counts agent-runs, so N selected agents consume N units.
 	const budget = await remainingDailyBudget(repo.installation_id, installation.account_login);
 	if (budget <= 0) return { body: { ok: true, skipped: 'daily review limit reached' } };
 	if (agents.length > budget) {
@@ -199,13 +215,14 @@ async function handlePullRequest(
 
 	const dispatched: string[] = [];
 	for (const agent of agents.slice(0, budget)) {
-		if (await dispatch(agent, repo, p.number, p.pull_request.html_url, p.action)) {
+		const opts = { riskTier: tier, ...(modelOverride ? { modelOverride } : {}) };
+		if (await dispatch(agent, repo, p.number, p.pull_request.html_url, p.action, opts)) {
 			dispatched.push(agent.slug);
 		}
 	}
 	if (dispatched.length === 0) return { body: { error: 'dispatch failed' }, status: 502 };
 	return {
-		body: { ok: true, review: `${p.repository.full_name}#${p.number}`, agents: dispatched },
+		body: { ok: true, review: `${p.repository.full_name}#${p.number}`, tier, agents: dispatched },
 	};
 }
 

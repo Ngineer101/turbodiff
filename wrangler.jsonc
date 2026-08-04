@@ -26,7 +26,11 @@
 		// install/manage links in the settings UI.
 		"GITHUB_APP_SLUG": "turbodiff",
 		// Max auto-triggered reviews per installation per rolling 24h.
-		"REVIEW_DAILY_LIMIT": "50"
+		"REVIEW_DAILY_LIMIT": "50",
+		// Optional gateway model id used instead of each agent's configured
+		// model on trivial-tier PRs (≤10 reviewable lines) — set a cheap model
+		// (e.g. a haiku-class id) to cut cost. Empty disables the downgrade.
+		"TRIVIAL_MODEL": ""
 	},
 	// Every agent generates a Durable Object class named after its identity
 	// (PrReviewer -> FluePrReviewerAgent), and Cloudflare requires a migration
