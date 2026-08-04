@@ -300,6 +300,22 @@ const findingSchema = v.object({
 	body: v.pipe(v.string(), v.minLength(1)),
 });
 
+// Severity gates merges in blocking mode, so the model's structured field is
+// not trusted alone: the body's visible tag is an independent claim of the
+// same fact. A finding counts as P1 when either says so — a mislabel can then
+// only escalate (a spurious REQUEST_CHANGES a re-review clears), never
+// silently APPROVE past a real P1 — and disagreements are logged.
+function findingSeverity(f: v.InferOutput<typeof findingSchema>): 'P1' | 'P2' {
+	const bodyTagged = f.body.includes('**P1**') || f.body.includes('\u{1F534}');
+	if (bodyTagged !== (f.severity === 'P1')) {
+		console.warn(
+			`turbodiff: severity mismatch on finding ${f.path}:${f.line} — field says ${f.severity}, ` +
+				`body ${bodyTagged ? 'is' : 'is not'} tagged P1; treating as P1`,
+		);
+	}
+	return bodyTagged || f.severity === 'P1' ? 'P1' : 'P2';
+}
+
 function findingsAsMarkdown(findings: v.InferOutput<typeof findingSchema>[]): string {
 	return findings
 		.map((f) => `**\`${f.path}:${f.line}\`**\n${f.body}`)
@@ -342,7 +358,7 @@ export const makePostReview = (agentInstanceId: string) =>
 			const event =
 				row.blocking_reviews !== 1
 					? 'COMMENT'
-					: data.findings.some((f) => f.severity === 'P1')
+					: data.findings.map(findingSeverity).includes('P1')
 						? 'REQUEST_CHANGES'
 						: 'APPROVE';
 			const path = `/repos/${data.owner}/${data.repo}/pulls/${data.number}/reviews`;
