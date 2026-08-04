@@ -18,6 +18,8 @@ export interface RepositoryRow {
 	owner: string;
 	name: string;
 	enabled: number;
+	review_on_push: number; // re-dispatch tiered agents on pushes to open PRs
+	blocking_reviews: number; // P1 → REQUEST_CHANGES, clean → APPROVE
 	model: string | null;
 	created_at: string; // when the repo was connected (mirrored into D1)
 }
@@ -124,6 +126,18 @@ export async function getRepoById(id: number): Promise<RepositoryRow | null> {
 export async function setRepoEnabled(id: number, enabled: boolean): Promise<void> {
 	await env.DB.prepare('UPDATE repositories SET enabled = ?2 WHERE id = ?1')
 		.bind(id, enabled ? 1 : 0)
+		.run();
+}
+
+export async function setRepoReviewOnPush(id: number, on: boolean): Promise<void> {
+	await env.DB.prepare('UPDATE repositories SET review_on_push = ?2 WHERE id = ?1')
+		.bind(id, on ? 1 : 0)
+		.run();
+}
+
+export async function setRepoBlockingReviews(id: number, on: boolean): Promise<void> {
+	await env.DB.prepare('UPDATE repositories SET blocking_reviews = ?2 WHERE id = ?1')
+		.bind(id, on ? 1 : 0)
 		.run();
 }
 
@@ -675,6 +689,26 @@ export async function hasActiveReview(
 		 LIMIT 1`,
 	)
 		.bind(repositoryId, prNumber, agentSlug)
+		.first<{ id: number }>();
+	return row !== null;
+}
+
+// True when this agent reviewed (or started reviewing) this PR within the
+// window, regardless of outcome. Backs the push-trigger debounce: a burst of
+// pushes re-dispatches at most once per window per agent.
+export async function reviewedRecently(
+	repositoryId: number,
+	prNumber: number,
+	agentSlug: string,
+	windowMinutes: number,
+): Promise<boolean> {
+	const row = await env.DB.prepare(
+		`SELECT id FROM reviews
+		 WHERE repository_id = ?1 AND pr_number = ?2 AND agent_slug = ?3
+			AND created_at > datetime('now', '-' || ?4 || ' minutes')
+		 LIMIT 1`,
+	)
+		.bind(repositoryId, prNumber, agentSlug, windowMinutes)
 		.first<{ id: number }>();
 	return row !== null;
 }

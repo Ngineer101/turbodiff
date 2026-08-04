@@ -168,6 +168,125 @@ export const fetchFile = defineTool({
 	},
 });
 
+// GraphQL is the only API surface that exposes review-thread resolution
+// state, which the re-review rules depend on.
+async function ghGraphql<T>(
+	token: string,
+	query: string,
+	variables: Record<string, unknown>,
+): Promise<T> {
+	const res = await fetch(`${API}/graphql`, {
+		method: 'POST',
+		headers: {
+			authorization: `Bearer ${token}`,
+			'content-type': 'application/json',
+			'user-agent': 'turbodiff-pr-reviewer',
+		},
+		body: JSON.stringify({ query, variables }),
+	});
+	const payload = (await res.json()) as { data?: T; errors?: { message: string }[] };
+	if (!res.ok || payload.errors?.length || !payload.data) {
+		const detail = payload.errors?.map((e) => e.message).join('; ') ?? `HTTP ${res.status}`;
+		throw new Error(`GitHub GraphQL error: ${detail.slice(0, 500)}`);
+	}
+	return payload.data;
+}
+
+const THREADS_QUERY = `query($owner: String!, $repo: String!, $number: Int!) {
+	repository(owner: $owner, name: $repo) {
+		pullRequest(number: $number) {
+			reviews(last: 30) {
+				nodes { author { login } state body submittedAt }
+			}
+			reviewThreads(first: 100) {
+				nodes {
+					isResolved
+					isOutdated
+					path
+					line
+					comments(first: 20) {
+						nodes { author { login } body createdAt }
+					}
+				}
+			}
+		}
+	}
+}`;
+
+interface ThreadsQueryResult {
+	repository: {
+		pullRequest: {
+			reviews: {
+				nodes: {
+					author: { login: string } | null;
+					state: string;
+					body: string;
+					submittedAt: string;
+				}[];
+			};
+			reviewThreads: {
+				nodes: {
+					isResolved: boolean;
+					isOutdated: boolean;
+					path: string;
+					line: number | null;
+					comments: {
+						nodes: { author: { login: string } | null; body: string; createdAt: string }[];
+					};
+				}[];
+			};
+		} | null;
+	} | null;
+}
+
+const MAX_THREAD_BODY_CHARS = 2_000;
+
+export const fetchReviewThreads = defineTool({
+	name: 'fetch_review_threads',
+	description:
+		'Fetch the existing reviews and inline comment threads on a pull request, including each ' +
+		"thread's resolution state and any replies. Call this on a re-review to reconcile your " +
+		'earlier findings with what happened since: which threads were resolved, and how the ' +
+		'author responded.',
+	input: v.object({
+		owner: v.string(),
+		repo: v.string(),
+		number: v.number(),
+	}),
+	async run({ data }) {
+		const token = await tokenFor(data.owner, data.repo);
+		const result = await ghGraphql<ThreadsQueryResult>(token, THREADS_QUERY, {
+			owner: data.owner,
+			repo: data.repo,
+			number: data.number,
+		});
+		const pr = result.repository?.pullRequest;
+		if (!pr) throw new Error(`pull request ${data.owner}/${data.repo}#${data.number} not found`);
+		const clip = (text: string) => truncate(text, MAX_THREAD_BODY_CHARS, 'comment');
+		return {
+			output: {
+				reviews: pr.reviews.nodes.map((r) => ({
+					author: r.author?.login ?? 'unknown',
+					state: r.state,
+					submittedAt: r.submittedAt,
+					body: clip(r.body),
+				})),
+				threads: pr.reviewThreads.nodes.map((t) => ({
+					path: t.path,
+					line: t.line,
+					resolved: t.isResolved,
+					outdated: t.isOutdated,
+					comments: t.comments.nodes.map((c) => ({
+						author: c.author?.login ?? 'unknown',
+						createdAt: c.createdAt,
+						body: clip(c.body),
+					})),
+				})),
+			},
+		};
+	},
+});
+
 const findingSchema = v.object({
 	path: v.pipe(v.string(), v.minLength(1)),
 	// Line number in the file's NEW version (side RIGHT) or OLD version (side
@@ -176,8 +295,26 @@ const findingSchema = v.object({
 	side: v.optional(v.picklist(['LEFT', 'RIGHT']), 'RIGHT'),
 	// Optional start of a multi-line range; must be < line and in the same hunk.
 	startLine: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
+	// Drives the review verdict in blocking mode; must match the body's tag.
+	severity: v.optional(v.picklist(['P1', 'P2']), 'P2'),
 	body: v.pipe(v.string(), v.minLength(1)),
 });
+
+// Severity gates merges in blocking mode, so the model's structured field is
+// not trusted alone: the body's visible tag is an independent claim of the
+// same fact. A finding counts as P1 when either says so — a mislabel can then
+// only escalate (a spurious REQUEST_CHANGES a re-review clears), never
+// silently APPROVE past a real P1 — and disagreements are logged.
+function findingSeverity(f: v.InferOutput<typeof findingSchema>): 'P1' | 'P2' {
+	const bodyTagged = f.body.includes('**P1**') || f.body.includes('\u{1F534}');
+	if (bodyTagged !== (f.severity === 'P1')) {
+		console.warn(
+			`turbodiff: severity mismatch on finding ${f.path}:${f.line} — field says ${f.severity}, ` +
+				`body ${bodyTagged ? 'is' : 'is not'} tagged P1; treating as P1`,
+		);
+	}
+	return bodyTagged || f.severity === 'P1' ? 'P1' : 'P2';
+}
 
 function findingsAsMarkdown(findings: v.InferOutput<typeof findingSchema>[]): string {
 	return findings
@@ -206,7 +343,24 @@ export const makePostReview = (agentInstanceId: string) =>
 			findings: v.optional(v.array(findingSchema), []),
 		}),
 		async run({ data }) {
-			const token = await tokenFor(data.owner, data.repo);
+			const row = await getRepoByFullName(data.owner, data.repo);
+			if (!row) {
+				throw new Error(
+					`Turbodiff is not installed on ${data.owner}/${data.repo} (no installation found). ` +
+						'Install the GitHub App on this repository first.',
+				);
+			}
+			const token = await installationToken(row.installation_id);
+			// Verdict mapping (repo blocking mode, default off): a P1 requests
+			// changes, a clean or P2-only review approves. Off posts plain
+			// comments — today's behavior. The bot's latest review state wins on
+			// GitHub, so a re-review that finds the P1s fixed clears the block.
+			const event =
+				row.blocking_reviews !== 1
+					? 'COMMENT'
+					: data.findings.map(findingSeverity).includes('P1')
+						? 'REQUEST_CHANGES'
+						: 'APPROVE';
 			const path = `/repos/${data.owner}/${data.repo}/pulls/${data.number}/reviews`;
 			const comments = data.findings.map((f) => ({
 				path: f.path,
@@ -220,7 +374,7 @@ export const makePostReview = (agentInstanceId: string) =>
 			try {
 				const res = await gh(token, path, {
 					method: 'POST',
-					body: JSON.stringify({ body: data.body, event: 'COMMENT', comments }),
+					body: JSON.stringify({ body: data.body, event, comments }),
 				});
 				const review = (await res.json()) as { html_url?: string };
 				output = {
@@ -237,7 +391,7 @@ export const makePostReview = (agentInstanceId: string) =>
 				const fallbackBody = `${data.body}\n\n### Findings\n\n${findingsAsMarkdown(data.findings)}`;
 				const res = await gh(token, path, {
 					method: 'POST',
-					body: JSON.stringify({ body: fallbackBody, event: 'COMMENT' }),
+					body: JSON.stringify({ body: fallbackBody, event }),
 				});
 				const review = (await res.json()) as { html_url?: string };
 				output = {

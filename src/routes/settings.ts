@@ -26,7 +26,9 @@ import {
 	repoUsageForMonth,
 	resolveAgentEnabled,
 	setRepoAgentEnabled,
+	setRepoBlockingReviews,
 	setRepoEnabled,
+	setRepoReviewOnPush,
 	updateAgent,
 	type AgentConnectionRow,
 	type AgentRow,
@@ -974,6 +976,24 @@ export function createSettingsRoutes() {
 																				</button>
 																			</form>`;
 																		})}
+																		<form method="post" action="/repos/${r.id}/push-toggle">
+																			<button
+																				class="chip ${r.review_on_push ? 'on' : ''}"
+																				title="${r.review_on_push ? 'stop' : 'start'} re-reviewing this repo's PRs when new commits are pushed (debounced)"
+																			>
+																				&#8635; on push
+																			</button>
+																		</form>
+																		<form method="post" action="/repos/${r.id}/blocking-toggle">
+																			<button
+																				class="chip ${r.blocking_reviews ? 'on' : ''}"
+																				title="${r.blocking_reviews
+																					? 'reviews post as plain comments'
+																					: 'P1 findings request changes; clean reviews approve'} — click to ${r.blocking_reviews ? 'disable' : 'enable'}"
+																			>
+																				&#9940; blocking
+																			</button>
+																		</form>
 																	</div>`
 																: ''}
 														</td>
@@ -1014,6 +1034,34 @@ export function createSettingsRoutes() {
 			overrides.find((o) => o.repository_id === repo.id && o.agent_id === agent.id)?.enabled,
 		);
 		await setRepoAgentEnabled(repo.id, agent.id, !current);
+		return c.redirect('/settings');
+	});
+
+	app.post('/repos/:id/push-toggle', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+
+		const repoId = Number(c.req.param('id'));
+		const repo = Number.isInteger(repoId) ? await getRepoById(repoId) : null;
+		if (!repo || !user.installationIds.includes(repo.installation_id)) {
+			return c.text('unknown repository', 404);
+		}
+
+		await setRepoReviewOnPush(repo.id, !repo.review_on_push);
+		return c.redirect('/settings');
+	});
+
+	app.post('/repos/:id/blocking-toggle', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+
+		const repoId = Number(c.req.param('id'));
+		const repo = Number.isInteger(repoId) ? await getRepoById(repoId) : null;
+		if (!repo || !user.installationIds.includes(repo.installation_id)) {
+			return c.text('unknown repository', 404);
+		}
+
+		await setRepoBlockingReviews(repo.id, !repo.blocking_reviews);
 		return c.redirect('/settings');
 	});
 
