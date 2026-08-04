@@ -295,8 +295,26 @@ const findingSchema = v.object({
 	side: v.optional(v.picklist(['LEFT', 'RIGHT']), 'RIGHT'),
 	// Optional start of a multi-line range; must be < line and in the same hunk.
 	startLine: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1))),
+	// Drives the review verdict in blocking mode; must match the body's tag.
+	severity: v.optional(v.picklist(['P1', 'P2']), 'P2'),
 	body: v.pipe(v.string(), v.minLength(1)),
 });
+
+// Severity gates merges in blocking mode, so the model's structured field is
+// not trusted alone: the body's visible tag is an independent claim of the
+// same fact. A finding counts as P1 when either says so — a mislabel can then
+// only escalate (a spurious REQUEST_CHANGES a re-review clears), never
+// silently APPROVE past a real P1 — and disagreements are logged.
+function findingSeverity(f: v.InferOutput<typeof findingSchema>): 'P1' | 'P2' {
+	const bodyTagged = f.body.includes('**P1**') || f.body.includes('\u{1F534}');
+	if (bodyTagged !== (f.severity === 'P1')) {
+		console.warn(
+			`turbodiff: severity mismatch on finding ${f.path}:${f.line} — field says ${f.severity}, ` +
+				`body ${bodyTagged ? 'is' : 'is not'} tagged P1; treating as P1`,
+		);
+	}
+	return bodyTagged || f.severity === 'P1' ? 'P1' : 'P2';
+}
 
 function findingsAsMarkdown(findings: v.InferOutput<typeof findingSchema>[]): string {
 	return findings
@@ -325,7 +343,24 @@ export const makePostReview = (agentInstanceId: string) =>
 			findings: v.optional(v.array(findingSchema), []),
 		}),
 		async run({ data }) {
-			const token = await tokenFor(data.owner, data.repo);
+			const row = await getRepoByFullName(data.owner, data.repo);
+			if (!row) {
+				throw new Error(
+					`Turbodiff is not installed on ${data.owner}/${data.repo} (no installation found). ` +
+						'Install the GitHub App on this repository first.',
+				);
+			}
+			const token = await installationToken(row.installation_id);
+			// Verdict mapping (repo blocking mode, default off): a P1 requests
+			// changes, a clean or P2-only review approves. Off posts plain
+			// comments — today's behavior. The bot's latest review state wins on
+			// GitHub, so a re-review that finds the P1s fixed clears the block.
+			const event =
+				row.blocking_reviews !== 1
+					? 'COMMENT'
+					: data.findings.map(findingSeverity).includes('P1')
+						? 'REQUEST_CHANGES'
+						: 'APPROVE';
 			const path = `/repos/${data.owner}/${data.repo}/pulls/${data.number}/reviews`;
 			const comments = data.findings.map((f) => ({
 				path: f.path,
@@ -339,7 +374,7 @@ export const makePostReview = (agentInstanceId: string) =>
 			try {
 				const res = await gh(token, path, {
 					method: 'POST',
-					body: JSON.stringify({ body: data.body, event: 'COMMENT', comments }),
+					body: JSON.stringify({ body: data.body, event, comments }),
 				});
 				const review = (await res.json()) as { html_url?: string };
 				output = {
@@ -356,7 +391,7 @@ export const makePostReview = (agentInstanceId: string) =>
 				const fallbackBody = `${data.body}\n\n### Findings\n\n${findingsAsMarkdown(data.findings)}`;
 				const res = await gh(token, path, {
 					method: 'POST',
-					body: JSON.stringify({ body: fallbackBody, event: 'COMMENT' }),
+					body: JSON.stringify({ body: fallbackBody, event }),
 				});
 				const review = (await res.json()) as { html_url?: string };
 				output = {

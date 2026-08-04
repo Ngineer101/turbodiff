@@ -19,6 +19,7 @@ export interface RepositoryRow {
 	name: string;
 	enabled: number;
 	review_on_push: number; // re-dispatch tiered agents on pushes to open PRs
+	blocking_reviews: number; // P1 → REQUEST_CHANGES, clean → APPROVE
 	model: string | null;
 	created_at: string; // when the repo was connected (mirrored into D1)
 }
@@ -130,6 +131,12 @@ export async function setRepoEnabled(id: number, enabled: boolean): Promise<void
 
 export async function setRepoReviewOnPush(id: number, on: boolean): Promise<void> {
 	await env.DB.prepare('UPDATE repositories SET review_on_push = ?2 WHERE id = ?1')
+		.bind(id, on ? 1 : 0)
+		.run();
+}
+
+export async function setRepoBlockingReviews(id: number, on: boolean): Promise<void> {
+	await env.DB.prepare('UPDATE repositories SET blocking_reviews = ?2 WHERE id = ?1')
 		.bind(id, on ? 1 : 0)
 		.run();
 }
