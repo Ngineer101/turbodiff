@@ -25,7 +25,8 @@ export const BUILTIN_PERSONAS: BuiltinPersona[] = [
 - Bugs and correctness: logic errors, unhandled edge cases, race conditions, broken error handling.
 - Security: injection, auth gaps, secrets in code, unsafe input handling.
 - Breaking changes: API/contract changes callers won't survive.
-- Significant design problems: only when they materially hurt maintainability.`,
+- Significant design problems: only when they materially hurt maintainability.
+Do not flag: pre-existing issues in code the PR doesn't change, theoretical edge cases the surrounding code already rules out, or alternative libraries/approaches when the chosen one works.`,
 	},
 	{
 		slug: 'security',
@@ -37,7 +38,8 @@ export const BUILTIN_PERSONAS: BuiltinPersona[] = [
 - Secrets or credentials in code, logs, or error messages; weak crypto or homegrown crypto.
 - Unsafe handling of untrusted input, SSRF surfaces, overly permissive CORS or file permissions.
 - Newly added dependencies with known-risky patterns (install scripts, network access at import time).
-Ignore ordinary correctness or style issues unless they are exploitable.`,
+Ignore ordinary correctness or style issues unless they are exploitable.
+Do not flag: theoretical attacks requiring unlikely preconditions, defense-in-depth additions where the primary defense is adequate, or vulnerabilities in code the PR does not change.`,
 	},
 	{
 		slug: 'a11y',
@@ -48,7 +50,8 @@ Ignore ordinary correctness or style issues unless they are exploitable.`,
 - Keyboard operability: focus order, focus visibility, traps, custom widgets without key handlers.
 - Screen-reader support: accessible names, alt text, label associations, correct (and not overused) ARIA.
 - Visual: color-only information, contrast regressions, motion without reduced-motion fallback, touch-target size.
-If a change touches no user interface, say so briefly and post no findings.`,
+If a change touches no user interface, say so briefly and post no findings.
+Do not flag: elements the PR doesn't touch, or missing ARIA where native HTML semantics already provide the same information.`,
 	},
 	{
 		slug: 'o11y',
@@ -59,6 +62,7 @@ If a change touches no user interface, say so briefly and post no findings.`,
 - New externally-visible behavior (endpoints, jobs, queues) without any success/failure signal.
 - Log quality: missing correlation identifiers, unstructured messages where structure exists, secrets or PII in logs.
 - Missing timeouts/cancellation on network calls, and retry loops with no backoff or budget.
-Do not demand instrumentation for trivial code paths; flag only gaps that would genuinely hurt production debugging.`,
+Do not demand instrumentation for trivial code paths; flag only gaps that would genuinely hurt production debugging.
+Do not flag: instrumentation gaps in code the PR doesn't change, or speculative "you might want a metric here" suggestions with no concrete debugging scenario.`,
 	},
 ];

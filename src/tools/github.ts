@@ -49,11 +49,59 @@ function truncate(text: string, max: number, label: string): string {
 	return `${text.slice(0, max)}\n\n[turbodiff: ${label} truncated at ${max} characters of ${text.length}]`;
 }
 
+// Files whose diffs are machine noise: no reviewable intent, and large enough
+// to eat the truncation budget before the real code gets seen.
+const NOISE_PATTERNS: { pattern: RegExp; reason: string }[] = [
+	{
+		pattern:
+			/(^|\/)(package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|deno\.lock|Cargo\.lock|Gemfile\.lock|poetry\.lock|uv\.lock|Pipfile\.lock|composer\.lock|flake\.lock|go\.sum|gradle\.lockfile)$/,
+		reason: 'lockfile',
+	},
+	{ pattern: /\.min\.(js|css)$/, reason: 'minified asset' },
+	{ pattern: /\.map$/, reason: 'source map' },
+];
+
+// An @generated marker in a file's header comment means machine output —
+// except migrations, whose generated SQL still changes schema and needs
+// review. Only the first hunk is checked, and only when it starts at the top
+// of the new file: the marker convention is "first few lines", and matching
+// deeper would drop files that merely mention @generated in code.
+function isGeneratedSegment(path: string, segment: string): boolean {
+	if (/migration/i.test(path)) return false;
+	const hunk = segment.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@.*$/m);
+	if (!hunk || Number(hunk[1]) > 3) return false;
+	const start = segment.indexOf(hunk[0]) + hunk[0].length;
+	return segment
+		.slice(start)
+		.split('\n', 10)
+		.some((line) => line.includes('@generated'));
+}
+
+// Replaces each noise file's segment of the unified diff with a one-line
+// marker, so the model knows the file changed without reading it and the
+// MAX_DIFF_CHARS budget goes to reviewable code. Runs before truncation.
+function filterDiffNoise(diff: string): string {
+	return diff
+		.split(/^(?=diff --git )/m)
+		.map((segment) => {
+			const header = segment.match(/^diff --git "?a\/.+?"? "?b\/(.+?)"?$/m);
+			if (!header) return segment;
+			const path = header[1];
+			const reason =
+				NOISE_PATTERNS.find((n) => n.pattern.test(path))?.reason ??
+				(isGeneratedSegment(path, segment) ? 'generated file' : null);
+			return reason === null ? segment : `[turbodiff: diff for ${path} omitted — ${reason}]\n`;
+		})
+		.join('');
+}
+
 export const fetchPr = defineTool({
 	name: 'fetch_pr',
 	description:
 		'Fetch a pull request: its title, description, author, branch info, and the full unified diff. ' +
-		'Call this first to see what the PR changes. Large diffs are truncated with a marker.',
+		'Call this first to see what the PR changes. Large diffs are truncated with a marker; noise ' +
+		'files (lockfiles, minified assets, source maps, generated code) are omitted and replaced ' +
+		'with per-file markers.',
 	input: v.object({
 		owner: v.string(),
 		repo: v.string(),
@@ -89,7 +137,7 @@ export const fetchPr = defineTool({
 				changedFiles: meta.changed_files,
 				additions: meta.additions,
 				deletions: meta.deletions,
-				diff: truncate(diff, MAX_DIFF_CHARS, 'diff'),
+				diff: truncate(filterDiffNoise(diff), MAX_DIFF_CHARS, 'diff'),
 			},
 		};
 	},
