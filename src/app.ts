@@ -47,6 +47,10 @@ export async function dispatchReviewAgent(
 	prNumber: number,
 	prUrl: string,
 	trigger: string,
+	// Auto-dispatch passes the PR's computed risk tier (recorded for the
+	// dashboard) and, for trivial PRs, an optional cheap-model override.
+	// Mention/manual dispatches omit both.
+	opts: { riskTier?: string; modelOverride?: string } = {},
 ): Promise<boolean> {
 	const instanceId = `${agent.slug}--${repo.owner}--${repo.name}--${prNumber}`.toLowerCase();
 	// Snapshot the agent's external MCP connections (non-secret fields only;
@@ -62,7 +66,7 @@ export async function dispatchReviewAgent(
 				attributes: {
 					agent_slug: agent.slug,
 					agent_name: agent.name,
-					model: agent.model,
+					model: opts.modelOverride ?? agent.model,
 					pull_request: `${repo.owner}/${repo.name}#${prNumber}`,
 					trigger,
 					...(connections.length > 0 ? { connections: JSON.stringify(connections) } : {}),
@@ -79,7 +83,15 @@ export async function dispatchReviewAgent(
 		);
 		return false;
 	}
-	await recordReview(repo.id, repo.installation_id, prNumber, trigger, agent.slug, instanceId);
+	await recordReview(
+		repo.id,
+		repo.installation_id,
+		prNumber,
+		trigger,
+		agent.slug,
+		instanceId,
+		opts.riskTier ?? null,
+	);
 	return true;
 }
 

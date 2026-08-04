@@ -226,7 +226,13 @@ function reviewRow(r: ReviewActivityRow) {
 	return html`<tr>
 		<td>
 			${prUrl ? html`<a href="${prUrl}">${repoFull}#${r.pr_number}</a>` : html`${repoFull}#${r.pr_number}`}
-			<span class="muted">&middot; ${r.agent_slug ?? 'review'} &middot; ${r.trigger_event}</span>
+			<span class="muted"
+				>&middot; ${r.agent_slug ?? 'review'} &middot; ${r.trigger_event}${r.risk_tier
+					? html` &middot; ${r.risk_tier}`
+					: ''}${r.findings_count !== null
+					? html` &middot; ${r.findings_count} finding${r.findings_count === 1 ? '' : 's'}`
+					: ''}</span
+			>
 		</td>
 		<td>${statusPill(r)}</td>
 		<td class="num">${tokens > 0 ? fmtTokens(tokens) : html`<span class="muted">—</span>`}</td>
@@ -384,7 +390,11 @@ export function createSettingsRoutes() {
 						<div class="tile">
 							<div class="label">avg review time</div>
 							<div class="value">${stats.avg_duration_s !== null ? fmtDuration(stats.avg_duration_s) : '—'}</div>
-							<div class="sub">${fmtTokens(stats.month_tokens)} tokens this month</div>
+							<div class="sub">
+								${fmtTokens(stats.month_tokens)} tokens this month${stats.avg_findings !== null
+									? html` &middot; ${stats.avg_findings.toFixed(1)} findings/review`
+									: ''}
+							</div>
 						</div>
 						<div class="tile">
 							<div class="label">connected repos</div>
