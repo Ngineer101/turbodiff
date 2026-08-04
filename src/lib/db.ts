@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { openToken } from './crypto.ts';
 import { BUILTIN_PERSONAS, DEFAULT_AGENT_SLUG, DEFAULT_MODEL } from './personas.ts';
 
 // Thin typed layer over the D1 config store (schema in migrations/).
@@ -281,6 +282,7 @@ export async function updateAgent(
 export async function deleteAgent(id: number): Promise<void> {
 	await env.DB.batch([
 		env.DB.prepare('DELETE FROM repo_agents WHERE agent_id = ?1').bind(id),
+		env.DB.prepare('DELETE FROM agent_connections WHERE agent_id = ?1').bind(id),
 		env.DB.prepare('DELETE FROM agents WHERE id = ?1 AND is_builtin = 0').bind(id),
 	]);
 }
@@ -350,6 +352,106 @@ export async function setRepoAgentEnabled(
 	)
 		.bind(repositoryId, agentId, enabled ? 1 : 0)
 		.run();
+}
+
+// --- External MCP tool connections per agent (migration 0005) ---
+
+export interface AgentConnectionRow {
+	id: number;
+	agent_id: number;
+	name: string;
+	url: string;
+	tool_allowlist: string | null; // JSON string array; null = all tools
+	auth_ciphertext: string | null;
+	optional: number;
+	created_at: string;
+}
+
+// The non-secret snapshot that rides the review.request signal so the agent
+// render can mount connections. The bearer token never leaves D1: the auth
+// resolver fetches and decrypts it by connection id at request time.
+export interface ConnectionSnapshot {
+	id: number;
+	name: string;
+	url: string;
+	tools?: string[];
+	hasAuth: boolean;
+	optional: boolean;
+}
+
+export function connectionSnapshot(row: AgentConnectionRow): ConnectionSnapshot {
+	let tools: string[] | undefined;
+	if (row.tool_allowlist) {
+		try {
+			const parsed = JSON.parse(row.tool_allowlist);
+			if (Array.isArray(parsed) && parsed.length > 0) tools = parsed.map(String);
+		} catch {
+			// Malformed allowlist behaves as "all tools" rather than failing runs.
+		}
+	}
+	return {
+		id: row.id,
+		name: row.name,
+		url: row.url,
+		...(tools ? { tools } : {}),
+		hasAuth: row.auth_ciphertext !== null,
+		optional: row.optional === 1,
+	};
+}
+
+export async function listAgentConnections(agentId: number): Promise<AgentConnectionRow[]> {
+	const res = await env.DB.prepare(
+		'SELECT * FROM agent_connections WHERE agent_id = ?1 ORDER BY name',
+	)
+		.bind(agentId)
+		.all<AgentConnectionRow>();
+	return res.results;
+}
+
+export async function getAgentConnection(id: number): Promise<AgentConnectionRow | null> {
+	return env.DB.prepare('SELECT * FROM agent_connections WHERE id = ?1')
+		.bind(id)
+		.first<AgentConnectionRow>();
+}
+
+export async function createAgentConnection(
+	agentId: number,
+	fields: {
+		name: string;
+		url: string;
+		toolAllowlist: string[] | null;
+		authCiphertext: string | null;
+		optional: boolean;
+	},
+): Promise<void> {
+	await env.DB.prepare(
+		`INSERT INTO agent_connections (agent_id, name, url, tool_allowlist, auth_ciphertext, optional)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+	)
+		.bind(
+			agentId,
+			fields.name,
+			fields.url,
+			fields.toolAllowlist ? JSON.stringify(fields.toolAllowlist) : null,
+			fields.authCiphertext,
+			fields.optional ? 1 : 0,
+		)
+		.run();
+}
+
+export async function deleteAgentConnection(id: number): Promise<void> {
+	await env.DB.prepare('DELETE FROM agent_connections WHERE id = ?1').bind(id).run();
+}
+
+// The MCP auth resolver: called by the Flue transport on every request to an
+// authenticated server. Fetches and unseals the token on demand — it never
+// lands in the conversation, the signal, or the UI.
+export async function getConnectionAuthToken(connectionId: number): Promise<string> {
+	const row = await getAgentConnection(connectionId);
+	if (!row?.auth_ciphertext) {
+		throw new Error(`turbodiff: connection ${connectionId} has no stored token`);
+	}
+	return openToken(row.auth_ciphertext);
 }
 
 export interface AgentUsageRow {
