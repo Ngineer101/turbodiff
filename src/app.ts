@@ -36,6 +36,8 @@ setProvider(
 // Accumulate per-turn token usage and cost onto review rows in D1.
 registerReviewMetering();
 
+const startedAt = Date.now();
+
 const app = new Hono();
 const reviewer = createAgentRouter(PrReviewer);
 
@@ -46,7 +48,7 @@ app.get('/healthz', async (c) => {
 		console.error('turbodiff: healthz D1 check failed', err);
 		return c.json({ ok: false, db: false }, 503);
 	}
-	return c.json({ ok: true, db: true });
+	return c.json({ ok: true, db: true, uptime_s: Math.round((Date.now() - startedAt) / 1000) });
 });
 
 // Dispatches one configured agent against one PR and records the review row.
