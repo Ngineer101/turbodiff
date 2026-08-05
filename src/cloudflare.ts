@@ -9,6 +9,7 @@
 
 import { processFixMessage, type FixQueueMessage } from './lib/fixer.ts';
 import { runGeneration, type GenQueueMessage } from './lib/generator.ts';
+import { runPlanAnalyze, runPlanRefine, type PlanQueueMessage } from './lib/planner.ts';
 
 // The fixer sandbox container (docs/software-factory-design.md). Declared in
 // wrangler.jsonc under containers/durable_objects with migration tag v2.
@@ -18,13 +19,24 @@ export { Sandbox } from '@cloudflare/sandbox';
 // request can wait on, so producers enqueue and these consumers do the work.
 // Both processors never throw (failures land in fix_attempts / features), so
 // every message acks — a broken run is not retried into repeat token spend.
+type FactoryMessage = FixQueueMessage | GenQueueMessage | PlanQueueMessage;
+
 export default {
-	async queue(batch: MessageBatch<FixQueueMessage | GenQueueMessage>): Promise<void> {
+	async queue(batch: MessageBatch<FactoryMessage>): Promise<void> {
 		for (const message of batch.messages) {
-			if (message.body.kind === 'generate') {
-				await runGeneration(message.body.featureId);
-			} else {
-				await processFixMessage(message.body);
+			const body = message.body;
+			switch (body.kind) {
+				case 'generate':
+					await runGeneration(body.featureId);
+					break;
+				case 'plan_analyze':
+					await runPlanAnalyze(body.planId);
+					break;
+				case 'plan_refine':
+					await runPlanRefine(body.planId);
+					break;
+				default:
+					await processFixMessage(body);
 			}
 			message.ack();
 		}

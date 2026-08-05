@@ -246,6 +246,80 @@ export async function updateFeature(
 		.run();
 }
 
+// --- plans (Phase 3: requirements → questions → plan → approve → feature) ---
+
+export interface PlanRow {
+	id: number;
+	repository_id: number;
+	title: string;
+	requirements: string;
+	analysis: string | null;
+	questions: string | null; // JSON array of strings
+	answers: string | null; // JSON array of strings
+	plan: string | null;
+	acceptance: string | null; // JSON array of strings
+	feature_id: number | null;
+	status: string;
+	error: string | null;
+	created_at: string;
+}
+
+export async function createPlan(
+	repositoryId: number,
+	title: string,
+	requirements: string,
+): Promise<number> {
+	const row = await env.DB.prepare(
+		'INSERT INTO plans (repository_id, title, requirements) VALUES (?1, ?2, ?3) RETURNING id',
+	)
+		.bind(repositoryId, title, requirements)
+		.first<{ id: number }>();
+	return row!.id;
+}
+
+export async function getPlan(id: number): Promise<PlanRow | null> {
+	return env.DB.prepare('SELECT * FROM plans WHERE id = ?1').bind(id).first<PlanRow>();
+}
+
+export async function updatePlan(
+	id: number,
+	fields: {
+		status?: string;
+		analysis?: string;
+		questions?: string;
+		answers?: string;
+		plan?: string;
+		acceptance?: string;
+		featureId?: number;
+		error?: string;
+	},
+): Promise<void> {
+	await env.DB.prepare(
+		`UPDATE plans SET
+		 status = COALESCE(?2, status),
+		 analysis = COALESCE(?3, analysis),
+		 questions = COALESCE(?4, questions),
+		 answers = COALESCE(?5, answers),
+		 plan = COALESCE(?6, plan),
+		 acceptance = COALESCE(?7, acceptance),
+		 feature_id = COALESCE(?8, feature_id),
+		 error = COALESCE(?9, error)
+		 WHERE id = ?1`,
+	)
+		.bind(
+			id,
+			fields.status ?? null,
+			fields.analysis ?? null,
+			fields.questions ?? null,
+			fields.answers ?? null,
+			fields.plan ?? null,
+			fields.acceptance ?? null,
+			fields.featureId ?? null,
+			fields.error ?? null,
+		)
+		.run();
+}
+
 export async function finishFixAttempt(
 	id: number,
 	status: string,
