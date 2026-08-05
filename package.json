@@ -1,34 +1,27 @@
 {
-	"name": "turbodiff",
-	"private": true,
-	"type": "module",
-	"scripts": {
-		"dev": "vite dev",
-		"build": "vite build",
-		"deploy": "vite build && wrangler deploy",
-		"check:types": "tsc --noEmit"
-	},
-	"dependencies": {
-		"@cloudflare/sandbox": "^0.12.4",
-		"@flue/runtime": "^2.0.1",
-		"agents": "^0.14.2",
-		"hono": "^4.7.0",
-		"valibot": "^1.4.2"
-	},
-	"devDependencies": {
-		"@cloudflare/vite-plugin": "^1.39.2",
-		"@flue/cli": "^2.0.1",
-		"@flue/vite": "^2.0.1",
-		"@types/node": "^22.10.10",
-		"typescript": "^7.0.2",
-		"vite": "^8.0.14",
-		"wrangler": "^4.97.0"
-	},
-	"devEngines": {
-		"packageManager": {
-			"name": "npm",
-			"version": "12.0.2",
-			"onFail": "download"
-		}
-	}
+  "name": "turbodiff",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "deploy": "vite build && wrangler deploy",
+    "check:types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cloudflare/sandbox": "^0.12.4",
+    "@flue/runtime": "^2.0.1",
+    "agents": "^0.14.2",
+    "hono": "^4.7.0",
+    "valibot": "^1.4.2"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.39.2",
+    "@flue/cli": "^2.0.1",
+    "@flue/vite": "^2.0.1",
+    "@types/node": "^22.10.10",
+    "typescript": "^7.0.2",
+    "vite": "^8.0.14",
+    "wrangler": "^4.97.0"
+  }
 }

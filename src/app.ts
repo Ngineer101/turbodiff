@@ -22,6 +22,8 @@ import { registerReviewMetering } from './lib/metering.ts';
 import { createSettingsRoutes } from './routes/settings.ts';
 import { createWebhookRoutes } from './routes/webhooks.ts';
 
+const startedAt = Date.now();
+
 // Route every model call through the Workers AI binding and the named
 // AI Gateway (set AI_GATEWAY_ID in wrangler.jsonc). The gateway holds the
 // provider keys (BYOK) — no ANTHROPIC_API_KEY ever enters this Worker.
@@ -45,7 +47,7 @@ app.get('/healthz', async (c) => {
 		console.error('turbodiff: healthz D1 check failed', err);
 		return c.json({ ok: false, db: false }, 503);
 	}
-	return c.json({ ok: true, db: true });
+	return c.json({ ok: true, db: true, uptime_s: Math.round((Date.now() - startedAt) / 1000) });
 });
 
 // Dispatches one configured agent against one PR and records the review row.
