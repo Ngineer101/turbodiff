@@ -270,7 +270,7 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
 
 	const push = await sandbox.exec(
 		`git -C ${CLONE_DIR} add -A && ` +
-			`git -C ${CLONE_DIR} commit -m "Address review findings (turbodiff fix agent)" && ` +
+			`git -C ${CLONE_DIR} commit -m "Address review findings on #${prNumber} (turbodiff fix agent)" && ` +
 			`git -C ${CLONE_DIR} push origin HEAD:"$FIX_BRANCH"`,
 		{ env: gitEnv, timeout: 2 * 60_000 },
 	);
