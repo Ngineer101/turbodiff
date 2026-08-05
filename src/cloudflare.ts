@@ -7,4 +7,6 @@
 //
 // https://flueframework.com/docs/guide/cloudflare-target/#extending-cloudflarets-entrypoint
 
-export {};
+// The fixer sandbox container (docs/software-factory-design.md). Declared in
+// wrangler.jsonc under containers/durable_objects with migration tag v2.
+export { Sandbox } from '@cloudflare/sandbox';
