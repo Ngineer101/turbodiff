@@ -52,6 +52,21 @@
 	"durable_objects": {
 		"bindings": [{ "class_name": "Sandbox", "name": "Sandbox" }]
 	},
+	// Decouples the auto-fix run (minutes) from the webhook request (seconds).
+	// Create the queue once per account: npx wrangler queues create turbodiff-fix
+	"queues": {
+		"producers": [{ "binding": "FIX_QUEUE", "queue": "turbodiff-fix" }],
+		"consumers": [
+			{
+				"queue": "turbodiff-fix",
+				// One fix run per invocation so each gets the full 15-minute
+				// consumer wall clock; the fixer records failures itself, so a
+				// single redelivery only re-runs infra-level crashes.
+				"max_batch_size": 1,
+				"max_retries": 1
+			}
+		]
+	},
 	// Every agent generates a Durable Object class named after its identity
 	// (PrReviewer -> FluePrReviewerAgent), and Cloudflare requires a migration
 	// entry for each one. Append a new tag when you add an agent:

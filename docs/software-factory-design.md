@@ -102,9 +102,11 @@ fix_attempts (
 1. **Phase 1 — close the loop (fix iteration).** On `pull_request_review` submitted
    with `REQUEST_CHANGES` from turbodiff (opt-in per repo), dispatch a fix agent in a
    Cloudflare Sandbox: clone head branch → apply findings → run tests → push. Works on
-   human-authored PRs too — standalone value before any factory exists. *Spike status:
-   implemented as `POST /internal/fix` (manual trigger); webhook trigger + D1 tracking
-   next.*
+   human-authored PRs too — standalone value before any factory exists. *Status: done —
+   manual trigger (`POST /internal/fix`), webhook trigger (`pull_request_review` →
+   `FIX_QUEUE` → consumer in `src/cloudflare.ts`), per-repo `auto_fix` dashboard toggle,
+   and the `fix_attempts` cap with human-handoff comment. The GitHub App needs
+   Contents: Read & write and the Pull request review webhook event.*
 2. **Phase 2 — generation.** A Workflow: spec → sandbox codegen → tests → open PR →
    existing review + fix loop take over. API-triggered, no UI.
 3. **Phase 3 — planning intake.** Dashboard feature entry; planning agent asks

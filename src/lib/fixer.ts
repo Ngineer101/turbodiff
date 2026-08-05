@@ -1,6 +1,7 @@
 import { getSandbox, type Sandbox } from '@cloudflare/sandbox';
 import { env } from 'cloudflare:workers';
 import { gh } from '../tools/github.ts';
+import { countFixAttempts, finishFixAttempt, getRepoById, recordFixAttempt } from './db.ts';
 import { installationToken } from './github-app.ts';
 
 // Phase 1 spike of the software factory fix loop (docs/software-factory-design.md):
@@ -40,8 +41,14 @@ export interface FixOutcome {
 const CLONE_DIR = '/workspace/repo';
 const TASK_FILE = '/workspace/fix-task.md';
 const NOTES_FILE = '/workspace/fix-notes.md';
-const AGENT_TIMEOUT_MS = 15 * 60_000;
-const TEST_TIMEOUT_MS = 10 * 60_000;
+// Agent + tests + git must fit inside a queue consumer's 15-minute wall clock.
+const AGENT_TIMEOUT_MS = 10 * 60_000;
+const TEST_TIMEOUT_MS = 3 * 60_000;
+
+// Fix runs per PR across all triggers. A fix push causes a re-review, which
+// can cause another blocking review and another fix — the cap guarantees the
+// loop terminates and hands off to a human.
+export const FIX_MAX_ATTEMPTS = 3;
 
 // Pick the runner credential: explicit request wins, otherwise prefer the
 // user's subscription token over gateway metering.
@@ -289,6 +296,74 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
 		testOutput,
 		agentOutput,
 	};
+}
+
+// Queue message enqueued by the pull_request_review webhook when a blocking
+// turbodiff review lands on an auto-fix-enabled repo.
+export interface FixQueueMessage {
+	repoId: number;
+	prNumber: number;
+	trigger: string;
+}
+
+// Queue consumer body: re-validate against current state (the toggle may have
+// flipped since enqueue), enforce the iteration cap, run the fix, and record
+// the attempt. Never throws — a fix failure is recorded, not retried, so a
+// broken run can't spend tokens again on redelivery.
+export async function processFixMessage(msg: FixQueueMessage): Promise<void> {
+	const repo = await getRepoById(msg.repoId);
+	if (!repo || !repo.enabled || !repo.auto_fix) {
+		console.log(`turbodiff: fix skipped for repo ${msg.repoId}#${msg.prNumber} (auto-fix off)`);
+		return;
+	}
+	const label = `${repo.owner}/${repo.name}#${msg.prNumber}`;
+
+	const attempts = await countFixAttempts(repo.id, msg.prNumber);
+	if (attempts >= FIX_MAX_ATTEMPTS) {
+		console.warn(`turbodiff: fix cap reached for ${label} (${attempts} attempts)`);
+		await postHandoffComment(repo.installation_id, repo.owner, repo.name, msg.prNumber, attempts);
+		return;
+	}
+
+	const attemptId = await recordFixAttempt(repo.id, msg.prNumber, msg.trigger);
+	try {
+		const outcome = await runFix({
+			owner: repo.owner,
+			repo: repo.name,
+			prNumber: msg.prNumber,
+			installationId: repo.installation_id,
+		});
+		await finishFixAttempt(attemptId, outcome.status, outcome.commit);
+		console.log(`turbodiff: fix ${outcome.status} for ${label} (attempt ${attempts + 1})`);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		await finishFixAttempt(attemptId, 'failed', undefined, message.slice(0, 500));
+		console.error(`turbodiff: fix attempt failed for ${label}:`, err);
+	}
+}
+
+// Cap exhausted: leave a handoff summary instead of another silent iteration.
+async function postHandoffComment(
+	installationId: number,
+	owner: string,
+	repo: string,
+	prNumber: number,
+	attempts: number,
+): Promise<void> {
+	try {
+		const token = await installationToken(installationId);
+		await gh(token, `/repos/${owner}/${repo}/issues/${prNumber}/comments`, {
+			method: 'POST',
+			body: JSON.stringify({
+				body:
+					`🔧 Turbodiff auto-fix stopped: ${attempts} fix attempts have run on this PR (the cap) ` +
+					`and the latest review still requests changes. A human should take over — see the fix ` +
+					`commits and review threads above for what was attempted and what remains open.`,
+			}),
+		});
+	} catch (err) {
+		console.error('turbodiff: handoff comment failed:', err);
+	}
 }
 
 async function postFixComment(
