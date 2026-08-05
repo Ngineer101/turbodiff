@@ -223,79 +223,85 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
 			`git -C ${CLONE_DIR} config user.email "turbodiff[bot]@users.noreply.github.com"`,
 	);
 
-	await sandbox.writeFile(TASK_FILE, taskPrompt(`${owner}/${repo}#${prNumber}`, headRef, findings));
+	try {
+		await sandbox.writeFile(TASK_FILE, taskPrompt(`${owner}/${repo}#${prNumber}`, headRef, findings));
 
-	// Headless Claude Code run. --dangerously-skip-permissions is safe here —
-	// the container is the isolation boundary (IS_SANDBOX acknowledges that).
-	const agent = await sandbox.exec(
-		`claude -p --dangerously-skip-permissions --output-format text < ${TASK_FILE}`,
-		{
-			cwd: CLONE_DIR,
-			timeout: AGENT_TIMEOUT_MS,
-			env: {
-				...auth.vars,
-				IS_SANDBOX: '1',
-				DISABLE_AUTOUPDATER: '1',
-				CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+		// Headless Claude Code run. --dangerously-skip-permissions is safe here —
+		// the container is the isolation boundary (IS_SANDBOX acknowledges that).
+		const agent = await sandbox.exec(
+			`claude -p --dangerously-skip-permissions --output-format text < ${TASK_FILE}`,
+			{
+				cwd: CLONE_DIR,
+				timeout: AGENT_TIMEOUT_MS,
+				env: {
+					...auth.vars,
+					IS_SANDBOX: '1',
+					DISABLE_AUTOUPDATER: '1',
+					CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+				},
 			},
-		},
-	);
-	const agentOutput = scrub(`${agent.stdout}\n${agent.stderr}`.trim()).slice(-8_000);
-	if (!agent.success) {
-		throw new Error(`fix agent exited ${agent.exitCode}: ${agentOutput.slice(-1_000)}`);
-	}
-
-	const notes = await sandbox
-		.readFile(NOTES_FILE)
-		.then((f) => f.content.trim() || undefined)
-		.catch(() => undefined);
-
-	const status = await sandbox.exec(`git -C ${CLONE_DIR} status --porcelain`);
-	if (!status.stdout.trim()) {
-		await postFixComment(token, params, { changed: false, notes });
-		return { status: 'no_changes', authMode: auth.mode, branch: headRef, notes, agentOutput };
-	}
-
-	let testOutput: string | undefined;
-	if (params.testCommand) {
-		const tests = await sandbox.exec(params.testCommand, {
-			cwd: CLONE_DIR,
-			timeout: TEST_TIMEOUT_MS,
-		});
-		testOutput = scrub(`${tests.stdout}\n${tests.stderr}`.trim()).slice(-4_000);
-		if (!tests.success) {
-			return {
-				status: 'tests_failed',
-				authMode: auth.mode,
-				branch: headRef,
-				notes,
-				testOutput,
-				agentOutput,
-			};
+		);
+		const agentOutput = scrub(`${agent.stdout}\n${agent.stderr}`.trim()).slice(-8_000);
+		if (!agent.success) {
+			throw new Error(`fix agent exited ${agent.exitCode}: ${agentOutput.slice(-1_000)}`);
 		}
-	}
 
-	const push = await sandbox.exec(
-		`git -C ${CLONE_DIR} add -A && ` +
-			`git -C ${CLONE_DIR} commit -m "Address review findings on #${prNumber} (turbodiff fix agent)" && ` +
-			`git -C ${CLONE_DIR} push origin HEAD:"$FIX_BRANCH"`,
-		{ env: gitEnv, timeout: 2 * 60_000 },
-	);
-	if (!push.success) {
-		throw new Error(`git push failed: ${scrub(push.stderr).slice(0, 500)}`);
-	}
-	const commit = (await sandbox.exec(`git -C ${CLONE_DIR} rev-parse HEAD`)).stdout.trim();
+		const notes = await sandbox
+			.readFile(NOTES_FILE)
+			.then((f) => f.content.trim() || undefined)
+			.catch(() => undefined);
 
-	await postFixComment(token, params, { changed: true, commit, notes, tested: !!params.testCommand });
-	return {
-		status: 'fixed',
-		authMode: auth.mode,
-		branch: headRef,
-		commit,
-		notes,
-		testOutput,
-		agentOutput,
-	};
+		const status = await sandbox.exec(`git -C ${CLONE_DIR} status --porcelain`);
+		if (!status.stdout.trim()) {
+			await postFixComment(token, params, { changed: false, notes });
+			return { status: 'no_changes', authMode: auth.mode, branch: headRef, notes, agentOutput };
+		}
+
+		let testOutput: string | undefined;
+		if (params.testCommand) {
+			const tests = await sandbox.exec(params.testCommand, {
+				cwd: CLONE_DIR,
+				timeout: TEST_TIMEOUT_MS,
+			});
+			testOutput = scrub(`${tests.stdout}\n${tests.stderr}`.trim()).slice(-4_000);
+			if (!tests.success) {
+				return {
+					status: 'tests_failed',
+					authMode: auth.mode,
+					branch: headRef,
+					notes,
+					testOutput,
+					agentOutput,
+				};
+			}
+		}
+
+		const push = await sandbox.exec(
+			`git -C ${CLONE_DIR} add -A && ` +
+				`git -C ${CLONE_DIR} commit -m "Address review findings on #${prNumber} (turbodiff fix agent)" && ` +
+				`git -C ${CLONE_DIR} push origin HEAD:"$FIX_BRANCH"`,
+			{ env: gitEnv, timeout: 2 * 60_000 },
+		);
+		if (!push.success) {
+			throw new Error(`git push failed: ${scrub(push.stderr).slice(0, 500)}`);
+		}
+		const commit = (await sandbox.exec(`git -C ${CLONE_DIR} rev-parse HEAD`)).stdout.trim();
+
+		await postFixComment(token, params, { changed: true, commit, notes, tested: !!params.testCommand });
+		return {
+			status: 'fixed',
+			authMode: auth.mode,
+			branch: headRef,
+			commit,
+			notes,
+			testOutput,
+			agentOutput,
+		};
+	} finally {
+		// Scrub the token-embedded remote URL so an idle sandbox (sleepAfter
+		// keeps it warm) never holds a usable credential after this run ends.
+		await sandbox.exec(`git -C ${CLONE_DIR} remote set-url origin "https://github.com/${headRepo}.git"`);
+	}
 }
 
 // Queue message enqueued by the pull_request_review webhook when a blocking
