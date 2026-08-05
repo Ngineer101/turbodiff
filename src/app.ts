@@ -38,7 +38,15 @@ registerReviewMetering();
 const app = new Hono();
 const reviewer = createAgentRouter(PrReviewer);
 
-app.get('/healthz', (c) => c.json({ ok: true }));
+app.get('/healthz', async (c) => {
+	try {
+		await env.DB.prepare('SELECT 1').run();
+	} catch (err) {
+		console.error('turbodiff: healthz D1 check failed', err);
+		return c.json({ ok: false, db: false }, 503);
+	}
+	return c.json({ ok: true, db: true });
+});
 
 // Dispatches one configured agent against one PR and records the review row.
 // The message is a signal carrying the config snapshot: attributes feed the
