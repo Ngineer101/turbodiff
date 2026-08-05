@@ -9,6 +9,10 @@ import {
 	countReviews,
 	createAgent,
 	createAgentConnection,
+	createPlan,
+	getPlan,
+	listPlansForInstallations,
+	updatePlan,
 	dashboardStats,
 	deleteAgent,
 	deleteAgentConnection,
@@ -17,6 +21,7 @@ import {
 	getAgentBySlug,
 	getAgentConnection,
 	getRepoById,
+	getRepoByFullName,
 	listAgentConnections,
 	listAgents,
 	listInstallationsWithRepos,
@@ -34,8 +39,11 @@ import {
 	updateAgent,
 	type AgentConnectionRow,
 	type AgentRow,
+	type PlanRow,
+	type PlanWithRepo,
 	type ReviewActivityRow,
 } from '../lib/db.ts';
+import { approvePlan } from '../lib/planner.ts';
 import { encryptionConfigured, openToken, sealToken } from '../lib/crypto.ts';
 import { testMcpEndpoint } from '../lib/mcp-test.ts';
 import { DEFAULT_MODEL, RESERVED_AGENT_SLUGS } from '../lib/personas.ts';
@@ -265,16 +273,91 @@ function topbar(login: string) {
 	</div>`;
 }
 
-function tabs(active: 'dashboard' | 'reviews' | 'agents' | 'settings') {
+function tabs(active: 'dashboard' | 'factory' | 'reviews' | 'agents' | 'settings') {
 	return html`<nav class="tabs">
 		<a href="/" class="${active === 'dashboard' ? 'active' : ''}">dashboard</a>
+		<a href="/factory" class="${active === 'factory' ? 'active' : ''}">factory</a>
 		<a href="/reviews" class="${active === 'reviews' ? 'active' : ''}">reviews</a>
 		<a href="/agents" class="${active === 'agents' ? 'active' : ''}">agents</a>
 		<a href="/settings" class="${active === 'settings' ? 'active' : ''}">settings</a>
 	</nav>`;
 }
 
+const PLAN_STATUS_HINT: Record<string, string> = {
+	analyzing: 'analyzing the repo and drafting clarifying questions…',
+	awaiting_answers: 'answer the questions below to continue',
+	refining: 'incorporating your answers into the plan…',
+	plan_ready: 'review the plan and approve to generate',
+	approved: 'generating — follow the pull request',
+	failed: 'failed — see the error',
+};
+
+const RUNNING_PLAN_STATUSES = new Set(['analyzing', 'refining']);
+
+// One plan card: status, plus the interactive surface for its current state
+// (answer form when awaiting answers, plan + approve when ready, PR link once
+// generating).
+function renderPlan(p: PlanWithRepo): HtmlEscapedString | Promise<HtmlEscapedString> {
+	const questions: string[] = p.questions ? JSON.parse(p.questions) : [];
+	const acceptance: string[] = p.acceptance ? JSON.parse(p.acceptance) : [];
+	const running = RUNNING_PLAN_STATUSES.has(p.status);
+	return html`<div class="tile" style="margin-top:0.75rem">
+		<div class="topbar">
+			<strong>${p.title}</strong>
+			<span class="pill ${running ? 'running' : p.status === 'failed' ? 'red' : 'on'}">${p.status}</span>
+		</div>
+		<div class="muted" style="margin:0.15rem 0 0.5rem">
+			${p.owner}/${p.name} · ${PLAN_STATUS_HINT[p.status] ?? ''} · ${ago(p.created_at)}
+		</div>
+		${p.status === 'failed' && p.error ? html`<p class="form-error">${p.error}</p>` : ''}
+		${p.status === 'awaiting_answers' && questions.length > 0
+			? html`<form method="post" action="/factory/plans/${p.id}/answers">
+					${questions.map(
+						(q, i) => html`<label
+							>${q}
+							<input type="text" name="answer_${i}" placeholder="your answer" />
+						</label>`,
+					)}
+					<p style="margin-top:0.6rem"><button type="submit">Submit answers</button></p>
+				</form>`
+			: ''}
+		${p.status === 'plan_ready'
+			? html`<details open>
+						<summary class="muted">implementation plan</summary>
+						<pre style="white-space:pre-wrap;margin-top:0.4rem">${p.plan ?? ''}</pre>
+						${acceptance.length > 0
+							? html`<div class="muted" style="margin-top:0.4rem">acceptance criteria</div>
+									<ul>
+										${acceptance.map((a) => html`<li>${a}</li>`)}
+									</ul>`
+							: ''}
+					</details>
+					<form method="post" action="/factory/plans/${p.id}/approve">
+						<p style="margin-top:0.6rem"><button type="submit">Approve &amp; generate</button></p>
+					</form>`
+			: ''}
+		${p.status === 'approved' && p.pr_number
+			? html`<p style="margin-top:0.4rem">
+					<a href="https://github.com/${p.owner}/${p.name}/pull/${p.pr_number}"
+						>pull request #${p.pr_number} &rarr;</a
+					>
+				</p>`
+			: ''}
+	</div>`;
+}
+
 type AuthedUser = { session: Session; installationIds: number[] };
+
+// Load the plan named by the :id param only if the caller may manage the repo
+// it belongs to (its installation is in the user's set). Null otherwise.
+async function authorizedPlan(c: Context, user: AuthedUser): Promise<PlanRow | null> {
+	const id = Number(c.req.param('id'));
+	const plan = Number.isInteger(id) ? await getPlan(id) : null;
+	if (!plan) return null;
+	const repo = await getRepoById(plan.repository_id);
+	if (!repo || !user.installationIds.includes(repo.installation_id)) return null;
+	return plan;
+}
 
 // GitHub is the source of truth for which installations this user may manage;
 // D1 only supplies Turbodiff's per-repo settings and usage. Returns null after
@@ -492,6 +575,106 @@ export function createSettingsRoutes() {
 						: ''}`,
 			),
 		);
+	});
+
+	// Factory (Phase 3): submit a feature as requirements, answer the planning
+	// agent's questions, approve the plan, and it generates a PR.
+	app.get('/factory', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+		const { session, installationIds } = user;
+
+		const [groups, plans] = await Promise.all([
+			listInstallationsWithRepos(installationIds),
+			listPlansForInstallations(installationIds),
+		]);
+		const repos = groups.flatMap((g) => g.repos).filter((r) => r.enabled);
+
+		return c.html(
+			page(
+				'Turbodiff — factory',
+				html`${topbar(session.login)} ${tabs('factory')}
+					<h2>new feature</h2>
+					${repos.length === 0
+						? html`<p class="muted">
+								Enable reviews on a repository in
+								<a href="/settings">settings</a> to plan features for it.
+							</p>`
+						: html`<form method="post" action="/factory/plans">
+								<label
+									>repository
+									<select name="repo" required>
+										${repos.map((r) => html`<option value="${r.owner}/${r.name}">${r.owner}/${r.name}</option>`)}
+									</select>
+								</label>
+								<label
+									>title
+									<input type="text" name="title" required placeholder="short feature name" />
+								</label>
+								<label
+									>requirements
+									<textarea
+										name="requirements"
+										required
+										placeholder="Describe what you want built. The planning agent reads your repo, asks clarifying questions, and drafts a plan you approve before any code is written."
+									></textarea>
+								</label>
+								<p style="margin-top:0.75rem"><button type="submit">Plan feature</button></p>
+							</form>`}
+					<h2>plans <span class="muted">(${plans.length})</span></h2>
+					${plans.length === 0
+						? html`<p class="muted">No plans yet.</p>`
+						: plans.map((p) => renderPlan(p))}`,
+			),
+		);
+	});
+
+	app.post('/factory/plans', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+		const form = await c.req.parseBody();
+		const repo = typeof form.repo === 'string' ? form.repo : '';
+		const title = typeof form.title === 'string' ? form.title.trim() : '';
+		const requirements = typeof form.requirements === 'string' ? form.requirements.trim() : '';
+		const match = repo.match(/^([\w.-]+)\/([\w.-]+)$/);
+		if (!match || !title || !requirements) return c.redirect('/factory');
+
+		const row = await getRepoByFullName(match[1], match[2]);
+		if (!row || !user.installationIds.includes(row.installation_id)) {
+			return c.text('unknown repository', 404);
+		}
+		const planId = await createPlan(row.id, title, requirements);
+		await env.FACTORY_QUEUE.send({ kind: 'plan_analyze', planId });
+		return c.redirect('/factory');
+	});
+
+	app.post('/factory/plans/:id/answers', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+		const plan = await authorizedPlan(c, user);
+		if (!plan) return c.text('unknown plan', 404);
+		if (plan.status !== 'awaiting_answers') return c.redirect('/factory');
+
+		const form = await c.req.parseBody();
+		const questions: string[] = plan.questions ? JSON.parse(plan.questions) : [];
+		const answers = questions.map((_, i) => {
+			const a = form[`answer_${i}`];
+			return typeof a === 'string' ? a : '';
+		});
+		await updatePlan(plan.id, { status: 'refining', answers: JSON.stringify(answers) });
+		await env.FACTORY_QUEUE.send({ kind: 'plan_refine', planId: plan.id });
+		return c.redirect('/factory');
+	});
+
+	app.post('/factory/plans/:id/approve', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+		const plan = await authorizedPlan(c, user);
+		if (!plan) return c.text('unknown plan', 404);
+
+		const featureId = await approvePlan(plan.id);
+		if (featureId !== null) await env.FACTORY_QUEUE.send({ kind: 'generate', featureId });
+		return c.redirect('/factory');
 	});
 
 	// Full review history, newest first, paginated.

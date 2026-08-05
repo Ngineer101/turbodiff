@@ -281,6 +281,35 @@ export async function getPlan(id: number): Promise<PlanRow | null> {
 	return env.DB.prepare('SELECT * FROM plans WHERE id = ?1').bind(id).first<PlanRow>();
 }
 
+export interface PlanWithRepo extends PlanRow {
+	owner: string;
+	name: string;
+	installation_id: number;
+	pr_number: number | null; // from the linked feature, if generation started
+}
+
+// Plans across the given installations, newest first, with repo + generated-PR
+// context for the dashboard.
+export async function listPlansForInstallations(
+	installationIds: number[],
+	limit = 50,
+): Promise<PlanWithRepo[]> {
+	if (installationIds.length === 0) return [];
+	const placeholders = installationIds.map((_, i) => `?${i + 2}`).join(', ');
+	const res = await env.DB.prepare(
+		`SELECT p.*, r.owner, r.name, r.installation_id, f.pr_number AS pr_number
+		 FROM plans p
+		 JOIN repositories r ON r.id = p.repository_id
+		 LEFT JOIN features f ON f.id = p.feature_id
+		 WHERE r.installation_id IN (${placeholders})
+		 ORDER BY p.id DESC
+		 LIMIT ?1`,
+	)
+		.bind(limit, ...installationIds)
+		.all<PlanWithRepo>();
+	return res.results;
+}
+
 export async function updatePlan(
 	id: number,
 	fields: {
