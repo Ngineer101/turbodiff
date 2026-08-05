@@ -55,6 +55,12 @@ app.get('/healthz', async (c) => {
 	return c.json({ ok: true, db: true, uptime_s: Math.round((Date.now() - startedAt) / 1000) });
 });
 
+// Reports the live Worker version (Cloudflare Version Metadata binding) so
+// deploy tooling can confirm which build is running. No auth, like /healthz.
+app.get('/version', (c) => {
+	return c.json({ id: env.CF_VERSION_METADATA.id, tag: env.CF_VERSION_METADATA.tag });
+});
+
 // Dispatches one configured agent against one PR and records the review row.
 // The message is a signal carrying the config snapshot: attributes feed the
 // render (model, agent name), the body carries the request plus the agent's
