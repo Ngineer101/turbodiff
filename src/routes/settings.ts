@@ -26,6 +26,7 @@ import {
 	repoUsageForMonth,
 	resolveAgentEnabled,
 	setRepoAgentEnabled,
+	setRepoAutoFix,
 	setRepoBlockingReviews,
 	setRepoEnabled,
 	setRepoReviewOnPush,
@@ -994,6 +995,16 @@ export function createSettingsRoutes() {
 																				&#9940; blocking
 																			</button>
 																		</form>
+																		<form method="post" action="/repos/${r.id}/autofix-toggle">
+																			<button
+																				class="chip ${r.auto_fix ? 'on' : ''}"
+																				title="${r.auto_fix
+																					? 'blocking reviews are left for a human to address'
+																					: 'a blocking review dispatches the fix agent to address the findings (max 3 runs per PR)'} — click to ${r.auto_fix ? 'disable' : 'enable'}"
+																			>
+																				&#128295; auto-fix
+																			</button>
+																		</form>
 																	</div>`
 																: ''}
 														</td>
@@ -1062,6 +1073,20 @@ export function createSettingsRoutes() {
 		}
 
 		await setRepoBlockingReviews(repo.id, !repo.blocking_reviews);
+		return c.redirect('/settings');
+	});
+
+	app.post('/repos/:id/autofix-toggle', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+
+		const repoId = Number(c.req.param('id'));
+		const repo = Number.isInteger(repoId) ? await getRepoById(repoId) : null;
+		if (!repo || !user.installationIds.includes(repo.installation_id)) {
+			return c.text('unknown repository', 404);
+		}
+
+		await setRepoAutoFix(repo.id, !repo.auto_fix);
 		return c.redirect('/settings');
 	});
 

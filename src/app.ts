@@ -7,7 +7,9 @@ import { createMiddleware } from 'hono/factory';
 import { PrReviewer } from './agents/pr-reviewer.ts';
 import {
 	connectionSnapshot,
+	createFeature,
 	getAgentBySlug,
+	getFeature,
 	getRepoByFullName,
 	listAgentConnections,
 	listAgentsForRepo,
@@ -15,6 +17,7 @@ import {
 	type AgentRow,
 	type RepositoryRow,
 } from './lib/db.ts';
+import { runFix, sandboxSmoke, type FixAuthMode } from './lib/fixer.ts';
 import { registerReviewMetering } from './lib/metering.ts';
 import { createSettingsRoutes } from './routes/settings.ts';
 import { createWebhookRoutes } from './routes/webhooks.ts';
@@ -116,6 +119,95 @@ app.use('/internal/*', requireSecret);
 app.use('/review', requireSecret);
 
 app.route('/internal/pr-reviewer', reviewer);
+
+// Software-factory fix loop, Phase 1 spike (docs/software-factory-design.md):
+//   POST /internal/fix { "pr_url": "...", "findings"?: "...", "auth_mode"?: "...", "test_command"?: "..." }
+// Clones the PR head branch in a sandbox, runs the fix agent against the
+// findings (default: turbodiff's latest blocking review), runs tests, pushes.
+// The request stays open for the duration of the run (minutes).
+// Sandbox health probe: boots the fixer container and reports toolchain
+// versions. No GitHub access, no model spend.
+app.get('/internal/fix/smoke', async (c) => {
+	try {
+		// ?auth=1 additionally runs a one-line agent prompt with the resolved
+		// runner credential (tiny model spend) to verify auth end to end.
+		return c.json(await sandboxSmoke(c.req.query('auth') === '1'));
+	} catch (err) {
+		console.error('turbodiff: sandbox smoke failed:', err);
+		return c.json({ error: err instanceof Error ? err.message : 'smoke failed' }, 502);
+	}
+});
+
+// Software-factory generation, Phase 2 (docs/software-factory-design.md):
+//   POST /internal/generate { "repo": "<owner>/<name>", "title": "...", "spec": "..." }
+// Records the feature and enqueues the generation run; the generated PR then
+// flows through the normal review + auto-fix loop. Poll the status route below.
+app.post('/internal/generate', async (c) => {
+	const payload = await c.req
+		.json<{ repo?: string; title?: string; spec?: string }>()
+		.catch(() => null);
+	const match = payload?.repo?.match(/^([\w.-]+)\/([\w.-]+)$/);
+	if (!match || !payload?.title?.trim() || !payload?.spec?.trim()) {
+		return c.json(
+			{ error: 'body must be {"repo": "<owner>/<name>", "title": "...", "spec": "..."}' },
+			400,
+		);
+	}
+	const repo = await getRepoByFullName(match[1], match[2]);
+	if (!repo) return c.json({ error: `Turbodiff is not installed on ${payload.repo}` }, 404);
+	if (!repo.enabled) return c.json({ error: 'reviews are disabled for this repository' }, 409);
+
+	const featureId = await createFeature(repo.id, payload.title.trim(), payload.spec.trim());
+	await env.FACTORY_QUEUE.send({ kind: 'generate', featureId });
+	return c.json({ accepted: true, feature_id: featureId, status_url: `/internal/features/${featureId}` });
+});
+
+app.get('/internal/features/:id', async (c) => {
+	const id = Number(c.req.param('id'));
+	const feature = Number.isInteger(id) ? await getFeature(id) : null;
+	if (!feature) return c.json({ error: 'unknown feature' }, 404);
+	return c.json(feature);
+});
+
+app.post('/internal/fix', async (c) => {
+	const payload = await c.req
+		.json<{
+			pr_url?: string;
+			findings?: string;
+			auth_mode?: FixAuthMode;
+			test_command?: string;
+		}>()
+		.catch(() => null);
+	const match = payload?.pr_url?.match(
+		/^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/,
+	);
+	if (!match) {
+		return c.json(
+			{ error: 'body must be {"pr_url": "https://github.com/<owner>/<repo>/pull/<n>", ...}' },
+			400,
+		);
+	}
+	const [, owner, repoName, number] = match;
+	const repo = await getRepoByFullName(owner, repoName);
+	if (!repo) {
+		return c.json({ error: `Turbodiff is not installed on ${owner}/${repoName}` }, 404);
+	}
+	try {
+		const outcome = await runFix({
+			owner: repo.owner,
+			repo: repo.name,
+			prNumber: Number(number),
+			installationId: repo.installation_id,
+			findings: payload?.findings,
+			authMode: payload?.auth_mode,
+			testCommand: payload?.test_command,
+		});
+		return c.json(outcome);
+	} catch (err) {
+		console.error(`turbodiff: fix run failed for ${owner}/${repoName}#${number}:`, err);
+		return c.json({ error: err instanceof Error ? err.message : 'fix run failed' }, 502);
+	}
+});
 
 // Manual trigger (e.g. re-review after pushes, or CI callers):
 //   POST /review { "pr_url": "https://github.com/<owner>/<repo>/pull/<n>", "agent"?: "<slug>" }

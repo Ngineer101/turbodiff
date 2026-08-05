@@ -20,6 +20,7 @@ export interface RepositoryRow {
 	enabled: number;
 	review_on_push: number; // re-dispatch tiered agents on pushes to open PRs
 	blocking_reviews: number; // P1 → REQUEST_CHANGES, clean → APPROVE
+	auto_fix: number; // dispatch the fix agent when a blocking review lands
 	model: string | null;
 	created_at: string; // when the repo was connected (mirrored into D1)
 }
@@ -138,6 +139,98 @@ export async function setRepoReviewOnPush(id: number, on: boolean): Promise<void
 export async function setRepoBlockingReviews(id: number, on: boolean): Promise<void> {
 	await env.DB.prepare('UPDATE repositories SET blocking_reviews = ?2 WHERE id = ?1')
 		.bind(id, on ? 1 : 0)
+		.run();
+}
+
+export async function setRepoAutoFix(id: number, on: boolean): Promise<void> {
+	await env.DB.prepare('UPDATE repositories SET auto_fix = ?2 WHERE id = ?1')
+		.bind(id, on ? 1 : 0)
+		.run();
+}
+
+// --- fix attempts (auto-fix loop bookkeeping + iteration cap) ---
+
+// Every attempt counts toward the cap regardless of outcome, so even a
+// persistently failing fixer terminates after the cap.
+export async function countFixAttempts(repositoryId: number, prNumber: number): Promise<number> {
+	const row = await env.DB.prepare(
+		'SELECT COUNT(*) AS n FROM fix_attempts WHERE repository_id = ?1 AND pr_number = ?2',
+	)
+		.bind(repositoryId, prNumber)
+		.first<{ n: number }>();
+	return row?.n ?? 0;
+}
+
+export async function recordFixAttempt(
+	repositoryId: number,
+	prNumber: number,
+	trigger: string,
+): Promise<number> {
+	const row = await env.DB.prepare(
+		'INSERT INTO fix_attempts (repository_id, pr_number, "trigger") VALUES (?1, ?2, ?3) RETURNING id',
+	)
+		.bind(repositoryId, prNumber, trigger)
+		.first<{ id: number }>();
+	return row!.id;
+}
+
+// --- features (Phase 2: spec → generated branch + PR) ---
+
+export interface FeatureRow {
+	id: number;
+	repository_id: number;
+	title: string;
+	spec: string;
+	branch: string | null;
+	pr_number: number | null;
+	status: string;
+	error: string | null;
+	created_at: string;
+}
+
+export async function createFeature(
+	repositoryId: number,
+	title: string,
+	spec: string,
+): Promise<number> {
+	const row = await env.DB.prepare(
+		'INSERT INTO features (repository_id, title, spec) VALUES (?1, ?2, ?3) RETURNING id',
+	)
+		.bind(repositoryId, title, spec)
+		.first<{ id: number }>();
+	return row!.id;
+}
+
+export async function getFeature(id: number): Promise<FeatureRow | null> {
+	return env.DB.prepare('SELECT * FROM features WHERE id = ?1').bind(id).first<FeatureRow>();
+}
+
+export async function updateFeature(
+	id: number,
+	fields: { status?: string; branch?: string; prNumber?: number; error?: string },
+): Promise<void> {
+	await env.DB.prepare(
+		`UPDATE features SET
+		 status = COALESCE(?2, status),
+		 branch = COALESCE(?3, branch),
+		 pr_number = COALESCE(?4, pr_number),
+		 error = COALESCE(?5, error)
+		 WHERE id = ?1`,
+	)
+		.bind(id, fields.status ?? null, fields.branch ?? null, fields.prNumber ?? null, fields.error ?? null)
+		.run();
+}
+
+export async function finishFixAttempt(
+	id: number,
+	status: string,
+	commitSha?: string,
+	error?: string,
+): Promise<void> {
+	await env.DB.prepare(
+		'UPDATE fix_attempts SET status = ?2, commit_sha = ?3, error = ?4 WHERE id = ?1',
+	)
+		.bind(id, status, commitSha ?? null, error ?? null)
 		.run();
 }
 

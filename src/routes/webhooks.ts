@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { Hono } from 'hono';
 import {
 	addRepositories,
+	countFixAttempts,
 	deleteInstallation,
 	ensureBuiltinAgents,
 	getAgentBySlug,
@@ -17,6 +18,7 @@ import {
 	type AgentRow,
 	type RepositoryRow,
 } from '../lib/db.ts';
+import { FIX_MAX_ATTEMPTS } from '../lib/fixer.ts';
 import { reactToIssueComment, verifyWebhookSignature } from '../lib/github-app.ts';
 import { agentsForTier, computeRiskTier, tierModelOverride, type RiskTier } from '../lib/risk.ts';
 
@@ -52,6 +54,17 @@ interface PullRequestEvent {
 	action: string;
 	number: number;
 	pull_request: { draft: boolean; html_url: string };
+	repository: { id: number; full_name: string };
+}
+
+interface PullRequestReviewEvent {
+	action: string;
+	review: {
+		id: number;
+		state: string; // lowercase in webhook payloads: changes_requested | approved | commented
+		user: { login: string; type: string } | null;
+	};
+	pull_request: { number: number; html_url: string; state: string; draft: boolean };
 	repository: { id: number; full_name: string };
 }
 
@@ -118,6 +131,8 @@ async function handleEvent(
 			return handleInstallationRepositories(payload as InstallationEvent);
 		case 'pull_request':
 			return handlePullRequest(payload as PullRequestEvent, dispatch);
+		case 'pull_request_review':
+			return handlePullRequestReview(payload as PullRequestReviewEvent);
 		case 'issue_comment':
 			return handleIssueComment(payload as IssueCommentEvent, dispatch);
 		case 'repository': {
@@ -248,6 +263,47 @@ async function handlePullRequest(
 	return {
 		body: { ok: true, review: `${p.repository.full_name}#${p.number}`, tier, agents: dispatched },
 	};
+}
+
+// The auto-fix trigger: turbodiff's own blocking review (posted when the repo
+// has blocking_reviews on and a P1 lands) enqueues a fix run. GitHub delivers
+// the app's own review back to it, so the author check is what closes the
+// loop deliberately rather than accidentally. The consumer re-validates
+// everything; this handler just gates cheaply before enqueueing.
+async function handlePullRequestReview(p: PullRequestReviewEvent): Promise<HandlerResult> {
+	if (p.action !== 'submitted') return { body: { ok: true, ignored: p.action } };
+	if (p.review.state !== 'changes_requested') {
+		return { body: { ok: true, ignored: `review state ${p.review.state}` } };
+	}
+	const botLogin = `${env.GITHUB_APP_SLUG || 'turbodiff'}[bot]`;
+	if (p.review.user?.type !== 'Bot' || p.review.user.login !== botLogin) {
+		return { body: { ok: true, ignored: 'not our review' } };
+	}
+	if (p.pull_request.state !== 'open' || p.pull_request.draft) {
+		return { body: { ok: true, skipped: 'PR closed or draft' } };
+	}
+
+	const repo = await getRepoById(p.repository.id);
+	if (!repo) return { body: { ok: true, skipped: 'repo not tracked' } };
+	if (!repo.enabled || !repo.auto_fix) {
+		return { body: { ok: true, skipped: 'auto-fix disabled for repo' } };
+	}
+	const installation = await getInstallation(repo.installation_id);
+	if (!installation || installation.suspended) {
+		return { body: { ok: true, skipped: 'installation missing or suspended' } };
+	}
+	const attempts = await countFixAttempts(repo.id, p.pull_request.number);
+	if (attempts >= FIX_MAX_ATTEMPTS) {
+		return { body: { ok: true, skipped: `fix cap reached (${attempts})` } };
+	}
+
+	await env.FACTORY_QUEUE.send({
+		kind: 'fix',
+		repoId: repo.id,
+		prNumber: p.pull_request.number,
+		trigger: 'blocking_review',
+	});
+	return { body: { ok: true, fix_enqueued: `${p.repository.full_name}#${p.pull_request.number}` } };
 }
 
 // Agent-runs left under the installation's daily cap.

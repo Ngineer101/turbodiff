@@ -30,11 +30,52 @@
 		// Optional gateway model id used instead of each agent's configured
 		// model on trivial-tier PRs (≤10 reviewable lines) — set a cheap model
 		// (e.g. a haiku-class id) to cut cost. Empty disables the downgrade.
-		"TRIVIAL_MODEL": ""
+		"TRIVIAL_MODEL": "",
+		// Gateway-mode auth for the fix runner: the AI Gateway's Anthropic
+		// endpoint (https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/anthropic).
+		// Pair with the FIXER_ANTHROPIC_API_KEY secret. Empty disables gateway mode;
+		// the CLAUDE_CODE_OAUTH_TOKEN secret enables subscription mode instead.
+		"FIXER_ANTHROPIC_BASE_URL": ""
+	},
+	// Fixer/codegen sandbox (docs/software-factory-design.md): each fix run
+	// executes Claude Code inside an isolated container. Local dev needs Docker.
+	"containers": [
+		{
+			"class_name": "Sandbox",
+			"image": "./Dockerfile",
+			// "standard-1" over "lite": fix runs clone repos, run the agent CLI,
+			// and execute test suites — they need the memory/CPU headroom.
+			"instance_type": "standard-1",
+			"max_instances": 5
+		}
+	],
+	"durable_objects": {
+		"bindings": [{ "class_name": "Sandbox", "name": "Sandbox" }]
+	},
+	// Decouples factory runs (minutes) from the requests that trigger them
+	// (seconds). One queue for both fix and generation messages, discriminated
+	// by a `kind` field — the local dev plugin hangs at boot with two consumers
+	// on one worker. Create once per account:
+	//   npx wrangler queues create turbodiff-factory
+	"queues": {
+		"producers": [{ "binding": "FACTORY_QUEUE", "queue": "turbodiff-factory" }],
+		"consumers": [
+			{
+				"queue": "turbodiff-factory",
+				// One run per invocation so each gets the full 15-minute consumer
+				// wall clock; the fixer/generator record failures themselves, so a
+				// single redelivery only re-runs infra-level crashes.
+				"max_batch_size": 1,
+				"max_retries": 1
+			}
+		]
 	},
 	// Every agent generates a Durable Object class named after its identity
 	// (PrReviewer -> FluePrReviewerAgent), and Cloudflare requires a migration
 	// entry for each one. Append a new tag when you add an agent:
 	// https://flueframework.com/docs/guide/cloudflare-target/#managing-migrations
-	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["FluePrReviewerAgent"] }]
+	"migrations": [
+		{ "tag": "v1", "new_sqlite_classes": ["FluePrReviewerAgent"] },
+		{ "tag": "v2", "new_sqlite_classes": ["Sandbox"] }
+	]
 }

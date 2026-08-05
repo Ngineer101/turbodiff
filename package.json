@@ -9,6 +9,7 @@
 		"check:types": "tsc --noEmit"
 	},
 	"dependencies": {
+		"@cloudflare/sandbox": "^0.12.4",
 		"@flue/runtime": "^2.0.1",
 		"agents": "^0.14.2",
 		"hono": "^4.7.0",
