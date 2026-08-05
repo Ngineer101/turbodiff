@@ -8,10 +8,13 @@ import { PrReviewer } from './agents/pr-reviewer.ts';
 import {
 	connectionSnapshot,
 	createFeature,
+	createPlan,
 	getAgentBySlug,
 	getFeature,
+	getPlan,
 	getRepoByFullName,
 	setRepoCheckCommand,
+	updatePlan,
 	listAgentConnections,
 	listAgentsForRepo,
 	recordReview,
@@ -19,6 +22,7 @@ import {
 	type RepositoryRow,
 } from './lib/db.ts';
 import { runFix, sandboxSmoke, type FixAuthMode } from './lib/fixer.ts';
+import { approvePlan } from './lib/planner.ts';
 import { registerReviewMetering } from './lib/metering.ts';
 import { createSettingsRoutes } from './routes/settings.ts';
 import { createWebhookRoutes } from './routes/webhooks.ts';
@@ -171,6 +175,72 @@ app.post('/internal/generate', async (c) => {
 	const featureId = await createFeature(repo.id, payload.title.trim(), payload.spec.trim());
 	await env.FACTORY_QUEUE.send({ kind: 'generate', featureId });
 	return c.json({ accepted: true, feature_id: featureId, status_url: `/internal/features/${featureId}` });
+});
+
+// Software-factory planning intake, Phase 3 (docs/software-factory-design.md).
+// The full front half: requirements → clarifying questions → plan + acceptance
+// criteria → approve → generation.
+//   POST /internal/plans { "repo": "<owner>/<name>", "title": "...", "requirements": "..." }
+// Records the plan and enqueues analysis; poll the status route for questions.
+app.post('/internal/plans', async (c) => {
+	const payload = await c.req
+		.json<{ repo?: string; title?: string; requirements?: string }>()
+		.catch(() => null);
+	const match = payload?.repo?.match(/^([\w.-]+)\/([\w.-]+)$/);
+	if (!match || !payload?.title?.trim() || !payload?.requirements?.trim()) {
+		return c.json(
+			{ error: 'body must be {"repo": "<owner>/<name>", "title": "...", "requirements": "..."}' },
+			400,
+		);
+	}
+	const repo = await getRepoByFullName(match[1], match[2]);
+	if (!repo) return c.json({ error: `Turbodiff is not installed on ${payload.repo}` }, 404);
+	if (!repo.enabled) return c.json({ error: 'reviews are disabled for this repository' }, 409);
+
+	const planId = await createPlan(repo.id, payload.title.trim(), payload.requirements.trim());
+	await env.FACTORY_QUEUE.send({ kind: 'plan_analyze', planId });
+	return c.json({ accepted: true, plan_id: planId, status_url: `/internal/plans/${planId}` });
+});
+
+app.get('/internal/plans/:id', async (c) => {
+	const id = Number(c.req.param('id'));
+	const plan = Number.isInteger(id) ? await getPlan(id) : null;
+	if (!plan) return c.json({ error: 'unknown plan' }, 404);
+	return c.json(plan);
+});
+
+// Submit answers to the clarifying questions; enqueues plan refinement.
+app.post('/internal/plans/:id/answers', async (c) => {
+	const id = Number(c.req.param('id'));
+	const plan = Number.isInteger(id) ? await getPlan(id) : null;
+	if (!plan) return c.json({ error: 'unknown plan' }, 404);
+	if (plan.status !== 'awaiting_answers') {
+		return c.json({ error: `plan is ${plan.status}, not awaiting_answers` }, 409);
+	}
+	const payload = await c.req.json<{ answers?: unknown }>().catch(() => null);
+	if (!Array.isArray(payload?.answers)) {
+		return c.json({ error: 'body must be {"answers": ["...", ...]}' }, 400);
+	}
+	await updatePlan(id, { status: 'refining', answers: JSON.stringify(payload.answers.map(String)) });
+	await env.FACTORY_QUEUE.send({ kind: 'plan_refine', planId: id });
+	return c.json({ accepted: true, plan_id: id, status_url: `/internal/plans/${id}` });
+});
+
+// Approve a ready plan: converts it to a generation feature (spec = plan +
+// acceptance criteria) and enqueues generation.
+app.post('/internal/plans/:id/approve', async (c) => {
+	const id = Number(c.req.param('id'));
+	const featureId = await approvePlan(id);
+	if (featureId === null) {
+		return c.json({ error: 'plan not found or not in plan_ready state' }, 409);
+	}
+	await env.FACTORY_QUEUE.send({ kind: 'generate', featureId });
+	return c.json({
+		accepted: true,
+		plan_id: id,
+		feature_id: featureId,
+		status_url: `/internal/features/${featureId}`,
+	});
 });
 
 // Set the sandbox verification gate for a repo (dashboard field lives in
