@@ -1,7 +1,7 @@
 import { getSandbox, type Sandbox } from '@cloudflare/sandbox';
 import { env } from 'cloudflare:workers';
 import { gh } from '../tools/github.ts';
-import { countFixAttempts, finishFixAttempt, getRepoById, recordFixAttempt } from './db.ts';
+import { finishFixAttempt, getRepoById, tryRecordFixAttempt } from './db.ts';
 import { installationToken } from './github-app.ts';
 
 // Phase 1 spike of the software factory fix loop (docs/software-factory-design.md):
@@ -41,9 +41,10 @@ export interface FixOutcome {
 const CLONE_DIR = '/workspace/repo';
 const TASK_FILE = '/workspace/fix-task.md';
 const NOTES_FILE = '/workspace/fix-notes.md';
-// Agent + tests + git must fit inside a queue consumer's 15-minute wall clock.
-const AGENT_TIMEOUT_MS = 10 * 60_000;
-const TEST_TIMEOUT_MS = 3 * 60_000;
+// Clone (2) + agent (8) + checks (4) + push (1) must fit inside a queue
+// consumer's 15-minute wall clock; typical runs use a fraction of each budget.
+const AGENT_TIMEOUT_MS = 8 * 60_000;
+const TEST_TIMEOUT_MS = 4 * 60_000;
 
 // Fix runs per PR across all triggers. A fix push causes a re-review, which
 // can cause another blocking review and another fix — the cap guarantees the
@@ -121,9 +122,16 @@ async function latestBlockingFindings(
 		body: string;
 		user: { login: string; type: string } | null;
 	}[];
-	const blocking = reviews.filter(
-		(r) => r.state === 'CHANGES_REQUESTED' && r.user?.type === 'Bot',
-	).at(-1);
+	// A blocking verdict on a self-authored (factory) PR is downgraded to a
+	// COMMENT review with the intended verdict in the body — match both forms.
+	const blocking = reviews
+		.filter(
+			(r) =>
+				r.user?.type === 'Bot' &&
+				(r.state === 'CHANGES_REQUESTED' ||
+					(r.state === 'COMMENTED' && r.body.startsWith('**Verdict: REQUEST_CHANGES**'))),
+		)
+		.at(-1);
 	if (!blocking) return null;
 
 	const comments = (await (
@@ -257,6 +265,18 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
 			return { status: 'no_changes', authMode: auth.mode, branch: headRef, notes, agentOutput };
 		}
 
+		// Commit the fix BEFORE running checks so check-command working-tree
+		// mutations (dep installs, config edits) never leak into the pushed
+		// commit. Local until checks pass and we push.
+		const committed = await sandbox.exec(
+			`git -C ${CLONE_DIR} add -A && ` +
+				`git -C ${CLONE_DIR} commit -m "Address review findings on #${prNumber} (turbodiff fix agent)"`,
+			{ timeout: 60_000 },
+		);
+		if (!committed.success) {
+			throw new Error(`git commit failed: ${scrub(committed.stderr).slice(0, 500)}`);
+		}
+
 		let testOutput: string | undefined;
 		if (params.testCommand) {
 			const tests = await sandbox.exec(params.testCommand, {
@@ -277,9 +297,7 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
 		}
 
 		const push = await sandbox.exec(
-			`git -C ${CLONE_DIR} add -A && ` +
-				`git -C ${CLONE_DIR} commit -m "Address review findings on #${prNumber} (turbodiff fix agent)" && ` +
-				`git -C ${CLONE_DIR} push origin HEAD:"$FIX_BRANCH"`,
+			`git -C ${CLONE_DIR} push origin HEAD:"$FIX_BRANCH"`,
 			{ env: gitEnv, timeout: 2 * 60_000 },
 		);
 		if (!push.success) {
@@ -325,23 +343,35 @@ export async function processFixMessage(msg: FixQueueMessage): Promise<void> {
 	}
 	const label = `${repo.owner}/${repo.name}#${msg.prNumber}`;
 
-	const attempts = await countFixAttempts(repo.id, msg.prNumber);
-	if (attempts >= FIX_MAX_ATTEMPTS) {
-		console.warn(`turbodiff: fix cap reached for ${label} (${attempts} attempts)`);
-		await postHandoffComment(repo.installation_id, repo.owner, repo.name, msg.prNumber, attempts);
+	// The cap check and the attempt insert are one atomic statement — two
+	// concurrent deliveries for the same PR can't both start a run past the cap.
+	const attemptId = await tryRecordFixAttempt(
+		repo.id,
+		msg.prNumber,
+		msg.trigger,
+		FIX_MAX_ATTEMPTS,
+	);
+	if (attemptId === null) {
+		console.warn(`turbodiff: fix cap reached for ${label}`);
+		await postHandoffComment(
+			repo.installation_id,
+			repo.owner,
+			repo.name,
+			msg.prNumber,
+			FIX_MAX_ATTEMPTS,
+		);
 		return;
 	}
-
-	const attemptId = await recordFixAttempt(repo.id, msg.prNumber, msg.trigger);
 	try {
 		const outcome = await runFix({
 			owner: repo.owner,
 			repo: repo.name,
 			prNumber: msg.prNumber,
 			installationId: repo.installation_id,
+			testCommand: repo.check_command ?? undefined,
 		});
 		await finishFixAttempt(attemptId, outcome.status, outcome.commit);
-		console.log(`turbodiff: fix ${outcome.status} for ${label} (attempt ${attempts + 1})`);
+		console.log(`turbodiff: fix ${outcome.status} for ${label} (attempt ${attemptId})`);
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		await finishFixAttempt(attemptId, 'failed', undefined, message.slice(0, 500));

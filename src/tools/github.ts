@@ -1,4 +1,5 @@
 import { defineTool } from '@flue/runtime';
+import { env } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { completeReview, getRepoByFullName } from '../lib/db.ts';
 import { installationToken } from '../lib/github-app.ts';
@@ -370,41 +371,65 @@ export const makePostReview = (agentInstanceId: string) =>
 				body: f.body,
 			}));
 
-			let output: { posted: boolean; inline: number; url: string | null; fallback: string | null };
-			try {
-				const res = await gh(token, path, {
-					method: 'POST',
-					body: JSON.stringify({ body: data.body, event, comments }),
-				});
-				const review = (await res.json()) as { html_url?: string };
-				output = {
-					posted: true,
-					inline: comments.length,
-					url: review.html_url ?? null,
-					fallback: null,
-				};
-			} catch (err) {
-				// GitHub 422s the whole review if any single comment anchors outside
-				// the diff. Rather than lose the review, repost with the findings
-				// folded into the summary body.
-				if (comments.length === 0 || !String(err).includes('422')) throw err;
-				const fallbackBody = `${data.body}\n\n### Findings\n\n${findingsAsMarkdown(data.findings)}`;
-				const res = await gh(token, path, {
-					method: 'POST',
-					body: JSON.stringify({ body: fallbackBody, event }),
-				});
-				const review = (await res.json()) as { html_url?: string };
-				output = {
-					posted: true,
-					inline: 0,
-					url: review.html_url ?? null,
-					fallback: 'inline comments failed to anchor; findings were folded into the review body',
-				};
+			// Two recoverable 422 classes, retried in a bounded loop:
+			//   - self-authored PR: GitHub refuses APPROVE/REQUEST_CHANGES from the
+			//     PR author (factory-generated PRs) — downgrade to COMMENT, keeping
+			//     the intended verdict visible in the body.
+			//   - bad anchor: any single comment outside the diff fails the whole
+			//     review — fold findings into the summary body.
+			const intended = event;
+			let postEvent = event;
+			let postBody = data.body;
+			let postComments = comments;
+			let fallback: string | null = null;
+			let review: { html_url?: string };
+			for (let attempt = 0; ; attempt++) {
+				try {
+					const res = await gh(token, path, {
+						method: 'POST',
+						body: JSON.stringify({ body: postBody, event: postEvent, comments: postComments }),
+					});
+					review = (await res.json()) as { html_url?: string };
+					break;
+				} catch (err) {
+					const msg = String(err);
+					if (!msg.includes('422') || attempt >= 2) throw err;
+					if (/own pull request/i.test(msg) && postEvent !== 'COMMENT') {
+						postEvent = 'COMMENT';
+						postBody =
+							`**Verdict: ${intended}** _(posted as a comment — GitHub does not let the PR author ` +
+							`review its own pull request)_\n\n${postBody}`;
+						fallback = 'self-authored PR: verdict downgraded to COMMENT';
+					} else if (postComments.length > 0) {
+						postBody = `${postBody}\n\n### Findings\n\n${findingsAsMarkdown(data.findings)}`;
+						postComments = [];
+						fallback = 'inline comments failed to anchor; findings were folded into the review body';
+					} else {
+						throw err;
+					}
+				}
 			}
+			const output = {
+				posted: true,
+				inline: postComments.length,
+				url: review.html_url ?? null,
+				fallback,
+			};
 			// Flip this dispatch's row to completed so /reviews stops showing it
 			// as running. The findings count feeds the noise metric on the
 			// dashboard (fallback-posted findings still count — they reached the PR).
 			await completeReview(agentInstanceId, output.url, data.findings.length);
+			// Factory-PR gate: a blocking verdict on a self-authored PR never fires
+			// the pull_request_review webhook trigger (the posted state is COMMENT),
+			// so enqueue the fix directly. The consumer re-validates toggle and cap.
+			if (intended === 'REQUEST_CHANGES' && postEvent === 'COMMENT' && row.auto_fix === 1) {
+				await env.FACTORY_QUEUE.send({
+					kind: 'fix',
+					repoId: row.id,
+					prNumber: data.number,
+					trigger: 'blocking_review_self',
+				});
+			}
 			return { output };
 		},
 	});

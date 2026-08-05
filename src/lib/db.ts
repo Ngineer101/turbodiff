@@ -21,6 +21,7 @@ export interface RepositoryRow {
 	review_on_push: number; // re-dispatch tiered agents on pushes to open PRs
 	blocking_reviews: number; // P1 → REQUEST_CHANGES, clean → APPROVE
 	auto_fix: number; // dispatch the fix agent when a blocking review lands
+	check_command: string | null; // sandbox verification gate before factory pushes
 	model: string | null;
 	created_at: string; // when the repo was connected (mirrored into D1)
 }
@@ -148,6 +149,14 @@ export async function setRepoAutoFix(id: number, on: boolean): Promise<void> {
 		.run();
 }
 
+// The sandbox verification gate for factory pushes. Empty string clears it.
+export async function setRepoCheckCommand(id: number, command: string): Promise<void> {
+	const trimmed = command.trim();
+	await env.DB.prepare('UPDATE repositories SET check_command = ?2 WHERE id = ?1')
+		.bind(id, trimmed || null)
+		.run();
+}
+
 // --- fix attempts (auto-fix loop bookkeeping + iteration cap) ---
 
 // Every attempt counts toward the cap regardless of outcome, so even a
@@ -161,17 +170,33 @@ export async function countFixAttempts(repositoryId: number, prNumber: number): 
 	return row?.n ?? 0;
 }
 
-export async function recordFixAttempt(
+// Records an attempt only while under the cap, in a single statement so two
+// concurrent consumers can't both slip past the count check. Returns null when
+// the cap is reached. Sweeps zombie rows first: a consumer killed at the
+// platform's wall clock never finishes its row, so old 'running' rows are
+// closed as failed rather than lying on the dashboard forever.
+export async function tryRecordFixAttempt(
 	repositoryId: number,
 	prNumber: number,
 	trigger: string,
-): Promise<number> {
-	const row = await env.DB.prepare(
-		'INSERT INTO fix_attempts (repository_id, pr_number, "trigger") VALUES (?1, ?2, ?3) RETURNING id',
+	cap: number,
+): Promise<number | null> {
+	await env.DB.prepare(
+		`UPDATE fix_attempts SET status = 'failed', error = 'stale: consumer killed before completion'
+		 WHERE repository_id = ?1 AND pr_number = ?2 AND status = 'running'
+		 AND created_at < datetime('now', '-20 minutes')`,
 	)
-		.bind(repositoryId, prNumber, trigger)
+		.bind(repositoryId, prNumber)
+		.run();
+	const row = await env.DB.prepare(
+		`INSERT INTO fix_attempts (repository_id, pr_number, "trigger")
+		 SELECT ?1, ?2, ?3
+		 WHERE (SELECT COUNT(*) FROM fix_attempts WHERE repository_id = ?1 AND pr_number = ?2) < ?4
+		 RETURNING id`,
+	)
+		.bind(repositoryId, prNumber, trigger, cap)
 		.first<{ id: number }>();
-	return row!.id;
+	return row?.id ?? null;
 }
 
 // --- features (Phase 2: spec → generated branch + PR) ---
