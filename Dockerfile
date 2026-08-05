@@ -2,8 +2,9 @@
 # The tag must match the installed @cloudflare/sandbox SDK version.
 FROM docker.io/cloudflare/sandbox:0.12.4
 
-# Coding agent CLI used by the fix runner. Preinstalled so fix runs don't pay
-# an npm install on every container cold start.
-RUN npm install -g @anthropic-ai/claude-code
+# Coding agent CLI used by the fix/generation runners, plus pnpm for repos
+# whose check_command installs dependencies. Preinstalled so runs don't pay
+# the install on every container cold start.
+RUN npm install -g @anthropic-ai/claude-code pnpm
 
 EXPOSE 8080

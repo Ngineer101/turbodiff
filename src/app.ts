@@ -11,6 +11,7 @@ import {
 	getAgentBySlug,
 	getFeature,
 	getRepoByFullName,
+	setRepoCheckCommand,
 	listAgentConnections,
 	listAgentsForRepo,
 	recordReview,
@@ -170,6 +171,20 @@ app.post('/internal/generate', async (c) => {
 	return c.json({ accepted: true, feature_id: featureId, status_url: `/internal/features/${featureId}` });
 });
 
+// Set the sandbox verification gate for a repo (dashboard field lives in
+// settings; this is the operator/API path). Empty command clears the gate.
+app.post('/internal/repos/check-command', async (c) => {
+	const payload = await c.req.json<{ repo?: string; command?: string }>().catch(() => null);
+	const match = payload?.repo?.match(/^([\w.-]+)\/([\w.-]+)$/);
+	if (!match || typeof payload?.command !== 'string') {
+		return c.json({ error: 'body must be {"repo": "<owner>/<name>", "command": "..."}' }, 400);
+	}
+	const repo = await getRepoByFullName(match[1], match[2]);
+	if (!repo) return c.json({ error: `Turbodiff is not installed on ${payload.repo}` }, 404);
+	await setRepoCheckCommand(repo.id, payload.command);
+	return c.json({ ok: true, repo: payload.repo, check_command: payload.command.trim() || null });
+});
+
 app.get('/internal/features/:id', async (c) => {
 	const id = Number(c.req.param('id'));
 	const feature = Number.isInteger(id) ? await getFeature(id) : null;
@@ -208,7 +223,7 @@ app.post('/internal/fix', async (c) => {
 			installationId: repo.installation_id,
 			findings: payload?.findings,
 			authMode: payload?.auth_mode,
-			testCommand: payload?.test_command,
+			testCommand: payload?.test_command ?? repo.check_command ?? undefined,
 		});
 		return c.json(outcome);
 	} catch (err) {

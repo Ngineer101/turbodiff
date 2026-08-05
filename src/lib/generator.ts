@@ -13,8 +13,10 @@ import { installationToken } from './github-app.ts';
 
 const CLONE_DIR = '/workspace/gen';
 const SPEC_FILE = '/workspace/gen-spec.md';
-// Clone + agent + push must fit inside a queue consumer's 15-minute wall clock.
-const AGENT_TIMEOUT_MS = 10 * 60_000;
+// Clone (2) + agent (8) + checks (4) + push (1) must fit inside a queue
+// consumer's 15-minute wall clock.
+const AGENT_TIMEOUT_MS = 8 * 60_000;
+const CHECK_TIMEOUT_MS = 4 * 60_000;
 
 export interface GenQueueMessage {
 	kind: 'generate';
@@ -135,10 +137,37 @@ async function generate(
 			return { status: 'no_changes', error: 'agent produced no file changes' };
 		}
 
-		const push = await sandbox.exec(
+		// Commit the agent's changes BEFORE running checks: the check command may
+		// mutate the working tree (installing deps, editing config), and those
+		// mutations must never end up in the pushed commit. The commit is local
+		// only until the check passes and we push.
+		const commit = await sandbox.exec(
 			`git -C ${CLONE_DIR} add -A && ` +
-				`git -C ${CLONE_DIR} commit -m "${feature.title.replaceAll('"', "'")} (turbodiff generator, feature #${feature.id})" && ` +
-				`git -C ${CLONE_DIR} push origin HEAD:"$GEN_BRANCH"`,
+				`git -C ${CLONE_DIR} commit -m "${feature.title.replaceAll('"', "'")} (turbodiff generator, feature #${feature.id})"`,
+			{ timeout: 60_000 },
+		);
+		if (!commit.success) {
+			throw new Error(`git commit failed: ${scrub(commit.stderr).slice(0, 500)}`);
+		}
+
+		// Verification gate: generated code must pass the repo's checks before the
+		// commit is allowed to become a PR. Runs against the committed tree; any
+		// files the check dirties stay in the working tree and are never pushed.
+		if (repo.check_command) {
+			const checks = await sandbox.exec(repo.check_command, {
+				cwd: CLONE_DIR,
+				timeout: CHECK_TIMEOUT_MS,
+			});
+			if (!checks.success) {
+				return {
+					status: 'checks_failed',
+					error: scrub(`${checks.stdout}\n${checks.stderr}`.trim()).slice(-500),
+				};
+			}
+		}
+
+		const push = await sandbox.exec(
+			`git -C ${CLONE_DIR} push origin HEAD:"$GEN_BRANCH"`,
 			{ env: gitEnv, timeout: 2 * 60_000 },
 		);
 		if (!push.success) {

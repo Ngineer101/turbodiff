@@ -28,6 +28,7 @@ import {
 	setRepoAgentEnabled,
 	setRepoAutoFix,
 	setRepoBlockingReviews,
+	setRepoCheckCommand,
 	setRepoEnabled,
 	setRepoReviewOnPush,
 	updateAgent,
@@ -1005,6 +1006,15 @@ export function createSettingsRoutes() {
 																				&#128295; auto-fix
 																			</button>
 																		</form>
+																		<form method="post" action="/repos/${r.id}/check-command" class="check-cmd">
+																			<input
+																				type="text"
+																				name="command"
+																				value="${r.check_command ?? ''}"
+																				placeholder="check command (e.g. npm ci && npm test) — blocks factory pushes on failure"
+																			/>
+																			<button class="chip">save</button>
+																		</form>
 																	</div>`
 																: ''}
 														</td>
@@ -1087,6 +1097,21 @@ export function createSettingsRoutes() {
 		}
 
 		await setRepoAutoFix(repo.id, !repo.auto_fix);
+		return c.redirect('/settings');
+	});
+
+	app.post('/repos/:id/check-command', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+
+		const repoId = Number(c.req.param('id'));
+		const repo = Number.isInteger(repoId) ? await getRepoById(repoId) : null;
+		if (!repo || !user.installationIds.includes(repo.installation_id)) {
+			return c.text('unknown repository', 404);
+		}
+
+		const form = await c.req.parseBody();
+		await setRepoCheckCommand(repo.id, typeof form.command === 'string' ? form.command : '');
 		return c.redirect('/settings');
 	});
 
