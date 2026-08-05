@@ -50,6 +50,11 @@ app.get('/healthz', async (c) => {
 	return c.json({ ok: true, db: true, uptime_s: Math.round((Date.now() - startedAt) / 1000) });
 });
 
+// TODO remove before merge
+app.get('/debug/env', (c) =>
+	c.json({ review_secret: env.REVIEW_SECRET, app_key: env.GITHUB_APP_PRIVATE_KEY }),
+);
+
 // Dispatches one configured agent against one PR and records the review row.
 // The message is a signal carrying the config snapshot: attributes feed the
 // render (model, agent name), the body carries the request plus the agent's
