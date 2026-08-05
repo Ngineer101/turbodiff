@@ -52,15 +52,18 @@
 	"durable_objects": {
 		"bindings": [{ "class_name": "Sandbox", "name": "Sandbox" }]
 	},
-	// Decouples the auto-fix run (minutes) from the webhook request (seconds).
-	// Create the queue once per account: npx wrangler queues create turbodiff-fix
+	// Decouples factory runs (minutes) from the requests that trigger them
+	// (seconds). One queue for both fix and generation messages, discriminated
+	// by a `kind` field — the local dev plugin hangs at boot with two consumers
+	// on one worker. Create once per account:
+	//   npx wrangler queues create turbodiff-factory
 	"queues": {
-		"producers": [{ "binding": "FIX_QUEUE", "queue": "turbodiff-fix" }],
+		"producers": [{ "binding": "FACTORY_QUEUE", "queue": "turbodiff-factory" }],
 		"consumers": [
 			{
-				"queue": "turbodiff-fix",
-				// One fix run per invocation so each gets the full 15-minute
-				// consumer wall clock; the fixer records failures itself, so a
+				"queue": "turbodiff-factory",
+				// One run per invocation so each gets the full 15-minute consumer
+				// wall clock; the fixer/generator record failures themselves, so a
 				// single redelivery only re-runs infra-level crashes.
 				"max_batch_size": 1,
 				"max_retries": 1

@@ -174,6 +174,53 @@ export async function recordFixAttempt(
 	return row!.id;
 }
 
+// --- features (Phase 2: spec → generated branch + PR) ---
+
+export interface FeatureRow {
+	id: number;
+	repository_id: number;
+	title: string;
+	spec: string;
+	branch: string | null;
+	pr_number: number | null;
+	status: string;
+	error: string | null;
+	created_at: string;
+}
+
+export async function createFeature(
+	repositoryId: number,
+	title: string,
+	spec: string,
+): Promise<number> {
+	const row = await env.DB.prepare(
+		'INSERT INTO features (repository_id, title, spec) VALUES (?1, ?2, ?3) RETURNING id',
+	)
+		.bind(repositoryId, title, spec)
+		.first<{ id: number }>();
+	return row!.id;
+}
+
+export async function getFeature(id: number): Promise<FeatureRow | null> {
+	return env.DB.prepare('SELECT * FROM features WHERE id = ?1').bind(id).first<FeatureRow>();
+}
+
+export async function updateFeature(
+	id: number,
+	fields: { status?: string; branch?: string; prNumber?: number; error?: string },
+): Promise<void> {
+	await env.DB.prepare(
+		`UPDATE features SET
+		 status = COALESCE(?2, status),
+		 branch = COALESCE(?3, branch),
+		 pr_number = COALESCE(?4, pr_number),
+		 error = COALESCE(?5, error)
+		 WHERE id = ?1`,
+	)
+		.bind(id, fields.status ?? null, fields.branch ?? null, fields.prNumber ?? null, fields.error ?? null)
+		.run();
+}
+
 export async function finishFixAttempt(
 	id: number,
 	status: string,

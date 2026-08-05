@@ -297,7 +297,8 @@ async function handlePullRequestReview(p: PullRequestReviewEvent): Promise<Handl
 		return { body: { ok: true, skipped: `fix cap reached (${attempts})` } };
 	}
 
-	await env.FIX_QUEUE.send({
+	await env.FACTORY_QUEUE.send({
+		kind: 'fix',
 		repoId: repo.id,
 		prNumber: p.pull_request.number,
 		trigger: 'blocking_review',

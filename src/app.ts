@@ -7,7 +7,9 @@ import { createMiddleware } from 'hono/factory';
 import { PrReviewer } from './agents/pr-reviewer.ts';
 import {
 	connectionSnapshot,
+	createFeature,
 	getAgentBySlug,
+	getFeature,
 	getRepoByFullName,
 	listAgentConnections,
 	listAgentsForRepo,
@@ -134,6 +136,37 @@ app.get('/internal/fix/smoke', async (c) => {
 		console.error('turbodiff: sandbox smoke failed:', err);
 		return c.json({ error: err instanceof Error ? err.message : 'smoke failed' }, 502);
 	}
+});
+
+// Software-factory generation, Phase 2 (docs/software-factory-design.md):
+//   POST /internal/generate { "repo": "<owner>/<name>", "title": "...", "spec": "..." }
+// Records the feature and enqueues the generation run; the generated PR then
+// flows through the normal review + auto-fix loop. Poll the status route below.
+app.post('/internal/generate', async (c) => {
+	const payload = await c.req
+		.json<{ repo?: string; title?: string; spec?: string }>()
+		.catch(() => null);
+	const match = payload?.repo?.match(/^([\w.-]+)\/([\w.-]+)$/);
+	if (!match || !payload?.title?.trim() || !payload?.spec?.trim()) {
+		return c.json(
+			{ error: 'body must be {"repo": "<owner>/<name>", "title": "...", "spec": "..."}' },
+			400,
+		);
+	}
+	const repo = await getRepoByFullName(match[1], match[2]);
+	if (!repo) return c.json({ error: `Turbodiff is not installed on ${payload.repo}` }, 404);
+	if (!repo.enabled) return c.json({ error: 'reviews are disabled for this repository' }, 409);
+
+	const featureId = await createFeature(repo.id, payload.title.trim(), payload.spec.trim());
+	await env.FACTORY_QUEUE.send({ kind: 'generate', featureId });
+	return c.json({ accepted: true, feature_id: featureId, status_url: `/internal/features/${featureId}` });
+});
+
+app.get('/internal/features/:id', async (c) => {
+	const id = Number(c.req.param('id'));
+	const feature = Number.isInteger(id) ? await getFeature(id) : null;
+	if (!feature) return c.json({ error: 'unknown feature' }, 404);
+	return c.json(feature);
 });
 
 app.post('/internal/fix', async (c) => {

@@ -51,8 +51,8 @@ const TEST_TIMEOUT_MS = 3 * 60_000;
 export const FIX_MAX_ATTEMPTS = 3;
 
 // Pick the runner credential: explicit request wins, otherwise prefer the
-// user's subscription token over gateway metering.
-function resolveRunnerAuth(requested?: FixAuthMode): {
+// user's subscription token over gateway metering. Shared with the generator.
+export function resolveRunnerAuth(requested?: FixAuthMode): {
 	mode: FixAuthMode;
 	vars: Record<string, string>;
 } {
@@ -307,6 +307,7 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
 // Queue message enqueued by the pull_request_review webhook when a blocking
 // turbodiff review lands on an auto-fix-enabled repo.
 export interface FixQueueMessage {
+	kind: 'fix';
 	repoId: number;
 	prNumber: number;
 	trigger: string;

@@ -8,19 +8,24 @@
 // https://flueframework.com/docs/guide/cloudflare-target/#extending-cloudflarets-entrypoint
 
 import { processFixMessage, type FixQueueMessage } from './lib/fixer.ts';
+import { runGeneration, type GenQueueMessage } from './lib/generator.ts';
 
 // The fixer sandbox container (docs/software-factory-design.md). Declared in
 // wrangler.jsonc under containers/durable_objects with migration tag v2.
 export { Sandbox } from '@cloudflare/sandbox';
 
-// Auto-fix runs take minutes, far beyond what a webhook request can wait on,
-// so the pull_request_review webhook enqueues and this consumer does the work.
-// processFixMessage never throws (failures are recorded in fix_attempts), so
-// every message acks — a broken fix run is not retried into repeat token spend.
+// Fix and generation runs take minutes, far beyond what a webhook or intake
+// request can wait on, so producers enqueue and these consumers do the work.
+// Both processors never throw (failures land in fix_attempts / features), so
+// every message acks — a broken run is not retried into repeat token spend.
 export default {
-	async queue(batch: MessageBatch<FixQueueMessage>): Promise<void> {
+	async queue(batch: MessageBatch<FixQueueMessage | GenQueueMessage>): Promise<void> {
 		for (const message of batch.messages) {
-			await processFixMessage(message.body);
+			if (message.body.kind === 'generate') {
+				await runGeneration(message.body.featureId);
+			} else {
+				await processFixMessage(message.body);
+			}
 			message.ack();
 		}
 	},
