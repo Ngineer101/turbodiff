@@ -9,8 +9,10 @@ import {
 	type FeatureRow,
 	type RepositoryRow,
 } from './db.ts';
+import { signArtifactKey } from './crypto.ts';
 import { resolveRunnerAuth } from './fixer.ts';
-import { installationToken } from './github-app.ts';
+import { installationToken, sandboxGitToken } from './github-app.ts';
+import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
 
 // Phase 4 (docs/software-factory-design.md): empirical verification of factory
 // PRs, doubling as the spec-conformance gate. A verifier agent checks each
@@ -82,6 +84,8 @@ ${runtime}
 2. ${OUT_DIR}/summary.md — a short reviewer-facing narrative titled "How it
    works": what was implemented and how it behaves, referencing the evidence.
 
+${UNTRUSTED_CONTENT_RULES}
+
 ## Acceptance criteria
 ${criteria.map((c, i) => `${i}. ${c}`).join('\n')}
 `;
@@ -124,7 +128,9 @@ async function verify(
 ): Promise<{ status: string; results: CriterionResult[]; summary?: string }> {
 	const token = await installationToken(repo.installation_id);
 	const auth = resolveRunnerAuth();
-	const scrub = (s: string) => s.replaceAll(token, '***');
+	// Verifier sandboxes never push: single-repo, contents READ-ONLY token.
+	const gitToken = await sandboxGitToken(repo.installation_id, repo.name, 'read');
+	const scrub = (s: string) => s.replaceAll(token, '***').replaceAll(gitToken, '***');
 	const full = `${repo.owner}/${repo.name}`;
 
 	const sandbox = getSandbox(
@@ -138,7 +144,7 @@ async function verify(
 		const clone = await sandbox.exec(
 			`git clone --depth 50 --single-branch --branch "$VERIFY_BRANCH" ` +
 				`"https://x-access-token:$GIT_TOKEN@github.com/${full}.git" ${CLONE_DIR}`,
-			{ env: { GIT_TOKEN: token, VERIFY_BRANCH: feature.branch! }, timeout: 3 * 60_000 },
+			{ env: { GIT_TOKEN: gitToken, VERIFY_BRANCH: feature.branch! }, timeout: 3 * 60_000 },
 		);
 		if (!clone.success) {
 			throw new Error(`git clone failed: ${scrub(clone.stderr).slice(0, 500)}`);
@@ -246,7 +252,8 @@ async function uploadScreenshots(
 		const bytes = Uint8Array.from(atob(b64.stdout.trim()), (c) => c.charCodeAt(0));
 		const key = `verify/${featureId}/${safe}`;
 		await env.ARTIFACTS.put(key, bytes, { httpMetadata: { contentType: 'image/png' } });
-		urls.set(name, `${env.PUBLIC_BASE_URL}/artifacts/${key}`);
+		const sig = await signArtifactKey(key);
+		urls.set(name, `${env.PUBLIC_BASE_URL}/artifacts/${key}?sig=${sig}`);
 	}
 	return urls;
 }

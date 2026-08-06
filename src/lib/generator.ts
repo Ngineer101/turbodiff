@@ -3,7 +3,8 @@ import { env } from 'cloudflare:workers';
 import { gh } from '../tools/github.ts';
 import { getFeature, getRepoById, updateFeature, type FeatureRow, type RepositoryRow } from './db.ts';
 import { resolveRunnerAuth } from './fixer.ts';
-import { installationToken } from './github-app.ts';
+import { installationToken, sandboxGitToken } from './github-app.ts';
+import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
 
 // Phase 2 of the software factory (docs/software-factory-design.md): turn an
 // approved feature spec into a branch + PR. The generator clones the default
@@ -44,6 +45,8 @@ Implement the feature specified below. Rules:
 - If part of the spec is ambiguous, choose the most conventional interpretation
   and note the choice in a "## Implementation notes" section you append to
   ${SPEC_FILE}.
+
+${UNTRUSTED_CONTENT_RULES}
 
 ## Feature: ${feature.title}
 
@@ -87,7 +90,9 @@ async function generate(
 ): Promise<{ status: string; branch?: string; prNumber?: number; error?: string }> {
 	const token = await installationToken(repo.installation_id);
 	const auth = resolveRunnerAuth();
-	const scrub = (s: string) => s.replaceAll(token, '***');
+	// The sandbox only sees gitToken: single-repo, contents-only.
+	const gitToken = await sandboxGitToken(repo.installation_id, repo.name, 'write');
+	const scrub = (s: string) => s.replaceAll(token, '***').replaceAll(gitToken, '***');
 	const full = `${repo.owner}/${repo.name}`;
 
 	const repoInfo = (await (await gh(token, `/repos/${full}`)).json()) as {
@@ -102,7 +107,7 @@ async function generate(
 		{ sleepAfter: '20m' },
 	);
 
-	const gitEnv = { GIT_TOKEN: token, GEN_BASE: base, GEN_BRANCH: branch };
+	const gitEnv = { GIT_TOKEN: gitToken, GEN_BASE: base, GEN_BRANCH: branch };
 	try {
 		await sandbox.exec(`rm -rf ${CLONE_DIR}`);
 		const clone = await sandbox.exec(
@@ -146,10 +151,14 @@ async function generate(
 		// mutate the working tree (installing deps, editing config), and those
 		// mutations must never end up in the pushed commit. The commit is local
 		// only until the check passes and we push.
+		// The title is user input: it travels via env so shell metacharacters in
+		// it are data, never code.
 		const commit = await sandbox.exec(
-			`git -C ${CLONE_DIR} add -A && ` +
-				`git -C ${CLONE_DIR} commit -m "${feature.title.replaceAll('"', "'")} (turbodiff generator, feature #${feature.id})"`,
-			{ timeout: 60_000 },
+			`git -C ${CLONE_DIR} add -A && git -C ${CLONE_DIR} commit -m "$COMMIT_MSG"`,
+			{
+				env: { COMMIT_MSG: `${feature.title} (turbodiff generator, feature #${feature.id})` },
+				timeout: 60_000,
+			},
 		);
 		if (!commit.success) {
 			throw new Error(`git commit failed: ${scrub(commit.stderr).slice(0, 500)}`);

@@ -365,9 +365,11 @@ async function authorizedPlan(c: Context, user: AuthedUser): Promise<PlanRow | n
 async function requireUser(c: Context): Promise<AuthedUser | null> {
 	// Local-only escape hatch for developing the signed-in UI without GitHub
 	// OAuth: DEV_FAKE_INSTALLATIONS="1001,1002" in .dev.vars signs you in as
-	// @dev with those installation ids. Must never be set in production.
+	// @dev with those installation ids. Guarded to loopback hosts so setting it
+	// in production by mistake cannot become an auth bypass.
 	const fake = (env as { DEV_FAKE_INSTALLATIONS?: string }).DEV_FAKE_INSTALLATIONS;
-	if (fake) {
+	const host = new URL(c.req.url).hostname;
+	if (fake && (host === 'localhost' || host === '127.0.0.1')) {
 		return {
 			session: { userId: 0, login: 'dev', ghToken: '', exp: 0 },
 			installationIds: fake.split(',').map(Number).filter((n) => Number.isInteger(n)),
