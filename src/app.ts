@@ -5,6 +5,7 @@ import { env } from 'cloudflare:workers';
 import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { PrReviewer } from './agents/pr-reviewer.ts';
+import { timingSafeEqual, verifyArtifactSig } from './lib/crypto.ts';
 import {
 	connectionSnapshot,
 	createFeature,
@@ -68,6 +69,11 @@ app.get('/version', (c) => {
 app.get('/artifacts/*', async (c) => {
 	const key = c.req.path.replace(/^\/artifacts\//, '');
 	if (!key || key.includes('..')) return c.notFound();
+	// Capability URL: the signature over the key (issued when the artifact was
+	// uploaded) is the only credential — no signature, no object, and keys
+	// cannot be enumerated.
+	const sig = c.req.query('sig') ?? '';
+	if (!(await verifyArtifactSig(key, sig))) return c.notFound();
 	const object = await env.ARTIFACTS.get(key);
 	if (!object) return c.notFound();
 	return new Response(object.body, {
@@ -144,8 +150,8 @@ app.route('/', createSettingsRoutes());
 
 // Operator endpoints keep the shared secret (Authorization: Bearer <REVIEW_SECRET>).
 const requireSecret = createMiddleware(async (c, next) => {
-	const token = c.req.header('authorization')?.replace(/^Bearer\s+/i, '');
-	if (!env.REVIEW_SECRET || token !== env.REVIEW_SECRET) {
+	const token = c.req.header('authorization')?.replace(/^Bearer\s+/i, '') ?? '';
+	if (!env.REVIEW_SECRET || !(await timingSafeEqual(token, env.REVIEW_SECRET))) {
 		return c.json({ error: 'unauthorized' }, 401);
 	}
 	await next();

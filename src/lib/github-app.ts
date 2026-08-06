@@ -58,6 +58,35 @@ export async function installationToken(installationId: number): Promise<string>
 	const cached = tokenCache.get(installationId);
 	if (cached && cached.expiresAt > Date.now() + 5 * 60_000) return cached.token;
 
+	const data = await mintToken(installationId);
+	tokenCache.set(installationId, {
+		token: data.token,
+		expiresAt: new Date(data.expires_at).getTime(),
+	});
+	return data.token;
+}
+
+// Least-privilege token for code that runs inside a sandbox next to untrusted
+// content: scoped to ONE repository and the given permissions (typically just
+// contents), so a compromised or prompt-injected agent run cannot touch other
+// repos in the installation or use any other App permission. Deliberately
+// uncached — each run gets its own token.
+export async function sandboxGitToken(
+	installationId: number,
+	repoName: string,
+	access: 'read' | 'write',
+): Promise<string> {
+	const data = await mintToken(installationId, {
+		repositories: [repoName],
+		permissions: { contents: access },
+	});
+	return data.token;
+}
+
+async function mintToken(
+	installationId: number,
+	scope?: { repositories: string[]; permissions: Record<string, string> },
+): Promise<{ token: string; expires_at: string }> {
 	const res = await fetch(`${API}/app/installations/${installationId}/access_tokens`, {
 		method: 'POST',
 		headers: {
@@ -65,19 +94,16 @@ export async function installationToken(installationId: number): Promise<string>
 			authorization: `Bearer ${await appJwt()}`,
 			'user-agent': 'turbodiff',
 			'x-github-api-version': '2022-11-28',
+			...(scope ? { 'content-type': 'application/json' } : {}),
 		},
+		...(scope ? { body: JSON.stringify(scope) } : {}),
 	});
 	if (!res.ok) {
 		throw new Error(
 			`Failed to mint installation token for ${installationId}: ${res.status} ${(await res.text()).slice(0, 300)}`,
 		);
 	}
-	const data = (await res.json()) as { token: string; expires_at: string };
-	tokenCache.set(installationId, {
-		token: data.token,
-		expiresAt: new Date(data.expires_at).getTime(),
-	});
-	return data.token;
+	return res.json() as Promise<{ token: string; expires_at: string }>;
 }
 
 // Webhook payloads are authenticated solely by this HMAC — never skip it.

@@ -2,7 +2,8 @@ import { getSandbox, type Sandbox } from '@cloudflare/sandbox';
 import { env } from 'cloudflare:workers';
 import { gh } from '../tools/github.ts';
 import { finishFixAttempt, getRepoById, tryRecordFixAttempt } from './db.ts';
-import { installationToken } from './github-app.ts';
+import { installationToken, sandboxGitToken } from './github-app.ts';
+import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
 
 // Phase 1 spike of the software factory fix loop (docs/software-factory-design.md):
 // clone a PR's head branch into a Cloudflare Sandbox, run a coding agent CLI
@@ -155,6 +156,8 @@ Address every finding listed below. Rules:
 - If a finding is wrong, already fixed, or cannot be fixed safely, leave the
   code unchanged and append one line to ${NOTES_FILE} explaining why.
 
+${UNTRUSTED_CONTENT_RULES}
+
 ## Pull request
 ${pr} — branch \`${branch}\`
 
@@ -197,9 +200,11 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
 	const { owner, repo, prNumber } = params;
 	const token = await installationToken(params.installationId);
 	const auth = resolveRunnerAuth(params.authMode);
-	// Any surfaced output must never leak the installation token (it is
-	// interpolated into the git remote URL inside the sandbox).
-	const scrub = (s: string) => s.replaceAll(token, '***');
+	// Any surfaced output must never leak a token. The sandbox only ever sees
+	// gitToken — scoped to this one repository with contents access only — so a
+	// prompt-injected agent run cannot touch other repos or App permissions.
+	const gitToken = await sandboxGitToken(params.installationId, repo, 'write');
+	const scrub = (s: string) => s.replaceAll(token, '***').replaceAll(gitToken, '***');
 
 	const findings =
 		params.findings?.trim() || (await latestBlockingFindings(token, owner, repo, prNumber));
@@ -216,7 +221,7 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
 
 	// Fresh checkout per run; the branch name and token travel via env so the
 	// command string stays free of secrets and shell-hostile ref names.
-	const gitEnv = { GIT_TOKEN: token, FIX_BRANCH: headRef };
+	const gitEnv = { GIT_TOKEN: gitToken, FIX_BRANCH: headRef };
 	await sandbox.exec(`rm -rf ${CLONE_DIR} ${NOTES_FILE}`);
 	const clone = await sandbox.exec(
 		`git clone --depth 50 --single-branch --branch "$FIX_BRANCH" ` +

@@ -3,7 +3,8 @@ import { env } from 'cloudflare:workers';
 import { gh } from '../tools/github.ts';
 import { createFeature, getPlan, getRepoById, updatePlan, type PlanRow, type RepositoryRow } from './db.ts';
 import { resolveRunnerAuth } from './fixer.ts';
-import { installationToken } from './github-app.ts';
+import { installationToken, sandboxGitToken } from './github-app.ts';
+import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
 
 // Phase 3 of the software factory (docs/software-factory-design.md): the
 // planning front half. A planning agent clones the repo (read-only), analyzes
@@ -26,7 +27,9 @@ async function clonePlanRepo(
 	planId: number,
 ): Promise<{ sandbox: Sandbox; token: string; scrub: (s: string) => string }> {
 	const token = await installationToken(repo.installation_id);
-	const scrub = (s: string) => s.replaceAll(token, '***');
+	// Planner sandboxes never push: single-repo, contents READ-ONLY token.
+	const gitToken = await sandboxGitToken(repo.installation_id, repo.name, 'read');
+	const scrub = (s: string) => s.replaceAll(token, '***').replaceAll(gitToken, '***');
 	const full = `${repo.owner}/${repo.name}`;
 	const info = (await (await gh(token, `/repos/${full}`)).json()) as { default_branch: string };
 
@@ -39,7 +42,7 @@ async function clonePlanRepo(
 	const clone = await sandbox.exec(
 		`git clone --depth 50 --single-branch --branch "$GEN_BASE" ` +
 			`"https://x-access-token:$GIT_TOKEN@github.com/${full}.git" ${CLONE_DIR}`,
-		{ env: { GIT_TOKEN: token, GEN_BASE: info.default_branch }, timeout: 3 * 60_000 },
+		{ env: { GIT_TOKEN: gitToken, GEN_BASE: info.default_branch }, timeout: 3 * 60_000 },
 	);
 	if (!clone.success) {
 		throw new Error(`git clone failed: ${scrub(clone.stderr).slice(0, 500)}`);
@@ -99,6 +102,8 @@ Analyze the feature requirements below against the actual codebase, then write t
 1. ${OUT_DIR}/analysis.md — a short grounding analysis: which files/modules this touches, how it fits existing conventions, and any risks.
 2. ${OUT_DIR}/questions.json — a JSON array of clarifying questions (strings). Include ONLY genuine ambiguities or decisions the requirements leave open and that would change the implementation. If the requirements are clear enough to implement well, write an empty array [].
 
+${UNTRUSTED_CONTENT_RULES}
+
 ## Feature: ${plan.title}
 
 ## Requirements
@@ -113,6 +118,8 @@ Produce an implementation plan for the feature below, grounded in the real code,
 
 1. ${OUT_DIR}/plan.md — a file-level implementation plan: what changes in which files, in what order, and why. Concrete enough for an implementation agent to follow without further questions.
 2. ${OUT_DIR}/acceptance.json — a JSON array of machine-checkable acceptance criteria (strings). Each must be objectively verifiable (a specific response shape, a test that would pass, an observable behavior) — not vague ("works well"). These gate whether the generated code satisfies the request.
+
+${UNTRUSTED_CONTENT_RULES}
 
 ## Feature: ${plan.title}
 

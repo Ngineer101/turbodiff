@@ -65,3 +65,48 @@ export async function openToken(sealed: string): Promise<string> {
 	);
 	return new TextDecoder().decode(plain);
 }
+
+// --- artifact URL signing (capability URLs for verification screenshots) ---
+//
+// R2 artifact keys are served publicly so GitHub can render them inline in PR
+// comments, but the URL must be unguessable: each carries an HMAC of its key
+// (signed with SESSION_SECRET), so knowing one URL grants exactly that object
+// and enumeration is impossible. No expiry — PR evidence shouldn't rot.
+
+async function artifactMac(key: string): Promise<string> {
+	const mac = await crypto.subtle.sign(
+		'HMAC',
+		await crypto.subtle.importKey(
+			'raw',
+			new TextEncoder().encode(env.SESSION_SECRET),
+			{ name: 'HMAC', hash: 'SHA-256' },
+			false,
+			['sign'],
+		),
+		new TextEncoder().encode(`artifact:${key}`),
+	);
+	return [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+export async function signArtifactKey(key: string): Promise<string> {
+	return artifactMac(key);
+}
+
+export async function verifyArtifactSig(key: string, sig: string): Promise<boolean> {
+	return timingSafeEqual(await artifactMac(key), sig);
+}
+
+// Constant-time string comparison: hash both sides first so neither content
+// nor length differences shape the timing.
+export async function timingSafeEqual(a: string, b: string): Promise<boolean> {
+	const enc = new TextEncoder();
+	const [ha, hb] = await Promise.all([
+		crypto.subtle.digest('SHA-256', enc.encode(a)),
+		crypto.subtle.digest('SHA-256', enc.encode(b)),
+	]);
+	const va = new Uint8Array(ha);
+	const vb = new Uint8Array(hb);
+	let diff = 0;
+	for (let i = 0; i < va.length; i++) diff |= va[i] ^ vb[i];
+	return diff === 0;
+}
