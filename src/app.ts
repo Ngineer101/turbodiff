@@ -14,6 +14,7 @@ import {
 	getPlan,
 	getRepoByFullName,
 	setRepoCheckCommand,
+	setRepoRunCommand,
 	updatePlan,
 	listAgentConnections,
 	listAgentsForRepo,
@@ -59,6 +60,22 @@ app.get('/healthz', async (c) => {
 // deploy tooling can confirm which build is running. No auth, like /healthz.
 app.get('/version', (c) => {
 	return c.json({ id: env.CF_VERSION_METADATA.id, tag: env.CF_VERSION_METADATA.tag });
+});
+
+// Verification evidence (Phase 4): screenshots from verify runs, stored in R2
+// and embedded in PR comments — public so GitHub can render them inline. Keys
+// are harness-generated (verify/<featureId>/<name>.png), never user input.
+app.get('/artifacts/*', async (c) => {
+	const key = c.req.path.replace(/^\/artifacts\//, '');
+	if (!key || key.includes('..')) return c.notFound();
+	const object = await env.ARTIFACTS.get(key);
+	if (!object) return c.notFound();
+	return new Response(object.body, {
+		headers: {
+			'content-type': object.httpMetadata?.contentType ?? 'application/octet-stream',
+			'cache-control': 'public, max-age=31536000, immutable',
+		},
+	});
 });
 
 // Dispatches one configured agent against one PR and records the review row.
@@ -251,6 +268,29 @@ app.post('/internal/plans/:id/approve', async (c) => {
 
 // Set the sandbox verification gate for a repo (dashboard field lives in
 // settings; this is the operator/API path). Empty command clears the gate.
+// How the verify step launches this repo's app for runtime/visual checks
+// (Phase 4). Empty command disables runtime verification for the repo.
+app.post('/internal/repos/run-command', async (c) => {
+	const payload = await c.req
+		.json<{ repo?: string; command?: string; port?: number }>()
+		.catch(() => null);
+	const match = payload?.repo?.match(/^([\w.-]+)\/([\w.-]+)$/);
+	if (!match || typeof payload?.command !== 'string') {
+		return c.json(
+			{ error: 'body must be {"repo": "<owner>/<name>", "command": "...", "port": 3000}' },
+			400,
+		);
+	}
+	const port = Number.isInteger(payload.port) ? (payload.port as number) : null;
+	if (payload.command.trim() && !port) {
+		return c.json({ error: 'port is required when command is set' }, 400);
+	}
+	const repo = await getRepoByFullName(match[1], match[2]);
+	if (!repo) return c.json({ error: `Turbodiff is not installed on ${payload.repo}` }, 404);
+	await setRepoRunCommand(repo.id, payload.command, port);
+	return c.json({ ok: true, repo: payload.repo, run_command: payload.command.trim() || null, app_port: port });
+});
+
 app.post('/internal/repos/check-command', async (c) => {
 	const payload = await c.req.json<{ repo?: string; command?: string }>().catch(() => null);
 	const match = payload?.repo?.match(/^([\w.-]+)\/([\w.-]+)$/);

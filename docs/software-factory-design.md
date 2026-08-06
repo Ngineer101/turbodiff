@@ -112,8 +112,15 @@ fix_attempts (
 3. **Phase 3 — planning intake.** Dashboard feature entry; planning agent asks
    clarifying questions, produces plan + acceptance criteria; `waitForEvent` approval
    gate; spec-conformance reviewer persona.
-4. **Phase 4 — verification artifacts.** Playwright video in the sandbox for frontend
-   work → R2 → PR comment.
+4. **Phase 4 — verification artifacts.** *Built:* an empirical verification step
+   doubling as the spec-conformance gate. After generation opens a PR, a verify
+   run checks each acceptance criterion against the checked-out branch — static
+   criteria by reading the tree, runtime criteria by launching the app
+   (per-repo `run_command` + `app_port`), visual criteria by driving headless
+   Chromium (puppeteer-core in the sandbox image) and capturing screenshots.
+   Evidence lands on the PR as a report comment (✅/❌ table + inline images
+   served from R2 via `GET /artifacts/*`); unmet criteria feed the auto-fix
+   loop as findings. Screenshots-over-video: they render inline in PR comments.
 5. **Phase 5 — auto-merge + trust**, per-feature token budgets, pipeline dashboard.
 
 ## Phase 1 spike (this repo, now)

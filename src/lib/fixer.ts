@@ -329,6 +329,9 @@ export interface FixQueueMessage {
 	repoId: number;
 	prNumber: number;
 	trigger: string;
+	// Explicit work order (e.g. unmet acceptance criteria from a verification
+	// run). When absent, the latest blocking bot review on the PR is used.
+	findings?: string;
 }
 
 // Queue consumer body: re-validate against current state (the toggle may have
@@ -368,6 +371,7 @@ export async function processFixMessage(msg: FixQueueMessage): Promise<void> {
 			repo: repo.name,
 			prNumber: msg.prNumber,
 			installationId: repo.installation_id,
+			findings: msg.findings,
 			testCommand: repo.check_command ?? undefined,
 		});
 		await finishFixAttempt(attemptId, outcome.status, outcome.commit);

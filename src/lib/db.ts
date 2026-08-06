@@ -22,6 +22,8 @@ export interface RepositoryRow {
 	blocking_reviews: number; // P1 → REQUEST_CHANGES, clean → APPROVE
 	auto_fix: number; // dispatch the fix agent when a blocking review lands
 	check_command: string | null; // sandbox verification gate before factory pushes
+	run_command: string | null; // how to launch the app for runtime verification
+	app_port: number | null; // port the launched app listens on
 	model: string | null;
 	created_at: string; // when the repo was connected (mirrored into D1)
 }
@@ -157,6 +159,42 @@ export async function setRepoCheckCommand(id: number, command: string): Promise<
 		.run();
 }
 
+// How the verify step launches the repo's app for runtime/visual checks.
+// Empty command clears both fields (static verification only).
+export async function setRepoRunCommand(
+	id: number,
+	command: string,
+	port: number | null,
+): Promise<void> {
+	const trimmed = command.trim();
+	await env.DB.prepare('UPDATE repositories SET run_command = ?2, app_port = ?3 WHERE id = ?1')
+		.bind(id, trimmed || null, trimmed ? port : null)
+		.run();
+}
+
+// --- verifications (Phase 4: empirical acceptance-criteria checks) ---
+
+export async function createVerification(featureId: number): Promise<number> {
+	const row = await env.DB.prepare(
+		'INSERT INTO verifications (feature_id) VALUES (?1) RETURNING id',
+	)
+		.bind(featureId)
+		.first<{ id: number }>();
+	return row!.id;
+}
+
+export async function finishVerification(
+	id: number,
+	status: string,
+	fields: { results?: string; summary?: string; error?: string } = {},
+): Promise<void> {
+	await env.DB.prepare(
+		'UPDATE verifications SET status = ?2, results = ?3, summary = ?4, error = ?5 WHERE id = ?1',
+	)
+		.bind(id, status, fields.results ?? null, fields.summary ?? null, fields.error ?? null)
+		.run();
+}
+
 // --- fix attempts (auto-fix loop bookkeeping + iteration cap) ---
 
 // Every attempt counts toward the cap regardless of outcome, so even a
@@ -206,6 +244,7 @@ export interface FeatureRow {
 	repository_id: number;
 	title: string;
 	spec: string;
+	acceptance: string | null; // JSON array of acceptance criteria strings
 	branch: string | null;
 	pr_number: number | null;
 	status: string;
@@ -217,11 +256,14 @@ export async function createFeature(
 	repositoryId: number,
 	title: string,
 	spec: string,
+	// JSON array of acceptance criteria strings; the verify step checks these
+	// empirically against the generated branch.
+	acceptance?: string,
 ): Promise<number> {
 	const row = await env.DB.prepare(
-		'INSERT INTO features (repository_id, title, spec) VALUES (?1, ?2, ?3) RETURNING id',
+		'INSERT INTO features (repository_id, title, spec, acceptance) VALUES (?1, ?2, ?3, ?4) RETURNING id',
 	)
-		.bind(repositoryId, title, spec)
+		.bind(repositoryId, title, spec, acceptance ?? null)
 		.first<{ id: number }>();
 	return row!.id;
 }

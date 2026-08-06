@@ -22,9 +22,16 @@
 			"migrations_dir": "migrations"
 		}
 	],
+	// Verification evidence (Phase 4): screenshots captured in the sandbox land
+	// here and are served publicly via GET /artifacts/*. Create once per account:
+	//   npx wrangler r2 bucket create turbodiff-artifacts
+	"r2_buckets": [{ "binding": "ARTIFACTS", "bucket_name": "turbodiff-artifacts" }],
 	"vars": {
 		// The name of your existing Cloudflare AI Gateway.
 		"AI_GATEWAY_ID": "default",
+		// Public origin of this deployment — used to build absolute artifact URLs
+		// embedded in PR comments.
+		"PUBLIC_BASE_URL": "https://turbodiff.dev",
 		// URL slug of your GitHub App (github.com/apps/<slug>) — used for
 		// install/manage links in the settings UI.
 		"GITHUB_APP_SLUG": "turbodiff",
