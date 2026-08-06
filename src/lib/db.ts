@@ -192,6 +192,50 @@ export interface VerificationRow {
 	created_at: string;
 }
 
+export interface CockpitCommentRow {
+	id: number;
+	feature_id: number;
+	path: string;
+	line: number;
+	side: string;
+	body: string;
+	author: string;
+	status: string;
+	created_at: string;
+}
+
+export async function createCockpitComment(
+	featureId: number,
+	path: string,
+	line: number,
+	side: string,
+	body: string,
+	author: string,
+): Promise<number> {
+	const row = await env.DB.prepare(
+		`INSERT INTO cockpit_comments (feature_id, path, line, side, body, author)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6) RETURNING id`,
+	)
+		.bind(featureId, path, line, side, body, author)
+		.first<{ id: number }>();
+	return row!.id;
+}
+
+export async function markCockpitCommentDispatched(id: number): Promise<void> {
+	await env.DB.prepare("UPDATE cockpit_comments SET status = 'dispatched' WHERE id = ?1")
+		.bind(id)
+		.run();
+}
+
+export async function listCockpitComments(featureId: number): Promise<CockpitCommentRow[]> {
+	const res = await env.DB.prepare(
+		'SELECT * FROM cockpit_comments WHERE feature_id = ?1 ORDER BY id',
+	)
+		.bind(featureId)
+		.all<CockpitCommentRow>();
+	return res.results;
+}
+
 // The feature a factory PR belongs to (null for human-authored PRs).
 export async function getFeatureByRepoPr(
 	repositoryId: number,
