@@ -69,6 +69,11 @@ export async function runGeneration(featureId: number): Promise<void> {
 		const outcome = await generate(feature, repo);
 		await updateFeature(featureId, outcome);
 		console.log(`turbodiff: generation ${outcome.status} for ${label}`);
+		// Phase 4: a fresh PR with acceptance criteria gets an empirical
+		// verification run (its own queue message → own consumer wall clock).
+		if (outcome.status === 'pr_opened' && feature.acceptance) {
+			await env.FACTORY_QUEUE.send({ kind: 'verify', featureId });
+		}
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		await updateFeature(featureId, { status: 'failed', error: message.slice(0, 500) });

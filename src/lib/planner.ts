@@ -233,7 +233,14 @@ export async function approvePlan(planId: number): Promise<number | null> {
 			? acceptance.map((c) => `- ${c}`).join('\n')
 			: '(none specified)') +
 		`\n\nImplement the plan above so that every acceptance criterion holds.`;
-	const featureId = await createFeature(plan.repository_id, plan.title, spec);
+	// Criteria travel structured (not only embedded in the spec text) so the
+	// verify step can check them one by one after generation.
+	const featureId = await createFeature(
+		plan.repository_id,
+		plan.title,
+		spec,
+		plan.acceptance ?? undefined,
+	);
 	await updatePlan(planId, { status: 'approved', featureId });
 	return featureId;
 }
