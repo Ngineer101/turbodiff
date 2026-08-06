@@ -14,7 +14,7 @@ RUN npm install -g @anthropic-ai/claude-code pnpm
 # ad-hoc scripts require the global puppeteer-core install.
 RUN apt-get update && \
 	curl -fsSL -o /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && \
-	apt-get install -y --no-install-recommends /tmp/chrome.deb && \
+	apt-get install -y --no-install-recommends /tmp/chrome.deb ffmpeg && \
 	rm /tmp/chrome.deb && rm -rf /var/lib/apt/lists/* && \
 	npm install -g puppeteer-core
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
