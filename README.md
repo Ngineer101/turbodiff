@@ -2,95 +2,135 @@
 
 <img src="public/logo-small.png" alt="Turbodiff logo" width="64" align="right" />
 
-Open-source AI code review for teams that ship more code than they can review.
-Turbodiff is a GitHub App built with [Flue](https://flueframework.com) and hosted
-end-to-end on Cloudflare Workers: install it, pick your repositories, and every
-new pull request gets an automatic review — a short summary plus inline comments
-on the exact lines each finding concerns.
+Open-source AI code review — growing into a software factory. Turbodiff is a
+GitHub App hosted end-to-end on Cloudflare (Workers, Durable Objects, D1,
+Queues, Containers, R2) and built with [Flue](https://flueframework.com).
 
-**Live at [turbodiff.dev](https://turbodiff.dev)** — or self-host it on your own
-Cloudflare account (see [One-time setup](#one-time-setup)).
+Install it and every new pull request gets an automatic review: a short summary
+plus inline comments on the exact lines each finding concerns. Beyond review,
+the factory pipeline takes a feature from free-form requirements to a verified
+pull request: an agent plans it against your actual code (asking clarifying
+questions where the requirements are ambiguous), you approve the plan, agents
+generate the code, review it, fix blocking findings automatically, and verify
+the result empirically — launching the app in a sandbox and posting screenshot
+evidence for every acceptance criterion to the PR.
 
-```
-GitHub webhook (PR opened) ──▶ Worker ──▶ PrReviewer agent (Durable Object, one per PR)
-        │                        │            │  fetch_pr / fetch_file (GitHub API,
-Landing + settings + /reviews    │            │    per-installation App tokens)
-(sign in, toggle repos, watch    │            │  model calls via env.AI ─▶ AI Gateway ─▶ Claude
-running reviews) ──▶ D1 config ◀─┘            └─ post_review ──▶ inline PR comments
-                     & review status ◀────────────┘ (marks the review completed)
-```
+**Live at [turbodiff.dev](https://turbodiff.dev)** — or self-host on your own
+Cloudflare account ([One-time setup](#one-time-setup)).
 
-## How it works
+> [!WARNING]
+> **Turbodiff is under heavy development.** Expect rough edges, bugs, and
+> breaking changes between releases. If something misbehaves, please
+> [open an issue](https://github.com/Ngineer101/turbodiff/issues) — and
+> contributions are very welcome: pull requests, bug reports, and ideas all
+> help. If you want to work on something bigger, open an issue first so we can
+> align on the approach.
 
-- [src/agents/pr-reviewer.ts](src/agents/pr-reviewer.ts) — the agent: model choice
-  (`cloudflare/anthropic/claude-sonnet-5` through your gateway) and review instructions.
-- [src/tools/github.ts](src/tools/github.ts) — its tools: `fetch_pr` (metadata + diff),
-  `fetch_file` (extra context), `post_review` (summary body + inline comments anchored to
-  diff lines, falling back to body-only if an anchor is rejected; also flips the review's
-  D1 row to `completed`). All GitHub calls authenticate as the App installation that owns
-  the repo (looked up in D1).
-- [src/routes/webhooks.ts](src/routes/webhooks.ts) — GitHub App webhooks: syncs
-  installations/repositories into D1 and auto-dispatches reviews on `pull_request`
-  `opened` / `ready_for_review` (drafts skipped, per-installation daily cap).
-- [src/routes/landing.tsx](src/routes/landing.tsx) — the signed-out home page, a
-  server-rendered hono/jsx component with a Three.js "self-typing terminal" animation.
-- [src/routes/settings.ts](src/routes/settings.ts) — the signed-in UI: enable/disable
-  reviews per repository, and the `/reviews` activity page showing each review as
-  `reviewing` (live, auto-refreshing), `done` (linking to the posted review), or
-  `stalled` (dispatched but never completed).
-- [src/lib/github-app.ts](src/lib/github-app.ts) — App JWTs, installation tokens, webhook
-  signature verification, OAuth.
-- [src/app.ts](src/app.ts) — routing and the manual `POST /review` trigger.
-- [migrations/](migrations/) — D1 schema: `installations`, `repositories`, `reviews`
-  (including review lifecycle status).
-- [public/](public/) — static assets (logo), served by the Worker's asset binding.
+## What's inside
 
-Each PR gets its own durable agent instance (`owner--repo--number`), so a re-review of the
-same PR continues the same conversation.
+**Review** (the original product):
+
+- One durable agent instance per PR (`owner--repo--number`), so re-reviews
+  continue the same conversation and reconcile against earlier findings.
+- Risk tiering sizes the effort: trivial changes get one generalist agent,
+  large or sensitive changes the full agent fleet.
+- Optional blocking mode: a P1 finding posts `REQUEST_CHANGES`, a clean review
+  approves.
+- Custom review agents (personas) per installation, with optional remote
+  [MCP](https://modelcontextprotocol.io) tool connections (bearer tokens
+  encrypted at rest; servers are treated as untrusted, like the PR itself).
+
+**Factory** (in active development — see
+[docs/software-factory-design.md](docs/software-factory-design.md)):
+
+- **Plan** — an agent clones the repo read-only, analyzes your requirements
+  against the real code, asks clarifying questions, and produces a file-level
+  plan plus machine-checkable acceptance criteria for you to approve.
+- **Generate** — an agent implements the approved plan in a sandbox, a
+  per-repo check command gates the push, and a PR opens.
+- **Auto-fix** — a blocking review dispatches a fix agent (max 3 attempts per
+  PR, then a human-handoff comment).
+- **Verify** — every acceptance criterion is checked empirically against the
+  branch: static criteria by reading the tree, runtime criteria by launching
+  the app in the sandbox, visual criteria by driving headless Chrome. The PR
+  gets a report comment with a verdict table and inline screenshots; unmet
+  criteria feed the auto-fix loop.
+
+Agent runs execute inside Cloudflare Containers (the sandbox) and can spend
+either your existing Claude subscription (`claude setup-token`) or API credits
+through your AI Gateway.
+
+## Code map
+
+- [src/agents/pr-reviewer.ts](src/agents/pr-reviewer.ts) — the review agent.
+- [src/tools/github.ts](src/tools/github.ts) — its tools (`fetch_pr`,
+  `fetch_file`, `fetch_review_threads`, `post_review`).
+- [src/lib/planner.ts](src/lib/planner.ts) /
+  [generator.ts](src/lib/generator.ts) / [fixer.ts](src/lib/fixer.ts) /
+  [verifier.ts](src/lib/verifier.ts) — the factory pipeline stages, each a
+  sandboxed agent run.
+- [src/cloudflare.ts](src/cloudflare.ts) — the factory queue consumer and the
+  sandbox container export.
+- [src/routes/webhooks.ts](src/routes/webhooks.ts) — GitHub App webhooks:
+  installation sync, review auto-dispatch, auto-fix trigger.
+- [src/routes/settings.ts](src/routes/settings.ts) — the signed-in UI:
+  dashboard, factory (submit/answer/approve), reviews, agents, per-repo
+  settings.
+- [src/app.ts](src/app.ts) — routing, operator endpoints (`/review`,
+  `/internal/*`), and the public artifact route for verification screenshots.
+- [migrations/](migrations/) — D1 schema: installations, repositories, reviews,
+  agents, fix attempts, features, plans, verifications.
 
 ## One-time setup
 
-Everything runs on a single Cloudflare account: the Worker, D1, the AI Gateway, and the
-static assets. To self-host, create your own GitHub App and deploy:
+Everything runs on a single Cloudflare account. To self-host, create your own
+GitHub App and deploy:
 
-1. **Dependencies** (peer-dep conflict upstream in `agents`/`ai` requires the flag):
+1. **Dependencies** (peer-dep conflict upstream requires the flag):
 
    ```sh
    npm install --legacy-peer-deps
    ```
 
-2. **AI Gateway** — in [wrangler.jsonc](wrangler.jsonc), set `AI_GATEWAY_ID` to your existing
-   gateway's name. The gateway must be able to serve Anthropic models: either store your
-   Anthropic key in the gateway (BYOK) or enable Cloudflare's unified billing for it.
+2. **AI Gateway** — set `AI_GATEWAY_ID` in [wrangler.jsonc](wrangler.jsonc) to
+   your gateway's name. It must serve Anthropic models (BYOK or unified
+   billing).
 
-3. **D1** — create a `turbodiff` D1 database, put its id in [wrangler.jsonc](wrangler.jsonc),
-   and apply the schema:
+3. **D1** — create a `turbodiff` database, put its id in
+   [wrangler.jsonc](wrangler.jsonc), and apply the schema:
 
    ```sh
-   npx wrangler d1 migrations apply turbodiff --local    # for dev
-   npx wrangler d1 migrations apply turbodiff --remote   # for production
+   npx wrangler d1 migrations apply turbodiff --local    # dev
+   npx wrangler d1 migrations apply turbodiff --remote   # production
    ```
 
-4. **GitHub App** — create one at <https://github.com/settings/apps> (or under your org):
-   - **Webhook URL**: `https://<your-worker>/webhooks/github`, with a webhook secret
+4. **Queue and R2 bucket** (factory pipeline):
+
+   ```sh
+   npx wrangler queues create turbodiff-factory
+   npx wrangler r2 bucket create turbodiff-artifacts
+   ```
+
+5. **GitHub App** — create one at <https://github.com/settings/apps>:
+   - **Webhook URL**: `https://<your-worker>/webhooks/github`, with a secret
      (`openssl rand -hex 32`).
-   - **Repository permissions**: Contents (read-only), Pull requests (read & write).
-   - **Subscribe to events**: Pull request, Installation target, Repository.
-     (Installation events are always delivered to Apps.)
-   - **Callback URL** (under "Identifying and authorizing users"):
-     `https://<your-worker>/auth/callback`. Note the OAuth client id and generate a client
-     secret.
-   - Generate a **private key** and convert it to PKCS#8 (WebCrypto can't read the PKCS#1
-     file GitHub gives you):
+   - **Repository permissions**: Contents (read & write — the fix and
+     generation agents push branches), Pull requests (read & write), Issues
+     (read & write, for comment reactions and factory reports).
+   - **Subscribe to events**: Pull request, Pull request review, Issue comment,
+     Repository.
+   - **Callback URL**: `https://<your-worker>/auth/callback`; note the OAuth
+     client id and generate a client secret.
+   - Generate a **private key** and convert it to PKCS#8 (WebCrypto can't read
+     GitHub's PKCS#1 file):
 
      ```sh
      openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in app.pem -out app.pkcs8.pem
      ```
 
-   - Set `GITHUB_APP_SLUG` in [wrangler.jsonc](wrangler.jsonc) to the app's URL slug
-     (`github.com/apps/<slug>`).
+   - Set `GITHUB_APP_SLUG` in [wrangler.jsonc](wrangler.jsonc).
 
-5. **Secrets** — locally, fill in [.dev.vars](.dev.vars); in production:
+6. **Secrets** — locally in `.dev.vars`; in production:
 
    ```sh
    npx wrangler secret put GITHUB_APP_ID
@@ -100,26 +140,33 @@ static assets. To self-host, create your own GitHub App and deploy:
    npx wrangler secret put GITHUB_OAUTH_CLIENT_SECRET
    npx wrangler secret put SESSION_SECRET           # openssl rand -hex 32
    npx wrangler secret put REVIEW_SECRET            # openssl rand -hex 32 (operator endpoints)
-   # Only needed if agents will use authenticated external MCP connections:
-   npx wrangler secret put TOKEN_ENCRYPTION_KEY     # openssl rand -hex 32 (seals MCP tokens)
+   # Factory agent runs — set at least one:
+   npx wrangler secret put CLAUDE_CODE_OAUTH_TOKEN  # from `claude setup-token` (Claude subscription)
+   npx wrangler secret put FIXER_ANTHROPIC_API_KEY  # gateway mode, with FIXER_ANTHROPIC_BASE_URL var
+   # Only if agents use authenticated external MCP connections:
+   npx wrangler secret put TOKEN_ENCRYPTION_KEY     # openssl rand -hex 32
    ```
 
-6. **Custom domain** (optional) — add a custom domain to the Worker (turbodiff.dev in the
-   hosted deployment) and update the GitHub App's webhook + callback URLs to match.
+7. **Custom domain** (optional) — add it to the Worker, set `PUBLIC_BASE_URL`
+   in [wrangler.jsonc](wrangler.jsonc), and update the GitHub App's webhook +
+   callback URLs.
 
 ## Develop
+
+Local dev needs **Docker running** (the sandbox container image builds on
+first start).
 
 ```sh
 npm run dev
 ```
 
-The landing page is at `/` (settings once signed in). To exercise webhooks locally, either
-use a tunnel (`cloudflared tunnel`, `smee.io`) pointed at `/webhooks/github`, or send
-signed test payloads by hand (HMAC-SHA256 of the body with your webhook secret in
-`x-hub-signature-256: sha256=<hex>`).
+To exercise webhooks locally, use a tunnel (`cloudflared tunnel`, `smee.io`)
+pointed at `/webhooks/github`, or send signed test payloads (HMAC-SHA256 of the
+body in `x-hub-signature-256: sha256=<hex>`).
 
-> `package.json` pins npm via `devEngines` (npm ≥ 12). If your npm refuses to run scripts,
-> call the binaries directly: `./node_modules/.bin/vite dev`, `./node_modules/.bin/tsc --noEmit`.
+> `package.json` pins npm via `devEngines`. If your npm refuses to run scripts,
+> call the binaries directly: `./node_modules/.bin/vite dev`,
+> `./node_modules/.bin/tsc --noEmit`.
 
 ## Deploy
 
@@ -127,58 +174,31 @@ signed test payloads by hand (HMAC-SHA256 of the body with your webhook secret i
 npm run deploy
 ```
 
+This builds the Worker and the sandbox container image (Docker required) and
+pushes both.
+
 ## Use it
 
-1. Visit [turbodiff.dev](https://turbodiff.dev) (or your own deployment) and install the
-   GitHub App on an organization or account, selecting the repositories to review.
-2. Open a pull request (or mark a draft as ready) — Turbodiff reviews it automatically.
-   Auto-reviews are capped per installation per day (`REVIEW_DAILY_LIMIT`).
-3. Sign in to toggle reviews per repository, and watch in-flight reviews live on
-   [`/reviews`](https://turbodiff.dev/reviews) — each shows as reviewing, done (with a
-   link to the posted review), or stalled.
+1. Install the GitHub App, selecting the repositories to review.
+2. Open a pull request — Turbodiff reviews it automatically (capped per
+   installation per day via `REVIEW_DAILY_LIMIT`).
+3. Sign in to configure repositories on `/settings` — per-repo toggles for
+   re-review on push, blocking reviews, auto-fix, and the sandbox check
+   command — and watch reviews on `/reviews`.
+4. Plan and build features on `/factory`: submit requirements, answer the
+   planning agent's questions, approve the plan, and follow the generated PR
+   through review and verification.
 
-Need a manual (re-)review — e.g. after new pushes? The operator endpoint works for any
-installed repo:
-
-```sh
-curl -X POST https://turbodiff.dev/review \
-  -H "Authorization: Bearer $REVIEW_SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{"pr_url": "https://github.com/OWNER/REPO/pull/123"}'
-```
-
-Inspect a PR's conversation at `GET /agents/pr-reviewer/owner--repo--123` (same auth header).
-
-## External tools (MCP)
-
-Any agent can mount remote [MCP](https://modelcontextprotocol.io) servers as extra review
-tools — a dependency database, an internal policy service, whatever your reviews need.
-On an agent's edit page, add a connection: a server name, its MCP endpoint URL, an
-optional bearer token (encrypted at rest with `TOKEN_ENCRYPTION_KEY`, write-only in the
-UI), and an optional tool allowlist. The **Test** button performs the MCP handshake and
-lists the tools the agent would see, without mounting anything.
-
-The featured path is [Executor](https://executor.sh): configure your integrations (MCP
-servers, OpenAPI, GraphQL) with per-tool policies in Executor's catalog, then hand
-Turbodiff the single hosted MCP endpoint + token it gives you. Secrets for the underlying
-services stay in Executor; rotating or re-scoping tools never touches Turbodiff.
-
-Two things to know before connecting a server: the agent sends it PR context (that's data
-egress to wherever the URL points — connect only servers you trust), and everything the
-server returns is treated as untrusted content, same as the PR itself. Connections are
-`optional` — if a server is down, the review runs without it and notes the gap.
-
-## Learn more
-
-- [Flue docs](https://flueframework.com/docs/) — or `npx flue docs` from the terminal.
-- [Cloudflare AI Gateway](https://developers.cloudflare.com/ai-gateway/)
-- [GitHub Apps](https://docs.github.com/en/apps)
+Operator endpoints (Bearer `REVIEW_SECRET`) mirror the UI for automation:
+`POST /review` (manual re-review), `POST /internal/generate`,
+`POST /internal/plans` + `/answers` + `/approve`, `POST /internal/fix`, and
+`GET /internal/pr-reviewer/<owner--repo--number>` to inspect a review agent's
+conversation.
 
 ## License
 
-Turbodiff is licensed under the [Functional Source License, Version 1.1, ALv2 Future
-License](LICENSE.md) (FSL-1.1-ALv2). In short: you may use, modify, and self-host it
-freely — including inside your company — but you may not offer it (or a substantially
-similar service) commercially in competition with Turbodiff. Each release automatically
-becomes available under the Apache License 2.0 two years after publication. See
-[fsl.software](https://fsl.software) for the license's background.
+Turbodiff is licensed under the [Functional Source License, Version 1.1, ALv2
+Future License](LICENSE.md) (FSL-1.1-ALv2): use, modify, and self-host freely —
+including inside your company — but don't offer it (or a substantially similar
+service) commercially in competition with Turbodiff. Each release becomes
+Apache 2.0 two years after publication. See [fsl.software](https://fsl.software).
