@@ -1,4 +1,4 @@
-import { getSandbox, type Sandbox } from '@cloudflare/sandbox';
+import { collectFile, getSandbox, type Sandbox } from '@cloudflare/sandbox';
 import { env } from 'cloudflare:workers';
 import { gh } from '../tools/github.ts';
 import {
@@ -63,7 +63,20 @@ ${SHOTS_DIR}/ (create it). Write capture scripts as CommonJS (.cjs files using
 require('puppeteer-core')) — ESM import cannot resolve the global install.
 Launch with args ['--no-sandbox', '--disable-dev-shm-usage']. Use descriptive
 kebab-case filenames and reference each screenshot from the matching
-criterion result.`
+criterion result.
+
+## Demo recording
+Also record ONE short screen recording (10–30 seconds) demonstrating the
+feature's happy path end to end. This is what humans watch, so drive it like a
+demo: pause about a second between meaningful steps and let each state change
+be visible before moving on. In a .cjs script, use puppeteer's screencast API:
+
+    const recorder = await page.screencast({ path: '${OUT_DIR}/demo.webm' });
+    // ... drive the flow deliberately ...
+    await recorder.stop();
+
+Write a one-line caption for the recording to ${OUT_DIR}/demo-caption.txt.
+If the app cannot run, skip the recording.`
 		: `## Running the app
 No run command is configured for this repository, so runtime and visual checks
 are unavailable. Verify what can be verified statically from the tree; mark
@@ -113,6 +126,7 @@ export async function runVerification(featureId: number): Promise<void> {
 		await finishVerification(verificationId, outcome.status, {
 			results: JSON.stringify(outcome.results),
 			summary: outcome.summary,
+			demo: outcome.demo ? JSON.stringify({ video: outcome.demo.key, caption: outcome.demo.caption }) : undefined,
 		});
 		console.log(`turbodiff: verification ${outcome.status} for ${label}`);
 	} catch (err) {
@@ -126,7 +140,7 @@ async function verify(
 	feature: FeatureRow,
 	repo: RepositoryRow,
 	criteria: string[],
-): Promise<{ status: string; results: CriterionResult[]; summary?: string }> {
+): Promise<{ status: string; results: CriterionResult[]; summary?: string; demo?: DemoInfo }> {
 	const token = await installationToken(repo.installation_id);
 	const auth = resolveRunnerAuth();
 	// Verifier sandboxes never push: single-repo, contents READ-ONLY token.
@@ -174,9 +188,10 @@ async function verify(
 		const results = await readResults(sandbox, criteria.length);
 		const summary = await readText(sandbox, `${OUT_DIR}/summary.md`);
 		const shots = await uploadScreenshots(sandbox, feature.id, results);
+		const demo = await uploadDemo(sandbox, feature.id);
 
 		const failed = results.filter((r) => r.verdict === 'fail');
-		await postReport(token, repo, feature, criteria, results, shots, summary);
+		await postReport(token, repo, feature, criteria, results, shots, summary, demo);
 		if (failed.length === 0) {
 			await maybeAutoMerge(repo, feature.pr_number!);
 		}
@@ -194,7 +209,7 @@ async function verify(
 					.join('\n\n'),
 			});
 		}
-		return { status: failed.length > 0 ? 'failed' : 'passed', results, summary };
+		return { status: failed.length > 0 ? 'failed' : 'passed', results, summary, demo };
 	} finally {
 		await sandbox
 			.exec(`git -C ${CLONE_DIR} remote set-url origin "https://github.com/${full}.git"`)
@@ -236,8 +251,17 @@ async function readText(sandbox: Sandbox, path: string): Promise<string | undefi
 	}
 }
 
-// Screenshots leave the sandbox base64-encoded (binary-safe over the exec
-// transport) and land in R2 under verify/<featureId>/, served publicly by the
+// Binary-safe read out of the sandbox via the SDK's file streaming.
+async function readBinary(sandbox: Sandbox, path: string): Promise<Uint8Array | null> {
+	try {
+		const { content } = await collectFile(await sandbox.readFileStream(path));
+		return content instanceof Uint8Array ? content : new TextEncoder().encode(content);
+	} catch {
+		return null;
+	}
+}
+
+// Screenshots land in R2 under verify/<featureId>/, served via the signed
 // GET /artifacts/* route so they render inline in the PR comment.
 async function uploadScreenshots(
 	sandbox: Sandbox,
@@ -249,17 +273,39 @@ async function uploadScreenshots(
 	for (const name of wanted) {
 		const safe = name.replace(/[^\w.-]/g, '');
 		if (!safe.endsWith('.png')) continue;
-		const b64 = await sandbox.exec(`base64 < "${SHOTS_DIR}/${safe}" | tr -d '\\n'`, {
-			timeout: 30_000,
-		});
-		if (!b64.success || !b64.stdout.trim()) continue;
-		const bytes = Uint8Array.from(atob(b64.stdout.trim()), (c) => c.charCodeAt(0));
+		const bytes = await readBinary(sandbox, `${SHOTS_DIR}/${safe}`);
+		if (!bytes || bytes.length === 0) continue;
 		const key = `verify/${featureId}/${safe}`;
 		await env.ARTIFACTS.put(key, bytes, { httpMetadata: { contentType: 'image/png' } });
 		const sig = await signArtifactKey(key);
 		urls.set(name, `${env.PUBLIC_BASE_URL}/artifacts/${key}?sig=${sig}`);
 	}
 	return urls;
+}
+
+interface DemoInfo {
+	key: string;
+	url: string;
+	caption?: string;
+}
+
+// The demo recording: WebM to R2; the cockpit plays it natively and the PR
+// comment links it. 40MB guard against runaway recordings.
+async function uploadDemo(sandbox: Sandbox, featureId: number): Promise<DemoInfo | undefined> {
+	const stat = await sandbox.exec(`stat -c %s "${OUT_DIR}/demo.webm"`, { timeout: 15_000 });
+	const size = Number(stat.stdout.trim());
+	if (!stat.success || !Number.isFinite(size) || size === 0) return undefined;
+	if (size > 40 * 1024 * 1024) {
+		console.warn(`turbodiff: demo recording too large (${size} bytes), skipping upload`);
+		return undefined;
+	}
+	const bytes = await readBinary(sandbox, `${OUT_DIR}/demo.webm`);
+	if (!bytes || bytes.length === 0) return undefined;
+	const key = `verify/${featureId}/demo.webm`;
+	await env.ARTIFACTS.put(key, bytes, { httpMetadata: { contentType: 'video/webm' } });
+	const sig = await signArtifactKey(key);
+	const caption = await readText(sandbox, `${OUT_DIR}/demo-caption.txt`);
+	return { key, url: `${env.PUBLIC_BASE_URL}/artifacts/${key}?sig=${sig}`, caption };
 }
 
 const VERDICT_BADGE: Record<CriterionResult['verdict'], string> = {
@@ -276,11 +322,16 @@ async function postReport(
 	results: CriterionResult[],
 	shots: Map<string, string>,
 	summary?: string,
+	demo?: DemoInfo,
 ): Promise<void> {
 	const failed = results.filter((r) => r.verdict === 'fail').length;
+	const cockpit = `${env.PUBLIC_BASE_URL}/factory/features/${feature.id}`;
 	const lines = [
 		`## 🔍 Turbodiff verification — ${failed === 0 ? 'all criteria met' : `${failed} criteria not met`}`,
 		'',
+		...(demo
+			? [`🎬 **[Watch the demo & review this PR in Turbodiff](${cockpit})** — ${demo.caption ?? 'screen recording of the feature in action'} ([raw video](${demo.url}))`, '']
+			: [`🔎 **[Review this PR in Turbodiff](${cockpit})**`, '']),
 		'| | Criterion | Evidence |',
 		'|---|---|---|',
 		...results.map((r) => {

@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
-import { html } from 'hono/html';
+import { html, raw } from 'hono/html';
 import type { HtmlEscapedString } from 'hono/utils/html';
 import {
 	agentUsageForMonth,
@@ -11,6 +11,9 @@ import {
 	createAgentConnection,
 	createPlan,
 	getPlan,
+	getPlanByFeatureId,
+	getFeature,
+	latestVerificationForFeature,
 	listPlansForInstallations,
 	updatePlan,
 	dashboardStats,
@@ -44,7 +47,11 @@ import {
 	type PlanWithRepo,
 	type ReviewActivityRow,
 } from '../lib/db.ts';
+import { parsePatchFiles, wrapCoreCSS } from '@pierre/diffs';
+import { preloadDiffHTML } from '@pierre/diffs/ssr';
 import { approvePlan } from '../lib/planner.ts';
+import { signArtifactKey } from '../lib/crypto.ts';
+import { gh } from '../tools/github.ts';
 import { encryptionConfigured, openToken, sealToken } from '../lib/crypto.ts';
 import { testMcpEndpoint } from '../lib/mcp-test.ts';
 import { DEFAULT_MODEL, RESERVED_AGENT_SLUGS } from '../lib/personas.ts';
@@ -52,6 +59,7 @@ import {
 	exchangeOAuthCode,
 	fetchUser,
 	fetchUserInstallationIds,
+	installationToken,
 	oauthAuthorizeUrl,
 } from '../lib/github-app.ts';
 import {
@@ -298,6 +306,23 @@ const RUNNING_PLAN_STATUSES = new Set(['analyzing', 'refining']);
 // Latest verification for an approved plan's feature, as a compact pill:
 // passed (n/n) / failed (n unmet) / running / error. Full evidence lives in
 // the PR's report comment.
+// Inline pill for the cockpit header, from raw status + results.
+function renderVerificationInline(
+	status: string | null,
+	results: { verdict: string }[],
+): HtmlEscapedString | Promise<HtmlEscapedString> | '' {
+	if (!status) return '';
+	const failed = results.filter((r) => r.verdict === 'fail').length;
+	const detail =
+		status === 'passed'
+			? ` (${results.length}/${results.length})`
+			: status === 'failed'
+				? ` (${failed} unmet)`
+				: '';
+	const cls = status === 'passed' ? 'on' : status === 'running' ? 'running' : 'red';
+	return html` · <span class="pill ${cls}">verify: ${status}${detail}</span>`;
+}
+
 function renderVerification(p: PlanWithRepo): HtmlEscapedString | Promise<HtmlEscapedString> | '' {
 	if (!p.verification_status) return '';
 	let detail = '';
@@ -362,8 +387,9 @@ function renderPlan(p: PlanWithRepo): HtmlEscapedString | Promise<HtmlEscapedStr
 			: ''}
 		${p.status === 'approved' && p.pr_number
 			? html`<p style="margin-top:0.4rem">
-					<a href="https://github.com/${p.owner}/${p.name}/pull/${p.pr_number}"
-						>pull request #${p.pr_number} &rarr;</a
+					<a href="/factory/features/${p.feature_id}"><strong>open in cockpit &rarr;</strong></a>
+					· <a href="https://github.com/${p.owner}/${p.name}/pull/${p.pr_number}"
+						>PR #${p.pr_number}</a
 					>
 					${renderVerification(p)}
 				</p>`
@@ -1363,6 +1389,216 @@ export function createSettingsRoutes() {
 
 		await setRepoEnabled(repo.id, !repo.enabled);
 		return c.redirect('/settings');
+	});
+
+	// --- Factory PR cockpit (v1, server-rendered) ---
+	// One screen for reviewing a factory PR without GitHub: demo video, full
+	// diff (SSR-rendered via @pierre/diffs), acceptance evidence, review
+	// verdicts, and the merge action. GitHub stays the system of record; this
+	// is the review surface. v2 hydrates this markup with @pierre/diffs/react
+	// for inline commenting that feeds the fix loop.
+
+	app.get('/factory/features/:id', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+
+		const id = Number(c.req.param('id'));
+		const feature = Number.isInteger(id) ? await getFeature(id) : null;
+		const repo = feature ? await getRepoById(feature.repository_id) : null;
+		if (!feature || !repo || !user.installationIds.includes(repo.installation_id)) {
+			return c.text('unknown feature', 404);
+		}
+		if (!feature.pr_number) {
+			return c.html(
+				page(
+					`Turbodiff — ${feature.title}`,
+					html`${topbar(user.session.login)} ${tabs('factory')}
+						<h2>${feature.title}</h2>
+						<p class="muted">No pull request yet — generation is ${feature.status}.</p>`,
+				),
+			);
+		}
+
+		const [plan, verification, token] = await Promise.all([
+			getPlanByFeatureId(feature.id),
+			latestVerificationForFeature(feature.id),
+			installationToken(repo.installation_id),
+		]);
+		const base = `/repos/${repo.owner}/${repo.name}`;
+		const [prMeta, prFiles, prReviews] = await Promise.all([
+			gh(token, `${base}/pulls/${feature.pr_number}`).then(
+				(r) =>
+					r.json() as Promise<{
+						state: string;
+						merged: boolean;
+						html_url: string;
+						additions: number;
+						deletions: number;
+						changed_files: number;
+					}>,
+			),
+			gh(token, `${base}/pulls/${feature.pr_number}/files?per_page=100`).then(
+				(r) =>
+					r.json() as Promise<
+						{ filename: string; status: string; additions: number; deletions: number; patch?: string }[]
+					>,
+			),
+			gh(token, `${base}/pulls/${feature.pr_number}/reviews?per_page=100`).then(
+				(r) =>
+					r.json() as Promise<{ state: string; body: string; user: { login: string } | null }[]>,
+			),
+		]);
+
+		// SSR-render each file's diff. GitHub's per-file patch lacks git headers,
+		// so wrap it into a minimal single-file patch for the parser.
+		const MAX_FILES = 50;
+		const rendered: { filename: string; status: string; html: string | null }[] = [];
+		for (const f of prFiles.slice(0, MAX_FILES)) {
+			let diffHtml: string | null = null;
+			if (f.patch && f.patch.length < 100_000) {
+				try {
+					const pseudo = `diff --git a/${f.filename} b/${f.filename}\n--- a/${f.filename}\n+++ b/${f.filename}\n${f.patch}\n`;
+					const fileDiff = parsePatchFiles(pseudo)[0]?.files[0];
+					if (fileDiff) {
+						diffHtml = await preloadDiffHTML({ fileDiff, options: { theme: 'pierre-dark' } });
+					}
+				} catch (err) {
+					console.warn(`turbodiff: cockpit diff render failed for ${f.filename}:`, err);
+				}
+			}
+			rendered.push({ filename: f.filename, status: f.status, html: diffHtml });
+		}
+
+		// The library's stylesheet targets :host (web components); rescope it to
+		// a wrapper class for light-DOM embedding.
+		const diffsCss = wrapCoreCSS('').replaceAll(':host', '.diffs-scope');
+
+		const demo = verification?.demo ? (JSON.parse(verification.demo) as { video?: string; caption?: string }) : null;
+		const demoUrl = demo?.video
+			? `/artifacts/${demo.video}?sig=${await signArtifactKey(demo.video)}`
+			: null;
+		const criteria: string[] = feature.acceptance ? JSON.parse(feature.acceptance) : [];
+		const results: { index: number; verdict: string; note: string; screenshot?: string }[] =
+			verification?.results ? JSON.parse(verification.results) : [];
+		const shotUrl = new Map<string, string>();
+		for (const r of results) {
+			if (r.screenshot) {
+				const key = `verify/${feature.id}/${r.screenshot.replace(/[^\w.-]/g, '')}`;
+				shotUrl.set(r.screenshot, `/artifacts/${key}?sig=${await signArtifactKey(key)}`);
+			}
+		}
+		const verdictBadge: Record<string, string> = { pass: '✅', fail: '❌', skip: '⚪' };
+		const prState = prMeta.merged ? 'merged' : prMeta.state;
+
+		return c.html(
+			page(
+				`Turbodiff — ${feature.title}`,
+				html`${topbar(user.session.login)} ${tabs('factory')}
+					<style>
+						${raw(diffsCss)}
+						.diffs-scope { display: block; margin-top: 0.5rem; border: 1px solid #1c2620; border-radius: 8px; overflow: hidden; }
+						.cockpit-video { width: 100%; border: 1px solid #1c2620; border-radius: 8px; margin-top: 0.5rem; background: #000; }
+						.file-label { margin-top: 1.25rem; font-size: 0.8rem; color: #b8c4bc; }
+						details.review-body pre { white-space: pre-wrap; font-size: 0.8rem; }
+					</style>
+					<div class="topbar" style="margin-top:1.5rem">
+						<h1 style="margin:0">${feature.title}</h1>
+						<span class="pill ${prState === 'merged' ? 'on' : prState === 'open' ? 'running' : 'red'}">${prState}</span>
+					</div>
+					<p class="muted">
+						${repo.owner}/${repo.name} · PR
+						<a href="${prMeta.html_url}" target="_blank" rel="noopener">#${feature.pr_number}</a> ·
+						${prMeta.changed_files} files, +${prMeta.additions} −${prMeta.deletions}
+						${renderVerificationInline(verification?.status ?? null, results)}
+					</p>
+					${prState === 'open'
+						? html`<form method="post" action="/factory/features/${feature.id}/merge">
+								<button
+									onclick="return confirm('Merge this pull request?')"
+								>
+									Merge pull request
+								</button>
+							</form>`
+						: ''}
+					${demoUrl
+						? html`<h2>demo</h2>
+								${demo?.caption ? html`<p class="muted">${demo.caption}</p>` : ''}
+								<video class="cockpit-video" controls autoplay muted loop playsinline src="${demoUrl}"></video>`
+						: ''}
+					${criteria.length > 0
+						? html`<h2>acceptance criteria</h2>
+								<table>
+									${criteria.map((crit, i) => {
+										const r = results.find((x) => x.index === i);
+										const shot = r?.screenshot ? shotUrl.get(r.screenshot) : undefined;
+										return html`<tr>
+											<td style="width:1.5rem">${verdictBadge[r?.verdict ?? ''] ?? '⚪'}</td>
+											<td>
+												${crit}
+												${r?.note ? html`<div class="muted">${r.note}</div>` : ''}
+												${shot
+													? html`<div><a href="${shot}" target="_blank" rel="noopener">screenshot →</a></div>`
+													: ''}
+											</td>
+										</tr>`;
+									})}
+								</table>`
+						: ''}
+					${prReviews.length > 0
+						? html`<h2>reviews</h2>
+								${prReviews.map(
+									(r) => html`<details class="review-body">
+										<summary>
+											${r.user?.login ?? 'unknown'} · ${r.state.toLowerCase()}
+										</summary>
+										<pre>${r.body || '(no body)'}</pre>
+									</details>`,
+								)}`
+						: ''}
+					${plan
+						? html`<h2>plan</h2>
+								<details class="review-body">
+									<summary class="muted">implementation plan (approved)</summary>
+									<pre>${plan.plan ?? ''}</pre>
+								</details>`
+						: ''}
+					<h2>diff</h2>
+					${rendered.map(
+						(f) => html`<div class="file-label">${f.filename} <span class="muted">(${f.status})</span></div>
+							${f.html
+								? html`<div class="diffs-scope">${raw(f.html)}</div>`
+								: html`<p class="muted">diff not rendered (binary, renamed, or too large)</p>`}`,
+					)}
+					${prFiles.length > MAX_FILES
+						? html`<p class="muted">…and ${prFiles.length - MAX_FILES} more files — see the PR on GitHub.</p>`
+						: ''}`,
+			),
+		);
+	});
+
+	// Human-initiated merge from the cockpit. Deliberately does not reuse the
+	// auto-merge gates: a signed-in repo admin clicking Merge IS the authority.
+	app.post('/factory/features/:id/merge', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+
+		const id = Number(c.req.param('id'));
+		const feature = Number.isInteger(id) ? await getFeature(id) : null;
+		const repo = feature ? await getRepoById(feature.repository_id) : null;
+		if (!feature || !repo || !user.installationIds.includes(repo.installation_id)) {
+			return c.text('unknown feature', 404);
+		}
+		if (!feature.pr_number) return c.redirect(`/factory/features/${id}`);
+		try {
+			const token = await installationToken(repo.installation_id);
+			await gh(token, `/repos/${repo.owner}/${repo.name}/pulls/${feature.pr_number}/merge`, {
+				method: 'PUT',
+				body: JSON.stringify({ merge_method: 'merge' }),
+			});
+		} catch (err) {
+			console.error(`turbodiff: cockpit merge failed for feature ${id}:`, err);
+		}
+		return c.redirect(`/factory/features/${id}`);
 	});
 
 	return app;

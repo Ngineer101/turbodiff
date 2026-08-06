@@ -187,6 +187,7 @@ export interface VerificationRow {
 	status: string;
 	results: string | null;
 	summary: string | null;
+	demo: string | null; // JSON {"video": r2Key, "caption": string}
 	error: string | null;
 	created_at: string;
 }
@@ -225,13 +226,27 @@ export async function createVerification(featureId: number): Promise<number> {
 export async function finishVerification(
 	id: number,
 	status: string,
-	fields: { results?: string; summary?: string; error?: string } = {},
+	fields: { results?: string; summary?: string; error?: string; demo?: string } = {},
 ): Promise<void> {
 	await env.DB.prepare(
-		'UPDATE verifications SET status = ?2, results = ?3, summary = ?4, error = ?5 WHERE id = ?1',
+		'UPDATE verifications SET status = ?2, results = ?3, summary = ?4, error = ?5, demo = ?6 WHERE id = ?1',
 	)
-		.bind(id, status, fields.results ?? null, fields.summary ?? null, fields.error ?? null)
+		.bind(
+			id,
+			status,
+			fields.results ?? null,
+			fields.summary ?? null,
+			fields.error ?? null,
+			fields.demo ?? null,
+		)
 		.run();
+}
+
+// The plan a factory feature came from (null for direct /internal/generate).
+export async function getPlanByFeatureId(featureId: number): Promise<PlanRow | null> {
+	return env.DB.prepare('SELECT * FROM plans WHERE feature_id = ?1 ORDER BY id DESC LIMIT 1')
+		.bind(featureId)
+		.first<PlanRow>();
 }
 
 // --- fix attempts (auto-fix loop bookkeeping + iteration cap) ---
@@ -369,6 +384,7 @@ export interface PlanWithRepo extends PlanRow {
 	pr_number: number | null; // from the linked feature, if generation started
 	verification_status: string | null; // latest verification for the feature
 	verification_results: string | null; // its per-criterion results JSON
+	verification_demo: string | null; // its demo JSON {"video": r2Key}
 }
 
 // Plans across the given installations, newest first, with repo + generated-PR
@@ -381,7 +397,8 @@ export async function listPlansForInstallations(
 	const placeholders = installationIds.map((_, i) => `?${i + 2}`).join(', ');
 	const res = await env.DB.prepare(
 		`SELECT p.*, r.owner, r.name, r.installation_id, f.pr_number AS pr_number,
-		        v.status AS verification_status, v.results AS verification_results
+		        v.status AS verification_status, v.results AS verification_results,
+		        v.demo AS verification_demo
 		 FROM plans p
 		 JOIN repositories r ON r.id = p.repository_id
 		 LEFT JOIN features f ON f.id = p.feature_id
