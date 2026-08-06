@@ -9,6 +9,9 @@
 	// Workers AI binding — model calls dispatch through env.AI into the named
 	// AI Gateway (see setProvider in src/app.ts).
 	"ai": { "binding": "AI" },
+	// Exposes the live Worker version (id/tag) to GET /version — see
+	// https://developers.cloudflare.com/workers/configuration/version-metadata/
+	"version_metadata": { "binding": "CF_VERSION_METADATA" },
 	// Installation/repo config store. Apply migrations with:
 	//   npx wrangler d1 migrations apply turbodiff [--local | --remote]
 	"d1_databases": [
