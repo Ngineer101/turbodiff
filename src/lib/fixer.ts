@@ -1,7 +1,7 @@
 import { getSandbox, type Sandbox } from '@cloudflare/sandbox';
 import { env } from 'cloudflare:workers';
 import { gh } from '../tools/github.ts';
-import { finishFixAttempt, getRepoById, tryRecordFixAttempt } from './db.ts';
+import { finishFixAttempt, getFeatureByRepoPr, getRepoById, tryRecordFixAttempt } from './db.ts';
 import { installationToken, sandboxGitToken } from './github-app.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
 
@@ -381,6 +381,14 @@ export async function processFixMessage(msg: FixQueueMessage): Promise<void> {
 		});
 		await finishFixAttempt(attemptId, outcome.status, outcome.commit);
 		console.log(`turbodiff: fix ${outcome.status} for ${label} (attempt ${attemptId})`);
+		// A fix push invalidates prior verification evidence: re-verify factory
+		// PRs so the report (and the auto-merge gate) reflects the fixed code.
+		if (outcome.status === 'fixed') {
+			const feature = await getFeatureByRepoPr(repo.id, msg.prNumber);
+			if (feature?.acceptance) {
+				await env.FACTORY_QUEUE.send({ kind: 'verify', featureId: feature.id });
+			}
+		}
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		await finishFixAttempt(attemptId, 'failed', undefined, message.slice(0, 500));

@@ -21,6 +21,7 @@ export interface RepositoryRow {
 	review_on_push: number; // re-dispatch tiered agents on pushes to open PRs
 	blocking_reviews: number; // P1 → REQUEST_CHANGES, clean → APPROVE
 	auto_fix: number; // dispatch the fix agent when a blocking review lands
+	auto_merge: number; // merge factory PRs when verification + review are clean
 	check_command: string | null; // sandbox verification gate before factory pushes
 	run_command: string | null; // how to launch the app for runtime verification
 	app_port: number | null; // port the launched app listens on
@@ -151,6 +152,12 @@ export async function setRepoAutoFix(id: number, on: boolean): Promise<void> {
 		.run();
 }
 
+export async function setRepoAutoMerge(id: number, on: boolean): Promise<void> {
+	await env.DB.prepare('UPDATE repositories SET auto_merge = ?2 WHERE id = ?1')
+		.bind(id, on ? 1 : 0)
+		.run();
+}
+
 // The sandbox verification gate for factory pushes. Empty string clears it.
 export async function setRepoCheckCommand(id: number, command: string): Promise<void> {
 	const trimmed = command.trim();
@@ -173,6 +180,38 @@ export async function setRepoRunCommand(
 }
 
 // --- verifications (Phase 4: empirical acceptance-criteria checks) ---
+
+export interface VerificationRow {
+	id: number;
+	feature_id: number;
+	status: string;
+	results: string | null;
+	summary: string | null;
+	error: string | null;
+	created_at: string;
+}
+
+// The feature a factory PR belongs to (null for human-authored PRs).
+export async function getFeatureByRepoPr(
+	repositoryId: number,
+	prNumber: number,
+): Promise<FeatureRow | null> {
+	return env.DB.prepare(
+		'SELECT * FROM features WHERE repository_id = ?1 AND pr_number = ?2 ORDER BY id DESC LIMIT 1',
+	)
+		.bind(repositoryId, prNumber)
+		.first<FeatureRow>();
+}
+
+export async function latestVerificationForFeature(
+	featureId: number,
+): Promise<VerificationRow | null> {
+	return env.DB.prepare(
+		'SELECT * FROM verifications WHERE feature_id = ?1 ORDER BY id DESC LIMIT 1',
+	)
+		.bind(featureId)
+		.first<VerificationRow>();
+}
 
 export async function createVerification(featureId: number): Promise<number> {
 	const row = await env.DB.prepare(
@@ -328,6 +367,8 @@ export interface PlanWithRepo extends PlanRow {
 	name: string;
 	installation_id: number;
 	pr_number: number | null; // from the linked feature, if generation started
+	verification_status: string | null; // latest verification for the feature
+	verification_results: string | null; // its per-criterion results JSON
 }
 
 // Plans across the given installations, newest first, with repo + generated-PR
@@ -339,10 +380,13 @@ export async function listPlansForInstallations(
 	if (installationIds.length === 0) return [];
 	const placeholders = installationIds.map((_, i) => `?${i + 2}`).join(', ');
 	const res = await env.DB.prepare(
-		`SELECT p.*, r.owner, r.name, r.installation_id, f.pr_number AS pr_number
+		`SELECT p.*, r.owner, r.name, r.installation_id, f.pr_number AS pr_number,
+		        v.status AS verification_status, v.results AS verification_results
 		 FROM plans p
 		 JOIN repositories r ON r.id = p.repository_id
 		 LEFT JOIN features f ON f.id = p.feature_id
+		 LEFT JOIN verifications v ON v.id =
+		   (SELECT MAX(id) FROM verifications WHERE feature_id = p.feature_id)
 		 WHERE r.installation_id IN (${placeholders})
 		 ORDER BY p.id DESC
 		 LIMIT ?1`,
