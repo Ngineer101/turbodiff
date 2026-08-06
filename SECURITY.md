@@ -70,6 +70,12 @@ rather than a public issue.
   check gate, and review reconciliation bound it, but a malicious blocking
   review body on a repo with auto-fix enabled is an injection channel into
   the fixer; only enable auto-fix on repos whose collaborators you trust.
+- **Auto-merge is double-gated but still autonomous.** With the per-repo
+  `auto_merge` toggle on (default off, and only honored alongside blocking
+  reviews), a factory PR merges itself when the empirical verification passed
+  and no review ever requested changes. The gates are real, but both are
+  produced by agents — enable it only on repos where a bad merge is cheap to
+  revert.
 - **Single-operator deployment.** There is no per-user authorization inside
   an installation beyond GitHub's own (any user who can access the
   installation can configure its repos). Multi-tenant hosting needs a proper

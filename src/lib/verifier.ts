@@ -9,6 +9,7 @@ import {
 	type FeatureRow,
 	type RepositoryRow,
 } from './db.ts';
+import { maybeAutoMerge } from './auto-merge.ts';
 import { signArtifactKey } from './crypto.ts';
 import { resolveRunnerAuth } from './fixer.ts';
 import { installationToken, sandboxGitToken } from './github-app.ts';
@@ -176,6 +177,9 @@ async function verify(
 
 		const failed = results.filter((r) => r.verdict === 'fail');
 		await postReport(token, repo, feature, criteria, results, shots, summary);
+		if (failed.length === 0) {
+			await maybeAutoMerge(repo, feature.pr_number!);
+		}
 
 		// Conformance gate: unmet criteria feed the existing fix loop (toggle and
 		// cap are re-validated by the consumer, exactly like review-driven fixes).

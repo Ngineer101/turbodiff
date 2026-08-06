@@ -1,6 +1,7 @@
 import { defineTool } from '@flue/runtime';
 import { env } from 'cloudflare:workers';
 import * as v from 'valibot';
+import { maybeAutoMerge } from '../lib/auto-merge.ts';
 import { completeReview, getRepoByFullName } from '../lib/db.ts';
 import { installationToken } from '../lib/github-app.ts';
 
@@ -429,6 +430,11 @@ export const makePostReview = (agentInstanceId: string) =>
 					prNumber: data.number,
 					trigger: 'blocking_review_self',
 				});
+			}
+			// Clean verdict on a factory PR: the verification may already have
+			// passed while this review was running — try the merge gate now.
+			if (intended !== 'REQUEST_CHANGES') {
+				await maybeAutoMerge(row, data.number);
 			}
 			return { output };
 		},

@@ -121,7 +121,15 @@ fix_attempts (
    Evidence lands on the PR as a report comment (✅/❌ table + inline images
    served from R2 via `GET /artifacts/*`); unmet criteria feed the auto-fix
    loop as findings. Screenshots-over-video: they render inline in PR comments.
-5. **Phase 5 — auto-merge + trust**, per-feature token budgets, pipeline dashboard.
+5. **Phase 5 — auto-merge + trust.** *Built:* per-repo `auto_merge` toggle (default
+   off, only honored alongside blocking reviews). A factory PR merges itself only
+   when the latest empirical verification passed AND at least one review exists
+   with zero blocking-intent reviews in the PR's history; both completion paths
+   (verification, review) attempt the gate so ordering cannot race, and any
+   ambiguity declines in favor of a human. Fix pushes re-enqueue verification so
+   evidence and the merge gate always reflect the fixed code (bounded by the
+   3-fix cap). Verification status surfaces on the factory tab. Still open:
+   per-feature token budgets.
 
 ## Phase 1 spike (this repo, now)
 

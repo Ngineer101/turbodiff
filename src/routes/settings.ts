@@ -32,6 +32,7 @@ import {
 	resolveAgentEnabled,
 	setRepoAgentEnabled,
 	setRepoAutoFix,
+	setRepoAutoMerge,
 	setRepoBlockingReviews,
 	setRepoCheckCommand,
 	setRepoEnabled,
@@ -294,6 +295,29 @@ const PLAN_STATUS_HINT: Record<string, string> = {
 
 const RUNNING_PLAN_STATUSES = new Set(['analyzing', 'refining']);
 
+// Latest verification for an approved plan's feature, as a compact pill:
+// passed (n/n) / failed (n unmet) / running / error. Full evidence lives in
+// the PR's report comment.
+function renderVerification(p: PlanWithRepo): HtmlEscapedString | Promise<HtmlEscapedString> | '' {
+	if (!p.verification_status) return '';
+	let detail = '';
+	try {
+		const results = JSON.parse(p.verification_results ?? '[]') as { verdict: string }[];
+		const failed = results.filter((r) => r.verdict === 'fail').length;
+		if (p.verification_status === 'passed') detail = ` (${results.length}/${results.length})`;
+		else if (p.verification_status === 'failed') detail = ` (${failed} unmet)`;
+	} catch {
+		// results unparsable — show the bare status
+	}
+	const cls =
+		p.verification_status === 'passed'
+			? 'on'
+			: p.verification_status === 'running'
+				? 'running'
+				: 'red';
+	return html` <span class="pill ${cls}">verify: ${p.verification_status}${detail}</span>`;
+}
+
 // One plan card: status, plus the interactive surface for its current state
 // (answer form when awaiting answers, plan + approve when ready, PR link once
 // generating).
@@ -341,6 +365,7 @@ function renderPlan(p: PlanWithRepo): HtmlEscapedString | Promise<HtmlEscapedStr
 					<a href="https://github.com/${p.owner}/${p.name}/pull/${p.pr_number}"
 						>pull request #${p.pr_number} &rarr;</a
 					>
+					${renderVerification(p)}
 				</p>`
 			: ''}
 	</div>`;
@@ -1191,6 +1216,16 @@ export function createSettingsRoutes() {
 																				&#128295; auto-fix
 																			</button>
 																		</form>
+																		<form method="post" action="/repos/${r.id}/automerge-toggle">
+																			<button
+																				class="chip ${r.auto_merge ? 'on' : ''}"
+																				title="${r.auto_merge
+																					? 'factory PRs stay open for a human to merge'
+																					: 'factory PRs merge automatically once verification passes and the review is clean (requires blocking reviews)'} — click to ${r.auto_merge ? 'disable' : 'enable'}"
+																			>
+																				&#127981; auto-merge
+																			</button>
+																		</form>
 																		<form method="post" action="/repos/${r.id}/check-command" class="check-cmd">
 																			<input
 																				type="text"
@@ -1282,6 +1317,20 @@ export function createSettingsRoutes() {
 		}
 
 		await setRepoAutoFix(repo.id, !repo.auto_fix);
+		return c.redirect('/settings');
+	});
+
+	app.post('/repos/:id/automerge-toggle', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.redirect('/auth/login');
+
+		const repoId = Number(c.req.param('id'));
+		const repo = Number.isInteger(repoId) ? await getRepoById(repoId) : null;
+		if (!repo || !user.installationIds.includes(repo.installation_id)) {
+			return c.text('unknown repository', 404);
+		}
+
+		await setRepoAutoMerge(repo.id, !repo.auto_merge);
 		return c.redirect('/settings');
 	});
 
