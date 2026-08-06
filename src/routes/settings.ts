@@ -14,6 +14,9 @@ import {
 	getPlanByFeatureId,
 	getFeature,
 	latestVerificationForFeature,
+	createCockpitComment,
+	listCockpitComments,
+	markCockpitCommentDispatched,
 	listPlansForInstallations,
 	updatePlan,
 	dashboardStats,
@@ -1419,10 +1422,11 @@ export function createSettingsRoutes() {
 			);
 		}
 
-		const [plan, verification, token] = await Promise.all([
+		const [plan, verification, token, cockpitComments] = await Promise.all([
 			getPlanByFeatureId(feature.id),
 			latestVerificationForFeature(feature.id),
 			installationToken(repo.installation_id),
+			listCockpitComments(feature.id),
 		]);
 		const base = `/repos/${repo.owner}/${repo.name}`;
 		const [prMeta, prFiles, prReviews] = await Promise.all([
@@ -1500,6 +1504,10 @@ export function createSettingsRoutes() {
 						.cockpit-video { width: 100%; border: 1px solid #1c2620; border-radius: 8px; margin-top: 0.5rem; background: #000; }
 						.file-label { margin-top: 1.25rem; font-size: 0.8rem; color: #b8c4bc; }
 						details.review-body pre { white-space: pre-wrap; font-size: 0.8rem; }
+						.cockpit-comment { border: 1px solid #2a3830; border-left: 3px solid #3fb950; border-radius: 6px; background: #0a100d; padding: 0.6rem 0.8rem; margin: 0.3rem 0.5rem; font-size: 0.82rem; }
+						.cockpit-comment-head { color: #7d8f85; font-size: 0.75rem; margin-bottom: 0.25rem; }
+						.cockpit-composer textarea { min-height: 4.5rem; }
+						.cockpit-composer-actions { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
 					</style>
 					<div class="topbar" style="margin-top:1.5rem">
 						<h1 style="margin:0">${feature.title}</h1>
@@ -1563,17 +1571,85 @@ export function createSettingsRoutes() {
 								</details>`
 						: ''}
 					<h2>diff</h2>
+					<script id="cockpit-data" type="application/json">
+						${raw(
+							JSON.stringify({
+								featureId: feature.id,
+								prOpen: prState === 'open',
+								files: prFiles.slice(0, MAX_FILES).map((f) => ({
+									filename: f.filename,
+									status: f.status,
+									patch:
+										f.patch && f.patch.length < 100_000
+											? `diff --git a/${f.filename} b/${f.filename}\n--- a/${f.filename}\n+++ b/${f.filename}\n${f.patch}\n`
+											: null,
+								})),
+								comments: cockpitComments,
+							}).replaceAll('</', '<\\/'),
+						)}
+					</script>
+					<div id="cockpit-diffs">
 					${rendered.map(
 						(f) => html`<div class="file-label">${f.filename} <span class="muted">(${f.status})</span></div>
 							${f.html
 								? html`<div class="diffs-scope">${raw(f.html)}</div>`
 								: html`<p class="muted">diff not rendered (binary, renamed, or too large)</p>`}`,
 					)}
+					</div>
 					${prFiles.length > MAX_FILES
 						? html`<p class="muted">…and ${prFiles.length - MAX_FILES} more files — see the PR on GitHub.</p>`
-						: ''}`,
+						: ''}
+					<script type="module" src="/cockpit/app.js"></script>`,
 			),
 		);
+	});
+
+	// Line-anchored review comment from the cockpit diff. Submitting one
+	// dispatches the fix agent against that exact finding — this replaces
+	// GitHub review threads as the fix channel for factory PRs.
+	app.post('/factory/features/:id/comments', async (c) => {
+		const user = await requireUser(c);
+		if (!user) return c.json({ error: 'unauthorized' }, 401);
+
+		const id = Number(c.req.param('id'));
+		const feature = Number.isInteger(id) ? await getFeature(id) : null;
+		const repo = feature ? await getRepoById(feature.repository_id) : null;
+		if (!feature || !repo || !user.installationIds.includes(repo.installation_id)) {
+			return c.json({ error: 'unknown feature' }, 404);
+		}
+		const payload = await c.req
+			.json<{ path?: string; line?: number; side?: string; body?: string }>()
+			.catch(() => null);
+		if (
+			!payload?.path ||
+			!Number.isInteger(payload.line) ||
+			!payload.body?.trim() ||
+			!feature.pr_number
+		) {
+			return c.json({ error: 'body must be {path, line, side?, body}' }, 400);
+		}
+		const side = payload.side === 'deletions' ? 'deletions' : 'additions';
+		const commentId = await createCockpitComment(
+			feature.id,
+			payload.path,
+			payload.line as number,
+			side,
+			payload.body.trim(),
+			user.session.login,
+		);
+		// The comment IS the work order: dispatch the fixer with it verbatim.
+		// The consumer re-validates the auto_fix toggle and the attempt cap.
+		await env.FACTORY_QUEUE.send({
+			kind: 'fix',
+			repoId: repo.id,
+			prNumber: feature.pr_number,
+			trigger: 'cockpit_comment',
+			findings:
+				`**P1** — Reviewer comment on \`${payload.path}:${payload.line}\` ` +
+				`(from @${user.session.login} in the Turbodiff cockpit):\n\n${payload.body.trim()}`,
+		});
+		await markCockpitCommentDispatched(commentId);
+		return c.json({ ok: true, comment_id: commentId, fix_dispatched: true });
 	});
 
 	// Human-initiated merge from the cockpit. Deliberately does not reuse the

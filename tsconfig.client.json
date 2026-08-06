@@ -4,13 +4,13 @@
 		"module": "ESNext",
 		"moduleResolution": "Bundler",
 		"lib": [
-			"ESNext"
+			"ESNext",
+			"DOM",
+			"DOM.Iterable"
 		],
-		"types": [
-			"node"
-		],
+		"types": [],
 		"jsx": "react-jsx",
-		"jsxImportSource": "hono/jsx",
+		"jsxImportSource": "react",
 		"allowImportingTsExtensions": true,
 		"verbatimModuleSyntax": true,
 		"strict": true,
@@ -18,10 +18,6 @@
 		"noEmit": true
 	},
 	"include": [
-		"src",
-		"worker-configuration.d.ts"
-	],
-	"exclude": [
 		"src/client"
 	]
 }

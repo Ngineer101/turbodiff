@@ -5,3 +5,4 @@ dist/
 .wrangler/
 worker-configuration.d.ts
 *.pem
+public/cockpit/
