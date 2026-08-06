@@ -1,3 +1,4 @@
+import { env } from 'cloudflare:workers';
 import { gh } from '../tools/github.ts';
 import {
 	getFeatureByRepoPr,
@@ -34,8 +35,11 @@ export async function maybeAutoMerge(repo: RepositoryRow, prNumber: number): Pro
 		const token = await installationToken(repo.installation_id);
 		const reviews = (await (
 			await gh(token, `/repos/${repo.owner}/${repo.name}/pulls/${prNumber}/reviews?per_page=100`)
-		).json()) as { state: string; body: string; user: { type: string } | null }[];
-		const botReviews = reviews.filter((r) => r.user?.type === 'Bot');
+		).json()) as { state: string; body: string; user: { type: string; login: string } | null }[];
+		// Only turbodiff's own reviews satisfy the gate — another bot's APPROVE
+		// (CodeRabbit, Copilot, …) must not stand in for our review having run.
+		const ourLogin = `${env.GITHUB_APP_SLUG || 'turbodiff'}[bot]`;
+		const botReviews = reviews.filter((r) => r.user?.type === 'Bot' && r.user.login === ourLogin);
 		if (botReviews.length === 0) {
 			console.log(`turbodiff: auto-merge waiting on review for ${label}`);
 			return;
