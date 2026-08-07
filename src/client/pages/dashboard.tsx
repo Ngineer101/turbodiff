@@ -51,7 +51,7 @@ export function DashboardPage() {
 					index={3}
 					label="connected repos"
 					value={data.repo_count}
-					sub={`${data.enabled_count} with reviews on`}
+					sub={`${data.enabled_count} with the factory on`}
 				/>
 			</div>
 
@@ -131,7 +131,8 @@ export function DashboardPage() {
 			</SectionHeading>
 			{data.recent_reviews.length === 0 ? (
 				<EmptyState>
-					No reviews yet — open a pull request on an enabled repository and it will show up here.
+					No reviews yet — factory-generated pull requests are reviewed automatically and show up
+					here.
 				</EmptyState>
 			) : (
 				<ReviewsTable reviews={data.recent_reviews} />
@@ -164,7 +165,7 @@ export function DashboardPage() {
 					<thead>
 						<tr>
 							<Th>repository</Th>
-							<Th>auto-review</Th>
+							<Th>factory</Th>
 							<Th numeric>reviews ({monthLabel(data.month)})</Th>
 							<Th numeric>cost ({monthLabel(data.month)})</Th>
 						</tr>

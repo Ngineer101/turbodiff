@@ -12,13 +12,11 @@ export function AgentsPage() {
 		<>
 			<PageTitle>agents</PageTitle>
 			<p className="mt-3 text-[0.85rem] text-mute">
-				Agents run on every PR of the repos they're enabled for (see{' '}
+				Agents review the factory's generated PRs on the repos they're enabled for (see{' '}
 				<Link to="/settings" className="text-accent-bright hover:underline">
 					settings
 				</Link>
-				), or on demand via{' '}
-				<code className="rounded bg-raised px-1 py-0.5 text-xs">@{data.github_app_slug} &lt;slug&gt;</code>{' '}
-				in a PR comment.
+				) — their blocking findings drive the auto-fix loop.
 			</p>
 
 			{data.installations.length === 0 ? (

@@ -233,7 +233,7 @@ export function FactoryPage() {
 			<SectionHeading>new feature</SectionHeading>
 			{data.repos.length === 0 ? (
 				<EmptyState>
-					Enable reviews on a repository in{' '}
+					Enable the factory on a repository in{' '}
 					<Link to="/settings" className="text-accent-bright hover:underline">
 						settings
 					</Link>{' '}

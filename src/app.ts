@@ -10,7 +10,6 @@ import {
 	connectionSnapshot,
 	createFeature,
 	createPlan,
-	getAgentBySlug,
 	getFeature,
 	getPlan,
 	getRepoByFullName,
@@ -18,7 +17,6 @@ import {
 	setRepoRunCommand,
 	updatePlan,
 	listAgentConnections,
-	listAgentsForRepo,
 	recordReview,
 	type AgentRow,
 	type RepositoryRow,
@@ -164,7 +162,6 @@ const requireSecret = createMiddleware(async (c, next) => {
 // returns the durable conversation incl. settlements). Lives under /internal
 // because the signed-in UI owns /agents.
 app.use('/internal/*', requireSecret);
-app.use('/review', requireSecret);
 
 app.route('/internal/pr-reviewer', reviewer);
 
@@ -358,50 +355,6 @@ app.post('/internal/fix', async (c) => {
 		console.error(`turbodiff: fix run failed for ${owner}/${repoName}#${number}:`, err);
 		return c.json({ error: err instanceof Error ? err.message : 'fix run failed' }, 502);
 	}
-});
-
-// Manual trigger (e.g. re-review after pushes, or CI callers):
-//   POST /review { "pr_url": "https://github.com/<owner>/<repo>/pull/<n>", "agent"?: "<slug>" }
-// Without "agent", every agent enabled for the repo runs; with it, exactly
-// that agent (enabled or not — an explicit call is explicit intent). The repo
-// must have the GitHub App installed — tokens are minted per installation.
-app.post('/review', async (c) => {
-	const payload = await c.req.json<{ pr_url?: string; agent?: string }>().catch(() => null);
-	const match = payload?.pr_url?.match(
-		/^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/,
-	);
-	if (!match) {
-		return c.json(
-			{ error: 'body must be {"pr_url": "https://github.com/<owner>/<repo>/pull/<n>", "agent"?: "<slug>"}' },
-			400,
-		);
-	}
-	const [, owner, repoName, number] = match;
-	const prNumber = Number(number);
-
-	const repo = await getRepoByFullName(owner, repoName);
-	if (!repo) {
-		return c.json({ error: `Turbodiff is not installed on ${owner}/${repoName}` }, 404);
-	}
-
-	let agents: AgentRow[];
-	if (payload?.agent) {
-		const agent = await getAgentBySlug(repo.installation_id, payload.agent);
-		if (!agent) return c.json({ error: `no agent "${payload.agent}" in this installation` }, 404);
-		agents = [agent];
-	} else {
-		agents = (await listAgentsForRepo(repo)).filter((a) => a.enabled);
-		if (agents.length === 0) return c.json({ error: 'no agents enabled for this repository' }, 409);
-	}
-
-	const dispatched: string[] = [];
-	for (const agent of agents) {
-		if (await dispatchReviewAgent(agent, repo, prNumber, payload!.pr_url!, 'manual')) {
-			dispatched.push(agent.slug);
-		}
-	}
-	if (dispatched.length === 0) return c.json({ error: 'dispatch failed' }, 502);
-	return c.json({ accepted: true, agents: dispatched, pr: payload!.pr_url });
 });
 
 export default app;

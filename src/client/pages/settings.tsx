@@ -137,16 +137,16 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
 					{repo.owner}/{repo.name}
 				</span>
 				<label className="flex cursor-pointer items-center gap-2 text-xs text-mute">
-					auto-review
+					factory
 					<Switch
 						checked={repo.enabled}
 						onCheckedChange={(enabled) =>
 							patchRepo.mutate(
 								{ enabled },
-								{ onSuccess: () => toast.success(`reviews ${enabled ? 'enabled' : 'disabled'} for ${repo.owner}/${repo.name}`) },
+								{ onSuccess: () => toast.success(`factory ${enabled ? 'enabled' : 'disabled'} for ${repo.owner}/${repo.name}`) },
 							)
 						}
-						aria-label={`auto-review for ${repo.owner}/${repo.name}`}
+						aria-label={`factory for ${repo.owner}/${repo.name}`}
 					/>
 				</label>
 			</div>
@@ -170,7 +170,7 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
 						<Muted className="mr-1 text-xs">behavior:</Muted>
 						<Chip
 							on={repo.review_on_push}
-							title={`${repo.review_on_push ? 'stop' : 'start'} re-reviewing this repo's PRs when new commits are pushed (debounced)`}
+							title={`${repo.review_on_push ? 'stop' : 'start'} re-reviewing this repo's factory PRs when new commits are pushed (debounced)`}
 							onClick={() => patchRepo.mutate({ review_on_push: !repo.review_on_push })}
 						>
 							&#8635; on push

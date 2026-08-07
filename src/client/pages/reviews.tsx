@@ -14,7 +14,8 @@ export function ReviewsPage() {
 			{data.reviews.length === 0 ? (
 				<div className="mt-6">
 					<EmptyState>
-						No reviews yet — open a pull request on an enabled repository and it will show up here.
+						No reviews yet — factory-generated pull requests are reviewed automatically and show
+						up here.
 					</EmptyState>
 				</div>
 			) : (
