@@ -6,3 +6,4 @@ dist/
 worker-configuration.d.ts
 *.pem
 public/cockpit/
+public/app/
