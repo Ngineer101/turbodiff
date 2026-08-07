@@ -15,6 +15,7 @@ import {
 	getRepoByFullName,
 	setRepoCheckCommand,
 	setRepoRunCommand,
+	updateFeature,
 	updatePlan,
 	listAgentConnections,
 	recordReview,
@@ -315,6 +316,22 @@ app.get('/internal/features/:id', async (c) => {
 	const feature = Number.isInteger(id) ? await getFeature(id) : null;
 	if (!feature) return c.json({ error: 'unknown feature' }, 404);
 	return c.json(feature);
+});
+
+// Operator retry for a failed generation: re-enqueues the SAME feature row,
+// preserving its spec and commit attribution (unlike /internal/generate,
+// which would mint a fresh unattributed feature).
+app.post('/internal/features/:id/retry', async (c) => {
+	const id = Number(c.req.param('id'));
+	const feature = Number.isInteger(id) ? await getFeature(id) : null;
+	if (!feature) return c.json({ error: 'unknown feature' }, 404);
+	const RETRYABLE = new Set(['failed', 'checks_failed', 'no_changes']);
+	if (!RETRYABLE.has(feature.status)) {
+		return c.json({ error: `feature is ${feature.status}, not retryable` }, 409);
+	}
+	await updateFeature(id, { status: 'generating' });
+	await env.FACTORY_QUEUE.send({ kind: 'generate', featureId: id });
+	return c.json({ accepted: true, feature_id: id, status_url: `/internal/features/${id}` });
 });
 
 app.post('/internal/fix', async (c) => {

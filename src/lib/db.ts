@@ -456,6 +456,8 @@ export interface PlanWithRepo extends PlanRow {
 	name: string;
 	installation_id: number;
 	pr_number: number | null; // from the linked feature, if generation started
+	feature_status: string | null; // the linked feature's lifecycle status
+	feature_error: string | null; // its failure detail, when generation failed
 	verification_status: string | null; // latest verification for the feature
 	verification_results: string | null; // its per-criterion results JSON
 	verification_demo: string | null; // its demo JSON {"video": r2Key}
@@ -471,6 +473,7 @@ export async function listPlansForInstallations(
 	const placeholders = installationIds.map((_, i) => `?${i + 2}`).join(', ');
 	const res = await env.DB.prepare(
 		`SELECT p.*, r.owner, r.name, r.installation_id, f.pr_number AS pr_number,
+		        f.status AS feature_status, f.error AS feature_error,
 		        v.status AS verification_status, v.results AS verification_results,
 		        v.demo AS verification_demo
 		 FROM plans p

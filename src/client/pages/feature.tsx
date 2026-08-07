@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { ApiCockpitComment, ApiFeatureDetail } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
-import { featureQuery } from '../lib/queries.ts';
+import { featureQuery, GENERATION_STOPPED } from '../lib/queries.ts';
 import { cn } from '../lib/utils.ts';
 import { ConfirmButton } from '../components/confirm-button.tsx';
 import { ensureDiffStyles } from '../components/diff-styles.ts';
@@ -320,14 +320,45 @@ export default function FeaturePage() {
 		},
 		onError: onApiError,
 	});
+	const retryGeneration = useMutation({
+		mutationFn: () => api.post(`/api/factory/features/${id}/retry`),
+		onSuccess: () => {
+			toast.success('generation retried — the run is queued');
+			refresh();
+		},
+		onError: onApiError,
+	});
 
 	if (!data.pr) {
+		const stopped = GENERATION_STOPPED.has(data.feature.status);
 		return (
 			<>
-				<PageTitle>{data.feature.title}</PageTitle>
-				<p className="mt-4">
-					<Muted>No pull request yet — generation is {data.feature.status}.</Muted>
-				</p>
+				<PageTitle
+					aside={
+						stopped ? <Pill tone="red">{data.feature.status}</Pill> : <Pill tone="running">generating</Pill>
+					}
+				>
+					{data.feature.title}
+				</PageTitle>
+				{stopped ? (
+					<>
+						<p className="mt-4">
+							<Muted>Generation stopped without a pull request.</Muted>
+						</p>
+						{data.feature.error ? (
+							<p className="mt-2 text-[0.85rem] text-danger">{data.feature.error}</p>
+						) : null}
+						<div className="mt-4">
+							<Button onClick={() => retryGeneration.mutate()} loading={retryGeneration.isPending}>
+								Retry generation
+							</Button>
+						</div>
+					</>
+				) : (
+					<p className="mt-4">
+						<Muted>No pull request yet — generation is {data.feature.status}.</Muted>
+					</p>
+				)}
 			</>
 		);
 	}

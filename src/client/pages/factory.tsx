@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import type { ApiPlan } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
 import { ago } from '../lib/format.ts';
-import { factoryQuery } from '../lib/queries.ts';
+import { factoryQuery, GENERATION_STOPPED } from '../lib/queries.ts';
 import { EmptyState, Muted, PageTitle, SectionHeading } from '../components/section.tsx';
 import { Button } from '../components/ui/button.tsx';
 import { Card } from '../components/ui/card.tsx';
@@ -19,6 +19,12 @@ const PLAN_STATUS_HINT: Record<string, string> = {
 	plan_ready: 'review the plan and approve to generate',
 	approved: 'generating — follow the pull request',
 	failed: 'failed — see the error',
+};
+
+const GENERATION_STOPPED_HINT: Record<string, string> = {
+	failed: 'generation failed',
+	checks_failed: 'generated code failed the check command',
+	no_changes: 'the generation agent produced no changes',
 };
 
 const RUNNING_PLAN_STATUSES = new Set(['analyzing', 'refining']);
@@ -146,6 +152,12 @@ function AnswersForm({ plan }: { plan: ApiPlan }) {
 function PlanCard({ plan }: { plan: ApiPlan }) {
 	const queryClient = useQueryClient();
 	const running = RUNNING_PLAN_STATUSES.has(plan.status);
+	// Approved with no PR: generation is either in flight or stopped — the
+	// card reflects the feature's real state instead of an eternal
+	// "generating" (the gap that hid a failed run).
+	const genStopped =
+		plan.status === 'approved' && !plan.pr_number && GENERATION_STOPPED.has(plan.feature_status ?? '');
+	const genRunning = plan.status === 'approved' && !plan.pr_number && !genStopped;
 	const approve = useMutation({
 		mutationFn: () => api.post(`/api/factory/plans/${plan.id}/approve`),
 		onSuccess: () => {
@@ -154,16 +166,48 @@ function PlanCard({ plan }: { plan: ApiPlan }) {
 		},
 		onError: onApiError,
 	});
+	const retry = useMutation({
+		mutationFn: () => api.post(`/api/factory/features/${plan.feature_id}/retry`),
+		onSuccess: () => {
+			toast.success('generation retried — the run is queued');
+			queryClient.invalidateQueries({ queryKey: ['factory'] });
+		},
+		onError: onApiError,
+	});
+
+	const pill = genStopped ? (
+		<Pill tone="red">{GENERATION_STOPPED_HINT[plan.feature_status ?? ''] ?? 'generation stopped'}</Pill>
+	) : (
+		<Pill tone={running || genRunning ? 'running' : plan.status === 'failed' ? 'red' : 'on'}>
+			{genRunning ? 'generating' : plan.status}
+		</Pill>
+	);
+	const hint = genStopped
+		? 'generation stopped — retry below'
+		: (PLAN_STATUS_HINT[plan.status] ?? '');
 
 	return (
 		<Card className="mt-3">
 			<div className="flex flex-wrap items-center justify-between gap-2">
 				<strong className="font-medium">{plan.title}</strong>
-				<Pill tone={running ? 'running' : plan.status === 'failed' ? 'red' : 'on'}>{plan.status}</Pill>
+				{pill}
 			</div>
 			<div className="mt-0.5 text-xs text-mute">
-				{plan.repo} · {PLAN_STATUS_HINT[plan.status] ?? ''} · {ago(plan.created_at)}
+				{plan.repo} · {hint} · {ago(plan.created_at)}
 			</div>
+
+			{genStopped ? (
+				<>
+					{plan.feature_error ? (
+						<p className="mt-3 text-[0.85rem] text-danger">{plan.feature_error}</p>
+					) : null}
+					<div className="mt-3">
+						<Button onClick={() => retry.mutate()} loading={retry.isPending}>
+							Retry generation
+						</Button>
+					</div>
+				</>
+			) : null}
 
 			{plan.status === 'failed' && plan.error ? (
 				<p className="mt-3 text-[0.85rem] text-danger">{plan.error}</p>
