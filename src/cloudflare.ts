@@ -28,7 +28,7 @@ export default {
 			const body = message.body;
 			switch (body.kind) {
 				case 'generate':
-					await runGeneration(body.featureId);
+					await runGeneration(body.featureId, body.attempt ?? 0);
 					break;
 				case 'plan_analyze':
 					await runPlanAnalyze(body.planId);
