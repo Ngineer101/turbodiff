@@ -645,6 +645,11 @@ export function createSettingsRoutes() {
 			listPlansForInstallations(installationIds),
 		]);
 		const repos = groups.flatMap((g) => g.repos).filter((r) => r.enabled);
+		// Planning/refining runs take minutes; without a refresh an in-flight
+		// plan looks frozen (same pattern as the reviews page).
+		const anyPlanRunning = plans.some(
+			(p) => RUNNING_PLAN_STATUSES.has(p.status) || p.verification_status === 'running',
+		);
 
 		return c.html(
 			page(
@@ -680,7 +685,13 @@ export function createSettingsRoutes() {
 					<h2>plans <span class="muted">(${plans.length})</span></h2>
 					${plans.length === 0
 						? html`<p class="muted">No plans yet.</p>`
-						: plans.map((p) => renderPlan(p))}`,
+						: plans.map((p) => renderPlan(p))}
+					${anyPlanRunning
+						? html`<p class="muted">An agent is working — this page refreshes every 10 seconds.</p>
+								<script>
+									setTimeout(function () { location.reload(); }, 10000);
+								</script>`
+						: ''}`,
 			),
 		);
 	});
