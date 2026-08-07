@@ -289,8 +289,9 @@ interface DemoInfo {
 	caption?: string;
 }
 
-// The demo recording: WebM to R2; the cockpit plays it natively and the PR
-// comment links it. 40MB guard against runaway recordings.
+// The demo recording: Chrome's screencast emits VP9 WebM, which iOS Safari
+// cannot play (renders a black box) — transcode to H.264 MP4 in the sandbox
+// so the demo plays everywhere. 40MB guard against runaway recordings.
 async function uploadDemo(sandbox: Sandbox, featureId: number): Promise<DemoInfo | undefined> {
 	const stat = await sandbox.exec(`stat -c %s "${OUT_DIR}/demo.webm"`, { timeout: 15_000 });
 	const size = Number(stat.stdout.trim());
@@ -299,10 +300,19 @@ async function uploadDemo(sandbox: Sandbox, featureId: number): Promise<DemoInfo
 		console.warn(`turbodiff: demo recording too large (${size} bytes), skipping upload`);
 		return undefined;
 	}
-	const bytes = await readBinary(sandbox, `${OUT_DIR}/demo.webm`);
+	const transcode = await sandbox.exec(
+		`ffmpeg -y -v error -i "${OUT_DIR}/demo.webm" -c:v libx264 -pix_fmt yuv420p ` +
+			`-movflags +faststart -crf 26 "${OUT_DIR}/demo.mp4"`,
+		{ timeout: 3 * 60_000 },
+	);
+	if (!transcode.success) {
+		console.warn(`turbodiff: demo transcode failed: ${transcode.stderr.slice(0, 300)}`);
+		return undefined;
+	}
+	const bytes = await readBinary(sandbox, `${OUT_DIR}/demo.mp4`);
 	if (!bytes || bytes.length === 0) return undefined;
-	const key = `verify/${featureId}/demo.webm`;
-	await env.ARTIFACTS.put(key, bytes, { httpMetadata: { contentType: 'video/webm' } });
+	const key = `verify/${featureId}/demo.mp4`;
+	await env.ARTIFACTS.put(key, bytes, { httpMetadata: { contentType: 'video/mp4' } });
 	const sig = await signArtifactKey(key);
 	const caption = await readText(sandbox, `${OUT_DIR}/demo-caption.txt`);
 	return { key, url: `${env.PUBLIC_BASE_URL}/artifacts/${key}?sig=${sig}`, caption };
