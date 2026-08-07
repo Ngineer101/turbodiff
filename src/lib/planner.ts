@@ -230,7 +230,12 @@ export async function runPlanRefine(planId: number): Promise<void> {
 // Approval turns a ready plan into a generation feature: the spec is the plan
 // plus its acceptance criteria, so the generated code is built against them.
 // Returns the new feature id, or null if the plan isn't ready.
-export async function approvePlan(planId: number): Promise<number | null> {
+// The approver becomes the feature's commit author; the plan creator rides
+// along as coauthor when a different user approved (see src/lib/attribution.ts).
+export async function approvePlan(
+	planId: number,
+	approver?: { login: string; id: number },
+): Promise<number | null> {
 	const plan = await getPlan(planId);
 	if (!plan || plan.status !== 'plan_ready' || !plan.plan) return null;
 	const acceptance: string[] = plan.acceptance ? JSON.parse(plan.acceptance) : [];
@@ -240,6 +245,12 @@ export async function approvePlan(planId: number): Promise<number | null> {
 			? acceptance.map((c) => `- ${c}`).join('\n')
 			: '(none specified)') +
 		`\n\nImplement the plan above so that every acceptance criterion holds.`;
+	const creator =
+		plan.created_by_login && plan.created_by_id !== null
+			? { login: plan.created_by_login, id: plan.created_by_id }
+			: undefined;
+	const author = approver ?? creator;
+	const coauthor = creator && author && creator.login !== author.login ? creator : undefined;
 	// Criteria travel structured (not only embedded in the spec text) so the
 	// verify step can check them one by one after generation.
 	const featureId = await createFeature(
@@ -247,6 +258,8 @@ export async function approvePlan(planId: number): Promise<number | null> {
 		plan.title,
 		spec,
 		plan.acceptance ?? undefined,
+		author,
+		coauthor,
 	);
 	await updatePlan(planId, { status: 'approved', featureId });
 	return featureId;

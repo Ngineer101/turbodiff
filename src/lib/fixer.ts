@@ -1,6 +1,7 @@
 import { getSandbox, type Sandbox } from '@cloudflare/sandbox';
 import { env } from 'cloudflare:workers';
 import { gh } from '../tools/github.ts';
+import { gitAuthorEnv } from './attribution.ts';
 import { finishFixAttempt, getFeatureByRepoPr, getRepoById, tryRecordFixAttempt } from './db.ts';
 import { installationToken, sandboxGitToken } from './github-app.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
@@ -26,6 +27,9 @@ export interface FixParams {
 	authMode?: FixAuthMode;
 	// e.g. "npm test". When set, a failing run blocks the push.
 	testCommand?: string;
+	// The instructing user (e.g. a cockpit commenter) — becomes the git author
+	// of the fix commit; the bot stays committer. Absent on auto-triggered runs.
+	author?: { login: string; id: number };
 }
 
 export interface FixOutcome {
@@ -276,7 +280,7 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
 		const committed = await sandbox.exec(
 			`git -C ${CLONE_DIR} add -A && ` +
 				`git -C ${CLONE_DIR} commit -m "Address review findings on #${prNumber} (turbodiff fix agent)"`,
-			{ timeout: 60_000 },
+			{ env: gitAuthorEnv(params.author), timeout: 60_000 },
 		);
 		if (!committed.success) {
 			throw new Error(`git commit failed: ${scrub(committed.stderr).slice(0, 500)}`);
@@ -337,6 +341,9 @@ export interface FixQueueMessage {
 	// Explicit work order (e.g. unmet acceptance criteria from a verification
 	// run). When absent, the latest blocking bot review on the PR is used.
 	findings?: string;
+	// Instructing user for commit attribution (cockpit comments); absent on
+	// auto-triggered fixes.
+	author?: { login: string; id: number };
 }
 
 // Queue consumer body: re-validate against current state (the toggle may have
@@ -378,6 +385,7 @@ export async function processFixMessage(msg: FixQueueMessage): Promise<void> {
 			installationId: repo.installation_id,
 			findings: msg.findings,
 			testCommand: repo.check_command ?? undefined,
+			author: msg.author,
 		});
 		await finishFixAttempt(attemptId, outcome.status, outcome.commit);
 		console.log(`turbodiff: fix ${outcome.status} for ${label} (attempt ${attemptId})`);

@@ -334,7 +334,11 @@ export function createApiRoutes() {
 		if (!row || !c.get('user').installationIds.includes(row.installation_id)) {
 			return c.json({ error: 'unknown repository' }, 404);
 		}
-		const planId = await createPlan(row.id, title, requirements);
+		const { session } = c.get('user');
+		const planId = await createPlan(row.id, title, requirements, {
+			login: session.login,
+			id: session.userId,
+		});
 		await env.FACTORY_QUEUE.send({ kind: 'plan_analyze', planId });
 		return c.json({ ok: true, plan_id: planId });
 	});
@@ -360,7 +364,9 @@ export function createApiRoutes() {
 	app.post('/factory/plans/:id/approve', async (c) => {
 		const plan = await authorizedPlan(c);
 		if (!plan) return c.json({ error: 'unknown plan' }, 404);
-		const featureId = await approvePlan(plan.id);
+		const { session } = c.get('user');
+		// The approver authors the generated commit (src/lib/attribution.ts).
+		const featureId = await approvePlan(plan.id, { login: session.login, id: session.userId });
 		if (featureId === null) return c.json({ error: 'plan is not ready for approval' }, 409);
 		await env.FACTORY_QUEUE.send({ kind: 'generate', featureId });
 		return c.json({ ok: true, feature_id: featureId });
@@ -504,7 +510,8 @@ export function createApiRoutes() {
 		if (!payload?.path || !Number.isInteger(payload.line) || !payload.body?.trim() || !feature.pr_number) {
 			return c.json({ error: 'body must be {path, line, side?, body}' }, 400);
 		}
-		const login = c.get('user').session.login;
+		const { session } = c.get('user');
+		const login = session.login;
 		const side = payload.side === 'deletions' ? 'deletions' : 'additions';
 		const commentId = await createCockpitComment(
 			feature.id,
@@ -513,14 +520,17 @@ export function createApiRoutes() {
 			side,
 			payload.body.trim(),
 			login,
+			session.userId,
 		);
 		// The comment IS the work order: dispatch the fixer with it verbatim.
 		// The consumer re-validates the auto_fix toggle and the attempt cap.
+		// The commenter rides along as the fix commit's git author.
 		await env.FACTORY_QUEUE.send({
 			kind: 'fix',
 			repoId: repo.id,
 			prNumber: feature.pr_number,
 			trigger: 'cockpit_comment',
+			author: { login, id: session.userId },
 			findings:
 				`**P1** — Reviewer comment on \`${payload.path}:${payload.line}\` ` +
 				`(from @${login} in the Turbodiff cockpit):\n\n${payload.body.trim()}`,
@@ -531,6 +541,10 @@ export function createApiRoutes() {
 
 	// Human-initiated merge from the cockpit. Deliberately does not reuse the
 	// auto-merge gates: a signed-in repo admin clicking Merge IS the authority.
+	// Merged with the clicking user's own OAuth token when possible so GitHub
+	// attributes the merge to them, not turbodiff[bot]; falls back to the App
+	// installation token when the user token can't merge (missing push
+	// permission, SSO enforcement, or the empty dev-fake session token).
 	app.post('/factory/features/:id/merge', async (c) => {
 		const id = Number(c.req.param('id'));
 		const feature = Number.isInteger(id) ? await getFeature(id) : null;
@@ -539,15 +553,23 @@ export function createApiRoutes() {
 			return c.json({ error: 'unknown feature' }, 404);
 		}
 		if (!feature.pr_number) return c.json({ error: 'no pull request yet' }, 409);
+		const mergePath = `/repos/${repo.owner}/${repo.name}/pulls/${feature.pr_number}/merge`;
+		const mergeBody = { method: 'PUT' as const, body: JSON.stringify({ merge_method: 'merge' }) };
+		const userToken = c.get('user').session.ghToken;
 		try {
-			const token = await installationToken(repo.installation_id);
-			await gh(token, `/repos/${repo.owner}/${repo.name}/pulls/${feature.pr_number}/merge`, {
-				method: 'PUT',
-				body: JSON.stringify({ merge_method: 'merge' }),
-			});
+			await gh(userToken || (await installationToken(repo.installation_id)), mergePath, mergeBody);
 		} catch (err) {
-			console.error(`turbodiff: cockpit merge failed for feature ${id}:`, err);
-			return c.json({ error: 'merge failed — check the PR on GitHub' }, 502);
+			if (!userToken) {
+				console.error(`turbodiff: cockpit merge failed for feature ${id}:`, err);
+				return c.json({ error: 'merge failed — check the PR on GitHub' }, 502);
+			}
+			console.warn(`turbodiff: user-token merge failed for feature ${id}, retrying as app:`, err);
+			try {
+				await gh(await installationToken(repo.installation_id), mergePath, mergeBody);
+			} catch (appErr) {
+				console.error(`turbodiff: cockpit merge failed for feature ${id}:`, appErr);
+				return c.json({ error: 'merge failed — check the PR on GitHub' }, 502);
+			}
 		}
 		return c.json({ ok: true });
 	});
