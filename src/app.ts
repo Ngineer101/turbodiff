@@ -26,7 +26,8 @@ import {
 import { runFix, sandboxSmoke, type FixAuthMode } from './lib/fixer.ts';
 import { approvePlan } from './lib/planner.ts';
 import { registerReviewMetering } from './lib/metering.ts';
-import { createSettingsRoutes } from './routes/settings.ts';
+import { createApiRoutes } from './routes/api.ts';
+import { createUiRoutes } from './routes/ui.ts';
 import { createWebhookRoutes } from './routes/webhooks.ts';
 
 // Route every model call through the Workers AI binding and the named
@@ -145,8 +146,11 @@ export async function dispatchReviewAgent(
 // GitHub App webhooks — authenticated by HMAC signature, not the bearer secret.
 app.route('/webhooks', createWebhookRoutes(dispatchReviewAgent));
 
-// Settings UI + OAuth sign-in (session cookie auth).
-app.route('/', createSettingsRoutes());
+// SPA data plane (session cookie auth, JSON in/out).
+app.route('/api', createApiRoutes());
+
+// SPA shell + landing + OAuth sign-in (session cookie auth).
+app.route('/', createUiRoutes());
 
 // Operator endpoints keep the shared secret (Authorization: Bearer <REVIEW_SECRET>).
 const requireSecret = createMiddleware(async (c, next) => {

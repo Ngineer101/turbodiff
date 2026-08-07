@@ -15,9 +15,15 @@
 		"verbatimModuleSyntax": true,
 		"strict": true,
 		"skipLibCheck": true,
-		"noEmit": true
+		"noEmit": true,
+		"paths": {
+			"@/*": [
+				"./src/client/*"
+			]
+		}
 	},
 	"include": [
-		"src/client"
+		"src/client",
+		"src/shared"
 	]
 }
