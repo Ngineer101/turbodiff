@@ -72,6 +72,23 @@ export async function runGeneration(featureId: number, attempt = 0): Promise<voi
 		console.warn(`turbodiff: generation skipped, feature ${featureId} not found`);
 		return;
 	}
+	// Dedupe first deliveries: queued messages can't be cancelled, so a
+	// scheduled retry can land after another retry already opened the PR or
+	// while a run is in flight. Platform-retry continuations (attempt > 0)
+	// bypass this — they ARE the in-flight run.
+	if (attempt === 0) {
+		if (feature.status === 'pr_opened') {
+			console.log(`turbodiff: generation skipped for feature ${featureId} — PR already opened`);
+			return;
+		}
+		const startedMs = feature.run_started_at
+			? Date.parse(`${feature.run_started_at.replace(' ', 'T')}Z`)
+			: 0;
+		if (feature.status === 'generating' && Date.now() - startedMs < 25 * 60_000) {
+			console.log(`turbodiff: generation skipped for feature ${featureId} — a run is in flight`);
+			return;
+		}
+	}
 	const repo = await getRepoById(feature.repository_id);
 	if (!repo || !repo.enabled) {
 		await updateFeature(featureId, { status: 'failed', error: 'repository missing or disabled' });
