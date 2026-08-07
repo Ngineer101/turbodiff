@@ -44,7 +44,7 @@ export function AgentForm({
 			</Field>
 			<Field
 				label="slug"
-				hint={`mention handle: @turbodiff <slug>; lowercase letters, digits, dashes${slugEditable ? '' : '; fixed after creation'}`}
+				hint={`short identifier; lowercase letters, digits, dashes${slugEditable ? '' : '; fixed after creation'}`}
 			>
 				<Input
 					value={values.slug}

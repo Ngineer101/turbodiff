@@ -5,7 +5,7 @@ import {
 	countFixAttempts,
 	deleteInstallation,
 	ensureBuiltinAgents,
-	getAgentBySlug,
+	getFeatureByRepoPr,
 	getInstallation,
 	getRepoById,
 	hasActiveReview,
@@ -19,16 +19,15 @@ import {
 	type RepositoryRow,
 } from '../lib/db.ts';
 import { FIX_MAX_ATTEMPTS } from '../lib/fixer.ts';
-import { reactToIssueComment, verifyWebhookSignature } from '../lib/github-app.ts';
+import { verifyWebhookSignature } from '../lib/github-app.ts';
 import { agentsForTier, computeRiskTier, tierModelOverride, type RiskTier } from '../lib/risk.ts';
 
-// GitHub App webhook receiver. Three jobs:
+// GitHub App webhook receiver. Two jobs:
 //   1. Mirror installation / repository-selection changes into D1.
-//   2. Auto-dispatch every repo-enabled agent when a PR opens or leaves draft.
-//   3. Dispatch on-demand reviews when a collaborator comments
-//      "@<app-slug> review", "@<app-slug> <agent-slug>", or "@<app-slug> all"
-//      on a PR (requires the App to subscribe to the Issue comment event and
-//      hold Issues read & write — write for the 👀 acknowledgement reaction).
+//   2. Drive the factory's review/fix loop: auto-dispatch the repo-enabled
+//      agents when a FACTORY-GENERATED PR opens or gets pushed to, and enqueue
+//      a fix run when one of turbodiff's own blocking reviews lands.
+// Human-opened PRs are never reviewed — reviews exist to gate factory output.
 
 interface WebhookAccount {
 	login: string;
@@ -65,24 +64,6 @@ interface PullRequestReviewEvent {
 		user: { login: string; type: string } | null;
 	};
 	pull_request: { number: number; html_url: string; state: string; draft: boolean };
-	repository: { id: number; full_name: string };
-}
-
-interface IssueCommentEvent {
-	action: string;
-	issue: {
-		number: number;
-		state: string;
-		// Present only when the "issue" is actually a pull request.
-		pull_request?: { html_url: string };
-	};
-	comment: {
-		id: number;
-		body: string;
-		// OWNER | MEMBER | COLLABORATOR | CONTRIBUTOR | NONE | ...
-		author_association: string;
-		user: { login: string; type: string };
-	};
 	repository: { id: number; full_name: string };
 }
 
@@ -133,8 +114,6 @@ async function handleEvent(
 			return handlePullRequest(payload as PullRequestEvent, dispatch);
 		case 'pull_request_review':
 			return handlePullRequestReview(payload as PullRequestReviewEvent);
-		case 'issue_comment':
-			return handleIssueComment(payload as IssueCommentEvent, dispatch);
 		case 'repository': {
 			// Keep owner/name current when a repo is renamed or transferred.
 			const p = payload as { action: string; repository: WebhookRepoRef };
@@ -198,10 +177,16 @@ async function handlePullRequest(
 
 	const repo = await getRepoById(p.repository.id);
 	if (!repo) return { body: { ok: true, skipped: 'repo not tracked' } };
-	if (!repo.enabled) return { body: { ok: true, skipped: 'reviews disabled for repo' } };
+	if (!repo.enabled) return { body: { ok: true, skipped: 'factory disabled for repo' } };
 	if (p.action === 'synchronize' && !repo.review_on_push) {
 		return { body: { ok: true, skipped: 'push reviews disabled for repo' } };
 	}
+
+	// Reviews gate factory output only: a PR gets auto-reviewed only when it
+	// belongs to a feature this factory generated. Human-opened PRs are never
+	// dispatched (the standalone auto-review product was retired).
+	const feature = await getFeatureByRepoPr(repo.id, p.number);
+	if (!feature) return { body: { ok: true, skipped: 'not a factory PR' } };
 
 	const installation = await getInstallation(repo.installation_id);
 	if (!installation || installation.suspended) {
@@ -317,105 +302,4 @@ async function remainingDailyBudget(installationId: number, accountLogin: string
 		);
 	}
 	return remaining;
-}
-
-// Only these author associations may spend the installation's tokens by
-// tagging the app — drive-by commenters on public repos cannot.
-const MENTION_ALLOWED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
-
-// "@<app-slug> <command>" — command is an agent slug, "review" (the default
-// agent), or "all" (every repo-enabled agent).
-function parseMentionCommand(body: string): string | null {
-	const slug = (env.GITHUB_APP_SLUG || 'turbodiff').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-	const match = body.match(new RegExp(`@${slug}\\s+([a-z0-9][a-z0-9_-]*)`, 'i'));
-	return match ? match[1].toLowerCase() : null;
-}
-
-// A mention in a PR comment dispatches on-demand reviews. Deliberately
-// ignores the per-repo auto-review toggles for a named agent (a mention is
-// explicit intent — toggles only gate automatic dispatch) and allows drafts.
-async function handleIssueComment(
-	p: IssueCommentEvent,
-	dispatch: ReviewDispatcher,
-): Promise<HandlerResult> {
-	// Only fresh comments; edits and deletions never (re-)trigger.
-	if (p.action !== 'created') return { body: { ok: true, ignored: p.action } };
-	if (!p.issue.pull_request) return { body: { ok: true, ignored: 'not a PR comment' } };
-	// Never react to bots — including our own review posts (loop prevention).
-	if (p.comment.user.type === 'Bot') return { body: { ok: true, ignored: 'bot comment' } };
-	const command = parseMentionCommand(p.comment.body);
-	if (!command) return { body: { ok: true, ignored: 'no review command' } };
-	if (!MENTION_ALLOWED_ASSOCIATIONS.has(p.comment.author_association)) {
-		return { body: { ok: true, skipped: 'commenter is not a collaborator' } };
-	}
-	if (p.issue.state !== 'open') return { body: { ok: true, skipped: 'PR is closed' } };
-
-	const repo = await getRepoById(p.repository.id);
-	if (!repo) return { body: { ok: true, skipped: 'repo not tracked' } };
-
-	const installation = await getInstallation(repo.installation_id);
-	if (!installation || installation.suspended) {
-		return { body: { ok: true, skipped: 'installation missing or suspended' } };
-	}
-
-	// Resolve the command to agents. An unknown slug gets a 😕 so the
-	// commenter learns the tag was seen but matched nothing.
-	await ensureBuiltinAgents(repo.installation_id);
-	let agents: AgentRow[];
-	if (command === 'all') {
-		agents = (await listAgentsForRepo(repo)).filter((a) => a.enabled);
-		if (agents.length === 0) return { body: { ok: true, skipped: 'no agents enabled' } };
-	} else {
-		const agent = await getAgentBySlug(repo.installation_id, command);
-		if (!agent) {
-			await react(repo.installation_id, p.repository.full_name, p.comment.id, 'confused');
-			return { body: { ok: true, skipped: `unknown agent "${command}"` } };
-		}
-		agents = [agent];
-	}
-
-	// Skip agents already reviewing this PR (a re-tag can't double-dispatch).
-	const idle: AgentRow[] = [];
-	for (const agent of agents) {
-		if (!(await hasActiveReview(repo.id, p.issue.number, agent.slug))) idle.push(agent);
-	}
-	if (idle.length === 0) {
-		return { body: { ok: true, skipped: 'review already running for this PR' } };
-	}
-
-	const budget = await remainingDailyBudget(repo.installation_id, installation.account_login);
-	if (budget <= 0) return { body: { ok: true, skipped: 'daily review limit reached' } };
-
-	const dispatched: string[] = [];
-	for (const agent of idle.slice(0, budget)) {
-		if (await dispatch(agent, repo, p.issue.number, p.issue.pull_request.html_url, 'mention')) {
-			dispatched.push(agent.slug);
-		}
-	}
-	if (dispatched.length === 0) return { body: { error: 'dispatch failed' }, status: 502 };
-
-	await react(repo.installation_id, p.repository.full_name, p.comment.id, 'eyes');
-	return {
-		body: {
-			ok: true,
-			review: `${p.repository.full_name}#${p.issue.number}`,
-			agents: dispatched,
-			trigger: 'mention',
-		},
-	};
-}
-
-// Best-effort acknowledgement reaction; failure (e.g. the App lacks
-// Issues:write until re-approved) must never fail the webhook.
-async function react(
-	installationId: number,
-	repoFullName: string,
-	commentId: number,
-	content: 'eyes' | 'confused',
-): Promise<void> {
-	try {
-		await reactToIssueComment(installationId, repoFullName, commentId, content);
-	} catch (err) {
-		console.warn(`turbodiff: could not react to comment ${commentId}:`, err);
-	}
 }
