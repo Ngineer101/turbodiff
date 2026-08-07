@@ -1,13 +1,16 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { useParams } from '@tanstack/react-router';
 import { PatchDiff, type DiffLineAnnotation } from '@pierre/diffs/react';
-import { useCallback, useMemo, useState } from 'react';
+import { ChevronDown, ChevronRight, MessageSquare } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { ApiCockpitComment, ApiFeatureDetail } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
 import { featureQuery } from '../lib/queries.ts';
+import { cn } from '../lib/utils.ts';
 import { ConfirmButton } from '../components/confirm-button.tsx';
 import { ensureDiffStyles } from '../components/diff-styles.ts';
+import { FILE_STATUS_DOT, FileTree } from '../components/file-tree.tsx';
 import { Muted, PageTitle, SectionHeading } from '../components/section.tsx';
 import { Button } from '../components/ui/button.tsx';
 import { Pill } from '../components/ui/pill.tsx';
@@ -16,8 +19,12 @@ import { Textarea } from '../components/ui/input.tsx';
 
 // The factory PR cockpit: one screen for reviewing a factory PR without
 // GitHub — demo video, acceptance evidence, review verdicts, the merge
-// action, and the full diff. Select a line range to leave a review comment;
-// submitting it dispatches the fix agent against that exact finding.
+// action, and the full diff. The diff pane runs wide (AppShell widens the
+// container for this route) with a sticky file tree for navigation; each
+// file is a collapsible card. Select a line range to leave a review
+// comment; submitting it dispatches the fix agent against that finding.
+
+type CockpitFile = ApiFeatureDetail['files'][number];
 
 type Selection = { file: string; startLine: number; endLine: number; side: 'additions' | 'deletions' };
 
@@ -100,13 +107,13 @@ function Composer({
 	);
 }
 
-function FileSurface({
+function FileDiff({
 	data,
 	file,
 	onCommented,
 }: {
 	data: ApiFeatureDetail;
-	file: ApiFeatureDetail['files'][number];
+	file: CockpitFile;
 	onCommented: () => void;
 }) {
 	const [selection, setSelection] = useState<Selection | null>(null);
@@ -144,43 +151,108 @@ function FileSurface({
 
 	if (!file.patch) {
 		return (
-			<Muted className="mt-4 block">
-				{file.filename} — diff not rendered (binary, renamed, or too large)
-			</Muted>
+			<p className="px-3 py-3 text-xs text-mute">
+				diff not rendered (binary, renamed, or too large) — see the PR on GitHub
+			</p>
 		);
 	}
 	return (
-		<div className="mt-4">
-			<div className="mb-1.5 text-xs text-ink-dim">
-				{file.filename} <Muted>({file.status})</Muted>
-			</div>
-			<div className="diffs-scope">
-				<PatchDiff
-					patch={file.patch}
-					lineAnnotations={annotations}
-					renderAnnotation={(a: DiffLineAnnotation<CommentMeta>) =>
-						a.metadata?.composer && selection ? (
-							<Composer
-								selection={selection}
-								featureId={data.feature.id}
-								onDone={() => {
-									setSelection(null);
-									onCommented();
-								}}
-								onCancel={() => setSelection(null)}
-							/>
-						) : a.metadata?.comment ? (
-							<CommentCard comment={a.metadata.comment} />
-						) : null
-					}
-					options={{
-						theme: 'pierre-dark',
-						enableLineSelection: prOpen,
-						onLineSelectionEnd: onSelectionEnd,
-					}}
-				/>
-			</div>
+		<div className="diffs-scope rounded-none border-0">
+			<PatchDiff
+				patch={file.patch}
+				lineAnnotations={annotations}
+				renderAnnotation={(a: DiffLineAnnotation<CommentMeta>) =>
+					a.metadata?.composer && selection ? (
+						<Composer
+							selection={selection}
+							featureId={data.feature.id}
+							onDone={() => {
+								setSelection(null);
+								onCommented();
+							}}
+							onCancel={() => setSelection(null)}
+						/>
+					) : a.metadata?.comment ? (
+						<CommentCard comment={a.metadata.comment} />
+					) : null
+				}
+				options={{
+					theme: 'pierre-dark',
+					// The card header (FileSection) owns the filename/stats row.
+					disableFileHeader: true,
+					enableLineSelection: prOpen,
+					onLineSelectionEnd: onSelectionEnd,
+				}}
+			/>
 		</div>
+	);
+}
+
+// One collapsible file card: sticky header (path, status, ±counts, comment
+// count) over the diff surface.
+function FileSection({
+	data,
+	file,
+	collapsed,
+	commentCount,
+	onToggle,
+	onCommented,
+	sectionRef,
+}: {
+	data: ApiFeatureDetail;
+	file: CockpitFile;
+	collapsed: boolean;
+	commentCount: number;
+	onToggle: () => void;
+	onCommented: () => void;
+	sectionRef: (el: HTMLElement | null) => void;
+}) {
+	const dir = file.filename.includes('/')
+		? file.filename.slice(0, file.filename.lastIndexOf('/') + 1)
+		: '';
+	const base = file.filename.slice(dir.length);
+	return (
+		<section
+			ref={sectionRef}
+			data-file={file.filename}
+			className="mt-3 scroll-mt-3 overflow-clip rounded-lg border border-line bg-surface"
+		>
+			<button
+				type="button"
+				onClick={onToggle}
+				aria-expanded={!collapsed}
+				className={cn(
+					'flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-xs hover:bg-raised/50',
+					'lg:sticky lg:top-0 lg:z-10 lg:bg-surface',
+					!collapsed && 'border-b border-line',
+				)}
+			>
+				{collapsed ? (
+					<ChevronRight className="size-3.5 shrink-0 text-mute" aria-hidden />
+				) : (
+					<ChevronDown className="size-3.5 shrink-0 text-mute" aria-hidden />
+				)}
+				<span
+					className={cn('size-1.5 shrink-0 rounded-full', FILE_STATUS_DOT[file.status] ?? 'bg-mute')}
+					title={file.status}
+				/>
+				<span className="min-w-0 truncate font-medium">
+					{dir ? <span className="font-normal text-mute">{dir}</span> : null}
+					{base}
+				</span>
+				{commentCount > 0 ? (
+					<span className="flex shrink-0 items-center gap-1 text-mute">
+						<MessageSquare className="size-3" aria-hidden />
+						{commentCount}
+					</span>
+				) : null}
+				<span className="ml-auto shrink-0 tabular-nums">
+					{file.additions > 0 ? <span className="text-accent-bright">+{file.additions}</span> : null}{' '}
+					{file.deletions > 0 ? <span className="text-danger">−{file.deletions}</span> : null}
+				</span>
+			</button>
+			{collapsed ? null : <FileDiff data={data} file={file} onCommented={onCommented} />}
+		</section>
 	);
 }
 
@@ -191,6 +263,54 @@ export default function FeaturePage() {
 	const queryClient = useQueryClient();
 	const { data } = useSuspenseQuery(featureQuery(id));
 	const refresh = () => queryClient.invalidateQueries({ queryKey: ['feature', id] });
+
+	const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+	const [activeFile, setActiveFile] = useState<string | null>(null);
+	const sectionEls = useRef(new Map<string, HTMLElement>());
+
+	const commentCounts = useMemo(() => {
+		const counts = new Map<string, number>();
+		for (const c of data.comments) counts.set(c.path, (counts.get(c.path) ?? 0) + 1);
+		return counts;
+	}, [data.comments]);
+
+	const toggleFile = (filename: string) =>
+		setCollapsed((prev) => {
+			const next = new Set(prev);
+			if (next.has(filename)) next.delete(filename);
+			else next.add(filename);
+			return next;
+		});
+
+	// Tree click: expand the file if needed, then scroll its card into view.
+	const jumpToFile = useCallback((filename: string) => {
+		setCollapsed((prev) => {
+			if (!prev.has(filename)) return prev;
+			const next = new Set(prev);
+			next.delete(filename);
+			return next;
+		});
+		setActiveFile(filename);
+		requestAnimationFrame(() => {
+			sectionEls.current.get(filename)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+		});
+	}, []);
+
+	// Scroll spy: highlight the file nearest the top of the viewport in the tree.
+	useEffect(() => {
+		const observer = new IntersectionObserver(
+			(entries) => {
+				const visible = entries
+					.filter((e) => e.isIntersecting)
+					.sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+				const top = visible[0]?.target.getAttribute('data-file');
+				if (top) setActiveFile(top);
+			},
+			{ rootMargin: '0px 0px -70% 0px' },
+		);
+		for (const el of sectionEls.current.values()) observer.observe(el);
+		return () => observer.disconnect();
+	}, [data.files]);
 
 	const merge = useMutation({
 		mutationFn: () => api.post(`/api/factory/features/${id}/merge`),
@@ -214,6 +334,17 @@ export default function FeaturePage() {
 
 	const prState = data.pr.state;
 	const v = data.verification;
+	const totalAdditions = data.files.reduce((n, f) => n + f.additions, 0);
+	const totalDeletions = data.files.reduce((n, f) => n + f.deletions, 0);
+
+	const fileTree = (
+		<FileTree
+			files={data.files}
+			activeFile={activeFile}
+			commentCounts={commentCounts}
+			onSelect={jumpToFile}
+		/>
+	);
 
 	return (
 		<>
@@ -259,95 +390,149 @@ export default function FeaturePage() {
 				</div>
 			) : null}
 
-			{data.demo ? (
-				<>
-					<SectionHeading>demo</SectionHeading>
-					{data.demo.caption ? <Muted className="mb-2 block">{data.demo.caption}</Muted> : null}
-					<video
-						className="w-full rounded-lg border border-line bg-black"
-						controls
-						autoPlay
-						muted
-						loop
-						playsInline
-						src={data.demo.url}
-					/>
-				</>
-			) : null}
+			<div className="lg:grid lg:grid-cols-[15rem_minmax(0,1fr)] lg:items-start lg:gap-8">
+				{/* Sticky file tree, desktop only; small screens get a collapsible
+				    jump list above the diff instead. */}
+				<aside className="hidden lg:sticky lg:top-4 lg:block lg:max-h-[calc(100dvh-2rem)] lg:overflow-y-auto lg:pt-9">
+					<div className="mb-2 px-1.5 text-xs text-mute">
+						{data.files.length} file{data.files.length === 1 ? '' : 's'} ·{' '}
+						<span className="text-accent-bright">+{totalAdditions}</span>{' '}
+						<span className="text-danger">−{totalDeletions}</span>
+					</div>
+					{fileTree}
+				</aside>
 
-			{data.criteria.length > 0 ? (
-				<>
-					<SectionHeading>acceptance criteria</SectionHeading>
-					<Table>
-						<tbody>
-							{data.criteria.map((crit, i) => (
-								<tr key={i}>
-									<Td className="w-6">{VERDICT_BADGE[crit.verdict ?? ''] ?? '⚪'}</Td>
-									<Td>
-										{crit.text}
-										{crit.note ? <div className="text-xs text-mute">{crit.note}</div> : null}
-										{crit.screenshot_url ? (
-											<div>
-												<a
-													href={crit.screenshot_url}
-													target="_blank"
-													rel="noopener"
-													className="text-xs text-accent-bright hover:underline"
-												>
-													screenshot →
-												</a>
-											</div>
-										) : null}
-									</Td>
-								</tr>
-							))}
-						</tbody>
-					</Table>
-				</>
-			) : null}
+				<div className="min-w-0">
+					<div className="max-w-3xl">
+						{data.demo ? (
+							<>
+								<SectionHeading>demo</SectionHeading>
+								{data.demo.caption ? <Muted className="mb-2 block">{data.demo.caption}</Muted> : null}
+								<video
+									className="w-full rounded-lg border border-line bg-black"
+									controls
+									autoPlay
+									muted
+									loop
+									playsInline
+									src={data.demo.url}
+								/>
+							</>
+						) : null}
 
-			{data.reviews.length > 0 ? (
-				<>
-					<SectionHeading>reviews</SectionHeading>
-					{data.reviews.map((r, i) => (
-						<details key={i} className="mt-2">
-							<summary className="cursor-pointer text-[0.85rem]">
-								{r.author ?? 'unknown'} · {r.state.toLowerCase()}
-							</summary>
-							<pre className="mt-1 text-xs leading-relaxed whitespace-pre-wrap text-ink-dim">
-								{r.body || '(no body)'}
-							</pre>
-						</details>
-					))}
-				</>
-			) : null}
+						{data.criteria.length > 0 ? (
+							<>
+								<SectionHeading>acceptance criteria</SectionHeading>
+								<Table>
+									<tbody>
+										{data.criteria.map((crit, i) => (
+											<tr key={i}>
+												<Td className="w-6">{VERDICT_BADGE[crit.verdict ?? ''] ?? '⚪'}</Td>
+												<Td>
+													{crit.text}
+													{crit.note ? <div className="text-xs text-mute">{crit.note}</div> : null}
+													{crit.screenshot_url ? (
+														<div>
+															<a
+																href={crit.screenshot_url}
+																target="_blank"
+																rel="noopener"
+																className="text-xs text-accent-bright hover:underline"
+															>
+																screenshot →
+															</a>
+														</div>
+													) : null}
+												</Td>
+											</tr>
+										))}
+									</tbody>
+								</Table>
+							</>
+						) : null}
 
-			{data.plan ? (
-				<>
-					<SectionHeading>plan</SectionHeading>
-					<details className="mt-2">
-						<summary className="cursor-pointer text-[0.85rem] text-mute">
-							implementation plan (approved)
+						{data.reviews.length > 0 ? (
+							<>
+								<SectionHeading>reviews</SectionHeading>
+								{data.reviews.map((r, i) => (
+									<details key={i} className="mt-2">
+										<summary className="cursor-pointer text-[0.85rem]">
+											{r.author ?? 'unknown'} · {r.state.toLowerCase()}
+										</summary>
+										<pre className="mt-1 text-xs leading-relaxed whitespace-pre-wrap text-ink-dim">
+											{r.body || '(no body)'}
+										</pre>
+									</details>
+								))}
+							</>
+						) : null}
+
+						{data.plan ? (
+							<>
+								<SectionHeading>plan</SectionHeading>
+								<details className="mt-2">
+									<summary className="cursor-pointer text-[0.85rem] text-mute">
+										implementation plan (approved)
+									</summary>
+									<pre className="mt-1 text-xs leading-relaxed whitespace-pre-wrap text-ink-dim">{data.plan}</pre>
+								</details>
+							</>
+						) : null}
+					</div>
+
+					<SectionHeading
+						aside={
+							<span className="flex gap-1">
+								<Button
+									variant="ghost"
+									size="sm"
+									onClick={() => setCollapsed(new Set(data.files.map((f) => f.filename)))}
+								>
+									collapse all
+								</Button>
+								<Button variant="ghost" size="sm" onClick={() => setCollapsed(new Set())}>
+									expand all
+								</Button>
+							</span>
+						}
+					>
+						diff
+					</SectionHeading>
+					{prState === 'open' ? (
+						<Muted className="block">
+							select a line range in the diff to comment — comments dispatch the fix agent
+						</Muted>
+					) : null}
+
+					<details className="mt-3 rounded-lg border border-line bg-surface px-3 py-2 lg:hidden">
+						<summary className="cursor-pointer text-xs text-mute">
+							{data.files.length} file{data.files.length === 1 ? '' : 's'} changed — jump to file
 						</summary>
-						<pre className="mt-1 text-xs leading-relaxed whitespace-pre-wrap text-ink-dim">{data.plan}</pre>
+						<div className="mt-2">{fileTree}</div>
 					</details>
-				</>
-			) : null}
 
-			<SectionHeading>diff</SectionHeading>
-			{data.pr.state === 'open' ? (
-				<Muted className="block">
-					select a line range in the diff to comment — comments dispatch the fix agent
-				</Muted>
-			) : null}
-			{data.files.map((f) => (
-				<FileSurface key={f.filename} data={data} file={f} onCommented={refresh} />
-			))}
-			{data.more_files > 0 ? (
-				<Muted className="mt-3 block">
-					…and {data.more_files} more files — see the PR on GitHub.
-				</Muted>
-			) : null}
+					{data.files.map((f) => (
+						<FileSection
+							key={f.filename}
+							data={data}
+							file={f}
+							collapsed={collapsed.has(f.filename)}
+							commentCount={commentCounts.get(f.filename) ?? 0}
+							onToggle={() => toggleFile(f.filename)}
+							onCommented={refresh}
+							sectionRef={(el) => {
+								if (el) sectionEls.current.set(f.filename, el);
+								else sectionEls.current.delete(f.filename);
+							}}
+						/>
+					))}
+					{data.more_files > 0 ? (
+						<Muted className="mt-3 block">
+							…and {data.more_files} more files — see the PR on GitHub.
+						</Muted>
+					) : null}
+				</div>
+			</div>
 		</>
 	);
 }

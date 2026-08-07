@@ -433,6 +433,8 @@ export function createApiRoutes() {
 		base.files = prFiles.slice(0, MAX_FILES).map((f) => ({
 			filename: f.filename,
 			status: f.status,
+			additions: f.additions,
+			deletions: f.deletions,
 			patch:
 				f.patch && f.patch.length < 100_000
 					? `diff --git a/${f.filename} b/${f.filename}\n--- a/${f.filename}\n+++ b/${f.filename}\n${f.patch}\n`

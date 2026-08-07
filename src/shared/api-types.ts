@@ -115,7 +115,13 @@ export interface ApiFeatureDetail {
 	} | null;
 	// Pseudo-patch (git-style header prepended) ready for @pierre/diffs; null
 	// when the file is binary/renamed/too large.
-	files: { filename: string; status: string; patch: string | null }[];
+	files: {
+		filename: string;
+		status: string;
+		additions: number;
+		deletions: number;
+		patch: string | null;
+	}[];
 	more_files: number; // count beyond the render cap
 	reviews: { state: string; body: string; author: string | null }[];
 	comments: ApiCockpitComment[];

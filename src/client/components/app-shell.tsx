@@ -68,7 +68,11 @@ function UserBlock({ login }: { login: string }) {
 }
 
 // Desktop: fixed sidebar. Small screens: sticky top bar with the same nav.
+// The cockpit's diff pane needs room, so that route gets a much wider
+// container than the reading-width default.
 export function AppShell({ login, children }: { login: string; children: ReactNode }) {
+	const pathname = useRouterState({ select: (s) => s.location.pathname });
+	const wide = pathname.startsWith('/factory/features/');
 	return (
 		<div className="min-h-dvh md:flex">
 			<aside className="sticky top-0 hidden h-dvh w-52 shrink-0 flex-col justify-between border-r border-line bg-surface/50 p-4 md:flex">
@@ -90,7 +94,9 @@ export function AppShell({ login, children }: { login: string; children: ReactNo
 			</div>
 
 			<main className="min-w-0 flex-1">
-				<div className="mx-auto max-w-4xl px-4 py-8 md:px-8">{children}</div>
+				<div className={cn('mx-auto px-4 py-8 md:px-8', wide ? 'max-w-[96rem]' : 'max-w-4xl')}>
+					{children}
+				</div>
 			</main>
 		</div>
 	);
