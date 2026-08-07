@@ -200,6 +200,7 @@ export interface CockpitCommentRow {
 	side: string;
 	body: string;
 	author: string;
+	author_id: number | null; // null on rows predating attribution
 	status: string;
 	created_at: string;
 }
@@ -211,12 +212,15 @@ export async function createCockpitComment(
 	side: string,
 	body: string,
 	author: string,
+	// GitHub user id completing the commenter's noreply identity, so the fix
+	// commit this comment dispatches can carry them as git author.
+	authorId?: number,
 ): Promise<number> {
 	const row = await env.DB.prepare(
-		`INSERT INTO cockpit_comments (feature_id, path, line, side, body, author)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6) RETURNING id`,
+		`INSERT INTO cockpit_comments (feature_id, path, line, side, body, author, author_id)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id`,
 	)
-		.bind(featureId, path, line, side, body, author)
+		.bind(featureId, path, line, side, body, author, authorId ?? null)
 		.first<{ id: number }>();
 	return row!.id;
 }
@@ -348,6 +352,10 @@ export interface FeatureRow {
 	status: string;
 	error: string | null;
 	created_at: string;
+	author_login: string | null; // instructing user (plan approver); null = bot
+	author_id: number | null;
+	coauthor_login: string | null; // plan creator when different from author
+	coauthor_id: number | null;
 }
 
 export async function createFeature(
@@ -357,11 +365,27 @@ export async function createFeature(
 	// JSON array of acceptance criteria strings; the verify step checks these
 	// empirically against the generated branch.
 	acceptance?: string,
+	// Commit attribution (src/lib/attribution.ts): author = the instructing
+	// user (plan approver), coauthor = the plan creator when they differ.
+	// Null for operator/API intakes — the generator commits as the bot.
+	author?: { login: string; id: number },
+	coauthor?: { login: string; id: number },
 ): Promise<number> {
 	const row = await env.DB.prepare(
-		'INSERT INTO features (repository_id, title, spec, acceptance) VALUES (?1, ?2, ?3, ?4) RETURNING id',
+		`INSERT INTO features
+		 (repository_id, title, spec, acceptance, author_login, author_id, coauthor_login, coauthor_id)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) RETURNING id`,
 	)
-		.bind(repositoryId, title, spec, acceptance ?? null)
+		.bind(
+			repositoryId,
+			title,
+			spec,
+			acceptance ?? null,
+			author?.login ?? null,
+			author?.id ?? null,
+			coauthor?.login ?? null,
+			coauthor?.id ?? null,
+		)
 		.first<{ id: number }>();
 	return row!.id;
 }
@@ -402,17 +426,23 @@ export interface PlanRow {
 	status: string;
 	error: string | null;
 	created_at: string;
+	created_by_login: string | null; // signed-in submitter; null = operator/API
+	created_by_id: number | null;
 }
 
 export async function createPlan(
 	repositoryId: number,
 	title: string,
 	requirements: string,
+	// The signed-in user who submitted the requirements; null for operator/API
+	// intakes. Carried onto the feature at approval for commit attribution.
+	createdBy?: { login: string; id: number },
 ): Promise<number> {
 	const row = await env.DB.prepare(
-		'INSERT INTO plans (repository_id, title, requirements) VALUES (?1, ?2, ?3) RETURNING id',
+		`INSERT INTO plans (repository_id, title, requirements, created_by_login, created_by_id)
+		 VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id`,
 	)
-		.bind(repositoryId, title, requirements)
+		.bind(repositoryId, title, requirements, createdBy?.login ?? null, createdBy?.id ?? null)
 		.first<{ id: number }>();
 	return row!.id;
 }

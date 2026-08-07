@@ -1,6 +1,7 @@
 import { getSandbox, type Sandbox } from '@cloudflare/sandbox';
 import { env } from 'cloudflare:workers';
 import { gh } from '../tools/github.ts';
+import { coauthorTrailer, gitAuthorEnv } from './attribution.ts';
 import { getFeature, getRepoById, updateFeature, type FeatureRow, type RepositoryRow } from './db.ts';
 import { resolveRunnerAuth } from './fixer.ts';
 import { installationToken, sandboxGitToken } from './github-app.ts';
@@ -152,11 +153,26 @@ async function generate(
 		// mutations must never end up in the pushed commit. The commit is local
 		// only until the check passes and we push.
 		// The title is user input: it travels via env so shell metacharacters in
-		// it are data, never code.
+		// it are data, never code. When a signed-in user instructed this feature
+		// they become the git author (the bot stays committer); a differing plan
+		// creator rides the message as a Co-authored-by trailer.
+		const author =
+			feature.author_login && feature.author_id !== null
+				? { login: feature.author_login, id: feature.author_id }
+				: null;
+		const coauthor =
+			feature.coauthor_login && feature.coauthor_id !== null
+				? { login: feature.coauthor_login, id: feature.coauthor_id }
+				: null;
 		const commit = await sandbox.exec(
 			`git -C ${CLONE_DIR} add -A && git -C ${CLONE_DIR} commit -m "$COMMIT_MSG"`,
 			{
-				env: { COMMIT_MSG: `${feature.title} (turbodiff generator, feature #${feature.id})` },
+				env: {
+					COMMIT_MSG:
+						`${feature.title} (turbodiff generator, feature #${feature.id})` +
+						coauthorTrailer(coauthor),
+					...gitAuthorEnv(author),
+				},
 				timeout: 60_000,
 			},
 		);
