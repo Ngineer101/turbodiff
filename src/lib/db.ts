@@ -352,6 +352,7 @@ export interface FeatureRow {
 	status: string;
 	error: string | null;
 	created_at: string;
+	run_started_at: string | null; // start of the current generation attempt
 	author_login: string | null; // instructing user (plan approver); null = bot
 	author_id: number | null;
 	coauthor_login: string | null; // plan creator when different from author
@@ -394,19 +395,51 @@ export async function getFeature(id: number): Promise<FeatureRow | null> {
 	return env.DB.prepare('SELECT * FROM features WHERE id = ?1').bind(id).first<FeatureRow>();
 }
 
+// A queue-consumer wall-clock kill dies without reaching the failure handler,
+// stranding the feature in 'generating' forever. This lazy sweep (called from
+// the factory read paths) flips any run silent past the wall clock + slack to
+// failed, so the UI shows the truth and the retry button lights up. Legacy
+// rows without run_started_at fall back to created_at.
+const GENERATION_STRAND_MINUTES = 25;
+
+export async function failStrandedGeneration(): Promise<number> {
+	const res = await env.DB.prepare(
+		`UPDATE features SET status = 'failed',
+		   error = 'generation run was killed before finishing (platform wall clock or runtime interruption) — retry'
+		 WHERE status = 'generating'
+		   AND COALESCE(run_started_at, created_at) < datetime('now', '-${GENERATION_STRAND_MINUTES} minutes')`,
+	).run();
+	return res.meta.changes ?? 0;
+}
+
 export async function updateFeature(
 	id: number,
-	fields: { status?: string; branch?: string; prNumber?: number; error?: string },
+	fields: {
+		status?: string;
+		branch?: string;
+		prNumber?: number;
+		error?: string;
+		// 'now' stamps the start of a generation attempt (strand detection).
+		runStartedAt?: 'now';
+	},
 ): Promise<void> {
 	await env.DB.prepare(
 		`UPDATE features SET
 		 status = COALESCE(?2, status),
 		 branch = COALESCE(?3, branch),
 		 pr_number = COALESCE(?4, pr_number),
-		 error = COALESCE(?5, error)
+		 error = COALESCE(?5, error),
+		 run_started_at = CASE WHEN ?6 THEN datetime('now') ELSE run_started_at END
 		 WHERE id = ?1`,
 	)
-		.bind(id, fields.status ?? null, fields.branch ?? null, fields.prNumber ?? null, fields.error ?? null)
+		.bind(
+			id,
+			fields.status ?? null,
+			fields.branch ?? null,
+			fields.prNumber ?? null,
+			fields.error ?? null,
+			fields.runStartedAt === 'now' ? 1 : 0,
+		)
 		.run();
 }
 

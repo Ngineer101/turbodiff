@@ -10,6 +10,7 @@ import {
 	connectionSnapshot,
 	createFeature,
 	createPlan,
+	failStrandedGeneration,
 	getFeature,
 	getPlan,
 	getRepoByFullName,
@@ -312,6 +313,7 @@ app.post('/internal/repos/check-command', async (c) => {
 });
 
 app.get('/internal/features/:id', async (c) => {
+	await failStrandedGeneration();
 	const id = Number(c.req.param('id'));
 	const feature = Number.isInteger(id) ? await getFeature(id) : null;
 	if (!feature) return c.json({ error: 'unknown feature' }, 404);
@@ -320,8 +322,12 @@ app.get('/internal/features/:id', async (c) => {
 
 // Operator retry for a failed generation: re-enqueues the SAME feature row,
 // preserving its spec and commit attribution (unlike /internal/generate,
-// which would mint a fresh unattributed feature).
+// which would mint a fresh unattributed feature). An optional
+// {"delay_seconds": n} defers delivery (e.g. to ride out a platform
+// incident); the feature stays in its failed state until the run actually
+// starts, so the strand sweep can't misfire during the wait.
 app.post('/internal/features/:id/retry', async (c) => {
+	await failStrandedGeneration();
 	const id = Number(c.req.param('id'));
 	const feature = Number.isInteger(id) ? await getFeature(id) : null;
 	if (!feature) return c.json({ error: 'unknown feature' }, 404);
@@ -329,9 +335,21 @@ app.post('/internal/features/:id/retry', async (c) => {
 	if (!RETRYABLE.has(feature.status)) {
 		return c.json({ error: `feature is ${feature.status}, not retryable` }, 409);
 	}
-	await updateFeature(id, { status: 'generating' });
-	await env.FACTORY_QUEUE.send({ kind: 'generate', featureId: id });
-	return c.json({ accepted: true, feature_id: id, status_url: `/internal/features/${id}` });
+	const body = await c.req.json<{ delay_seconds?: number }>().catch(() => null);
+	const delay = Math.min(Math.max(Math.floor(body?.delay_seconds ?? 0), 0), 12 * 3600);
+	if (delay > 0) {
+		await updateFeature(id, { error: `retry scheduled in ${Math.round(delay / 60)}m` });
+		await env.FACTORY_QUEUE.send({ kind: 'generate', featureId: id }, { delaySeconds: delay });
+	} else {
+		await updateFeature(id, { status: 'generating', runStartedAt: 'now' });
+		await env.FACTORY_QUEUE.send({ kind: 'generate', featureId: id });
+	}
+	return c.json({
+		accepted: true,
+		feature_id: id,
+		delay_seconds: delay,
+		status_url: `/internal/features/${id}`,
+	});
 });
 
 app.post('/internal/fix', async (c) => {

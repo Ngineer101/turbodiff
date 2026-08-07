@@ -23,7 +23,18 @@ const CHECK_TIMEOUT_MS = 4 * 60_000;
 export interface GenQueueMessage {
 	kind: 'generate';
 	featureId: number;
+	// Platform-interruption retry counter (see PLATFORM_INTERRUPTION below);
+	// absent on first delivery.
+	attempt?: number;
 }
+
+// Sandbox infrastructure failures outside our control — a runtime rollout
+// interrupting exec, or the sandbox client's bare 5xx. These are transient:
+// instead of failing the feature, the run re-enqueues itself with a delay so
+// it lands after the platform settles. Bounded by GEN_PLATFORM_RETRIES.
+const PLATFORM_INTERRUPTION = /interrupted while the platform|HTTP error! status: 5\d\d/i;
+const GEN_PLATFORM_RETRIES = 3;
+const GEN_RETRY_DELAY_S = 600;
 
 function branchName(feature: FeatureRow): string {
 	const slug = feature.title
@@ -55,7 +66,7 @@ ${feature.spec}
 `;
 }
 
-export async function runGeneration(featureId: number): Promise<void> {
+export async function runGeneration(featureId: number, attempt = 0): Promise<void> {
 	const feature = await getFeature(featureId);
 	if (!feature) {
 		console.warn(`turbodiff: generation skipped, feature ${featureId} not found`);
@@ -67,7 +78,8 @@ export async function runGeneration(featureId: number): Promise<void> {
 		return;
 	}
 	const label = `${repo.owner}/${repo.name} feature #${featureId}`;
-	await updateFeature(featureId, { status: 'generating' });
+	// runStartedAt restarts the strand-detection clock for this attempt.
+	await updateFeature(featureId, { status: 'generating', runStartedAt: 'now' });
 
 	try {
 		const outcome = await generate(feature, repo);
@@ -80,6 +92,22 @@ export async function runGeneration(featureId: number): Promise<void> {
 		}
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
+		// Transient platform interruption: keep the feature 'generating' and
+		// re-enqueue with a delay so the next attempt lands after the rollout.
+		if (PLATFORM_INTERRUPTION.test(message) && attempt < GEN_PLATFORM_RETRIES) {
+			await updateFeature(featureId, {
+				error: `platform interruption (attempt ${attempt + 1}/${GEN_PLATFORM_RETRIES + 1}), retrying in ${GEN_RETRY_DELAY_S / 60}m: ${message.slice(0, 300)}`,
+			});
+			await env.FACTORY_QUEUE.send(
+				{ kind: 'generate', featureId, attempt: attempt + 1 },
+				{ delaySeconds: GEN_RETRY_DELAY_S },
+			);
+			console.warn(
+				`turbodiff: generation platform-interrupted for ${label} (attempt ${attempt + 1}), re-enqueued with ${GEN_RETRY_DELAY_S}s delay:`,
+				err,
+			);
+			return;
+		}
 		await updateFeature(featureId, { status: 'failed', error: message.slice(0, 500) });
 		console.error(`turbodiff: generation failed for ${label}:`, err);
 	}

@@ -12,6 +12,7 @@ import {
 	deleteAgent,
 	deleteAgentConnection,
 	ensureBuiltinAgents,
+	failStrandedGeneration,
 	getAgentById,
 	getAgentBySlug,
 	getAgentConnection,
@@ -311,6 +312,9 @@ export function createApiRoutes() {
 
 	app.get('/factory', async (c) => {
 		const { installationIds } = c.get('user');
+		// Flip wall-clock-killed runs to failed before reading, so the cards
+		// never show an eternal "generating" for a dead run.
+		await failStrandedGeneration();
 		const [groups, plans] = await Promise.all([
 			listInstallationsWithRepos(installationIds),
 			listPlansForInstallations(installationIds),
@@ -378,6 +382,7 @@ export function createApiRoutes() {
 	// --- Factory PR cockpit ---
 
 	app.get('/factory/features/:id', async (c) => {
+		await failStrandedGeneration();
 		const id = Number(c.req.param('id'));
 		const feature = Number.isInteger(id) ? await getFeature(id) : null;
 		const repo = feature ? await getRepoById(feature.repository_id) : null;
@@ -557,7 +562,7 @@ export function createApiRoutes() {
 		if (!RETRYABLE.has(feature.status)) {
 			return c.json({ error: `feature is ${feature.status}, not retryable` }, 409);
 		}
-		await updateFeature(feature.id, { status: 'generating' });
+		await updateFeature(feature.id, { status: 'generating', runStartedAt: 'now' });
 		await env.FACTORY_QUEUE.send({ kind: 'generate', featureId: feature.id });
 		return c.json({ ok: true });
 	});
