@@ -82,6 +82,10 @@ export interface ApiPlan {
 	plan: string | null;
 	feature_id: number | null;
 	pr_number: number | null;
+	// Lifecycle of the linked feature once the plan is approved: generating /
+	// pr_opened / checks_failed / no_changes / failed (+ its error detail).
+	feature_status: string | null;
+	feature_error: string | null;
 	verification: ApiVerificationSummary | null;
 }
 
@@ -102,7 +106,13 @@ export interface ApiCockpitComment {
 }
 
 export interface ApiFeatureDetail {
-	feature: { id: number; title: string; status: string; pr_number: number | null };
+	feature: {
+		id: number;
+		title: string;
+		status: string;
+		error: string | null;
+		pr_number: number | null;
+	};
 	repo: string; // "owner/name"
 	plan: string | null;
 	// Null while generation hasn't opened a PR yet.

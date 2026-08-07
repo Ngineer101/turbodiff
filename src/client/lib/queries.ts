@@ -48,15 +48,22 @@ export const reviewsQuery = (page: number) =>
 
 const RUNNING_PLAN_STATUSES = new Set(['analyzing', 'refining']);
 
+// Feature states where generation stopped without a PR — terminal until the
+// user retries.
+export const GENERATION_STOPPED = new Set(['failed', 'checks_failed', 'no_changes']);
+
+function planIsLive(p: ApiFactory['plans'][number]): boolean {
+	if (RUNNING_PLAN_STATUSES.has(p.status)) return true;
+	if (p.verification?.status === 'running') return true;
+	// Approved and no PR yet: generation is in flight unless it stopped.
+	return p.status === 'approved' && !p.pr_number && !GENERATION_STOPPED.has(p.feature_status ?? '');
+}
+
 export const factoryQuery = queryOptions({
 	queryKey: ['factory'],
 	queryFn: () => api.get<ApiFactory>('/api/factory'),
 	refetchInterval: (query) =>
-		query.state.data?.plans.some(
-			(p) => RUNNING_PLAN_STATUSES.has(p.status) || p.verification?.status === 'running',
-		)
-			? LIVE_POLL_MS
-			: false,
+		query.state.data?.plans.some(planIsLive) ? LIVE_POLL_MS : false,
 });
 
 export const featureQuery = (id: number) =>
@@ -66,8 +73,10 @@ export const featureQuery = (id: number) =>
 		refetchInterval: (query) => {
 			const d = query.state.data;
 			if (!d) return false;
-			// Poll while generation hasn't opened a PR or verification is running.
-			return !d.pr || d.verification?.status === 'running' ? LIVE_POLL_MS : false;
+			// Poll while generation is in flight (no PR yet, not stopped) or a
+			// verification run is live.
+			if (!d.pr && !GENERATION_STOPPED.has(d.feature.status)) return LIVE_POLL_MS;
+			return d.verification?.status === 'running' ? LIVE_POLL_MS : false;
 		},
 	});
 

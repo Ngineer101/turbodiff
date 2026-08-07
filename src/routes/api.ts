@@ -40,6 +40,7 @@ import {
 	setRepoEnabled,
 	setRepoReviewOnPush,
 	updateAgent,
+	updateFeature,
 	updatePlan,
 	type AgentConnectionRow,
 	type AgentRow,
@@ -140,6 +141,8 @@ function serializePlan(p: PlanWithRepo): ApiPlan {
 		plan: p.plan,
 		feature_id: p.feature_id,
 		pr_number: p.pr_number,
+		feature_status: p.feature_status,
+		feature_error: p.feature_error,
 		verification: verificationSummary(p.verification_status, p.verification_results),
 	};
 }
@@ -387,6 +390,7 @@ export function createApiRoutes() {
 				id: feature.id,
 				title: feature.title,
 				status: feature.status,
+				error: feature.error,
 				pr_number: feature.pr_number,
 			},
 			repo: `${repo.owner}/${repo.name}`,
@@ -537,6 +541,25 @@ export function createApiRoutes() {
 		});
 		await markCockpitCommentDispatched(commentId);
 		return c.json({ ok: true, comment_id: commentId, fix_dispatched: true });
+	});
+
+	// Re-enqueue generation for a failed feature. The feature row (and its
+	// commit attribution) is reused as-is; status flips to 'generating'
+	// immediately so the UI reflects the retry without waiting on the queue.
+	app.post('/factory/features/:id/retry', async (c) => {
+		const id = Number(c.req.param('id'));
+		const feature = Number.isInteger(id) ? await getFeature(id) : null;
+		const repo = feature ? await getRepoById(feature.repository_id) : null;
+		if (!feature || !repo || !c.get('user').installationIds.includes(repo.installation_id)) {
+			return c.json({ error: 'unknown feature' }, 404);
+		}
+		const RETRYABLE = new Set(['failed', 'checks_failed', 'no_changes']);
+		if (!RETRYABLE.has(feature.status)) {
+			return c.json({ error: `feature is ${feature.status}, not retryable` }, 409);
+		}
+		await updateFeature(feature.id, { status: 'generating' });
+		await env.FACTORY_QUEUE.send({ kind: 'generate', featureId: feature.id });
+		return c.json({ ok: true });
 	});
 
 	// Human-initiated merge from the cockpit. Deliberately does not reuse the
