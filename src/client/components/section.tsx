@@ -18,10 +18,25 @@ export function SectionHeading({
 	);
 }
 
-export function PageTitle({ children, aside }: { children: ReactNode; aside?: ReactNode }) {
+export function PageTitle({
+	children,
+	aside,
+	titleClassName,
+}: {
+	children: ReactNode;
+	aside?: ReactNode;
+	titleClassName?: string;
+}) {
 	return (
-		<div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-			<h1 className="text-lg font-medium tracking-wide sm:text-xl">{children}</h1>
+		<div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+			<h1
+				className={cn(
+					'min-w-0 text-lg leading-snug font-medium tracking-wide break-words sm:text-xl',
+					titleClassName,
+				)}
+			>
+				{children}
+			</h1>
 			{aside}
 		</div>
 	);

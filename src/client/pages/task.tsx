@@ -8,9 +8,10 @@ import { api, ApiError } from '../lib/api.ts';
 import { ago } from '../lib/format.ts';
 import { GENERATION_STOPPED, taskQuery } from '../lib/queries.ts';
 import { taskState } from '../lib/task-state.ts';
+import { cn } from '../lib/utils.ts';
 import { ConfirmButton } from '../components/confirm-button.tsx';
-import { Muted, PageTitle, SectionHeading } from '../components/section.tsx';
-import { Button } from '../components/ui/button.tsx';
+import { SectionHeading } from '../components/section.tsx';
+import { Button, buttonVariants } from '../components/ui/button.tsx';
 import { Field, Input } from '../components/ui/input.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 
@@ -96,16 +97,32 @@ export function TaskPage() {
 
 	return (
 		<>
-			<Link to="/" className="inline-flex items-center gap-1.5 text-xs text-mute hover:text-ink">
+			<Link to="/" className="inline-flex items-center gap-1.5 py-1 text-xs text-mute hover:text-ink">
 				<ArrowLeft className="size-3.5" aria-hidden /> board
 			</Link>
-			<div className="mt-2">
-				<PageTitle aside={<Pill tone={state.tone}>{state.label}</Pill>}>{task.title}</PageTitle>
+			<h1 className="mt-2 text-base leading-snug font-medium break-words sm:text-xl">{task.title}</h1>
+			<div className="mt-3 flex flex-wrap items-center gap-2">
+				<Pill tone={state.tone}>{state.label}</Pill>
+				{task.verification ? (
+					<Pill
+						tone={
+							task.verification.status === 'passed'
+								? 'on'
+								: task.verification.status === 'running'
+									? 'running'
+									: 'red'
+						}
+					>
+						verify: {task.verification.status}
+						{task.verification.status === 'failed' ? ` (${task.verification.failed} unmet)` : ''}
+					</Pill>
+				) : null}
+				{task.archived ? <Pill>archived</Pill> : null}
 			</div>
-			<p className="mt-1 text-[0.85rem] text-mute">
-				{task.repo} · {state.hint} · {ago(task.created_at)}
-				{task.archived ? ' · archived' : ''}
+			<p className="mt-2.5 text-xs text-mute sm:text-[0.85rem]">
+				{task.repo} · {ago(task.created_at)}
 			</p>
+			{state.hint ? <p className="mt-1 text-xs text-mute/70">{state.hint}</p> : null}
 
 			{task.status === 'failed' && task.error ? (
 				<p className="mt-4 text-[0.85rem] text-danger">{task.error}</p>
@@ -154,39 +171,25 @@ export function TaskPage() {
 			) : null}
 
 			{task.status === 'approved' && task.pr_number ? (
-				<p className="mt-4 flex flex-wrap items-center gap-2 text-[0.85rem]">
+				<div className="mt-6 flex flex-col gap-2 sm:flex-row">
 					{task.feature_id !== null ? (
 						<Link
 							to="/factory/features/$featureId"
 							params={{ featureId: String(task.feature_id) }}
-							className="font-medium text-accent-bright hover:underline"
+							className={cn(buttonVariants({ variant: 'default' }), 'w-full sm:w-auto')}
 						>
-							open in cockpit &rarr;
+							Open in cockpit
 						</Link>
 					) : null}
 					<a
 						href={`https://github.com/${task.repo}/pull/${task.pr_number}`}
 						target="_blank"
 						rel="noopener"
-						className="text-accent-bright hover:underline"
+						className={cn(buttonVariants({ variant: 'secondary' }), 'w-full sm:w-auto')}
 					>
 						PR #{task.pr_number} on GitHub
 					</a>
-					{task.verification ? (
-						<Pill
-							tone={
-								task.verification.status === 'passed'
-									? 'on'
-									: task.verification.status === 'running'
-										? 'running'
-										: 'red'
-							}
-						>
-							verify: {task.verification.status}
-							{task.verification.status === 'failed' ? ` (${task.verification.failed} unmet)` : ''}
-						</Pill>
-					) : null}
-				</p>
+				</div>
 			) : null}
 
 			{task.plan && task.status === 'approved' ? (
@@ -199,7 +202,7 @@ export function TaskPage() {
 				</>
 			) : null}
 
-			<div className="mt-8 border-t border-line pt-4">
+			<div className="mt-12 border-t border-line/60 pt-5">
 				{task.archived ? (
 					<Button variant="secondary" onClick={() => archive.mutate(false)} loading={archive.isPending}>
 						Restore to board
@@ -216,7 +219,7 @@ export function TaskPage() {
 						Archive task
 					</ConfirmButton>
 				)}
-				<Muted className="ml-3">started tasks can't be deleted — only archived</Muted>
+				<p className="mt-2.5 text-xs text-mute/70">started tasks can't be deleted — only archived</p>
 			</div>
 		</>
 	);
