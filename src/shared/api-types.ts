@@ -194,6 +194,7 @@ export interface ApiRepoSettings {
 	blocking_reviews: boolean;
 	auto_fix: boolean;
 	auto_merge: boolean;
+	demo_videos: boolean;
 	check_command: string | null;
 	agents: { id: number; slug: string; name: string; enabled: boolean }[];
 }

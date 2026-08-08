@@ -196,6 +196,13 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
 						>
 							&#127981; auto-merge
 						</Chip>
+						<Chip
+							on={repo.demo_videos}
+							title={`${repo.demo_videos ? 'verification records a short demo video of each feature (the verify agent auto-detects how to launch the app)' : 'verification skips demo recordings for this repo'} — click to ${repo.demo_videos ? 'disable' : 'enable'}`}
+							onClick={() => patchRepo.mutate({ demo_videos: !repo.demo_videos })}
+						>
+							&#127909; demos
+						</Chip>
 					</div>
 					<CheckCommandForm repo={repo} />
 				</>
