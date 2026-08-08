@@ -15,10 +15,15 @@ import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
 
 const CLONE_DIR = '/workspace/gen';
 const SPEC_FILE = '/workspace/gen-spec.md';
-// Clone (2) + agent (8) + checks (4) + push (1) must fit inside a queue
-// consumer's 15-minute wall clock.
 const AGENT_TIMEOUT_MS = 8 * 60_000;
 const CHECK_TIMEOUT_MS = 4 * 60_000;
+// The queue consumer gets a hard 15-minute wall clock and a run that
+// outlives it is killed with NO error recorded (the failure handler never
+// runs). The stage caps above sum past that (3+8+4+2 plus container boot),
+// so every stage draws from this explicit budget instead: when it runs dry
+// the run fails loudly with a clear error rather than being killed silently.
+const RUN_BUDGET_MS = 13 * 60_000;
+const MIN_STAGE_MS = 30_000;
 
 export interface GenQueueMessage {
 	kind: 'generate';
@@ -66,7 +71,13 @@ ${feature.spec}
 `;
 }
 
-export async function runGeneration(featureId: number, attempt = 0): Promise<void> {
+export async function runGeneration(
+	featureId: number,
+	attempt = 0,
+	// True when the queue redelivers a message whose first delivery died
+	// without acking (wall-clock kill). The redelivery IS the recovery run.
+	redelivery = false,
+): Promise<void> {
 	const feature = await getFeature(featureId);
 	if (!feature) {
 		console.warn(`turbodiff: generation skipped, feature ${featureId} not found`);
@@ -74,13 +85,14 @@ export async function runGeneration(featureId: number, attempt = 0): Promise<voi
 	}
 	// Dedupe first deliveries: queued messages can't be cancelled, so a
 	// scheduled retry can land after another retry already opened the PR or
-	// while a run is in flight. Platform-retry continuations (attempt > 0)
-	// bypass this — they ARE the in-flight run.
-	if (attempt === 0) {
-		if (feature.status === 'pr_opened') {
-			console.log(`turbodiff: generation skipped for feature ${featureId} — PR already opened`);
-			return;
-		}
+	// while a run is in flight. Two kinds of delivery bypass the in-flight
+	// check — platform-retry continuations (attempt > 0) and queue
+	// redeliveries: both ARE the run they'd otherwise be deduped against.
+	if (feature.status === 'pr_opened') {
+		console.log(`turbodiff: generation skipped for feature ${featureId} — PR already opened`);
+		return;
+	}
+	if (attempt === 0 && !redelivery) {
 		const startedMs = feature.run_started_at
 			? Date.parse(`${feature.run_started_at.replace(' ', 'T')}Z`)
 			: 0;
@@ -141,6 +153,17 @@ async function generate(
 	const scrub = (s: string) => s.replaceAll(token, '***').replaceAll(gitToken, '***');
 	const full = `${repo.owner}/${repo.name}`;
 
+	const deadline = Date.now() + RUN_BUDGET_MS;
+	// A stage gets its own cap or whatever budget remains, whichever is less;
+	// too little left = fail now, visibly, instead of dying to the wall clock.
+	const stageTimeout = (cap: number, stage: string): number => {
+		const left = deadline - Date.now();
+		if (left < MIN_STAGE_MS) {
+			throw new Error(`run budget exhausted before ${stage} — the queue wall clock would have killed it`);
+		}
+		return Math.min(cap, left);
+	};
+
 	const repoInfo = (await (await gh(token, `/repos/${full}`)).json()) as {
 		default_branch: string;
 	};
@@ -162,7 +185,7 @@ async function generate(
 				`git -C ${CLONE_DIR} checkout -b "$GEN_BRANCH" && ` +
 				`git -C ${CLONE_DIR} config user.name "turbodiff[bot]" && ` +
 				`git -C ${CLONE_DIR} config user.email "turbodiff[bot]@users.noreply.github.com"`,
-			{ env: gitEnv, timeout: 3 * 60_000 },
+			{ env: gitEnv, timeout: stageTimeout(3 * 60_000, 'clone') },
 		);
 		if (!clone.success) {
 			throw new Error(`git clone failed: ${scrub(clone.stderr).slice(0, 500)}`);
@@ -173,7 +196,7 @@ async function generate(
 			`claude -p --dangerously-skip-permissions --output-format text < ${SPEC_FILE}`,
 			{
 				cwd: CLONE_DIR,
-				timeout: AGENT_TIMEOUT_MS,
+				timeout: stageTimeout(AGENT_TIMEOUT_MS, 'agent'),
 				env: {
 					...auth.vars,
 					IS_SANDBOX: '1',
@@ -218,7 +241,7 @@ async function generate(
 						coauthorTrailer(coauthor),
 					...gitAuthorEnv(author),
 				},
-				timeout: 60_000,
+				timeout: stageTimeout(60_000, 'commit'),
 			},
 		);
 		if (!commit.success) {
@@ -231,7 +254,7 @@ async function generate(
 		if (repo.check_command) {
 			const checks = await sandbox.exec(repo.check_command, {
 				cwd: CLONE_DIR,
-				timeout: CHECK_TIMEOUT_MS,
+				timeout: stageTimeout(CHECK_TIMEOUT_MS, 'checks'),
 			});
 			if (!checks.success) {
 				return {
@@ -243,7 +266,7 @@ async function generate(
 
 		const push = await sandbox.exec(
 			`git -C ${CLONE_DIR} push origin HEAD:"$GEN_BRANCH"`,
-			{ env: gitEnv, timeout: 2 * 60_000 },
+			{ env: gitEnv, timeout: stageTimeout(2 * 60_000, 'push') },
 		);
 		if (!push.success) {
 			throw new Error(`git push failed: ${scrub(push.stderr).slice(0, 500)}`);

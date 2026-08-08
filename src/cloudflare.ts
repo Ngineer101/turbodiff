@@ -28,7 +28,10 @@ export default {
 			const body = message.body;
 			switch (body.kind) {
 				case 'generate':
-					await runGeneration(body.featureId, body.attempt ?? 0);
+					// message.attempts > 1 = this is the queue's redelivery of a
+					// delivery that died (e.g. consumer wall-clock kill) — it must
+					// bypass the in-flight dedupe guard or the retry gets eaten.
+					await runGeneration(body.featureId, body.attempt ?? 0, message.attempts > 1);
 					break;
 				case 'plan_analyze':
 					await runPlanAnalyze(body.planId);
