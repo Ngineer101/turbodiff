@@ -257,10 +257,12 @@ export function IntegrationsPage() {
 		<>
 			<PageTitle>mcp &amp; integrations</PageTitle>
 			<p className="mt-3 text-[0.85rem] text-mute">
-				Connect remote MCP servers and APIs once, then attach MCP integrations to the review agents
-				that should use their tools. Tokens are encrypted and write-only. Anything a connected server
-				returns is treated as untrusted content, and connected servers see the PR context agents send
-				them — connect only servers you control or trust.
+				Connect MCP servers and APIs once, then attach MCP integrations to the agents that should
+				use their tools.
+			</p>
+			<p className="mt-1.5 text-xs text-mute/70">
+				Tokens are encrypted and write-only. Connected servers see the PR context agents send them
+				and their output is untrusted — connect only servers you control or trust.
 			</p>
 
 			<SectionHeading>connected</SectionHeading>

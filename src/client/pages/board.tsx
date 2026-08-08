@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { Archive, Play, Trash2 } from 'lucide-react';
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import type { ApiBoard, ApiPlan, ApiTodo } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
@@ -29,8 +29,21 @@ function onApiError(err: unknown) {
 
 function QuickAdd({ board }: { board: ApiBoard }) {
 	const queryClient = useQueryClient();
+	const inputRef = useRef<HTMLInputElement>(null);
 	const [title, setTitle] = useState('');
 	const [installationId, setInstallationId] = useState(board.installations[0]?.id ?? 0);
+	// Power-user affordance: "/" focuses the quick-add from anywhere on the board.
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+			const tag = (e.target as HTMLElement | null)?.tagName;
+			if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+			e.preventDefault();
+			inputRef.current?.focus();
+		};
+		window.addEventListener('keydown', onKey);
+		return () => window.removeEventListener('keydown', onKey);
+	}, []);
 	const add = useMutation({
 		mutationFn: () => api.post('/api/todos', { installation_id: installationId, title }),
 		onSuccess: () => {
@@ -46,9 +59,10 @@ function QuickAdd({ board }: { board: ApiBoard }) {
 	return (
 		<form onSubmit={submit} className="flex flex-col gap-2 sm:flex-row">
 			<Input
+				ref={inputRef}
 				value={title}
 				onChange={(e) => setTitle(e.target.value)}
-				placeholder="add a todo…"
+				placeholder="add a todo…  ( / )"
 				aria-label="New todo title"
 				maxLength={200}
 				className="flex-1"

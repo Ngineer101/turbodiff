@@ -1,9 +1,9 @@
 import { useSuspenseQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
+import { ChevronRight } from 'lucide-react';
 import { agentsQuery } from '../lib/queries.ts';
-import { EmptyState, Muted, PageTitle, SectionHeading } from '../components/section.tsx';
+import { EmptyState, PageTitle, SectionHeading } from '../components/section.tsx';
 import { Pill } from '../components/ui/pill.tsx';
-import { Table, Td, Th } from '../components/ui/table.tsx';
 
 export function AgentsPage() {
 	const { data } = useSuspenseQuery(agentsQuery);
@@ -39,41 +39,29 @@ export function AgentsPage() {
 						>
 							{inst.account_login} {inst.suspended ? <Pill tone="red">suspended</Pill> : null}
 						</SectionHeading>
-						<Table>
-							<thead>
-								<tr>
-									<Th>agent</Th>
-									<Th>slug</Th>
-									<Th>model</Th>
-									<Th numeric />
-								</tr>
-							</thead>
-							<tbody>
-								{inst.agents.map((a) => (
-									<tr key={a.id}>
-										<Td>
-											{a.name} {a.is_builtin ? <Pill>built-in</Pill> : null}
-											{a.description ? <div className="text-xs text-mute">{a.description}</div> : null}
-										</Td>
-										<Td>
+						<div className="flex flex-col gap-2.5">
+							{inst.agents.map((a) => (
+								<Link
+									key={a.id}
+									to="/agents/$agentId/edit"
+									params={{ agentId: String(a.id) }}
+									className="flex items-center justify-between gap-3 rounded-xl bg-raised/50 p-3.5 transition-colors hover:bg-raised active:scale-[0.99]"
+								>
+									<div className="min-w-0">
+										<div className="flex flex-wrap items-center gap-2">
+											<span className="text-[0.9rem] font-medium">{a.name}</span>
 											<Pill>{a.slug}</Pill>
-										</Td>
-										<Td>
-											<Muted>{a.model.replace('cloudflare/', '')}</Muted>
-										</Td>
-										<Td numeric>
-											<Link
-												to="/agents/$agentId/edit"
-												params={{ agentId: String(a.id) }}
-												className="text-accent-bright hover:underline"
-											>
-												edit
-											</Link>
-										</Td>
-									</tr>
-								))}
-							</tbody>
-						</Table>
+											{a.is_builtin ? <Pill className="text-mute/70">built-in</Pill> : null}
+										</div>
+										{a.description ? (
+											<p className="mt-1 truncate text-xs text-mute">{a.description}</p>
+										) : null}
+										<p className="mt-0.5 text-xs text-mute/70">{a.model.replace('cloudflare/', '')}</p>
+									</div>
+									<ChevronRight className="size-4 shrink-0 text-mute" aria-hidden />
+								</Link>
+							))}
+						</div>
 					</section>
 				))
 			)}

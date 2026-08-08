@@ -132,11 +132,11 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
 
 	return (
 		<Card className="mt-2">
-			<div className="flex flex-wrap items-center justify-between gap-3">
-				<span className="font-medium">
+			<div className="flex items-center justify-between gap-3">
+				<span className="min-w-0 truncate font-medium" title={`${repo.owner}/${repo.name}`}>
 					{repo.owner}/{repo.name}
 				</span>
-				<label className="flex cursor-pointer items-center gap-2 text-xs text-mute">
+				<label className="flex shrink-0 cursor-pointer items-center gap-2 text-xs text-mute">
 					factory
 					<Switch
 						checked={repo.enabled}
