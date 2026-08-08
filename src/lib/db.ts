@@ -22,6 +22,7 @@ export interface RepositoryRow {
 	blocking_reviews: number; // P1 → REQUEST_CHANGES, clean → APPROVE
 	auto_fix: number; // dispatch the fix agent when a blocking review lands
 	auto_merge: number; // merge factory PRs when verification + review are clean
+	demo_videos: number; // record a verification demo video (runtime auto-detected)
 	check_command: string | null; // sandbox verification gate before factory pushes
 	run_command: string | null; // how to launch the app for runtime verification
 	app_port: number | null; // port the launched app listens on
@@ -159,6 +160,12 @@ export async function setRepoAutoMerge(id: number, on: boolean): Promise<void> {
 }
 
 // The sandbox verification gate for factory pushes. Empty string clears it.
+export async function setRepoDemoVideos(id: number, on: boolean): Promise<void> {
+	await env.DB.prepare('UPDATE repositories SET demo_videos = ?2 WHERE id = ?1')
+		.bind(id, on ? 1 : 0)
+		.run();
+}
+
 export async function setRepoCheckCommand(id: number, command: string): Promise<void> {
 	const trimmed = command.trim();
 	await env.DB.prepare('UPDATE repositories SET check_command = ?2 WHERE id = ?1')

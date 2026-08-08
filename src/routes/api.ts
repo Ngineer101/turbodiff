@@ -38,6 +38,7 @@ import {
 	setRepoAutoMerge,
 	setRepoBlockingReviews,
 	setRepoCheckCommand,
+	setRepoDemoVideos,
 	setRepoEnabled,
 	setRepoReviewOnPush,
 	updateAgent,
@@ -791,6 +792,7 @@ export function createApiRoutes() {
 						blocking_reviews: r.blocking_reviews === 1,
 						auto_fix: r.auto_fix === 1,
 						auto_merge: r.auto_merge === 1,
+						demo_videos: r.demo_videos === 1,
 						check_command: r.check_command,
 						agents: instAgents.map((a) => ({
 							id: a.id,
@@ -815,6 +817,7 @@ export function createApiRoutes() {
 				blocking_reviews?: boolean;
 				auto_fix?: boolean;
 				auto_merge?: boolean;
+				demo_videos?: boolean;
 				check_command?: string;
 			}>()
 			.catch(() => null);
@@ -825,6 +828,7 @@ export function createApiRoutes() {
 			await setRepoBlockingReviews(repo.id, body.blocking_reviews);
 		if (typeof body.auto_fix === 'boolean') await setRepoAutoFix(repo.id, body.auto_fix);
 		if (typeof body.auto_merge === 'boolean') await setRepoAutoMerge(repo.id, body.auto_merge);
+		if (typeof body.demo_videos === 'boolean') await setRepoDemoVideos(repo.id, body.demo_videos);
 		if (typeof body.check_command === 'string') await setRepoCheckCommand(repo.id, body.check_command);
 		return c.json({ ok: true });
 	});

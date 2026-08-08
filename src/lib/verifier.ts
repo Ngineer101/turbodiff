@@ -8,6 +8,7 @@ import {
 	getRepoById,
 	type FeatureRow,
 	type RepositoryRow,
+	setRepoRunCommand,
 } from './db.ts';
 import { maybeAutoMerge } from './auto-merge.ts';
 import { signArtifactKey } from './crypto.ts';
@@ -41,7 +42,8 @@ interface CriterionResult {
 }
 
 function verifyPrompt(feature: FeatureRow, repo: RepositoryRow, criteria: string[]): string {
-	const runtime = repo.run_command
+	const demos = repo.demo_videos === 1;
+	const launch = repo.run_command
 		? `## Running the app
 The app can be launched with:
 
@@ -52,7 +54,28 @@ Start it in the background (e.g. \`nohup ... > /tmp/app.log 2>&1 &\`), wait for
 the port to accept connections, and verify runtime criteria against it with
 curl or small node scripts. If it fails to start, mark runtime criteria as
 "skip" with a note quoting the relevant log lines — do NOT mark them "fail"
-for infrastructure reasons.
+for infrastructure reasons.`
+		: `## Running the app (work it out yourself)
+No launch command is configured. Determine how to run this app from the
+repository itself: package.json scripts (dev/start/preview), the README,
+framework config, lockfiles. Install dependencies first if needed. Launch in
+the background (\`nohup ... > /tmp/app.log 2>&1 &\`), wait for its port to
+accept connections, and verify runtime criteria against the live app.
+
+If you launch it successfully, record what worked by writing
+${OUT_DIR}/run-command.json:
+
+    {"command": "<one shell command, including any install step>", "port": <number>}
+
+so future verification runs can skip this discovery.
+
+If this repository is NOT a launchable app with a web UI (a library, an
+API-only service, a mobile app), do not force it: verify what you can
+statically, mark runtime-only criteria "skip" with a note, and skip
+screenshots and the recording. If it fails to start after honest attempts,
+mark runtime criteria "skip" quoting the relevant log lines — do NOT mark
+them "fail" for infrastructure reasons.`;
+	const runtime = `${launch}
 
 ## Screenshots
 A headless Chrome binary is installed (its path is in the env var
@@ -65,7 +88,9 @@ Launch with args ['--no-sandbox', '--disable-dev-shm-usage']. Use descriptive
 kebab-case filenames and reference each screenshot from the matching
 criterion result.
 
-## Demo recording
+${
+		demos
+			? `## Demo recording
 Also record ONE short screen recording (10–30 seconds) demonstrating the
 feature's happy path end to end. This is what humans watch, so drive it like a
 demo: pause about a second between meaningful steps and let each state change
@@ -77,10 +102,8 @@ be visible before moving on. In a .cjs script, use puppeteer's screencast API:
 
 Write a one-line caption for the recording to ${OUT_DIR}/demo-caption.txt.
 If the app cannot run, skip the recording.`
-		: `## Running the app
-No run command is configured for this repository, so runtime and visual checks
-are unavailable. Verify what can be verified statically from the tree; mark
-criteria that would need a running app as "skip" with a note saying why.`;
+			: `Demo recordings are disabled for this repository — do not record one.`
+	}`;
 
 	return `You are a verification agent for ${repo.owner}/${repo.name}. You are in a checkout of the pull request branch for "${feature.title}". You may read anything and run the app, but do NOT modify tracked files, commit, or push.
 
@@ -188,7 +211,26 @@ async function verify(
 		const results = await readResults(sandbox, criteria.length);
 		const summary = await readText(sandbox, `${OUT_DIR}/summary.md`);
 		const shots = await uploadScreenshots(sandbox, feature.id, results);
-		const demo = await uploadDemo(sandbox, feature.id);
+		const demo = repo.demo_videos === 1 ? await uploadDemo(sandbox, feature.id) : undefined;
+
+		// Cache the agent's successful launch discovery so future runs (and the
+		// generation check gate) skip it. Same trust domain as running the
+		// repo's own code — the sandbox is the boundary.
+		if (!repo.run_command) {
+			try {
+				const detected = JSON.parse(
+					(await sandbox.readFile(`${OUT_DIR}/run-command.json`)).content,
+				) as { command?: unknown; port?: unknown };
+				const cmd = typeof detected.command === 'string' ? detected.command.trim() : '';
+				const port = Number(detected.port);
+				if (cmd && cmd.length <= 500 && Number.isInteger(port) && port > 0 && port < 65536) {
+					await setRepoRunCommand(repo.id, cmd, port);
+					console.log(`turbodiff: cached auto-detected run command for ${full} (port ${port})`);
+				}
+			} catch {
+				// nothing written — repo isn't launchable or launch failed
+			}
+		}
 
 		const failed = results.filter((r) => r.verdict === 'fail');
 		await postReport(token, repo, feature, criteria, results, shots, summary, demo);
