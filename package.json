@@ -3,12 +3,11 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"dev": "pnpm run build:app && vite dev",
-		"dev:app": "vite build --watch --config vite.client.config.ts",
-		"build": "pnpm run build:app && vite build",
-		"deploy": "pnpm run build:app && vite build && wrangler deploy",
-		"check:types": "tsc --noEmit && tsc -p tsconfig.client.json --noEmit",
-		"build:app": "vite build --config vite.client.config.ts"
+		"dev:app": "vp build --watch --config vite.client.config.ts",
+		"check": "vp check",
+		"lint": "vp lint",
+		"fmt": "vp fmt",
+		"test": "vp test"
 	},
 	"dependencies": {
 		"@cloudflare/sandbox": "^0.12.4",
@@ -41,13 +40,17 @@
 		"esbuild": "^0.28.1",
 		"tailwindcss": "^4.3.3",
 		"typescript": "^7.0.2",
-		"vite": "^8.0.14",
+		"vite": "npm:@voidzero-dev/vite-plus-core@0.2.7",
+		"vite-plus": "0.2.7",
 		"wrangler": "^4.97.0"
+	},
+	"overrides": {
+		"vite": "npm:@voidzero-dev/vite-plus-core@0.2.7"
 	},
 	"devEngines": {
 		"packageManager": {
-			"name": "npm",
-			"version": "12.0.2",
+			"name": "pnpm",
+			"version": "11.20.0",
 			"onFail": "download"
 		}
 	}

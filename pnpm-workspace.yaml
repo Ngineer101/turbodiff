@@ -6,5 +6,9 @@ allowBuilds:
   node-liblzma: false
   protobufjs: false
   workerd: true
+minimumReleaseAgeExclude:
+  - '@tanstack/react-router@1.170.22'
+  - '@tanstack/router-core@1.171.19'
+  - lucide-react@1.30.0
 patchedDependencies:
   '@flue/runtime': patches/@flue__runtime.patch
