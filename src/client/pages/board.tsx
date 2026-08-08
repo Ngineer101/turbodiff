@@ -44,20 +44,21 @@ function QuickAdd({ board }: { board: ApiBoard }) {
 		if (title.trim()) add.mutate();
 	};
 	return (
-		<form onSubmit={submit} className="flex flex-col gap-1.5">
+		<form onSubmit={submit} className="flex flex-col gap-2 sm:flex-row">
 			<Input
 				value={title}
 				onChange={(e) => setTitle(e.target.value)}
-				placeholder="add a todo… (enter to save)"
+				placeholder="add a todo…"
 				aria-label="New todo title"
 				maxLength={200}
+				className="flex-1"
 			/>
 			{board.installations.length > 1 ? (
 				<Select
 					value={installationId}
 					onChange={(e) => setInstallationId(Number(e.target.value))}
 					aria-label="Installation"
-					className="py-1 text-xs"
+					className="sm:w-44"
 				>
 					{board.installations.map((i) => (
 						<option key={i.id} value={i.id}>
@@ -246,11 +247,15 @@ function Column({
 }) {
 	return (
 		<section className="min-w-0">
-			<h2 className="section-mark mb-2 text-[0.95rem] font-medium text-ink-dim">
-				{title} <Muted className="text-xs">{count}</Muted>
+			<h2 className="mb-2.5 text-xs font-medium tracking-[0.14em] text-mute uppercase">
+				{title} <span className="ml-1 text-mute/60">{count}</span>
 			</h2>
-			<div className="flex flex-col gap-2 rounded-lg border border-line bg-surface/40 p-2">
-				{count === 0 ? <p className="px-2 py-4 text-center text-xs text-mute">{empty}</p> : children}
+			<div className="flex flex-col gap-2.5">
+				{count === 0 ? (
+					<p className="rounded-xl bg-surface-2/60 px-3 py-6 text-center text-xs text-mute">{empty}</p>
+				) : (
+					children
+				)}
 			</div>
 		</section>
 	);
@@ -313,12 +318,12 @@ export function BoardPage() {
 				board
 			</PageTitle>
 
-			<div className="mt-4 max-w-md">
+			<div className="mt-5 lg:max-w-xl">
 				<QuickAdd board={data} />
 			</div>
 
 			{/* Mobile: filter chips instead of three side-by-side columns. */}
-			<div className="mt-4 flex gap-1.5 lg:hidden" role="tablist" aria-label="Filter by status">
+			<div className="mt-5 flex gap-2 overflow-x-auto pb-1 lg:hidden" role="tablist" aria-label="Filter by status">
 				{(
 					[
 						['all', 'all'],
@@ -333,10 +338,10 @@ export function BoardPage() {
 						aria-selected={filter === key}
 						onClick={() => setFilter(key)}
 						className={cn(
-							'cursor-pointer rounded-full border px-3 py-1 text-xs whitespace-nowrap',
+							'cursor-pointer rounded-full px-3.5 py-1.5 text-xs whitespace-nowrap transition-colors',
 							filter === key
-								? 'border-accent/40 bg-raised text-accent-bright'
-								: 'border-line-2 text-mute hover:bg-raised/60',
+								? 'bg-accent/15 font-medium text-accent-bright'
+								: 'bg-raised/60 text-mute hover:text-ink',
 						)}
 					>
 						{label}
@@ -344,8 +349,8 @@ export function BoardPage() {
 				))}
 			</div>
 
-			<div className="mt-4 hidden gap-4 lg:grid lg:grid-cols-3">{columns.map((col) => col.el)}</div>
-			<div className="mt-3 flex flex-col gap-5 lg:hidden">
+			<div className="mt-6 hidden gap-5 lg:grid lg:grid-cols-3">{columns.map((col) => col.el)}</div>
+			<div className="mt-4 flex flex-col gap-7 lg:hidden">
 				{columns.filter((col) => show(col.key)).map((col) => col.el)}
 			</div>
 		</>

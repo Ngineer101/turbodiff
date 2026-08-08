@@ -1,7 +1,6 @@
 import type { ReactNode } from 'react';
 import { cn } from '../lib/utils.ts';
 
-// '// heading' section marker — the v1 identity, now a component.
 export function SectionHeading({
 	children,
 	aside,
@@ -12,8 +11,8 @@ export function SectionHeading({
 	className?: string;
 }) {
 	return (
-		<div className={cn('mt-9 mb-2 flex flex-wrap items-baseline justify-between gap-2', className)}>
-			<h2 className="section-mark text-[0.95rem] font-medium text-ink-dim">{children}</h2>
+		<div className={cn('mt-9 mb-3 flex flex-wrap items-baseline justify-between gap-2', className)}>
+			<h2 className="text-xs font-medium tracking-[0.14em] text-mute uppercase">{children}</h2>
 			{aside}
 		</div>
 	);
@@ -21,8 +20,8 @@ export function SectionHeading({
 
 export function PageTitle({ children, aside }: { children: ReactNode; aside?: ReactNode }) {
 	return (
-		<div className="flex flex-wrap items-center justify-between gap-3">
-			<h1 className="text-xl font-medium tracking-wide">{children}</h1>
+		<div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+			<h1 className="text-lg font-medium tracking-wide sm:text-xl">{children}</h1>
 			{aside}
 		</div>
 	);
@@ -30,7 +29,7 @@ export function PageTitle({ children, aside }: { children: ReactNode; aside?: Re
 
 export function EmptyState({ children }: { children: ReactNode }) {
 	return (
-		<p className="rounded-lg border border-dashed border-line-2 px-4 py-6 text-center text-[0.85rem] text-mute">
+		<p className="rounded-xl bg-surface-2/60 px-4 py-8 text-center text-[0.85rem] text-mute">
 			{children}
 		</p>
 	);

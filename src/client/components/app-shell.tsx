@@ -83,18 +83,18 @@ export function AppShell({ login, children }: { login: string; children: ReactNo
 				<UserBlock login={login} />
 			</aside>
 
-			<div className="sticky top-0 z-40 border-b border-line bg-bg/90 backdrop-blur md:hidden">
-				<div className="flex items-center justify-between px-4 pt-3">
+			<div className="sticky top-0 z-40 border-b border-line/60 bg-bg/95 backdrop-blur md:hidden">
+				<div className="flex items-center justify-between px-4 pt-2.5">
 					<Logo />
 					<UserBlock login={login} />
 				</div>
-				<div className="px-2 py-1.5">
+				<div className="px-2 pt-0.5 pb-1.5">
 					<NavLinks />
 				</div>
 			</div>
 
 			<main className="min-w-0 flex-1">
-				<div className={cn('mx-auto px-4 py-8 md:px-8', wide ? 'max-w-[96rem]' : 'max-w-4xl')}>
+				<div className={cn('mx-auto px-4 py-5 sm:py-8 md:px-8', wide ? 'max-w-[96rem]' : 'max-w-4xl')}>
 					{children}
 				</div>
 			</main>

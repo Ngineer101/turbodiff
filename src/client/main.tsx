@@ -56,7 +56,7 @@ function Pending() {
 function RouteError({ error, reset }: { error: Error; reset: () => void }) {
 	return (
 		<div className="mx-auto mt-16 max-w-md text-center">
-			<p className="section-mark text-ink-dim">something broke</p>
+			<p className="text-ink-dim">something broke</p>
 			<p className="mt-2 text-[0.85rem] text-mute">{error.message}</p>
 			<div className="mt-4">
 				<Button variant="secondary" onClick={reset}>
@@ -70,7 +70,7 @@ function RouteError({ error, reset }: { error: Error; reset: () => void }) {
 function NotFound() {
 	return (
 		<div className="mx-auto mt-16 max-w-md text-center">
-			<p className="section-mark text-ink-dim">404 — no such page</p>
+			<p className="text-ink-dim">404 — no such page</p>
 			<p className="mt-2 text-[0.85rem] text-mute">
 				<a href="/" className="text-accent-bright hover:underline">
 					back to the dashboard &rarr;
