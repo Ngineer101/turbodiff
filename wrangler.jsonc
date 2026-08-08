@@ -62,6 +62,17 @@
 	"durable_objects": {
 		"bindings": [{ "class_name": "Sandbox", "name": "Sandbox" }]
 	},
+	// Generation runs as a durable Workflow (src/lib/generation-workflow.ts):
+	// each stage is a memoized step with bounded retries, so a killed isolate
+	// resumes instead of stranding, and the paid agent step can never be
+	// silently re-run. The queue message only creates the instance.
+	"workflows": [
+		{
+			"binding": "GEN_WORKFLOW",
+			"name": "turbodiff-generation",
+			"class_name": "GenerationWorkflow"
+		}
+	],
 	// Decouples factory runs (minutes) from the requests that trigger them
 	// (seconds). One queue for both fix and generation messages, discriminated
 	// by a `kind` field — the local dev plugin hangs at boot with two consumers
