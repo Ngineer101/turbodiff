@@ -14,6 +14,7 @@ import {
 	reviewCountLastDay,
 	reviewedRecently,
 	setInstallationSuspended,
+	updateFeature,
 	upsertInstallation,
 	type AgentRow,
 	type RepositoryRow,
@@ -52,7 +53,7 @@ interface InstallationEvent {
 interface PullRequestEvent {
 	action: string;
 	number: number;
-	pull_request: { draft: boolean; html_url: string };
+	pull_request: { draft: boolean; html_url: string; merged?: boolean };
 	repository: { id: number; full_name: string };
 }
 
@@ -170,6 +171,16 @@ async function handlePullRequest(
 	p: PullRequestEvent,
 	dispatch: ReviewDispatcher,
 ): Promise<HandlerResult> {
+	// Closed factory PRs feed the board's Done column: merged -> 'merged',
+	// closed-unmerged -> 'pr_closed'. GitHub fires this for every merge path
+	// (cockpit button, auto-merge, the GitHub UI itself).
+	if (p.action === 'closed') {
+		const repo = await getRepoById(p.repository.id);
+		const feature = repo ? await getFeatureByRepoPr(repo.id, p.number) : null;
+		if (!feature) return { body: { ok: true, ignored: 'closed non-factory PR' } };
+		await updateFeature(feature.id, { status: p.pull_request.merged ? 'merged' : 'pr_closed' });
+		return { body: { ok: true, feature: feature.id, status: p.pull_request.merged ? 'merged' : 'pr_closed' } };
+	}
 	if (p.action !== 'opened' && p.action !== 'ready_for_review' && p.action !== 'synchronize') {
 		return { body: { ok: true, ignored: p.action } };
 	}

@@ -112,7 +112,16 @@ export function createUiRoutes() {
 
 	// Every SPA route the client router owns. Unauthenticated hits start OAuth,
 	// matching the old server-rendered pages.
-	for (const path of ['/reviews', '/factory', '/factory/*', '/agents', '/agents/*', '/settings']) {
+	for (const path of [
+		'/tasks',
+		'/tasks/*',
+		'/usage',
+		'/integrations',
+		'/factory/*',
+		'/agents',
+		'/agents/*',
+		'/settings',
+	]) {
 		app.get(path, async (c) => {
 			if (!(await hasSession(c))) return c.redirect('/auth/login');
 			return c.html(SHELL);
