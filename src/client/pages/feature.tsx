@@ -334,6 +334,7 @@ export default function FeaturePage() {
 		return (
 			<>
 				<PageTitle
+					titleClassName="text-base sm:text-xl"
 					aside={
 						stopped ? <Pill tone="red">{data.feature.status}</Pill> : <Pill tone="running">generating</Pill>
 					}
@@ -379,37 +380,39 @@ export default function FeaturePage() {
 
 	return (
 		<>
-			<PageTitle
-				aside={
-					<Pill tone={prState === 'merged' ? 'on' : prState === 'open' ? 'running' : 'red'}>{prState}</Pill>
-				}
-			>
-				{data.feature.title}
-			</PageTitle>
-			<p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.85rem] text-mute">
-				{data.repo} · PR{' '}
-				<a
-					href={data.pr.html_url}
-					target="_blank"
-					rel="noopener"
-					className="text-accent-bright hover:underline"
-				>
-					#{data.feature.pr_number}
-				</a>{' '}
-				· {data.pr.changed_files} files,{' '}
-				<span className="text-accent-bright">+{data.pr.additions}</span>{' '}
-				<span className="text-danger">−{data.pr.deletions}</span>
+			<h1 className="text-base leading-snug font-medium break-words sm:text-xl">{data.feature.title}</h1>
+			<div className="mt-3 flex flex-wrap items-center gap-2">
+				<Pill tone={prState === 'merged' ? 'on' : prState === 'open' ? 'running' : 'red'}>{prState}</Pill>
 				{v ? (
 					<Pill tone={v.status === 'passed' ? 'on' : v.status === 'running' ? 'running' : 'red'}>
 						verify: {v.status}
 						{v.status === 'passed' ? ` (${v.total}/${v.total})` : v.status === 'failed' ? ` (${v.failed} unmet)` : ''}
 					</Pill>
 				) : null}
+			</div>
+			<p className="mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-mute sm:text-[0.85rem]">
+				<span className="truncate">{data.repo}</span>
+				<span>·</span>
+				<a
+					href={data.pr.html_url}
+					target="_blank"
+					rel="noopener"
+					className="text-accent-bright hover:underline"
+				>
+					PR #{data.feature.pr_number}
+				</a>
+				<span>·</span>
+				<span>
+					{data.pr.changed_files} files{' '}
+					<span className="text-accent-bright">+{data.pr.additions}</span>{' '}
+					<span className="text-danger">−{data.pr.deletions}</span>
+				</span>
 			</p>
 
 			{prState === 'open' ? (
-				<div className="mt-4">
+				<div className="mt-5">
 					<ConfirmButton
+						className="w-full sm:w-auto"
 						title="Merge pull request?"
 						description={`This merges PR #${data.feature.pr_number} into ${data.repo} on GitHub.`}
 						confirmLabel="Merge"
@@ -438,9 +441,8 @@ export default function FeaturePage() {
 						{data.demo ? (
 							<>
 								<SectionHeading>demo</SectionHeading>
-								{data.demo.caption ? <Muted className="mb-2 block">{data.demo.caption}</Muted> : null}
 								<video
-									className="w-full rounded-lg border border-line bg-black"
+									className="w-full rounded-xl bg-black"
 									controls
 									autoPlay
 									muted
@@ -448,6 +450,9 @@ export default function FeaturePage() {
 									playsInline
 									src={data.demo.url}
 								/>
+								{data.demo.caption ? (
+									<p className="mt-2 text-xs leading-relaxed text-mute">{data.demo.caption}</p>
+								) : null}
 							</>
 						) : null}
 
