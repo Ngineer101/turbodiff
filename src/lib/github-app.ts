@@ -136,7 +136,14 @@ export function oauthAuthorizeUrl(redirectUri: string, state: string): string {
 	return `https://github.com/login/oauth/authorize?${params}`;
 }
 
-export async function exchangeOAuthCode(code: string, redirectUri: string): Promise<string> {
+export interface OAuthTokens {
+	token: string;
+	// Present when the App has expiring user tokens enabled (it does — the 8h
+	// session TTL mirrors it). Valid ~6 months, rotated on every use.
+	refreshToken: string | null;
+}
+
+export async function exchangeOAuthCode(code: string, redirectUri: string): Promise<OAuthTokens> {
 	const res = await fetch('https://github.com/login/oauth/access_token', {
 		method: 'POST',
 		headers: { accept: 'application/json', 'content-type': 'application/json' },
@@ -147,11 +154,34 @@ export async function exchangeOAuthCode(code: string, redirectUri: string): Prom
 			redirect_uri: redirectUri,
 		}),
 	});
-	const data = (await res.json()) as { access_token?: string; error_description?: string };
+	const data = (await res.json()) as {
+		access_token?: string;
+		refresh_token?: string;
+		error_description?: string;
+	};
 	if (!data.access_token) {
 		throw new Error(`OAuth exchange failed: ${data.error_description ?? 'no token returned'}`);
 	}
-	return data.access_token;
+	return { token: data.access_token, refreshToken: data.refresh_token ?? null };
+}
+
+// Exchange a stored refresh token for a fresh user access token. Null on any
+// failure (revoked, expired, or rotated elsewhere) — callers fall back to
+// the installation token and drop the stored credential.
+export async function refreshUserToken(refreshToken: string): Promise<OAuthTokens | null> {
+	const res = await fetch('https://github.com/login/oauth/access_token', {
+		method: 'POST',
+		headers: { accept: 'application/json', 'content-type': 'application/json' },
+		body: JSON.stringify({
+			client_id: env.GITHUB_OAUTH_CLIENT_ID,
+			client_secret: env.GITHUB_OAUTH_CLIENT_SECRET,
+			grant_type: 'refresh_token',
+			refresh_token: refreshToken,
+		}),
+	});
+	const data = (await res.json()) as { access_token?: string; refresh_token?: string };
+	if (!data.access_token) return null;
+	return { token: data.access_token, refreshToken: data.refresh_token ?? null };
 }
 
 async function userApi<T>(token: string, path: string): Promise<T> {

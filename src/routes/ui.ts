@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { exchangeOAuthCode, fetchUser, oauthAuthorizeUrl } from '../lib/github-app.ts';
+import { storeUserCredential } from '../lib/user-tokens.ts';
 import {
 	openSession,
 	randomToken,
@@ -76,12 +77,17 @@ export function createUiRoutes() {
 			return c.text('OAuth state mismatch — start again at /', 400);
 		}
 		const redirectUri = new URL('/auth/callback', c.req.url).toString();
-		const ghToken = await exchangeOAuthCode(code, redirectUri);
-		const user = await fetchUser(ghToken);
+		const tokens = await exchangeOAuthCode(code, redirectUri);
+		const user = await fetchUser(tokens.token);
+		// Durable credential for async attribution (user-opened PRs). Best
+		// effort — sign-in never fails over it.
+		await storeUserCredential(user.id, user.login, tokens).catch((err) =>
+			console.warn('turbodiff: storing user refresh token failed:', err),
+		);
 		const session: Session = {
 			userId: user.id,
 			login: user.login,
-			ghToken,
+			ghToken: tokens.token,
 			exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS,
 		};
 		setCookie(c, SESSION_COOKIE, await sealSession(session), {
