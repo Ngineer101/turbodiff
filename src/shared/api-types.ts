@@ -23,7 +23,8 @@ export interface ApiReview {
 	created_at: string; // D1 UTC 'YYYY-MM-DD HH:MM:SS'
 }
 
-export interface ApiDashboard {
+// Usage page payload (the pre-board dashboard metrics).
+export interface ApiUsage {
 	month: string; // 'YYYY-MM'
 	stats: {
 		month_reviews: number;
@@ -86,10 +87,11 @@ export interface ApiPlan {
 	// pr_opened / checks_failed / no_changes / failed (+ its error detail).
 	feature_status: string | null;
 	feature_error: string | null;
+	archived: boolean;
 	verification: ApiVerificationSummary | null;
 }
 
-export interface ApiFactory {
+export interface ApiFactoryLegacy_unused {
 	repos: { id: number; owner: string; name: string }[]; // enabled repos, plan targets
 	plans: ApiPlan[];
 }
@@ -216,4 +218,41 @@ export interface ApiMe {
 
 export interface ApiError {
 	error: string;
+}
+
+export interface ApiTodo {
+	id: number;
+	installation_id: number;
+	title: string;
+	notes: string | null;
+	created_at: string;
+}
+
+// The kanban home: unstarted todos + started tasks (plans). Columns are
+// derived client-side — done = feature_status 'merged', everything else
+// started is in progress.
+export interface ApiBoard {
+	stats: { month_cost_usd: number; running: number };
+	todos: ApiTodo[];
+	tasks: ApiPlan[]; // non-archived
+	installations: { id: number; account_login: string }[];
+	repos: { id: number; owner: string; name: string; installation_id: number }[]; // factory-enabled
+}
+
+export interface ApiIntegration {
+	id: number;
+	installation_id: number;
+	name: string;
+	kind: string; // 'mcp' | 'api'
+	url: string;
+	tools: string[] | null;
+	has_auth: boolean;
+	agent_ids: number[]; // agents this MCP connection is attached to
+}
+
+export interface ApiIntegrations {
+	encryption_configured: boolean;
+	installations: { id: number; account_login: string }[];
+	agents: ApiAgentSummary[];
+	connections: ApiIntegration[];
 }

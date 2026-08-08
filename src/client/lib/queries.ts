@@ -3,12 +3,13 @@ import { api } from './api.ts';
 import type {
 	ApiAgentDetail,
 	ApiAgentsList,
-	ApiDashboard,
-	ApiFactory,
+	ApiBoard,
 	ApiFeatureDetail,
+	ApiIntegrations,
 	ApiMe,
-	ApiReviewsPage,
+	ApiPlan,
 	ApiSettings,
+	ApiUsage,
 } from '../../shared/api-types.ts';
 
 export const queryClient = new QueryClient({
@@ -21,30 +22,8 @@ export const queryClient = new QueryClient({
 	},
 });
 
-// Poll cadence while an agent is working — replaces v1's full-page
-// `location.reload()` every 10s.
+// Poll cadence while an agent is working — instead of full-page reloads.
 export const LIVE_POLL_MS = 5_000;
-
-export const meQuery = queryOptions({
-	queryKey: ['me'],
-	queryFn: () => api.get<ApiMe>('/api/me'),
-	staleTime: Infinity,
-});
-
-export const dashboardQuery = queryOptions({
-	queryKey: ['dashboard'],
-	queryFn: () => api.get<ApiDashboard>('/api/dashboard'),
-	refetchInterval: (query) =>
-		query.state.data?.recent_reviews.some((r) => r.state === 'running') ? LIVE_POLL_MS : false,
-});
-
-export const reviewsQuery = (page: number) =>
-	queryOptions({
-		queryKey: ['reviews', page],
-		queryFn: () => api.get<ApiReviewsPage>(`/api/reviews?page=${page}`),
-		refetchInterval: (query) =>
-			query.state.data?.reviews.some((r) => r.state === 'running') ? LIVE_POLL_MS : false,
-	});
 
 const RUNNING_PLAN_STATUSES = new Set(['analyzing', 'refining']);
 
@@ -52,18 +31,36 @@ const RUNNING_PLAN_STATUSES = new Set(['analyzing', 'refining']);
 // user retries.
 export const GENERATION_STOPPED = new Set(['failed', 'checks_failed', 'no_changes']);
 
-function planIsLive(p: ApiFactory['plans'][number]): boolean {
+export function taskIsLive(p: ApiPlan): boolean {
 	if (RUNNING_PLAN_STATUSES.has(p.status)) return true;
 	if (p.verification?.status === 'running') return true;
 	// Approved and no PR yet: generation is in flight unless it stopped.
 	return p.status === 'approved' && !p.pr_number && !GENERATION_STOPPED.has(p.feature_status ?? '');
 }
 
-export const factoryQuery = queryOptions({
-	queryKey: ['factory'],
-	queryFn: () => api.get<ApiFactory>('/api/factory'),
+export const meQuery = queryOptions({
+	queryKey: ['me'],
+	queryFn: () => api.get<ApiMe>('/api/me'),
+	staleTime: Infinity,
+});
+
+export const boardQuery = queryOptions({
+	queryKey: ['board'],
+	queryFn: () => api.get<ApiBoard>('/api/board'),
 	refetchInterval: (query) =>
-		query.state.data?.plans.some(planIsLive) ? LIVE_POLL_MS : false,
+		query.state.data?.tasks.some(taskIsLive) ? LIVE_POLL_MS : false,
+});
+
+export const taskQuery = (id: number) =>
+	queryOptions({
+		queryKey: ['task', id],
+		queryFn: () => api.get<ApiPlan>(`/api/tasks/${id}`),
+		refetchInterval: (query) => (query.state.data && taskIsLive(query.state.data) ? LIVE_POLL_MS : false),
+	});
+
+export const usageQuery = queryOptions({
+	queryKey: ['usage'],
+	queryFn: () => api.get<ApiUsage>('/api/usage'),
 });
 
 export const featureQuery = (id: number) =>
@@ -94,4 +91,9 @@ export const agentQuery = (id: number) =>
 export const settingsQuery = queryOptions({
 	queryKey: ['settings'],
 	queryFn: () => api.get<ApiSettings>('/api/settings'),
+});
+
+export const integrationsQuery = queryOptions({
+	queryKey: ['integrations'],
+	queryFn: () => api.get<ApiIntegrations>('/api/integrations'),
 });

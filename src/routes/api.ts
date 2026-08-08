@@ -5,34 +5,44 @@ import {
 	connectionSnapshot,
 	countReviews,
 	createAgent,
-	createAgentConnection,
 	createCockpitComment,
+	createConnection,
 	createPlan,
+	createTodo,
 	dashboardStats,
 	deleteAgent,
-	deleteAgentConnection,
+	deleteConnection,
+	deleteTodo,
 	ensureBuiltinAgents,
 	failStrandedGeneration,
 	getAgentById,
 	getAgentBySlug,
-	getAgentConnection,
+	getConnection,
 	getFeature,
 	getPlan,
+	getPlanWithRepoById,
+	getTodo,
 	getPlanByFeatureId,
 	getRepoByFullName,
 	getRepoById,
 	latestVerificationForFeature,
+	linkTodoToPlan,
 	listAgentConnections,
 	listAgents,
 	listCockpitComments,
+	listConnectionLinks,
+	listConnections,
 	listInstallationsWithRepos,
 	listPlansForInstallations,
 	listRecentReviews,
 	listRepoAgentOverrides,
+	listTodos,
 	markCockpitCommentDispatched,
 	monthlyUsage,
 	repoUsageForMonth,
 	resolveAgentEnabled,
+	setAgentConnectionLink,
+	setPlanArchived,
 	setRepoAgentEnabled,
 	setRepoAutoFix,
 	setRepoAutoMerge,
@@ -44,8 +54,8 @@ import {
 	updateAgent,
 	updateFeature,
 	updatePlan,
-	type AgentConnectionRow,
 	type AgentRow,
+	type ConnectionRow,
 	type PlanRow,
 	type PlanWithRepo,
 	type RepositoryRow,
@@ -61,15 +71,16 @@ import { DEFAULT_MODEL, RESERVED_AGENT_SLUGS } from '../lib/personas.ts';
 import type {
 	ApiAgentDetail,
 	ApiAgentsList,
+	ApiBoard,
 	ApiConnectionTest,
-	ApiDashboard,
-	ApiFactory,
 	ApiFeatureDetail,
+	ApiIntegrations,
 	ApiMe,
 	ApiPlan,
 	ApiReview,
 	ApiReviewsPage,
 	ApiSettings,
+	ApiUsage,
 	ApiVerificationSummary,
 } from '../shared/api-types.ts';
 
@@ -145,6 +156,7 @@ function serializePlan(p: PlanWithRepo): ApiPlan {
 		pr_number: p.pr_number,
 		feature_status: p.feature_status,
 		feature_error: p.feature_error,
+		archived: p.archived === 1,
 		verification: verificationSummary(p.verification_status, p.verification_results),
 	};
 }
@@ -227,12 +239,6 @@ async function authorizedRepo(c: Context<ApiEnv>): Promise<RepositoryRow | null>
 	return repo;
 }
 
-async function connectionOf(c: Context<ApiEnv>, agent: AgentRow): Promise<AgentConnectionRow | null> {
-	const id = Number(c.req.param('cid'));
-	const conn = Number.isInteger(id) ? await getAgentConnection(id) : null;
-	return conn && conn.agent_id === agent.id ? conn : null;
-}
-
 export function createApiRoutes() {
 	const app = new Hono<ApiEnv>();
 
@@ -250,8 +256,9 @@ export function createApiRoutes() {
 		});
 	});
 
-	// Dashboard: headline metrics, monthly cost, per-repo cost, recent reviews.
-	app.get('/dashboard', async (c) => {
+	// Usage page: headline metrics, monthly cost, per-repo/agent cost, recent
+	// reviews (the pre-board dashboard).
+	app.get('/usage', async (c) => {
 		const { installationIds } = c.get('user');
 		const month = currentMonth();
 		const [stats, months, repoUsage, agentUsage, groups, recent] = await Promise.all([
@@ -270,7 +277,7 @@ export function createApiRoutes() {
 			.sort((a, b) => b.repo.created_at.localeCompare(a.repo.created_at))
 			.slice(0, 5);
 
-		return c.json<ApiDashboard>({
+		return c.json<ApiUsage>({
 			month,
 			stats,
 			months: months.map((m) => ({
@@ -309,34 +316,89 @@ export function createApiRoutes() {
 		return c.json<ApiReviewsPage>({ total, page, pages, reviews: reviews.map(serializeReview) });
 	});
 
-	// --- Factory: plans (requirements → questions → plan → approve → PR) ---
+	// --- Kanban board: todos (backlog) + started tasks (plans) ---
 
-	app.get('/factory', async (c) => {
+	app.get('/board', async (c) => {
 		const { installationIds } = c.get('user');
 		// Flip wall-clock-killed runs to failed before reading, so the cards
 		// never show an eternal "generating" for a dead run.
 		await failStrandedGeneration();
-		const [groups, plans] = await Promise.all([
+		const [groups, plans, todos, stats] = await Promise.all([
 			listInstallationsWithRepos(installationIds),
 			listPlansForInstallations(installationIds),
+			listTodos(installationIds),
+			dashboardStats(installationIds),
 		]);
-		return c.json<ApiFactory>({
+		return c.json<ApiBoard>({
+			stats: { month_cost_usd: stats.month_cost_usd, running: stats.running },
+			todos: todos.map((t) => ({
+				id: t.id,
+				installation_id: t.installation_id,
+				title: t.title,
+				notes: t.notes,
+				created_at: t.created_at,
+			})),
+			tasks: plans.filter((p) => p.archived !== 1).map(serializePlan),
+			installations: groups.map(({ installation }) => ({
+				id: installation.id,
+				account_login: installation.account_login,
+			})),
 			repos: groups
 				.flatMap((g) => g.repos)
 				.filter((r) => r.enabled === 1)
-				.map((r) => ({ id: r.id, owner: r.owner, name: r.name })),
-			plans: plans.map(serializePlan),
+				.map((r) => ({ id: r.id, owner: r.owner, name: r.name, installation_id: r.installation_id })),
 		});
 	});
 
-	app.post('/factory/plans', async (c) => {
-		const body = await c.req.json<{ repo?: string; title?: string; requirements?: string }>().catch(() => null);
-		const repo = body?.repo ?? '';
+	app.post('/todos', async (c) => {
+		const { installationIds, session } = c.get('user');
+		const body = await c.req
+			.json<{ installation_id?: number; title?: string; notes?: string }>()
+			.catch(() => null);
 		const title = body?.title?.trim() ?? '';
+		if (!title) return c.json({ error: 'title is required' }, 400);
+		const installationId = body?.installation_id ?? installationIds[0];
+		if (!installationIds.includes(installationId)) {
+			return c.json({ error: 'unknown installation' }, 404);
+		}
+		const id = await createTodo(installationId, title.slice(0, 200), body?.notes?.trim() || null, {
+			login: session.login,
+			id: session.userId,
+		});
+		return c.json({ ok: true, todo_id: id });
+	});
+
+	// Unstarted todos are deletable; a started todo's lifecycle lives on its
+	// plan (archive that instead).
+	app.delete('/todos/:id', async (c) => {
+		const id = Number(c.req.param('id'));
+		const todo = Number.isInteger(id) ? await getTodo(id) : null;
+		if (!todo || !c.get('user').installationIds.includes(todo.installation_id)) {
+			return c.json({ error: 'unknown todo' }, 404);
+		}
+		if (todo.plan_id !== null) return c.json({ error: 'started tasks cannot be deleted — archive instead' }, 409);
+		await deleteTodo(todo.id);
+		return c.json({ ok: true });
+	});
+
+	// Start a todo: fills in repo + requirements and fires the normal planning
+	// flow; the todo links to the plan and leaves the To Do column.
+	app.post('/todos/:id/start', async (c) => {
+		const id = Number(c.req.param('id'));
+		const todo = Number.isInteger(id) ? await getTodo(id) : null;
+		if (!todo || !c.get('user').installationIds.includes(todo.installation_id)) {
+			return c.json({ error: 'unknown todo' }, 404);
+		}
+		if (todo.plan_id !== null) return c.json({ error: 'already started' }, 409);
+		const body = await c.req
+			.json<{ repo?: string; title?: string; requirements?: string }>()
+			.catch(() => null);
+		const repoFull = body?.repo ?? '';
+		const title = body?.title?.trim() || todo.title;
 		const requirements = body?.requirements?.trim() ?? '';
-		const match = repo.match(/^([\w.-]+)\/([\w.-]+)$/);
-		if (!match || !title || !requirements) {
-			return c.json({ error: 'repository, title and requirements are required' }, 400);
+		const match = repoFull.match(/^([\w.-]+)\/([\w.-]+)$/);
+		if (!match || !requirements) {
+			return c.json({ error: 'repository and requirements are required' }, 400);
 		}
 		const row = await getRepoByFullName(match[1], match[2]);
 		if (!row || !c.get('user').installationIds.includes(row.installation_id)) {
@@ -347,8 +409,32 @@ export function createApiRoutes() {
 			login: session.login,
 			id: session.userId,
 		});
+		await linkTodoToPlan(todo.id, planId);
 		await env.FACTORY_QUEUE.send({ kind: 'plan_analyze', planId });
 		return c.json({ ok: true, plan_id: planId });
+	});
+
+	// Task detail for the board's compact cards.
+	app.get('/tasks/:id', async (c) => {
+		await failStrandedGeneration();
+		const id = Number(c.req.param('id'));
+		const plan = Number.isInteger(id) ? await getPlanWithRepoById(id) : null;
+		if (!plan || !c.get('user').installationIds.includes(plan.installation_id)) {
+			return c.json({ error: 'unknown task' }, 404);
+		}
+		return c.json<ApiPlan>(serializePlan(plan));
+	});
+
+	// Started tasks are never deleted — archived hides them from the board.
+	app.post('/tasks/:id/archive', async (c) => {
+		const plan = await authorizedPlan(c);
+		if (!plan) return c.json({ error: 'unknown task' }, 404);
+		const body = await c.req.json<{ archived?: boolean }>().catch(() => null);
+		if (typeof body?.archived !== 'boolean') {
+			return c.json({ error: 'body must be {"archived": true|false}' }, 400);
+		}
+		await setPlanArchived(plan.id, body.archived);
+		return c.json({ ok: true });
 	});
 
 	app.post('/factory/plans/:id/answers', async (c) => {
@@ -602,6 +688,8 @@ export function createApiRoutes() {
 				return c.json({ error: 'merge failed — check the PR on GitHub' }, 502);
 			}
 		}
+		// Reflect the merge immediately (the closed webhook confirms it too).
+		await updateFeature(feature.id, { status: 'merged' });
 		return c.json({ ok: true });
 	});
 
@@ -701,13 +789,62 @@ export function createApiRoutes() {
 		return c.json({ ok: true });
 	});
 
-	app.post('/agents/:id/connections', async (c) => {
-		const agent = await authorizedAgent(c);
-		if (!agent) return c.json({ error: 'unknown agent' }, 404);
+	// --- Integrations registry: installation-level MCP/API connections ---
+
+	async function authorizedConnection(c: Context<ApiEnv>): Promise<ConnectionRow | null> {
+		const id = Number(c.req.param('id'));
+		const conn = Number.isInteger(id) ? await getConnection(id) : null;
+		if (!conn || !c.get('user').installationIds.includes(conn.installation_id)) return null;
+		return conn;
+	}
+
+	app.get('/integrations', async (c) => {
+		const { installationIds } = c.get('user');
+		await Promise.all(installationIds.map((id) => ensureBuiltinAgents(id)));
+		const [groups, agents, connections, links] = await Promise.all([
+			listInstallationsWithRepos(installationIds),
+			listAgents(installationIds),
+			listConnections(installationIds),
+			listConnectionLinks(installationIds),
+		]);
+		return c.json<ApiIntegrations>({
+			encryption_configured: encryptionConfigured(),
+			installations: groups.map(({ installation }) => ({
+				id: installation.id,
+				account_login: installation.account_login,
+			})),
+			agents: agents.map((a) => ({
+				id: a.id,
+				slug: a.slug,
+				name: a.name,
+				description: a.description,
+				model: a.model,
+				is_builtin: a.is_builtin === 1,
+			})),
+			connections: connections.map((conn) => {
+				const snap = connectionSnapshot(conn);
+				return {
+					id: conn.id,
+					installation_id: conn.installation_id,
+					name: conn.name,
+					kind: conn.kind,
+					url: conn.url,
+					tools: snap.tools ?? null,
+					has_auth: conn.auth_ciphertext !== null,
+					agent_ids: links.filter((l) => l.connection_id === conn.id).map((l) => l.agent_id),
+				};
+			}),
+		});
+	});
+
+	app.post('/integrations', async (c) => {
+		const { installationIds } = c.get('user');
 		const body = await c.req.json<Record<string, unknown>>().catch(() => null);
 		if (!body) return c.json({ error: 'invalid JSON body' }, 400);
 		const get = (k: string) => (typeof body[k] === 'string' ? (body[k] as string).trim() : '');
+		const installationId = Number(body.installation_id ?? installationIds[0]);
 		const name = get('name').toLowerCase();
+		const kind = get('kind') === 'api' ? 'api' : 'mcp';
 		const url = get('url');
 		const token = get('token');
 		const tools = get('tools')
@@ -716,51 +853,86 @@ export function createApiRoutes() {
 			.filter(Boolean);
 
 		let error: string | null = null;
-		if (!CONNECTION_NAME_RE.test(name)) {
-			error = 'server name must be 1-31 chars: lowercase letters, digits, dashes, underscores';
+		if (!installationIds.includes(installationId)) {
+			error = 'unknown installation';
+		} else if (!CONNECTION_NAME_RE.test(name)) {
+			error = 'name must be 1-31 chars: lowercase letters, digits, dashes, underscores';
 		} else if (!validConnectionUrl(url)) {
 			error = 'endpoint must be an https:// URL';
 		} else if (token && !encryptionConfigured()) {
 			error =
 				'token storage needs the TOKEN_ENCRYPTION_KEY secret (openssl rand -hex 32, then wrangler secret put TOKEN_ENCRYPTION_KEY)';
-		} else if ((await listAgentConnections(agent.id)).some((conn) => conn.name === name)) {
-			error = `a connection named "${name}" already exists on this agent`;
+		} else if ((await listConnections([installationId])).some((conn) => conn.name === name)) {
+			error = `an integration named "${name}" already exists`;
 		}
 		if (error) return c.json({ error }, 400);
 
-		await createAgentConnection(agent.id, {
+		await createConnection({
+			installationId,
 			name,
+			kind,
 			url,
 			toolAllowlist: tools.length > 0 ? tools : null,
 			authCiphertext: token ? await sealToken(token) : null,
-			optional: true,
 		});
 		return c.json({ ok: true });
 	});
 
-	app.delete('/agents/:id/connections/:cid', async (c) => {
-		const agent = await authorizedAgent(c);
-		if (!agent) return c.json({ error: 'unknown agent' }, 404);
-		const conn = await connectionOf(c, agent);
-		if (!conn) return c.json({ error: 'unknown connection' }, 404);
-		await deleteAgentConnection(conn.id);
+	app.delete('/integrations/:id', async (c) => {
+		const conn = await authorizedConnection(c);
+		if (!conn) return c.json({ error: 'unknown integration' }, 404);
+		await deleteConnection(conn.id);
 		return c.json({ ok: true });
 	});
 
-	// Handshakes the server (initialize + tools/list) and reports what the
-	// agent would see — without mounting anything.
-	app.post('/agents/:id/connections/:cid/test', async (c) => {
-		const agent = await authorizedAgent(c);
-		if (!agent) return c.json({ error: 'unknown agent' }, 404);
-		const conn = await connectionOf(c, agent);
-		if (!conn) return c.json({ error: 'unknown connection' }, 404);
+	// MCP: handshake (initialize + tools/list) without mounting anything.
+	// API: a bearer-auth GET against the base URL, reporting the status.
+	app.post('/integrations/:id/test', async (c) => {
+		const conn = await authorizedConnection(c);
+		if (!conn) return c.json({ error: 'unknown integration' }, 404);
 		const token = conn.auth_ciphertext ? await openToken(conn.auth_ciphertext) : undefined;
+		if (conn.kind === 'api') {
+			try {
+				const res = await fetch(conn.url, {
+					headers: token ? { authorization: `Bearer ${token}` } : undefined,
+				});
+				return c.json<ApiConnectionTest>({
+					ok: res.ok,
+					detail: `HTTP ${res.status} ${res.statusText}`,
+					tools: [],
+				});
+			} catch (err) {
+				return c.json<ApiConnectionTest>({
+					ok: false,
+					detail: err instanceof Error ? err.message : 'request failed',
+					tools: [],
+				});
+			}
+		}
 		const result = await testMcpEndpoint(conn.url, token);
 		return c.json<ApiConnectionTest>({
 			ok: result.ok,
 			detail: result.detail,
 			tools: result.tools ?? [],
 		});
+	});
+
+	// Attach/detach an MCP integration to an agent.
+	app.put('/integrations/:id/agents/:agentId', async (c) => {
+		const conn = await authorizedConnection(c);
+		if (!conn) return c.json({ error: 'unknown integration' }, 404);
+		if (conn.kind !== 'mcp') return c.json({ error: 'only MCP integrations attach to agents' }, 400);
+		const agentId = Number(c.req.param('agentId'));
+		const agent = Number.isInteger(agentId) ? await getAgentById(agentId) : null;
+		if (!agent || agent.installation_id !== conn.installation_id) {
+			return c.json({ error: 'unknown agent' }, 404);
+		}
+		const body = await c.req.json<{ attached?: boolean }>().catch(() => null);
+		if (typeof body?.attached !== 'boolean') {
+			return c.json({ error: 'body must be {"attached": true|false}' }, 400);
+		}
+		await setAgentConnectionLink(agent.id, conn.id, body.attached);
+		return c.json({ ok: true });
 	});
 
 	// --- Settings: per-repo config, master switch plus per-agent toggles ---

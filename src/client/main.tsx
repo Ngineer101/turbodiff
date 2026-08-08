@@ -15,21 +15,23 @@ import { Button } from './components/ui/button.tsx';
 import {
 	agentQuery,
 	agentsQuery,
-	dashboardQuery,
-	factoryQuery,
+	boardQuery,
 	featureQuery,
+	integrationsQuery,
 	meQuery,
 	queryClient,
-	reviewsQuery,
 	settingsQuery,
+	taskQuery,
+	usageQuery,
 } from './lib/queries.ts';
 import { AgentEditPage } from './pages/agent-edit.tsx';
 import { AgentNewPage } from './pages/agent-new.tsx';
 import { AgentsPage } from './pages/agents.tsx';
-import { DashboardPage } from './pages/dashboard.tsx';
-import { FactoryPage } from './pages/factory.tsx';
-import { ReviewsPage } from './pages/reviews.tsx';
+import { BoardPage } from './pages/board.tsx';
+import { IntegrationsPage } from './pages/integrations.tsx';
 import { SettingsPage } from './pages/settings.tsx';
+import { TaskPage } from './pages/task.tsx';
+import { UsagePage } from './pages/usage.tsx';
 import './styles.css';
 
 function RootLayout() {
@@ -84,29 +86,32 @@ const rootRoute = createRootRoute({
 	notFoundComponent: NotFound,
 });
 
-const dashboardRoute = createRoute({
+const boardRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: '/',
-	loader: () => queryClient.ensureQueryData(dashboardQuery),
-	component: DashboardPage,
+	loader: () => queryClient.ensureQueryData(boardQuery),
+	component: BoardPage,
 });
 
-const reviewsRoute = createRoute({
+const taskRoute = createRoute({
 	getParentRoute: () => rootRoute,
-	path: '/reviews',
-	validateSearch: (search: Record<string, unknown>) => ({
-		page: Math.max(1, Number(search.page) || 1),
-	}),
-	loaderDeps: ({ search }) => ({ page: search.page }),
-	loader: ({ deps }) => queryClient.ensureQueryData(reviewsQuery(deps.page)),
-	component: ReviewsPage,
+	path: '/tasks/$taskId',
+	loader: ({ params }) => queryClient.ensureQueryData(taskQuery(Number(params.taskId))),
+	component: TaskPage,
 });
 
-const factoryRoute = createRoute({
+const usageRoute = createRoute({
 	getParentRoute: () => rootRoute,
-	path: '/factory',
-	loader: () => queryClient.ensureQueryData(factoryQuery),
-	component: FactoryPage,
+	path: '/usage',
+	loader: () => queryClient.ensureQueryData(usageQuery),
+	component: UsagePage,
+});
+
+const integrationsRoute = createRoute({
+	getParentRoute: () => rootRoute,
+	path: '/integrations',
+	loader: () => queryClient.ensureQueryData(integrationsQuery),
+	component: IntegrationsPage,
 });
 
 // The cockpit pulls in @pierre/diffs (+ syntax themes) — lazy so the rest of
@@ -150,9 +155,10 @@ const settingsRoute = createRoute({
 });
 
 const routeTree = rootRoute.addChildren([
-	dashboardRoute,
-	reviewsRoute,
-	factoryRoute,
+	boardRoute,
+	taskRoute,
+	usageRoute,
+	integrationsRoute,
 	featureRoute,
 	agentsRoute,
 	agentNewRoute,

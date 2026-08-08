@@ -1,13 +1,13 @@
 import { Link, useRouterState } from '@tanstack/react-router';
-import { Bot, Factory, GitPullRequest, LayoutDashboard, LogOut, Settings } from 'lucide-react';
+import { BarChart2, Bot, LayoutDashboard, LogOut, Plug, Settings } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { cn } from '../lib/utils.ts';
 
 const NAV = [
-	{ to: '/', label: 'dashboard', icon: LayoutDashboard, exact: true },
-	{ to: '/factory', label: 'factory', icon: Factory },
-	{ to: '/reviews', label: 'reviews', icon: GitPullRequest },
+	{ to: '/', label: 'board', icon: LayoutDashboard, exact: true },
 	{ to: '/agents', label: 'agents', icon: Bot },
+	{ to: '/integrations', label: 'integrations', icon: Plug },
+	{ to: '/usage', label: 'usage', icon: BarChart2 },
 	{ to: '/settings', label: 'settings', icon: Settings },
 ] as const;
 

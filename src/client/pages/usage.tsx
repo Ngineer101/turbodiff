@@ -1,21 +1,21 @@
 import { useSuspenseQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { fmtDuration, fmtTokens, fmtUsd, monthLabel } from '../lib/format.ts';
-import { dashboardQuery, meQuery } from '../lib/queries.ts';
+import { meQuery, usageQuery } from '../lib/queries.ts';
 import { ReviewsTable } from '../components/reviews-table.tsx';
 import { EmptyState, Muted, PageTitle, SectionHeading } from '../components/section.tsx';
 import { StatTile } from '../components/stat-tile.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 import { Table, Td, Th } from '../components/ui/table.tsx';
 
-export function DashboardPage() {
-	const { data } = useSuspenseQuery(dashboardQuery);
+export function UsagePage() {
+	const { data } = useSuspenseQuery(usageQuery);
 	const { data: me } = useSuspenseQuery(meQuery);
 	const maxMonthCost = Math.max(...data.months.map((m) => m.cost_usd), 0);
 
 	return (
 		<>
-			<PageTitle>dashboard</PageTitle>
+			<PageTitle>usage</PageTitle>
 
 			<div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
 				<StatTile
@@ -114,21 +114,7 @@ export function DashboardPage() {
 				</>
 			) : null}
 
-			<SectionHeading
-				aside={
-					data.recent_reviews.length > 0 ? (
-						<Link
-							to="/reviews"
-							search={{ page: 1 }}
-							className="text-[0.85rem] text-accent-bright hover:underline"
-						>
-							view all reviews &rarr;
-						</Link>
-					) : undefined
-				}
-			>
-				recent reviews
-			</SectionHeading>
+			<SectionHeading>recent reviews</SectionHeading>
 			{data.recent_reviews.length === 0 ? (
 				<EmptyState>
 					No reviews yet — factory-generated pull requests are reviewed automatically and show up

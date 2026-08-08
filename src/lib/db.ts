@@ -474,6 +474,7 @@ export interface PlanRow {
 	created_by_login: string | null; // signed-in submitter; null = operator/API
 	created_by_id: number | null;
 	tier: string | null; // trivial | standard; null = pre-tiering (standard)
+	archived: number; // started tasks are never deleted, only hidden
 }
 
 export async function createPlan(
@@ -534,6 +535,25 @@ export async function listPlansForInstallations(
 		.bind(limit, ...installationIds)
 		.all<PlanWithRepo>();
 	return res.results;
+}
+
+// One plan with the same repo/feature/verification context as the list query
+// (the board's task-detail view).
+export async function getPlanWithRepoById(id: number): Promise<PlanWithRepo | null> {
+	return env.DB.prepare(
+		`SELECT p.*, r.owner, r.name, r.installation_id, f.pr_number AS pr_number,
+		        f.status AS feature_status, f.error AS feature_error,
+		        v.status AS verification_status, v.results AS verification_results,
+		        v.demo AS verification_demo
+		 FROM plans p
+		 JOIN repositories r ON r.id = p.repository_id
+		 LEFT JOIN features f ON f.id = p.feature_id
+		 LEFT JOIN verifications v ON v.id =
+		   (SELECT MAX(id) FROM verifications WHERE feature_id = p.feature_id)
+		 WHERE p.id = ?1`,
+	)
+		.bind(id)
+		.first<PlanWithRepo>();
 }
 
 export async function updatePlan(
@@ -822,10 +842,14 @@ export async function setRepoAgentEnabled(
 
 // --- External MCP tool connections per agent (migration 0005) ---
 
-export interface AgentConnectionRow {
+// Installation-level integrations registry (kanban-era model): connections
+// are added once per installation on the integrations page; MCP-kind
+// connections are attached to agents via agent_connection_links.
+export interface ConnectionRow {
 	id: number;
-	agent_id: number;
+	installation_id: number;
 	name: string;
+	kind: string; // 'mcp' (agent-mountable) | 'api' (stored bearer integration)
 	url: string;
 	tool_allowlist: string | null; // JSON string array; null = all tools
 	auth_ciphertext: string | null;
@@ -845,7 +869,7 @@ export interface ConnectionSnapshot {
 	optional: boolean;
 }
 
-export function connectionSnapshot(row: AgentConnectionRow): ConnectionSnapshot {
+export function connectionSnapshot(row: ConnectionRow): ConnectionSnapshot {
 	let tools: string[] | undefined;
 	if (row.tool_allowlist) {
 		try {
@@ -865,55 +889,105 @@ export function connectionSnapshot(row: AgentConnectionRow): ConnectionSnapshot 
 	};
 }
 
-export async function listAgentConnections(agentId: number): Promise<AgentConnectionRow[]> {
+// MCP connections attached to one agent, via the registry links.
+export async function listAgentConnections(agentId: number): Promise<ConnectionRow[]> {
 	const res = await env.DB.prepare(
-		'SELECT * FROM agent_connections WHERE agent_id = ?1 ORDER BY name',
+		`SELECT c.* FROM connections c
+		 JOIN agent_connection_links l ON l.connection_id = c.id
+		 WHERE l.agent_id = ?1 AND c.kind = 'mcp'
+		 ORDER BY c.name`,
 	)
 		.bind(agentId)
-		.all<AgentConnectionRow>();
+		.all<ConnectionRow>();
 	return res.results;
 }
 
-export async function getAgentConnection(id: number): Promise<AgentConnectionRow | null> {
-	return env.DB.prepare('SELECT * FROM agent_connections WHERE id = ?1')
-		.bind(id)
-		.first<AgentConnectionRow>();
+export async function listConnections(installationIds: number[]): Promise<ConnectionRow[]> {
+	if (installationIds.length === 0) return [];
+	const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+	const res = await env.DB.prepare(
+		`SELECT * FROM connections WHERE installation_id IN (${placeholders}) ORDER BY name`,
+	)
+		.bind(...installationIds)
+		.all<ConnectionRow>();
+	return res.results;
 }
 
-export async function createAgentConnection(
-	agentId: number,
-	fields: {
-		name: string;
-		url: string;
-		toolAllowlist: string[] | null;
-		authCiphertext: string | null;
-		optional: boolean;
-	},
-): Promise<void> {
+export async function getConnection(id: number): Promise<ConnectionRow | null> {
+	return env.DB.prepare('SELECT * FROM connections WHERE id = ?1').bind(id).first<ConnectionRow>();
+}
+
+export async function createConnection(fields: {
+	installationId: number;
+	name: string;
+	kind: string;
+	url: string;
+	toolAllowlist: string[] | null;
+	authCiphertext: string | null;
+}): Promise<void> {
 	await env.DB.prepare(
-		`INSERT INTO agent_connections (agent_id, name, url, tool_allowlist, auth_ciphertext, optional)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+		`INSERT INTO connections (installation_id, name, kind, url, tool_allowlist, auth_ciphertext, optional)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)`,
 	)
 		.bind(
-			agentId,
+			fields.installationId,
 			fields.name,
+			fields.kind,
 			fields.url,
 			fields.toolAllowlist ? JSON.stringify(fields.toolAllowlist) : null,
 			fields.authCiphertext,
-			fields.optional ? 1 : 0,
 		)
 		.run();
 }
 
-export async function deleteAgentConnection(id: number): Promise<void> {
-	await env.DB.prepare('DELETE FROM agent_connections WHERE id = ?1').bind(id).run();
+export async function deleteConnection(id: number): Promise<void> {
+	await env.DB.prepare('DELETE FROM agent_connection_links WHERE connection_id = ?1').bind(id).run();
+	await env.DB.prepare('DELETE FROM connections WHERE id = ?1').bind(id).run();
+}
+
+export interface AgentConnectionLink {
+	agent_id: number;
+	connection_id: number;
+}
+
+export async function listConnectionLinks(installationIds: number[]): Promise<AgentConnectionLink[]> {
+	if (installationIds.length === 0) return [];
+	const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+	const res = await env.DB.prepare(
+		`SELECT l.agent_id, l.connection_id FROM agent_connection_links l
+		 JOIN connections c ON c.id = l.connection_id
+		 WHERE c.installation_id IN (${placeholders})`,
+	)
+		.bind(...installationIds)
+		.all<AgentConnectionLink>();
+	return res.results;
+}
+
+export async function setAgentConnectionLink(
+	agentId: number,
+	connectionId: number,
+	attached: boolean,
+): Promise<void> {
+	if (attached) {
+		await env.DB.prepare(
+			'INSERT OR IGNORE INTO agent_connection_links (agent_id, connection_id) VALUES (?1, ?2)',
+		)
+			.bind(agentId, connectionId)
+			.run();
+	} else {
+		await env.DB.prepare(
+			'DELETE FROM agent_connection_links WHERE agent_id = ?1 AND connection_id = ?2',
+		)
+			.bind(agentId, connectionId)
+			.run();
+	}
 }
 
 // The MCP auth resolver: called by the Flue transport on every request to an
 // authenticated server. Fetches and unseals the token on demand — it never
 // lands in the conversation, the signal, or the UI.
 export async function getConnectionAuthToken(connectionId: number): Promise<string> {
-	const row = await getAgentConnection(connectionId);
+	const row = await getConnection(connectionId);
 	if (!row?.auth_ciphertext) {
 		throw new Error(`turbodiff: connection ${connectionId} has no stored token`);
 	}
@@ -1208,4 +1282,63 @@ export async function getUserRefreshToken(userId: number): Promise<UserTokenRow 
 
 export async function deleteUserRefreshToken(userId: number): Promise<void> {
 	await env.DB.prepare('DELETE FROM user_tokens WHERE user_id = ?1').bind(userId).run();
+}
+
+// --- kanban board: todos (unstarted backlog cards) + task archiving ---
+
+export interface TodoRow {
+	id: number;
+	installation_id: number;
+	title: string;
+	notes: string | null;
+	created_by_login: string | null;
+	created_by_id: number | null;
+	plan_id: number | null; // set once started; the board then shows the plan
+	created_at: string;
+}
+
+export async function listTodos(installationIds: number[]): Promise<TodoRow[]> {
+	if (installationIds.length === 0) return [];
+	const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+	const res = await env.DB.prepare(
+		`SELECT * FROM todos
+		 WHERE installation_id IN (${placeholders}) AND plan_id IS NULL
+		 ORDER BY id DESC`,
+	)
+		.bind(...installationIds)
+		.all<TodoRow>();
+	return res.results;
+}
+
+export async function createTodo(
+	installationId: number,
+	title: string,
+	notes: string | null,
+	createdBy?: { login: string; id: number },
+): Promise<number> {
+	const row = await env.DB.prepare(
+		`INSERT INTO todos (installation_id, title, notes, created_by_login, created_by_id)
+		 VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id`,
+	)
+		.bind(installationId, title, notes, createdBy?.login ?? null, createdBy?.id ?? null)
+		.first<{ id: number }>();
+	return row!.id;
+}
+
+export async function getTodo(id: number): Promise<TodoRow | null> {
+	return env.DB.prepare('SELECT * FROM todos WHERE id = ?1').bind(id).first<TodoRow>();
+}
+
+export async function deleteTodo(id: number): Promise<void> {
+	await env.DB.prepare('DELETE FROM todos WHERE id = ?1').bind(id).run();
+}
+
+export async function linkTodoToPlan(id: number, planId: number): Promise<void> {
+	await env.DB.prepare('UPDATE todos SET plan_id = ?2 WHERE id = ?1').bind(id, planId).run();
+}
+
+export async function setPlanArchived(id: number, archived: boolean): Promise<void> {
+	await env.DB.prepare('UPDATE plans SET archived = ?2 WHERE id = ?1')
+		.bind(id, archived ? 1 : 0)
+		.run();
 }
