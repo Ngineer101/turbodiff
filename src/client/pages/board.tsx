@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { Archive, Play, Trash2 } from 'lucide-react';
+import { Archive, Paperclip, Play, Trash2, X } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import type { ApiBoard, ApiPlan, ApiTodo } from '../../shared/api-types.ts';
@@ -99,8 +99,27 @@ function StartDialog({
 	const [repo, setRepo] = useState(repos[0] ? `${repos[0].owner}/${repos[0].name}` : '');
 	const [title, setTitle] = useState(todo.title);
 	const [requirements, setRequirements] = useState(todo.notes ?? todo.title);
+	const [files, setFiles] = useState<File[]>([]);
+	const fileInputRef = useRef<HTMLInputElement>(null);
 	const start = useMutation({
-		mutationFn: () => api.post(`/api/todos/${todo.id}/start`, { repo, title, requirements }),
+		// Attachments (pdf/images) upload first, then ride the start payload so
+		// the planning agent reads them alongside the requirements.
+		mutationFn: async () => {
+			const attachments: { key: string; name: string; content_type: string }[] = [];
+			for (const file of files) {
+				const fd = new FormData();
+				fd.append('file', file);
+				const res = await fetch('/api/uploads', { method: 'POST', body: fd });
+				const data = (await res.json().catch(() => null)) as
+					| { key?: string; name?: string; content_type?: string; error?: string }
+					| null;
+				if (!res.ok || !data?.key) {
+					throw new ApiError(data?.error ?? `upload failed for ${file.name}`, res.status);
+				}
+				attachments.push({ key: data.key, name: data.name ?? file.name, content_type: data.content_type ?? file.type });
+			}
+			return api.post(`/api/todos/${todo.id}/start`, { repo, title, requirements, attachments });
+		},
 		onSuccess: () => {
 			toast.success('task started — the planning agent is on it');
 			queryClient.invalidateQueries({ queryKey: ['board'] });
@@ -144,6 +163,48 @@ function StartDialog({
 								placeholder="What should be built? The planning agent reads the repo and drafts a plan you approve."
 							/>
 						</Field>
+						<div className="mt-3">
+							<input
+								ref={fileInputRef}
+								type="file"
+								accept="application/pdf,image/*"
+								multiple
+								className="hidden"
+								onChange={(e) => {
+									const picked = Array.from(e.target.files ?? []);
+									setFiles((prev) => [...prev, ...picked].slice(0, 5));
+									e.target.value = '';
+								}}
+							/>
+							<Button
+								type="button"
+								variant="ghost"
+								size="sm"
+								onClick={() => fileInputRef.current?.click()}
+							>
+								<Paperclip className="size-3.5" aria-hidden /> attach files (pdf, images)
+							</Button>
+							{files.length > 0 ? (
+								<div className="mt-2 flex flex-wrap gap-1.5">
+									{files.map((f, i) => (
+										<span
+											key={`${f.name}-${i}`}
+											className="inline-flex items-center gap-1.5 rounded-full bg-raised/70 py-1 pr-1.5 pl-2.5 text-xs"
+										>
+											<span className="max-w-40 truncate">{f.name}</span>
+											<button
+												type="button"
+												aria-label={`Remove ${f.name}`}
+												className="cursor-pointer rounded-full p-0.5 text-mute hover:text-danger"
+												onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))}
+											>
+												<X className="size-3" aria-hidden />
+											</button>
+										</span>
+									))}
+								</div>
+							) : null}
+						</div>
 						<div className="mt-4 flex justify-end gap-2">
 							<Button type="button" variant="secondary" onClick={onClose}>
 								Cancel

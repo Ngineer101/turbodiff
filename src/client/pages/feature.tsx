@@ -110,10 +110,12 @@ function Composer({
 function FileDiff({
 	data,
 	file,
+	diffStyle,
 	onCommented,
 }: {
 	data: ApiFeatureDetail;
 	file: CockpitFile;
+	diffStyle: 'split' | 'unified';
 	onCommented: () => void;
 }) {
 	const [selection, setSelection] = useState<Selection | null>(null);
@@ -178,6 +180,7 @@ function FileDiff({
 				}
 				options={{
 					theme: 'pierre-dark',
+					diffStyle,
 					// The card header (FileSection) owns the filename/stats row.
 					disableFileHeader: true,
 					enableLineSelection: prOpen,
@@ -195,6 +198,7 @@ function FileSection({
 	file,
 	collapsed,
 	commentCount,
+	diffStyle,
 	onToggle,
 	onCommented,
 	sectionRef,
@@ -203,6 +207,7 @@ function FileSection({
 	file: CockpitFile;
 	collapsed: boolean;
 	commentCount: number;
+	diffStyle: 'split' | 'unified';
 	onToggle: () => void;
 	onCommented: () => void;
 	sectionRef: (el: HTMLElement | null) => void;
@@ -251,7 +256,7 @@ function FileSection({
 					{file.deletions > 0 ? <span className="text-danger">−{file.deletions}</span> : null}
 				</span>
 			</button>
-			{collapsed ? null : <FileDiff data={data} file={file} onCommented={onCommented} />}
+			{collapsed ? null : <FileDiff data={data} file={file} diffStyle={diffStyle} onCommented={onCommented} />}
 		</section>
 	);
 }
@@ -265,6 +270,16 @@ export default function FeaturePage() {
 	const refresh = () => queryClient.invalidateQueries({ queryKey: ['feature', id] });
 
 	const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+	// Side-by-side needs width; unified is the sane default on narrow screens.
+	const [diffStyle, setDiffStyleState] = useState<'split' | 'unified'>(() => {
+		const stored = localStorage.getItem('turbodiff.diffStyle');
+		if (stored === 'split' || stored === 'unified') return stored;
+		return window.matchMedia('(min-width: 1024px)').matches ? 'split' : 'unified';
+	});
+	const setDiffStyle = (style: 'split' | 'unified') => {
+		setDiffStyleState(style);
+		localStorage.setItem('turbodiff.diffStyle', style);
+	};
 	const [activeFile, setActiveFile] = useState<string | null>(null);
 	const sectionEls = useRef(new Map<string, HTMLElement>());
 
@@ -518,7 +533,27 @@ export default function FeaturePage() {
 
 					<SectionHeading
 						aside={
-							<span className="flex gap-1">
+							<span className="flex flex-wrap items-center gap-1">
+								<span
+									className="mr-1 inline-flex overflow-hidden rounded-md border border-line-2/70"
+									role="group"
+									aria-label="Diff layout"
+								>
+									{(['unified', 'split'] as const).map((style) => (
+										<button
+											key={style}
+											type="button"
+											aria-pressed={diffStyle === style}
+											onClick={() => setDiffStyle(style)}
+											className={cn(
+												'cursor-pointer px-2.5 py-1 text-xs transition-colors',
+												diffStyle === style ? 'bg-raised text-accent-bright' : 'text-mute hover:text-ink',
+											)}
+										>
+											{style === 'split' ? 'side-by-side' : 'unified'}
+										</button>
+									))}
+								</span>
 								<Button
 									variant="ghost"
 									size="sm"
@@ -552,6 +587,7 @@ export default function FeaturePage() {
 							key={f.filename}
 							data={data}
 							file={f}
+							diffStyle={diffStyle}
 							collapsed={collapsed.has(f.filename)}
 							commentCount={commentCounts.get(f.filename) ?? 0}
 							onToggle={() => toggleFile(f.filename)}

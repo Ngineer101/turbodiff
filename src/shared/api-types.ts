@@ -88,6 +88,7 @@ export interface ApiPlan {
 	feature_status: string | null;
 	feature_error: string | null;
 	archived: boolean;
+	attachments: { name: string }[];
 	verification: ApiVerificationSummary | null;
 }
 

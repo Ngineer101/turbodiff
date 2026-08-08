@@ -475,6 +475,8 @@ export interface PlanRow {
 	created_by_id: number | null;
 	tier: string | null; // trivial | standard; null = pre-tiering (standard)
 	archived: number; // started tasks are never deleted, only hidden
+	feedback: string | null; // JSON [{snippet, comment}] awaiting a revise run
+	attachments: string | null; // JSON [{key, name, content_type}] in R2
 }
 
 export async function createPlan(
@@ -484,12 +486,21 @@ export async function createPlan(
 	// The signed-in user who submitted the requirements; null for operator/API
 	// intakes. Carried onto the feature at approval for commit attribution.
 	createdBy?: { login: string; id: number },
+	// JSON [{key, name, content_type}] of user-uploaded context files.
+	attachments?: string,
 ): Promise<number> {
 	const row = await env.DB.prepare(
-		`INSERT INTO plans (repository_id, title, requirements, created_by_login, created_by_id)
-		 VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id`,
+		`INSERT INTO plans (repository_id, title, requirements, created_by_login, created_by_id, attachments)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6) RETURNING id`,
 	)
-		.bind(repositoryId, title, requirements, createdBy?.login ?? null, createdBy?.id ?? null)
+		.bind(
+			repositoryId,
+			title,
+			requirements,
+			createdBy?.login ?? null,
+			createdBy?.id ?? null,
+			attachments ?? null,
+		)
 		.first<{ id: number }>();
 	return row!.id;
 }
@@ -568,6 +579,7 @@ export async function updatePlan(
 		featureId?: number;
 		error?: string;
 		tier?: string;
+		feedback?: string;
 	},
 ): Promise<void> {
 	await env.DB.prepare(
@@ -580,7 +592,8 @@ export async function updatePlan(
 		 acceptance = COALESCE(?7, acceptance),
 		 feature_id = COALESCE(?8, feature_id),
 		 error = COALESCE(?9, error),
-		 tier = COALESCE(?10, tier)
+		 tier = COALESCE(?10, tier),
+		 feedback = COALESCE(?11, feedback)
 		 WHERE id = ?1`,
 	)
 		.bind(
@@ -594,6 +607,7 @@ export async function updatePlan(
 			fields.featureId ?? null,
 			fields.error ?? null,
 			fields.tier ?? null,
+			fields.feedback ?? null,
 		)
 		.run();
 }

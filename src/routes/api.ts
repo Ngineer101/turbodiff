@@ -157,6 +157,9 @@ function serializePlan(p: PlanWithRepo): ApiPlan {
 		feature_status: p.feature_status,
 		feature_error: p.feature_error,
 		archived: p.archived === 1,
+		attachments: (p.attachments ? (JSON.parse(p.attachments) as { name: string }[]) : []).map(
+			(a) => ({ name: a.name }),
+		),
 		verification: verificationSummary(p.verification_status, p.verification_results),
 	};
 }
@@ -391,7 +394,12 @@ export function createApiRoutes() {
 		}
 		if (todo.plan_id !== null) return c.json({ error: 'already started' }, 409);
 		const body = await c.req
-			.json<{ repo?: string; title?: string; requirements?: string }>()
+			.json<{
+				repo?: string;
+				title?: string;
+				requirements?: string;
+				attachments?: Record<string, unknown>[];
+			}>()
 			.catch(() => null);
 		const repoFull = body?.repo ?? '';
 		const title = body?.title?.trim() || todo.title;
@@ -404,11 +412,23 @@ export function createApiRoutes() {
 		if (!row || !c.get('user').installationIds.includes(row.installation_id)) {
 			return c.json({ error: 'unknown repository' }, 404);
 		}
+		const rawAtts = Array.isArray(body?.attachments) ? body.attachments : [];
+		const attachments = rawAtts
+			.map((a: Record<string, unknown>) => ({
+				key: typeof a.key === 'string' ? a.key : '',
+				name: typeof a.name === 'string' ? a.name.slice(-120) : 'attachment',
+				content_type: typeof a.content_type === 'string' ? a.content_type : '',
+			}))
+			.filter((a) => a.key.startsWith('plan-uploads/'))
+			.slice(0, 5);
 		const { session } = c.get('user');
-		const planId = await createPlan(row.id, title, requirements, {
-			login: session.login,
-			id: session.userId,
-		});
+		const planId = await createPlan(
+			row.id,
+			title,
+			requirements,
+			{ login: session.login, id: session.userId },
+			attachments.length > 0 ? JSON.stringify(attachments) : undefined,
+		);
 		await linkTodoToPlan(todo.id, planId);
 		await env.FACTORY_QUEUE.send({ kind: 'plan_analyze', planId });
 		return c.json({ ok: true, plan_id: planId });
@@ -654,6 +674,59 @@ export function createApiRoutes() {
 		await updateFeature(feature.id, { error: 'retry queued' });
 		await env.FACTORY_QUEUE.send({ kind: 'generate', featureId: feature.id });
 		return c.json({ ok: true });
+	});
+
+	// Context-file upload for planning (pdf/images). Stored in the ARTIFACTS
+	// bucket under a harness-generated key; the planner downloads them into
+	// the sandbox via the same signed /artifacts URLs verification uses.
+	const UPLOAD_TYPES = new Set([
+		'application/pdf',
+		'image/png',
+		'image/jpeg',
+		'image/webp',
+		'image/gif',
+	]);
+	const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+
+	app.post('/uploads', async (c) => {
+		const body = await c.req.parseBody();
+		const file = body.file;
+		if (!(file instanceof File)) return c.json({ error: 'multipart "file" field is required' }, 400);
+		if (!UPLOAD_TYPES.has(file.type)) {
+			return c.json({ error: 'only PDF and image attachments are supported' }, 400);
+		}
+		if (file.size > UPLOAD_MAX_BYTES) return c.json({ error: 'attachment exceeds 10MB' }, 400);
+		const safeName = file.name.replace(/[^\w.-]/g, '_').slice(-80) || 'attachment';
+		const key = `plan-uploads/${crypto.randomUUID()}/${safeName}`;
+		await env.ARTIFACTS.put(key, await file.arrayBuffer(), {
+			httpMetadata: { contentType: file.type },
+		});
+		return c.json({ ok: true, key, name: file.name.slice(-120), content_type: file.type });
+	});
+
+	// Batched plan-review feedback: snippet-anchored comments collected in the
+	// UI, submitted once, and consumed by a revise (plan_refine) run.
+	app.post('/factory/plans/:id/feedback', async (c) => {
+		const plan = await authorizedPlan(c);
+		if (!plan) return c.json({ error: 'unknown plan' }, 404);
+		if (plan.status !== 'plan_ready') {
+			return c.json({ error: `plan is ${plan.status}, not ready for feedback` }, 409);
+		}
+		const body = await c.req
+			.json<{ comments?: { snippet?: unknown; comment?: unknown }[] }>()
+			.catch(() => null);
+		const raw = Array.isArray(body?.comments) ? body.comments : [];
+		const comments = raw
+			.map((f) => ({
+				snippet: typeof f.snippet === 'string' ? f.snippet.trim().slice(0, 300) : '',
+				comment: typeof f.comment === 'string' ? f.comment.trim().slice(0, 1000) : '',
+			}))
+			.filter((f) => f.comment)
+			.slice(0, 20);
+		if (comments.length === 0) return c.json({ error: 'at least one comment is required' }, 400);
+		await updatePlan(plan.id, { status: 'refining', feedback: JSON.stringify(comments) });
+		await env.FACTORY_QUEUE.send({ kind: 'plan_refine', planId: plan.id });
+		return c.json({ ok: true, comments: comments.length });
 	});
 
 	// Human-initiated merge from the cockpit. Deliberately does not reuse the
