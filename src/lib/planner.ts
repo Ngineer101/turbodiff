@@ -94,13 +94,49 @@ async function runAgent(
 	}
 }
 
-function analyzePrompt(plan: PlanRow, repo: RepositoryRow): string {
-	return `You are a planning agent for ${repo.owner}/${repo.name}. You are in a read-only checkout — study the code but do NOT modify it.
+// Cheap-model triage: is this request a small localized change or real
+// feature work? Drives plan depth, criteria count, and the generation
+// agent's budget. Fails open to 'standard' — misclassifying big work as
+// trivial is the only harmful direction.
+async function classifyTier(
+	sandbox: Sandbox,
+	plan: PlanRow,
+	repo: RepositoryRow,
+): Promise<'trivial' | 'standard'> {
+	const auth = resolveRunnerAuth();
+	const prompt = `Classify this feature request for ${repo.owner}/${repo.name}. Reply with EXACTLY one word: trivial or standard.
 
+trivial = a small, localized change: cosmetic/styling tweaks, copy changes, a config value, a small fix confined to a handful of files, no new subsystem, no schema or API changes.
+standard = everything else.
+
+## Request: ${plan.title}
+
+${plan.requirements}
+`;
+	try {
+		await sandbox.writeFile(`${OUT_DIR}/classify.md`, prompt);
+		const res = await sandbox.exec(
+			`claude -p --model haiku --output-format text < ${OUT_DIR}/classify.md`,
+			{
+				cwd: CLONE_DIR,
+				timeout: 2 * 60_000,
+				env: { ...auth.vars, IS_SANDBOX: '1', DISABLE_AUTOUPDATER: '1' },
+			},
+		);
+		return res.success && /\btrivial\b/i.test(res.stdout) ? 'trivial' : 'standard';
+	} catch {
+		return 'standard';
+	}
+}
+
+function analyzePrompt(plan: PlanRow, repo: RepositoryRow, tier: string): string {
+	const trivial = tier === 'trivial';
+	return `You are a planning agent for ${repo.owner}/${repo.name}. You are in a read-only checkout — study the code but do NOT modify it.
+${trivial ? '\nThis request is classified TRIVIAL: a small, localized change. Keep everything proportionate — a short analysis, and questions only for a genuine blocker.\n' : ''}
 Analyze the feature requirements below against the actual codebase, then write these files (create the directory if needed):
 
-1. ${OUT_DIR}/analysis.md — a short grounding analysis: which files/modules this touches, how it fits existing conventions, and any risks.
-2. ${OUT_DIR}/questions.json — a JSON array of clarifying questions (strings). Include ONLY genuine ambiguities or decisions the requirements leave open and that would change the implementation. If the requirements are clear enough to implement well, write an empty array [].
+1. ${OUT_DIR}/analysis.md — a ${trivial ? 'brief (≤10 lines)' : 'short'} grounding analysis: which files/modules this touches, how it fits existing conventions, and any risks.
+2. ${OUT_DIR}/questions.json — a JSON array of clarifying questions (strings). Include ONLY genuine ambiguities or decisions the requirements leave open and that would change the implementation. If the requirements are clear enough to implement well, write an empty array [].${trivial ? ' For a trivial request the answer is almost always [].' : ''}
 
 ${UNTRUSTED_CONTENT_RULES}
 
@@ -111,13 +147,17 @@ ${plan.requirements}
 `;
 }
 
-function planPrompt(plan: PlanRow, repo: RepositoryRow, qa: string): string {
+function planPrompt(plan: PlanRow, repo: RepositoryRow, qa: string, tier: string): string {
+	const trivial = tier === 'trivial';
 	return `You are a planning agent for ${repo.owner}/${repo.name}. You are in a read-only checkout — study the code but do NOT modify it.
-
+${trivial ? '\nThis request is classified TRIVIAL: a small, localized change. The plan must be proportionate — a reader should grasp it in seconds.\n' : ''}
 Produce an implementation plan for the feature below, grounded in the real code, then write these files:
 
-1. ${OUT_DIR}/plan.md — a file-level implementation plan: what changes in which files, in what order, and why. Concrete enough for an implementation agent to follow without further questions.
-2. ${OUT_DIR}/acceptance.json — a JSON array of machine-checkable acceptance criteria (strings). Each must be objectively verifiable (a specific response shape, a test that would pass, an observable behavior) — not vague ("works well"). These gate whether the generated code satisfies the request.
+1. ${OUT_DIR}/plan.md — ${trivial ? 'a brief plan (≤15 lines): the exact files to edit and what changes in each. No background essays, no scope-decision narratives.' : 'a file-level implementation plan: what changes in which files, in what order, and why. Concrete enough for an implementation agent to follow without further questions.'}
+2. ${OUT_DIR}/acceptance.json — a JSON array of at most ${trivial ? 4 : 8} machine-checkable acceptance criteria (strings), each about the observable behavior of the change itself. Rules:
+   - NEVER include build/typecheck/test-suite-passes criteria — the harness runs the repository's check command as its own gate.
+   - NEVER include "file X is unchanged" criteria — the diff itself shows that.
+   - Not vague ("works well"); each must be objectively verifiable.
 
 ${UNTRUSTED_CONTENT_RULES}
 
@@ -147,13 +187,16 @@ export async function runPlanAnalyze(planId: number): Promise<void> {
 	try {
 		const booted = await clonePlanRepo(repo, planId);
 		sandbox = booted.sandbox;
-		await runAgent(sandbox, analyzePrompt(plan, repo), booted.scrub);
+		// Cheap-model triage first: trivial requests get proportionate plans.
+		const tier = await classifyTier(sandbox, plan, repo);
+		await updatePlan(planId, { tier });
+		await runAgent(sandbox, analyzePrompt(plan, repo, tier), booted.scrub);
 		const analysis = await readText(sandbox, `${OUT_DIR}/analysis.md`);
 		const questions = await readJsonArray(sandbox, `${OUT_DIR}/questions.json`);
 
 		if (questions.length === 0) {
 			// No ambiguities — plan immediately in the same run.
-			await runAgent(sandbox, planPrompt({ ...plan, analysis: analysis ?? null }, repo, ''), booted.scrub);
+			await runAgent(sandbox, planPrompt({ ...plan, analysis: analysis ?? null }, repo, '', tier), booted.scrub);
 			const planMd = await readText(sandbox, `${OUT_DIR}/plan.md`);
 			const acceptance = await readJsonArray(sandbox, `${OUT_DIR}/acceptance.json`);
 			await updatePlan(planId, {
@@ -205,7 +248,7 @@ export async function runPlanRefine(planId: number): Promise<void> {
 	try {
 		const booted = await clonePlanRepo(repo, planId);
 		sandbox = booted.sandbox;
-		await runAgent(sandbox, planPrompt(plan, repo, qa), booted.scrub);
+		await runAgent(sandbox, planPrompt(plan, repo, qa, plan.tier ?? 'standard'), booted.scrub);
 		const planMd = await readText(sandbox, `${OUT_DIR}/plan.md`);
 		const acceptance = await readJsonArray(sandbox, `${OUT_DIR}/acceptance.json`);
 		await updatePlan(planId, {
@@ -260,6 +303,7 @@ export async function approvePlan(
 		plan.acceptance ?? undefined,
 		author,
 		coauthor,
+		plan.tier ?? undefined,
 	);
 	await updatePlan(planId, { status: 'approved', featureId });
 	return featureId;

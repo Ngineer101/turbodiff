@@ -353,6 +353,7 @@ export interface FeatureRow {
 	error: string | null;
 	created_at: string;
 	run_started_at: string | null; // start of the current generation attempt
+	tier: string | null; // trivial | standard; scales the agent budget
 	author_login: string | null; // instructing user (plan approver); null = bot
 	author_id: number | null;
 	coauthor_login: string | null; // plan creator when different from author
@@ -371,11 +372,13 @@ export async function createFeature(
 	// Null for operator/API intakes — the generator commits as the bot.
 	author?: { login: string; id: number },
 	coauthor?: { login: string; id: number },
+	// trivial | standard — scales the generation agent's budget and prompt.
+	tier?: string,
 ): Promise<number> {
 	const row = await env.DB.prepare(
 		`INSERT INTO features
-		 (repository_id, title, spec, acceptance, author_login, author_id, coauthor_login, coauthor_id)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) RETURNING id`,
+		 (repository_id, title, spec, acceptance, author_login, author_id, coauthor_login, coauthor_id, tier)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) RETURNING id`,
 	)
 		.bind(
 			repositoryId,
@@ -386,6 +389,7 @@ export async function createFeature(
 			author?.id ?? null,
 			coauthor?.login ?? null,
 			coauthor?.id ?? null,
+			tier ?? null,
 		)
 		.first<{ id: number }>();
 	return row!.id;
@@ -462,6 +466,7 @@ export interface PlanRow {
 	created_at: string;
 	created_by_login: string | null; // signed-in submitter; null = operator/API
 	created_by_id: number | null;
+	tier: string | null; // trivial | standard; null = pre-tiering (standard)
 }
 
 export async function createPlan(
@@ -535,6 +540,7 @@ export async function updatePlan(
 		acceptance?: string;
 		featureId?: number;
 		error?: string;
+		tier?: string;
 	},
 ): Promise<void> {
 	await env.DB.prepare(
@@ -546,7 +552,8 @@ export async function updatePlan(
 		 plan = COALESCE(?6, plan),
 		 acceptance = COALESCE(?7, acceptance),
 		 feature_id = COALESCE(?8, feature_id),
-		 error = COALESCE(?9, error)
+		 error = COALESCE(?9, error),
+		 tier = COALESCE(?10, tier)
 		 WHERE id = ?1`,
 	)
 		.bind(
@@ -559,6 +566,7 @@ export async function updatePlan(
 			fields.acceptance ?? null,
 			fields.featureId ?? null,
 			fields.error ?? null,
+			fields.tier ?? null,
 		)
 		.run();
 }

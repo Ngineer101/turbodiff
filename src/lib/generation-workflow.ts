@@ -3,7 +3,7 @@ import { env, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from '
 import { NonRetryableError } from 'cloudflare:workflows';
 import { gh } from '../tools/github.ts';
 import { coauthorTrailer, gitAuthorEnv } from './attribution.ts';
-import { getFeature, getRepoById, updateFeature, type FeatureRow, type RepositoryRow } from './db.ts';
+import { getFeature, getRepoById, updateFeature, type FeatureRow } from './db.ts';
 import { resolveRunnerAuth } from './fixer.ts';
 import { installationToken, sandboxGitToken } from './github-app.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
@@ -28,12 +28,23 @@ import { mintUserToken } from './user-tokens.ts';
 // Step return values are persisted by the engine: never return tokens or
 // other secrets from a step — mint them inside the step that uses them.
 
-const CLONE_DIR = '/workspace/gen';
-const SPEC_FILE = '/workspace/gen-spec.md';
-// The agent's exec budget — the point of the workflow move. The step timeout
-// is set slightly above it so the exec timeout (a clean, attributable
-// failure) fires before the step timeout does.
-const AGENT_TIMEOUT_MS = 25 * 60_000;
+// The sandbox is per-REPO (warm across features): a shared git cache gets
+// fetched instead of re-cloned, and shared package caches make any install
+// the agent does run cache-hot. Each feature works in its own directory for
+// isolation; only the caches are shared.
+const CACHE_DIR = '/workspace/repo-cache';
+const NPM_CACHE_ENV = {
+	npm_config_cache: '/workspace/.npm-cache',
+	npm_config_store_dir: '/workspace/.pnpm-store',
+};
+const workDir = (featureId: number) => `/workspace/gen-${featureId}`;
+const specFile = (featureId: number) => `/workspace/gen-spec-${featureId}.md`;
+const prFile = (featureId: number) => `/workspace/gen-pr-${featureId}.md`;
+// Agent exec budgets by tier — trivial requests don't get to burn a
+// feature-sized window. Step timeouts sit slightly above so the exec timeout
+// (a clean, attributable failure) fires before the step timeout does.
+const AGENT_TIMEOUT_MS = { trivial: 8 * 60_000, standard: 25 * 60_000 };
+const AGENT_STEP_TIMEOUT = { trivial: '10 minutes', standard: '28 minutes' } as const;
 const CHECK_TIMEOUT_MS = 12 * 60_000;
 
 export interface GenQueueMessage {
@@ -56,31 +67,38 @@ function branchName(feature: FeatureRow): string {
 	return `turbodiff/feat-${feature.id}-${slug}`;
 }
 
-function generationPrompt(feature: FeatureRow, repo: RepositoryRow): string {
-	return `You are an automated implementation agent working in a fresh checkout of ${repo.owner}/${repo.name}.
+function generationPrompt(ctx: RunContext): string {
+	const trivial = ctx.tier === 'trivial';
+	return `You are an automated implementation agent working in a fresh checkout of ${ctx.owner}/${ctx.name}.
 
 Implement the feature specified below. Rules:
 - Implement exactly what the spec describes — no scope creep, no drive-by refactors.
 - Match the repository's existing conventions: style, structure, naming, idioms.
-- If the repository has an established testing pattern, add or update tests for
-  the new behavior in that same pattern.
+${trivial ? '- This is a small, localized change: make the edits, verify them by reading, and stop.' : `- If the repository has an established testing pattern, add or update tests for
+  the new behavior in that same pattern.`}
+- Do NOT run dependency installs, builds, or test suites unless the change itself
+  requires it — the harness runs the repository's check command after you finish,
+  and a separate verification phase checks the acceptance criteria empirically.
 - Do NOT run git commit or git push; the harness handles git.
 - If part of the spec is ambiguous, choose the most conventional interpretation
   and note the choice in a "## Implementation notes" section you append to
-  ${SPEC_FILE}.
+  ${specFile(ctx.featureId)}.
+- When done, write ${prFile(ctx.featureId)}: a concise pull-request description —
+  ${trivial ? '1-3' : '3-6'} bullet points covering what changed and why. No spec restatement, no
+  process narration; just what a reviewer needs.
 
 ${UNTRUSTED_CONTENT_RULES}
 
-## Feature: ${feature.title}
+## Feature: ${ctx.title}
 
-${feature.spec}
+${ctx.spec}
 `;
 }
 
-function sandboxFor(repo: { owner: string; name: string }, featureId: number): Sandbox {
+function sandboxFor(repo: { owner: string; name: string }): Sandbox {
 	return getSandbox(
 		env.Sandbox as unknown as DurableObjectNamespace<Sandbox>,
-		`gen--${repo.owner}--${repo.name}--${featureId}`.toLowerCase(),
+		`gen--${repo.owner}--${repo.name}`.toLowerCase(),
 		{ sleepAfter: '45m' },
 	) as unknown as Sandbox;
 }
@@ -102,6 +120,7 @@ type RunContext = {
 	coauthorLogin: string | null;
 	coauthorId: number | null;
 	acceptance: boolean;
+	tier: 'trivial' | 'standard';
 };
 
 const QUICK = {
@@ -145,31 +164,45 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
 					coauthorLogin: feature.coauthor_login,
 					coauthorId: feature.coauthor_id,
 					acceptance: feature.acceptance !== null,
+					tier: feature.tier === 'trivial' ? 'trivial' : 'standard',
 				};
 			});
 			if (!ctx) return 'skipped';
 			const full = `${ctx.owner}/${ctx.name}`;
 			const label = `${full} feature #${featureId}`;
 
-			await step.do('clone into sandbox', { retries: { limit: 3, delay: '1 minute', backoff: 'exponential' }, timeout: '8 minutes' }, async () => {
+			const WORK = workDir(featureId);
+			await step.do('prepare working copy', { retries: { limit: 3, delay: '1 minute', backoff: 'exponential' }, timeout: '8 minutes' }, async () => {
 				await updateFeature(featureId, { runStartedAt: 'now' }); // heartbeat for the strand sweep
 				const gitToken = await sandboxGitToken(ctx.installationId, ctx.name, 'write');
-				const sandbox = sandboxFor(ctx, featureId);
-				await sandbox.exec(`rm -rf ${CLONE_DIR}`);
-				const clone = await sandbox.exec(
-					`git clone --depth 50 --single-branch --branch "$GEN_BASE" ` +
-						`"https://x-access-token:$GIT_TOKEN@github.com/${full}.git" ${CLONE_DIR} && ` +
-						`git -C ${CLONE_DIR} checkout -b "$GEN_BRANCH" && ` +
-						`git -C ${CLONE_DIR} config user.name "turbodiff[bot]" && ` +
-						`git -C ${CLONE_DIR} config user.email "turbodiff[bot]@users.noreply.github.com"`,
-					{ env: { GIT_TOKEN: gitToken, GEN_BASE: ctx.base, GEN_BRANCH: ctx.branch }, timeout: 5 * 60_000 },
+				const sandbox = sandboxFor(ctx);
+				// Warm path: update the shared per-repo cache (fetch, seconds) or
+				// cold-clone it once; then a local hardlink clone into this
+				// feature's own directory. Credentials only ever travel via env to
+				// explicit-URL commands — nothing credentialed persists on disk.
+				const sync = await sandbox.exec(
+					`if [ -d ${CACHE_DIR}/.git ]; then ` +
+						`git -C ${CACHE_DIR} fetch --depth 50 "https://x-access-token:$GIT_TOKEN@github.com/${full}.git" "$GEN_BASE" && ` +
+						`git -C ${CACHE_DIR} checkout -q -B "$GEN_BASE" FETCH_HEAD; ` +
+						`else git clone --depth 50 --single-branch --branch "$GEN_BASE" ` +
+						`"https://x-access-token:$GIT_TOKEN@github.com/${full}.git" ${CACHE_DIR} && ` +
+						`git -C ${CACHE_DIR} remote set-url origin "https://github.com/${full}.git"; fi`,
+					{ env: { GIT_TOKEN: gitToken, GEN_BASE: ctx.base }, timeout: 5 * 60_000 },
 				);
-				// Never leave the credentialed remote behind, even on failure paths.
-				await sandbox
-					.exec(`git -C ${CLONE_DIR} remote set-url origin "https://github.com/${full}.git"`)
-					.catch(() => {});
+				if (!sync.success) {
+					// A corrupted cache must never wedge the repo — drop it for next time.
+					await sandbox.exec(`rm -rf ${CACHE_DIR}`).catch(() => {});
+					throw new Error(`repo cache sync failed: ${sync.stderr.replaceAll(gitToken, '***').slice(0, 500)}`);
+				}
+				const clone = await sandbox.exec(
+					`rm -rf ${WORK} && git clone --local ${CACHE_DIR} ${WORK} && ` +
+						`git -C ${WORK} checkout -q -b "$GEN_BRANCH" && ` +
+						`git -C ${WORK} config user.name "turbodiff[bot]" && ` +
+						`git -C ${WORK} config user.email "turbodiff[bot]@users.noreply.github.com"`,
+					{ env: { GEN_BRANCH: ctx.branch }, timeout: 2 * 60_000 },
+				);
 				if (!clone.success) {
-					throw new Error(`git clone failed: ${clone.stderr.replaceAll(gitToken, '***').slice(0, 500)}`);
+					throw new Error(`working-copy clone failed: ${clone.stderr.slice(0, 500)}`);
 				}
 			});
 
@@ -177,21 +210,20 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
 			// instance, ever. Memoization means success is never re-bought.
 			const agentRan = await step.do(
 				'run coding agent',
-				{ retries: { limit: 1, delay: '5 minutes' }, timeout: '28 minutes' },
+				{ retries: { limit: 1, delay: '5 minutes' }, timeout: AGENT_STEP_TIMEOUT[ctx.tier] },
 				async (): Promise<{ changed: boolean }> => {
 					await updateFeature(featureId, { runStartedAt: 'now' });
 					const auth = resolveRunnerAuth();
-					const sandbox = sandboxFor(ctx, featureId);
-					const feature = { title: ctx.title, spec: ctx.spec } as FeatureRow;
-					const repo = { owner: ctx.owner, name: ctx.name } as RepositoryRow;
-					await sandbox.writeFile(SPEC_FILE, generationPrompt(feature, repo));
+					const sandbox = sandboxFor(ctx);
+					await sandbox.writeFile(specFile(featureId), generationPrompt(ctx));
 					const agent = await sandbox.exec(
-						`claude -p --dangerously-skip-permissions --output-format text < ${SPEC_FILE}`,
+						`claude -p --dangerously-skip-permissions --output-format text < ${specFile(featureId)}`,
 						{
-							cwd: CLONE_DIR,
-							timeout: AGENT_TIMEOUT_MS,
+							cwd: WORK,
+							timeout: AGENT_TIMEOUT_MS[ctx.tier],
 							env: {
 								...auth.vars,
+								...NPM_CACHE_ENV,
 								IS_SANDBOX: '1',
 								DISABLE_AUTOUPDATER: '1',
 								CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
@@ -203,7 +235,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
 							`generation agent exited ${agent.exitCode}: ${`${agent.stdout}\n${agent.stderr}`.trim().slice(-1_000)}`,
 						);
 					}
-					const status = await sandbox.exec(`git -C ${CLONE_DIR} status --porcelain`);
+					const status = await sandbox.exec(`git -C ${WORK} status --porcelain`);
 					return { changed: Boolean(status.stdout.trim()) };
 				},
 			);
@@ -225,9 +257,9 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
 					ctx.coauthorLogin && ctx.coauthorId !== null
 						? { login: ctx.coauthorLogin, id: ctx.coauthorId }
 						: null;
-				const sandbox = sandboxFor(ctx, featureId);
+				const sandbox = sandboxFor(ctx);
 				const commit = await sandbox.exec(
-					`git -C ${CLONE_DIR} add -A && git -C ${CLONE_DIR} commit -m "$COMMIT_MSG"`,
+					`git -C ${WORK} add -A && git -C ${WORK} commit -m "$COMMIT_MSG"`,
 					{
 						env: {
 							COMMIT_MSG:
@@ -246,8 +278,12 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
 					{ retries: { limit: 1, delay: '1 minute' }, timeout: '15 minutes' },
 					async (): Promise<{ ok: boolean; output: string }> => {
 						await updateFeature(featureId, { runStartedAt: 'now' });
-						const sandbox = sandboxFor(ctx, featureId);
-						const res = await sandbox.exec(ctx.checkCommand!, { cwd: CLONE_DIR, timeout: CHECK_TIMEOUT_MS });
+						const sandbox = sandboxFor(ctx);
+						const res = await sandbox.exec(ctx.checkCommand!, {
+							cwd: WORK,
+							timeout: CHECK_TIMEOUT_MS,
+							env: NPM_CACHE_ENV,
+						});
 						// A failing check command is a business outcome, not an infra
 						// error — return it so the step is never retried for it.
 						return { ok: res.success, output: `${res.stdout}\n${res.stderr}`.trim().slice(-500) };
@@ -263,9 +299,9 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
 
 			await step.do('push branch', QUICK, async () => {
 				const gitToken = await sandboxGitToken(ctx.installationId, ctx.name, 'write');
-				const sandbox = sandboxFor(ctx, featureId);
+				const sandbox = sandboxFor(ctx);
 				const push = await sandbox.exec(
-					`git -C ${CLONE_DIR} push "https://x-access-token:$GIT_TOKEN@github.com/${full}.git" HEAD:"$GEN_BRANCH"`,
+					`git -C ${WORK} push "https://x-access-token:$GIT_TOKEN@github.com/${full}.git" HEAD:"$GEN_BRANCH"`,
 					{ env: { GIT_TOKEN: gitToken, GEN_BRANCH: ctx.branch }, timeout: 3 * 60_000 },
 				);
 				if (!push.success) {
@@ -274,10 +310,16 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
 			});
 
 			const prNumber = await step.do('open pull request', QUICK, async (): Promise<number> => {
-				const sandbox = sandboxFor(ctx, featureId);
-				// The agent may have appended implementation notes to the spec file.
+				const sandbox = sandboxFor(ctx);
+				// Concise PR body: the agent's own summary (what changed and why),
+				// not a spec dump. Implementation notes ride along only when the
+				// agent recorded a judgment call worth surfacing.
+				const summary = await sandbox
+					.readFile(prFile(featureId))
+					.then((f) => f.content.trim() || undefined)
+					.catch(() => undefined);
 				const notes = await sandbox
-					.readFile(SPEC_FILE)
+					.readFile(specFile(featureId))
 					.then((f) => f.content.split('## Implementation notes')[1]?.trim())
 					.catch(() => undefined);
 				const createPr = async (authToken: string) =>
@@ -289,9 +331,9 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
 								head: ctx.branch,
 								base: ctx.base,
 								body:
-									`Generated by the turbodiff software factory (feature #${featureId}).\n\n` +
-									`## Spec\n\n${ctx.spec}` +
-									(notes ? `\n\n## Implementation notes\n\n${notes}` : ''),
+									(summary ?? `${ctx.title} — generated change; see the diff.`) +
+									(notes ? `\n\n<details><summary>Implementation notes</summary>\n\n${notes}\n\n</details>` : '') +
+									`\n\n---\n_turbodiff factory · feature #${featureId}_`,
 							}),
 						})
 					).json()) as { number: number };
@@ -319,6 +361,14 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
 				// Phase 4: acceptance criteria get an empirical verification run.
 				if (ctx.acceptance) await env.FACTORY_QUEUE.send({ kind: 'verify', featureId });
 				return pr.number;
+			});
+
+			await step.do('clean workspace', { retries: { limit: 1, delay: '10 seconds' }, timeout: '2 minutes' }, async () => {
+				// Bound the warm container's disk: drop this feature's working copy
+				// and prompt files; the shared repo/package caches stay.
+				await sandboxFor(ctx)
+					.exec(`rm -rf ${WORK} ${specFile(featureId)} ${prFile(featureId)}`)
+					.catch(() => {});
 			});
 
 			console.log(`turbodiff: generation pr_opened for ${label} (PR #${prNumber})`);
