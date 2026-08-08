@@ -395,12 +395,13 @@ export async function getFeature(id: number): Promise<FeatureRow | null> {
 	return env.DB.prepare('SELECT * FROM features WHERE id = ?1').bind(id).first<FeatureRow>();
 }
 
-// A queue-consumer wall-clock kill dies without reaching the failure handler,
-// stranding the feature in 'generating' forever. This lazy sweep (called from
-// the factory read paths) flips any run silent past the wall clock + slack to
-// failed, so the UI shows the truth and the retry button lights up. Legacy
-// rows without run_started_at fall back to created_at.
-const GENERATION_STRAND_MINUTES = 25;
+// Generation runs as a durable Workflow whose steps heartbeat run_started_at,
+// so a stranded 'generating' row should be near-impossible — this lazy sweep
+// (called from the factory read paths) is the last-resort backstop for an
+// engine-level failure. The threshold must exceed the longest heartbeat gap
+// (the 25-minute agent step) plus retry delays. Legacy rows without
+// run_started_at fall back to created_at.
+const GENERATION_STRAND_MINUTES = 45;
 
 export async function failStrandedGeneration(): Promise<number> {
 	const res = await env.DB.prepare(

@@ -337,11 +337,13 @@ app.post('/internal/features/:id/retry', async (c) => {
 	}
 	const body = await c.req.json<{ delay_seconds?: number }>().catch(() => null);
 	const delay = Math.min(Math.max(Math.floor(body?.delay_seconds ?? 0), 0), 12 * 3600);
+	// The workflow's first step flips status to 'generating' — pre-setting it
+	// here would trip startGeneration's in-flight guard.
 	if (delay > 0) {
 		await updateFeature(id, { error: `retry scheduled in ${Math.round(delay / 60)}m` });
 		await env.FACTORY_QUEUE.send({ kind: 'generate', featureId: id }, { delaySeconds: delay });
 	} else {
-		await updateFeature(id, { status: 'generating', runStartedAt: 'now' });
+		await updateFeature(id, { error: 'retry queued' });
 		await env.FACTORY_QUEUE.send({ kind: 'generate', featureId: id });
 	}
 	return c.json({

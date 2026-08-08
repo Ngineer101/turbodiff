@@ -562,7 +562,9 @@ export function createApiRoutes() {
 		if (!RETRYABLE.has(feature.status)) {
 			return c.json({ error: `feature is ${feature.status}, not retryable` }, 409);
 		}
-		await updateFeature(feature.id, { status: 'generating', runStartedAt: 'now' });
+		// The workflow's first step flips status to 'generating' — pre-setting it
+		// here would trip startGeneration's in-flight guard.
+		await updateFeature(feature.id, { error: 'retry queued' });
 		await env.FACTORY_QUEUE.send({ kind: 'generate', featureId: feature.id });
 		return c.json({ ok: true });
 	});
