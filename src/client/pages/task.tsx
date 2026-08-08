@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
-import { ArrowLeft } from 'lucide-react';
-import { useState } from 'react';
+import { ArrowLeft, MessageSquarePlus, Paperclip, X } from 'lucide-react';
+import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { ApiPlan } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
@@ -12,7 +12,7 @@ import { cn } from '../lib/utils.ts';
 import { ConfirmButton } from '../components/confirm-button.tsx';
 import { SectionHeading } from '../components/section.tsx';
 import { Button, buttonVariants } from '../components/ui/button.tsx';
-import { Field, Input } from '../components/ui/input.tsx';
+import { Field, Input, Textarea } from '../components/ui/input.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 
 function onApiError(err: unknown) {
@@ -92,6 +92,41 @@ export function TaskPage() {
 		onError: onApiError,
 	});
 
+	// Plan review feedback: select text in the plan, comment via the popover,
+	// then submit the whole batch for a revise run.
+	const planRef = useRef<HTMLPreElement>(null);
+	const [popover, setPopover] = useState<{ x: number; y: number; snippet: string } | null>(null);
+	const [note, setNote] = useState('');
+	const [comments, setComments] = useState<{ snippet: string; comment: string }[]>([]);
+	const sendFeedback = useMutation({
+		mutationFn: () => api.post(`/api/factory/plans/${task.id}/feedback`, { comments }),
+		onSuccess: () => {
+			setComments([]);
+			toast.success('feedback sent — revising the plan');
+			refresh();
+		},
+		onError: onApiError,
+	});
+	const onPlanSelect = () => {
+		const sel = window.getSelection();
+		if (!sel || sel.isCollapsed || !planRef.current?.contains(sel.anchorNode)) return;
+		const text = sel.toString().trim();
+		if (!text) return;
+		const rect = sel.getRangeAt(0).getBoundingClientRect();
+		setPopover({
+			x: Math.min(Math.max(rect.left + rect.width / 2, 150), window.innerWidth - 150),
+			y: Math.min(rect.bottom + 8, window.innerHeight - 180),
+			snippet: text.slice(0, 300),
+		});
+		setNote('');
+	};
+	const addComment = () => {
+		if (!popover || !note.trim()) return;
+		setComments((prev) => [...prev, { snippet: popover.snippet, comment: note.trim() }]);
+		setPopover(null);
+		window.getSelection()?.removeAllRanges();
+	};
+
 	const genStopped =
 		task.status === 'approved' && !task.pr_number && GENERATION_STOPPED.has(task.feature_status ?? '');
 
@@ -122,6 +157,19 @@ export function TaskPage() {
 			<p className="mt-2.5 text-xs text-mute sm:text-[0.85rem]">
 				{task.repo} · {ago(task.created_at)}
 			</p>
+			{task.attachments.length > 0 ? (
+				<div className="mt-2 flex flex-wrap gap-1.5">
+					{task.attachments.map((a, i) => (
+						<span
+							key={i}
+							className="inline-flex items-center gap-1 rounded-full bg-raised/70 px-2.5 py-0.5 text-xs text-mute"
+						>
+							<Paperclip className="size-3" aria-hidden />
+							<span className="max-w-44 truncate">{a.name}</span>
+						</span>
+					))}
+				</div>
+			) : null}
 			{state.hint ? <p className="mt-1 text-xs text-mute/70">{state.hint}</p> : null}
 
 			{task.status === 'failed' && task.error ? (
@@ -137,8 +185,23 @@ export function TaskPage() {
 
 			{task.status === 'plan_ready' ? (
 				<>
-					<SectionHeading>implementation plan</SectionHeading>
-					<pre className="text-xs leading-relaxed whitespace-pre-wrap text-ink-dim">{task.plan ?? ''}</pre>
+					<SectionHeading
+						aside={
+							<span className="flex items-center gap-1 text-xs text-mute">
+								<MessageSquarePlus className="size-3.5" aria-hidden /> select text to comment
+							</span>
+						}
+					>
+						implementation plan
+					</SectionHeading>
+					<pre
+						ref={planRef}
+						onMouseUp={onPlanSelect}
+						onTouchEnd={onPlanSelect}
+						className="cursor-text text-xs leading-relaxed whitespace-pre-wrap text-ink-dim selection:bg-accent/30"
+					>
+						{task.plan ?? ''}
+					</pre>
 					{task.acceptance.length > 0 ? (
 						<>
 							<div className="mt-3 text-xs text-mute">acceptance criteria</div>
@@ -149,11 +212,71 @@ export function TaskPage() {
 							</ul>
 						</>
 					) : null}
-					<div className="mt-4">
+
+					{comments.length > 0 ? (
+						<>
+							<SectionHeading>your feedback</SectionHeading>
+							<div className="flex flex-col gap-2">
+								{comments.map((f, i) => (
+									<div key={i} className="rounded-xl bg-raised/50 p-3">
+										<div className="flex items-start justify-between gap-2">
+											<p className="line-clamp-2 border-l-2 border-line-2 pl-2 text-xs text-mute italic">
+												{f.snippet}
+											</p>
+											<button
+												type="button"
+												aria-label="Remove comment"
+												className="cursor-pointer p-0.5 text-mute hover:text-danger"
+												onClick={() => setComments((prev) => prev.filter((_, j) => j !== i))}
+											>
+												<X className="size-3.5" aria-hidden />
+											</button>
+										</div>
+										<p className="mt-1.5 text-[0.85rem]">{f.comment}</p>
+									</div>
+								))}
+							</div>
+						</>
+					) : null}
+
+					<div className="mt-5 flex flex-col gap-2 sm:flex-row">
 						<Button onClick={() => approve.mutate()} loading={approve.isPending}>
 							Approve &amp; generate
 						</Button>
+						{comments.length > 0 ? (
+							<Button
+								variant="secondary"
+								onClick={() => sendFeedback.mutate()}
+								loading={sendFeedback.isPending}
+							>
+								Send feedback ({comments.length}) &amp; revise plan
+							</Button>
+						) : null}
 					</div>
+
+					{popover ? (
+						<div
+							className="fixed z-50 w-72 -translate-x-1/2 rounded-xl border border-line-2 bg-surface p-3 shadow-2xl shadow-black/60"
+							style={{ left: popover.x, top: popover.y }}
+						>
+							<p className="line-clamp-2 text-xs text-mute italic">{popover.snippet}</p>
+							<Textarea
+								autoFocus
+								value={note}
+								onChange={(e) => setNote(e.target.value)}
+								placeholder="what should change here?"
+								className="mt-2 min-h-16"
+							/>
+							<div className="mt-2 flex justify-end gap-2">
+								<Button size="sm" variant="secondary" onClick={() => setPopover(null)}>
+									Cancel
+								</Button>
+								<Button size="sm" onClick={addComment} disabled={!note.trim()}>
+									Add comment
+								</Button>
+							</div>
+						</div>
+					) : null}
 				</>
 			) : null}
 

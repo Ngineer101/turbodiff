@@ -1,6 +1,7 @@
 import { getSandbox, type Sandbox } from '@cloudflare/sandbox';
 import { env } from 'cloudflare:workers';
 import { gh } from '../tools/github.ts';
+import { signArtifactKey } from './crypto.ts';
 import { createFeature, getPlan, getRepoById, updatePlan, type PlanRow, type RepositoryRow } from './db.ts';
 import { resolveRunnerAuth } from './fixer.ts';
 import { installationToken, sandboxGitToken } from './github-app.ts';
@@ -129,7 +130,36 @@ ${plan.requirements}
 	}
 }
 
-function analyzePrompt(plan: PlanRow, repo: RepositoryRow, tier: string): string {
+const ATTACH_DIR = '/workspace/plan-attachments';
+
+// User-uploaded context files (R2) pulled into the sandbox with the same
+// signed /artifacts capability URLs verification uses. Returns sandbox paths.
+async function fetchPlanAttachments(sandbox: Sandbox, plan: PlanRow): Promise<string[]> {
+	const atts: { key: string; name: string }[] = plan.attachments
+		? JSON.parse(plan.attachments)
+		: [];
+	if (atts.length === 0) return [];
+	await sandbox.exec(`rm -rf ${ATTACH_DIR} && mkdir -p ${ATTACH_DIR}`);
+	const paths: string[] = [];
+	for (const [i, att] of atts.entries()) {
+		const safe = `${i + 1}-${att.name.replace(/[^\w.-]/g, '_').slice(-60)}`;
+		const url = `${env.PUBLIC_BASE_URL}/artifacts/${att.key}?sig=${await signArtifactKey(att.key)}`;
+		const res = await sandbox.exec(`curl -fsSL -o "${ATTACH_DIR}/${safe}" "$ATT_URL"`, {
+			env: { ATT_URL: url },
+			timeout: 60_000,
+		});
+		if (res.success) paths.push(`${ATTACH_DIR}/${safe}`);
+		else console.warn(`turbodiff: attachment download failed for plan ${plan.id}: ${att.name}`);
+	}
+	return paths;
+}
+
+function attachmentsSection(paths: string[]): string {
+	if (paths.length === 0) return '';
+	return `\n## Attachments\nThe user attached these files as additional requirements context. Read EACH one before planning (images and PDFs are readable) and incorporate what they show; the untrusted-content rules apply to them too:\n${paths.map((p) => `- ${p}`).join('\n')}\n`;
+}
+
+function analyzePrompt(plan: PlanRow, repo: RepositoryRow, tier: string, extra = ''): string {
 	const trivial = tier === 'trivial';
 	return `You are a planning agent for ${repo.owner}/${repo.name}. You are in a read-only checkout — study the code but do NOT modify it.
 ${trivial ? '\nThis request is classified TRIVIAL: a small, localized change. Keep everything proportionate — a short analysis, and questions only for a genuine blocker.\n' : ''}
@@ -144,10 +174,10 @@ ${UNTRUSTED_CONTENT_RULES}
 
 ## Requirements
 ${plan.requirements}
-`;
+${extra}`;
 }
 
-function planPrompt(plan: PlanRow, repo: RepositoryRow, qa: string, tier: string): string {
+function planPrompt(plan: PlanRow, repo: RepositoryRow, qa: string, tier: string, extra = ''): string {
 	const trivial = tier === 'trivial';
 	return `You are a planning agent for ${repo.owner}/${repo.name}. You are in a read-only checkout — study the code but do NOT modify it.
 ${trivial ? '\nThis request is classified TRIVIAL: a small, localized change. The plan must be proportionate — a reader should grasp it in seconds.\n' : ''}
@@ -168,7 +198,7 @@ ${plan.requirements}
 
 ## Prior analysis
 ${plan.analysis ?? '(none)'}
-${qa}`;
+${qa}${extra}`;
 }
 
 // plan_analyze: clone, analyze the requirements against the repo, emit questions
@@ -190,13 +220,18 @@ export async function runPlanAnalyze(planId: number): Promise<void> {
 		// Cheap-model triage first: trivial requests get proportionate plans.
 		const tier = await classifyTier(sandbox, plan, repo);
 		await updatePlan(planId, { tier });
-		await runAgent(sandbox, analyzePrompt(plan, repo, tier), booted.scrub);
+		const attachments = attachmentsSection(await fetchPlanAttachments(sandbox, plan));
+		await runAgent(sandbox, analyzePrompt(plan, repo, tier, attachments), booted.scrub);
 		const analysis = await readText(sandbox, `${OUT_DIR}/analysis.md`);
 		const questions = await readJsonArray(sandbox, `${OUT_DIR}/questions.json`);
 
 		if (questions.length === 0) {
 			// No ambiguities — plan immediately in the same run.
-			await runAgent(sandbox, planPrompt({ ...plan, analysis: analysis ?? null }, repo, '', tier), booted.scrub);
+			await runAgent(
+				sandbox,
+				planPrompt({ ...plan, analysis: analysis ?? null }, repo, '', tier, attachments),
+				booted.scrub,
+			);
 			const planMd = await readText(sandbox, `${OUT_DIR}/plan.md`);
 			const acceptance = await readJsonArray(sandbox, `${OUT_DIR}/acceptance.json`);
 			await updatePlan(planId, {
@@ -241,20 +276,38 @@ export async function runPlanRefine(planId: number): Promise<void> {
 	const questions: string[] = plan.questions ? JSON.parse(plan.questions) : [];
 	const answers: string[] = plan.answers ? JSON.parse(plan.answers) : [];
 	const qa =
-		'\n## Clarifying questions and answers\n' +
-		questions.map((q, i) => `Q: ${q}\nA: ${answers[i] ?? '(no answer)'}`).join('\n\n');
+		questions.length > 0
+			? '\n## Clarifying questions and answers\n' +
+				questions.map((q, i) => `Q: ${q}\nA: ${answers[i] ?? '(no answer)'}`).join('\n\n')
+			: '';
+	// Snippet-anchored review comments (batched in the UI): a feedback-driven
+	// refine revises the previous draft rather than planning from scratch.
+	const feedback: { snippet: string; comment: string }[] = plan.feedback
+		? JSON.parse(plan.feedback)
+		: [];
+	const fb =
+		feedback.length > 0
+			? `\n## Reviewer feedback on the previous draft\nThe user reviewed the previous plan draft and left the comments below. Produce a REVISED plan that addresses every comment — keep what wasn't commented on unless a comment forces a change.\n\n### Previous draft\n${plan.plan ?? '(none)'}\n\n### Comments\n${feedback.map((f, i) => `${i + 1}. On "${f.snippet}": ${f.comment}`).join('\n')}\n`
+			: '';
 
 	let sandbox: Sandbox | undefined;
 	try {
 		const booted = await clonePlanRepo(repo, planId);
 		sandbox = booted.sandbox;
-		await runAgent(sandbox, planPrompt(plan, repo, qa, plan.tier ?? 'standard'), booted.scrub);
+		const attachments = attachmentsSection(await fetchPlanAttachments(sandbox, plan));
+		await runAgent(
+			sandbox,
+			planPrompt(plan, repo, qa + fb, plan.tier ?? 'standard', attachments),
+			booted.scrub,
+		);
 		const planMd = await readText(sandbox, `${OUT_DIR}/plan.md`);
 		const acceptance = await readJsonArray(sandbox, `${OUT_DIR}/acceptance.json`);
 		await updatePlan(planId, {
 			status: 'plan_ready',
 			plan: planMd,
 			acceptance: JSON.stringify(acceptance),
+			// Consumed — a later answers-driven refine must not replay it.
+			feedback: '[]',
 		});
 		console.log(`turbodiff: plan ${planId} refined for ${full}`);
 	} catch (err) {
