@@ -320,6 +320,18 @@ app.get('/internal/features/:id', async (c) => {
 	return c.json(feature);
 });
 
+// Operator re-verification: enqueue a fresh verify run for a feature.
+app.post('/internal/features/:id/verify', async (c) => {
+	const id = Number(c.req.param('id'));
+	const feature = Number.isInteger(id) ? await getFeature(id) : null;
+	if (!feature) return c.json({ error: 'unknown feature' }, 404);
+	if (!feature.pr_number || !feature.acceptance) {
+		return c.json({ error: 'feature has no PR or no acceptance criteria' }, 409);
+	}
+	await env.FACTORY_QUEUE.send({ kind: 'verify', featureId: id });
+	return c.json({ accepted: true, feature_id: id });
+});
+
 // Operator retry for a failed generation: re-enqueues the SAME feature row,
 // preserving its spec and commit attribution (unlike /internal/generate,
 // which would mint a fresh unattributed feature). An optional

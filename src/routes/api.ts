@@ -15,6 +15,7 @@ import {
 	deleteTodo,
 	ensureBuiltinAgents,
 	failStrandedGeneration,
+	failStrandedVerifications,
 	getAgentById,
 	getAgentBySlug,
 	getConnection,
@@ -326,6 +327,7 @@ export function createApiRoutes() {
 		// Flip wall-clock-killed runs to failed before reading, so the cards
 		// never show an eternal "generating" for a dead run.
 		await failStrandedGeneration();
+		await failStrandedVerifications();
 		const [groups, plans, todos, stats] = await Promise.all([
 			listInstallationsWithRepos(installationIds),
 			listPlansForInstallations(installationIds),
@@ -437,6 +439,7 @@ export function createApiRoutes() {
 	// Task detail for the board's compact cards.
 	app.get('/tasks/:id', async (c) => {
 		await failStrandedGeneration();
+		await failStrandedVerifications();
 		const id = Number(c.req.param('id'));
 		const plan = Number.isInteger(id) ? await getPlanWithRepoById(id) : null;
 		if (!plan || !c.get('user').installationIds.includes(plan.installation_id)) {
@@ -490,6 +493,7 @@ export function createApiRoutes() {
 
 	app.get('/factory/features/:id', async (c) => {
 		await failStrandedGeneration();
+		await failStrandedVerifications();
 		const id = Number(c.req.param('id'));
 		const feature = Number.isInteger(id) ? await getFeature(id) : null;
 		const repo = feature ? await getRepoById(feature.repository_id) : null;
