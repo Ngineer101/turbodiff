@@ -74,8 +74,10 @@ export function TaskPage() {
 		},
 		onError: onApiError,
 	});
+	// Each repo's feature retries independently — the mutation takes the
+	// feature id so the correct button can show its own loading state.
 	const retry = useMutation({
-		mutationFn: () => api.post(`/api/factory/features/${task.feature_id}/retry`),
+		mutationFn: (featureId: number) => api.post(`/api/factory/features/${featureId}/retry`),
 		onSuccess: () => {
 			toast.success('generation retried');
 			refresh();
@@ -127,9 +129,6 @@ export function TaskPage() {
 		window.getSelection()?.removeAllRanges();
 	};
 
-	const genStopped =
-		task.status === 'approved' && !task.pr_number && GENERATION_STOPPED.has(task.feature_status ?? '');
-
 	return (
 		<>
 			<Link to="/" className="inline-flex items-center gap-1.5 py-1 text-xs text-mute hover:text-ink">
@@ -138,24 +137,27 @@ export function TaskPage() {
 			<h1 className="mt-2 text-base leading-snug font-medium break-words sm:text-xl">{task.title}</h1>
 			<div className="mt-3 flex flex-wrap items-center gap-2">
 				<Pill tone={state.tone}>{state.label}</Pill>
-				{task.verification ? (
-					<Pill
-						tone={
-							task.verification.status === 'passed'
-								? 'on'
-								: task.verification.status === 'running'
-									? 'running'
-									: 'red'
-						}
-					>
-						verify: {task.verification.status}
-						{task.verification.status === 'failed' ? ` (${task.verification.failed} unmet)` : ''}
-					</Pill>
-				) : null}
+				{task.repos
+					.filter((r) => r.verification)
+					.map((r) => (
+						<Pill
+							key={r.repository_id}
+							tone={
+								r.verification!.status === 'passed'
+									? 'on'
+									: r.verification!.status === 'running'
+										? 'running'
+										: 'red'
+							}
+						>
+							{task.repos.length > 1 ? `${r.owner}/${r.name} ` : ''}verify: {r.verification!.status}
+							{r.verification!.status === 'failed' ? ` (${r.verification!.failed} unmet)` : ''}
+						</Pill>
+					))}
 				{task.archived ? <Pill>archived</Pill> : null}
 			</div>
 			<p className="mt-2.5 text-xs text-mute sm:text-[0.85rem]">
-				{task.repo} · {ago(task.created_at)}
+				{task.repos.map((r) => `${r.owner}/${r.name}`).join(', ')} · {ago(task.created_at)}
 			</p>
 			{task.attachments.length > 0 ? (
 				<div className="mt-2 flex flex-wrap gap-1.5">
@@ -280,38 +282,62 @@ export function TaskPage() {
 				</>
 			) : null}
 
-			{genStopped ? (
-				<>
-					{task.feature_error ? (
-						<p className="mt-4 text-[0.85rem] text-danger">{task.feature_error}</p>
-					) : null}
-					<div className="mt-4">
-						<Button onClick={() => retry.mutate()} loading={retry.isPending}>
-							Retry generation
-						</Button>
-					</div>
-				</>
-			) : null}
-
-			{task.status === 'approved' && task.pr_number ? (
-				<div className="mt-6 flex flex-col gap-2 sm:flex-row">
-					{task.feature_id !== null ? (
-						<Link
-							to="/factory/features/$featureId"
-							params={{ featureId: String(task.feature_id) }}
-							className={cn(buttonVariants({ variant: 'default' }), 'w-full sm:w-auto')}
-						>
-							Open in cockpit
-						</Link>
-					) : null}
-					<a
-						href={`https://github.com/${task.repo}/pull/${task.pr_number}`}
-						target="_blank"
-						rel="noopener"
-						className={cn(buttonVariants({ variant: 'secondary' }), 'w-full sm:w-auto')}
-					>
-						PR #{task.pr_number} on GitHub
-					</a>
+			{task.status === 'approved' ? (
+				<div className="mt-4 flex flex-col gap-3">
+					{task.repos.map((r) => {
+						const stopped = !r.pr_number && GENERATION_STOPPED.has(r.feature_status ?? '');
+						const tone = stopped ? 'red' : r.feature_status === 'merged' || r.pr_number ? 'on' : 'running';
+						const label = stopped
+							? 'generation stopped'
+							: r.feature_status === 'merged'
+								? 'merged'
+								: r.pr_number
+									? `PR #${r.pr_number}`
+									: 'generating';
+						return (
+							<div key={r.repository_id} className="rounded-xl bg-raised/40 p-3">
+								<div className="flex flex-wrap items-center gap-2">
+									<span className="text-[0.85rem] font-medium">
+										{r.owner}/{r.name}
+									</span>
+									<Pill tone={tone}>{label}</Pill>
+								</div>
+								{stopped && r.feature_error ? (
+									<p className="mt-2 text-[0.85rem] text-danger">{r.feature_error}</p>
+								) : null}
+								<div className="mt-2 flex flex-col gap-2 sm:flex-row">
+									{stopped && r.feature_id !== null ? (
+										<Button
+											size="sm"
+											onClick={() => retry.mutate(r.feature_id as number)}
+											loading={retry.isPending && retry.variables === r.feature_id}
+										>
+											Retry generation
+										</Button>
+									) : null}
+									{r.pr_number && r.feature_id !== null ? (
+										<Link
+											to="/factory/features/$featureId"
+											params={{ featureId: String(r.feature_id) }}
+											className={cn(buttonVariants({ variant: 'default', size: 'sm' }), 'w-full sm:w-auto')}
+										>
+											Open in cockpit
+										</Link>
+									) : null}
+									{r.pr_number ? (
+										<a
+											href={`https://github.com/${r.owner}/${r.name}/pull/${r.pr_number}`}
+											target="_blank"
+											rel="noopener"
+											className={cn(buttonVariants({ variant: 'secondary', size: 'sm' }), 'w-full sm:w-auto')}
+										>
+											PR #{r.pr_number} on GitHub
+										</a>
+									) : null}
+								</div>
+							</div>
+						);
+					})}
 				</div>
 			) : null}
 

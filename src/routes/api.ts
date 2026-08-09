@@ -21,9 +21,9 @@ import {
 	getFeature,
 	getPlan,
 	getPlanWithRepoById,
+	getTaskRepoStatuses,
 	getTodo,
 	getPlanByFeatureId,
-	getRepoByFullName,
 	getRepoById,
 	latestVerificationForFeature,
 	linkTodoToPlan,
@@ -36,6 +36,7 @@ import {
 	listPlansForInstallations,
 	listRecentReviews,
 	listRepoAgentOverrides,
+	listReposForTodo,
 	listTodos,
 	markCockpitCommentDispatched,
 	monthlyUsage,
@@ -51,6 +52,8 @@ import {
 	setRepoDemoVideos,
 	setRepoEnabled,
 	setRepoReviewOnPush,
+	setTodoRepositories,
+	todoRepositoriesForTodos,
 	updateAgent,
 	updateFeature,
 	updatePlan,
@@ -60,6 +63,7 @@ import {
 	type PlanWithRepo,
 	type RepositoryRow,
 	type ReviewActivityRow,
+	type TaskRepoStatusRow,
 } from '../lib/db.ts';
 import { requireUser, type AuthedUser } from '../lib/auth.ts';
 import { approvePlan } from '../lib/planner.ts';
@@ -141,26 +145,32 @@ function verificationSummary(
 	return { status, total, failed };
 }
 
-function serializePlan(p: PlanWithRepo): ApiPlan {
+function serializeTask(p: PlanWithRepo, repoStatuses: TaskRepoStatusRow[]): ApiPlan {
 	return {
 		id: p.id,
 		title: p.title,
-		repo: `${p.owner}/${p.name}`,
 		status: p.status,
 		error: p.error,
 		created_at: p.created_at,
 		questions: p.questions ? (JSON.parse(p.questions) as string[]) : [],
 		acceptance: p.acceptance ? (JSON.parse(p.acceptance) as string[]) : [],
 		plan: p.plan,
-		feature_id: p.feature_id,
-		pr_number: p.pr_number,
-		feature_status: p.feature_status,
-		feature_error: p.feature_error,
 		archived: p.archived === 1,
 		attachments: (p.attachments ? (JSON.parse(p.attachments) as { name: string }[]) : []).map(
 			(a) => ({ name: a.name }),
 		),
-		verification: verificationSummary(p.verification_status, p.verification_results),
+		repos: repoStatuses
+			.filter((r) => r.plan_id === p.id)
+			.map((r) => ({
+				repository_id: r.repository_id,
+				owner: r.owner,
+				name: r.name,
+				feature_id: r.feature_id,
+				pr_number: r.pr_number,
+				feature_status: r.feature_status,
+				feature_error: r.feature_error,
+				verification: verificationSummary(r.verification_status, r.verification_results),
+			})),
 	};
 }
 
@@ -332,6 +342,11 @@ export function createApiRoutes() {
 			listTodos(installationIds),
 			dashboardStats(installationIds),
 		]);
+		// Batched per-task/per-todo repo reads — one query each, not per-row.
+		const [repoStatuses, todoRepos] = await Promise.all([
+			getTaskRepoStatuses(plans.map((p) => p.id)),
+			todoRepositoriesForTodos(todos.map((t) => t.id)),
+		]);
 		return c.json<ApiBoard>({
 			stats: { month_cost_usd: stats.month_cost_usd, running: stats.running },
 			todos: todos.map((t) => ({
@@ -340,8 +355,11 @@ export function createApiRoutes() {
 				title: t.title,
 				notes: t.notes,
 				created_at: t.created_at,
+				repos: todoRepos
+					.filter((r) => r.todo_id === t.id)
+					.map((r) => ({ id: r.repository_id, owner: r.owner, name: r.name })),
 			})),
-			tasks: plans.filter((p) => p.archived !== 1).map(serializePlan),
+			tasks: plans.filter((p) => p.archived !== 1).map((p) => serializeTask(p, repoStatuses)),
 			installations: groups.map(({ installation }) => ({
 				id: installation.id,
 				account_login: installation.account_login,
@@ -353,10 +371,27 @@ export function createApiRoutes() {
 		});
 	});
 
+	// A backlog card targets 1-3 repos from the same installation (multi-repo
+	// tasks fan out into one independent PR per repo at approval).
+	const MAX_TASK_REPOS = 3;
+
+	// Every id must belong to the installation and be enabled — enforced
+	// server-side so the client-side picker can't be bypassed.
+	async function validRepoIds(installationId: number, repoIds: number[]): Promise<boolean> {
+		if (repoIds.length === 0 || repoIds.length > MAX_TASK_REPOS) return false;
+		const repos = await Promise.all(repoIds.map((id) => getRepoById(id)));
+		return repos.every((r) => r && r.installation_id === installationId && r.enabled === 1);
+	}
+
 	app.post('/todos', async (c) => {
 		const { installationIds, session } = c.get('user');
 		const body = await c.req
-			.json<{ installation_id?: number; title?: string; notes?: string }>()
+			.json<{
+				installation_id?: number;
+				title?: string;
+				notes?: string;
+				repository_ids?: number[];
+			}>()
 			.catch(() => null);
 		const title = body?.title?.trim() ?? '';
 		if (!title) return c.json({ error: 'title is required' }, 400);
@@ -364,10 +399,16 @@ export function createApiRoutes() {
 		if (!installationIds.includes(installationId)) {
 			return c.json({ error: 'unknown installation' }, 404);
 		}
+		const repoIds = Array.isArray(body?.repository_ids) ? body.repository_ids.map(Number) : [];
+		if (repoIds.length > MAX_TASK_REPOS) return c.json({ error: 'at most 3 repositories' }, 400);
+		if (repoIds.length > 0 && !(await validRepoIds(installationId, repoIds))) {
+			return c.json({ error: 'unknown or disabled repository' }, 400);
+		}
 		const id = await createTodo(installationId, title.slice(0, 200), body?.notes?.trim() || null, {
 			login: session.login,
 			id: session.userId,
 		});
+		if (repoIds.length > 0) await setTodoRepositories(id, repoIds);
 		return c.json({ ok: true, todo_id: id });
 	});
 
@@ -384,8 +425,29 @@ export function createApiRoutes() {
 		return c.json({ ok: true });
 	});
 
-	// Start a todo: fills in repo + requirements and fires the normal planning
-	// flow; the todo links to the plan and leaves the To Do column.
+	// The persisted, pre-start repo picker: editable any time up to "Start" —
+	// once the todo is linked to a plan the list is frozen.
+	app.post('/todos/:id/repos', async (c) => {
+		const id = Number(c.req.param('id'));
+		const todo = Number.isInteger(id) ? await getTodo(id) : null;
+		if (!todo || !c.get('user').installationIds.includes(todo.installation_id)) {
+			return c.json({ error: 'unknown todo' }, 404);
+		}
+		if (todo.plan_id !== null) return c.json({ error: 'already started' }, 409);
+		const body = await c.req.json<{ repository_ids?: unknown }>().catch(() => null);
+		const repoIds = Array.isArray(body?.repository_ids) ? body.repository_ids.map(Number) : [];
+		if (repoIds.length === 0) return c.json({ error: 'at least one repository is required' }, 400);
+		if (repoIds.length > MAX_TASK_REPOS) return c.json({ error: 'at most 3 repositories' }, 400);
+		if (!(await validRepoIds(todo.installation_id, repoIds))) {
+			return c.json({ error: 'unknown or disabled repository' }, 400);
+		}
+		await setTodoRepositories(todo.id, repoIds);
+		return c.json({ ok: true });
+	});
+
+	// Start a todo: fills in requirements and fires the normal planning flow
+	// against its persisted repo list; the todo links to the plan and leaves
+	// the To Do column.
 	app.post('/todos/:id/start', async (c) => {
 		const id = Number(c.req.param('id'));
 		const todo = Number.isInteger(id) ? await getTodo(id) : null;
@@ -393,24 +455,21 @@ export function createApiRoutes() {
 			return c.json({ error: 'unknown todo' }, 404);
 		}
 		if (todo.plan_id !== null) return c.json({ error: 'already started' }, 409);
+		const repos = await listReposForTodo(todo.id);
+		if (repos.length === 0) {
+			return c.json({ error: 'select at least one repository first' }, 400);
+		}
 		const body = await c.req
 			.json<{
-				repo?: string;
 				title?: string;
 				requirements?: string;
 				attachments?: Record<string, unknown>[];
 			}>()
 			.catch(() => null);
-		const repoFull = body?.repo ?? '';
 		const title = body?.title?.trim() || todo.title;
 		const requirements = body?.requirements?.trim() ?? '';
-		const match = repoFull.match(/^([\w.-]+)\/([\w.-]+)$/);
-		if (!match || !requirements) {
-			return c.json({ error: 'repository and requirements are required' }, 400);
-		}
-		const row = await getRepoByFullName(match[1], match[2]);
-		if (!row || !c.get('user').installationIds.includes(row.installation_id)) {
-			return c.json({ error: 'unknown repository' }, 404);
+		if (!requirements) {
+			return c.json({ error: 'requirements are required' }, 400);
 		}
 		const rawAtts = Array.isArray(body?.attachments) ? body.attachments : [];
 		const attachments = rawAtts
@@ -423,7 +482,7 @@ export function createApiRoutes() {
 			.slice(0, 5);
 		const { session } = c.get('user');
 		const planId = await createPlan(
-			row.id,
+			repos.map((r) => r.id),
 			title,
 			requirements,
 			{ login: session.login, id: session.userId },
@@ -442,7 +501,8 @@ export function createApiRoutes() {
 		if (!plan || !c.get('user').installationIds.includes(plan.installation_id)) {
 			return c.json({ error: 'unknown task' }, 404);
 		}
-		return c.json<ApiPlan>(serializePlan(plan));
+		const repoStatuses = await getTaskRepoStatuses([plan.id]);
+		return c.json<ApiPlan>(serializeTask(plan, repoStatuses));
 	});
 
 	// Started tasks are never deleted — archived hides them from the board.
@@ -480,10 +540,13 @@ export function createApiRoutes() {
 		if (!plan) return c.json({ error: 'unknown plan' }, 404);
 		const { session } = c.get('user');
 		// The approver authors the generated commit (src/lib/attribution.ts).
-		const featureId = await approvePlan(plan.id, { login: session.login, id: session.userId });
-		if (featureId === null) return c.json({ error: 'plan is not ready for approval' }, 409);
-		await env.FACTORY_QUEUE.send({ kind: 'generate', featureId });
-		return c.json({ ok: true, feature_id: featureId });
+		const featureIds = await approvePlan(plan.id, { login: session.login, id: session.userId });
+		if (featureIds === null) return c.json({ error: 'plan is not ready for approval' }, 409);
+		// One independent feature per repo — generation runs fully in parallel.
+		await Promise.all(
+			featureIds.map((featureId) => env.FACTORY_QUEUE.send({ kind: 'generate', featureId })),
+		);
+		return c.json({ ok: true, feature_ids: featureIds });
 	});
 
 	// --- Factory PR cockpit ---
