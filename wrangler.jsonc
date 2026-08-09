@@ -71,6 +71,11 @@
 			"binding": "GEN_WORKFLOW",
 			"name": "turbodiff-generation",
 			"class_name": "GenerationWorkflow"
+		},
+		{
+			"binding": "VERIFY_WORKFLOW",
+			"name": "turbodiff-verification",
+			"class_name": "VerificationWorkflow"
 		}
 	],
 	// Decouples factory runs (minutes) from the requests that trigger them

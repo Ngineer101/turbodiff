@@ -269,6 +269,21 @@ export async function latestVerificationForFeature(
 		.first<VerificationRow>();
 }
 
+// Verification runs killed mid-flight (isolate death) never reach their
+// error handler, stranding rows in 'running' and the UI in an endless poll.
+// Lazy sweep from the read paths, like failStrandedGeneration.
+const VERIFICATION_STRAND_MINUTES = 45;
+
+export async function failStrandedVerifications(): Promise<number> {
+	const res = await env.DB.prepare(
+		`UPDATE verifications SET status = 'error',
+		   error = 'verification run was killed before finishing — re-run it from the PR or wait for the next push'
+		 WHERE status = 'running'
+		   AND created_at < datetime('now', '-${VERIFICATION_STRAND_MINUTES} minutes')`,
+	).run();
+	return res.meta.changes ?? 0;
+}
+
 export async function createVerification(featureId: number): Promise<number> {
 	const row = await env.DB.prepare(
 		'INSERT INTO verifications (feature_id) VALUES (?1) RETURNING id',

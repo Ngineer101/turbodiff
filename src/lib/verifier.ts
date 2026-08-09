@@ -27,7 +27,9 @@ import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
 const CLONE_DIR = '/workspace/verify-repo';
 const OUT_DIR = '/workspace/verify-out';
 const SHOTS_DIR = `${OUT_DIR}/screenshots`;
-const AGENT_TIMEOUT_MS = 10 * 60_000;
+// Verification runs inside a Workflow step (no wall clock), so the agent can
+// afford launch discovery + screenshots + a recording.
+const AGENT_TIMEOUT_MS = 20 * 60_000;
 
 export interface VerifyQueueMessage {
 	kind: 'verify';
@@ -61,6 +63,11 @@ repository itself: package.json scripts (dev/start/preview), the README,
 framework config, lockfiles. Install dependencies first if needed. Launch in
 the background (\`nohup ... > /tmp/app.log 2>&1 &\`), wait for its port to
 accept connections, and verify runtime criteria against the live app.
+
+Timebox launch discovery to a few minutes. If the app needs Docker,
+containers, cloud bindings (e.g. Cloudflare Workers/D1/R2), a database, or
+other external services to run, treat it as NOT launchable here — do not
+fight it; verify statically instead.
 
 If you launch it successfully, record what worked by writing
 ${OUT_DIR}/run-command.json:

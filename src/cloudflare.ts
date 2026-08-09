@@ -10,15 +10,18 @@
 import { processFixMessage, type FixQueueMessage } from './lib/fixer.ts';
 import { startGeneration, type GenQueueMessage } from './lib/generation-workflow.ts';
 import { runPlanAnalyze, runPlanRefine, type PlanQueueMessage } from './lib/planner.ts';
-import { runVerification, type VerifyQueueMessage } from './lib/verifier.ts';
+import { startVerification, VerificationWorkflow } from './lib/verification-workflow.ts';
+import { type VerifyQueueMessage } from './lib/verifier.ts';
 
 // The fixer sandbox container (docs/software-factory-design.md). Declared in
 // wrangler.jsonc under containers/durable_objects with migration tag v2.
 export { Sandbox } from '@cloudflare/sandbox';
 
-// Generation runs as a durable Workflow (binding GEN_WORKFLOW in
-// wrangler.jsonc): memoized steps, bounded retries, no wall-clock kills.
+// Generation and verification run as durable Workflows (bindings
+// GEN_WORKFLOW / VERIFY_WORKFLOW in wrangler.jsonc): memoized steps, bounded
+// retries, no wall-clock kills.
 export { GenerationWorkflow } from './lib/generation-workflow.ts';
+export { VerificationWorkflow };
 
 // Fix and generation runs take minutes, far beyond what a webhook or intake
 // request can wait on, so producers enqueue and these consumers do the work.
@@ -43,7 +46,9 @@ export default {
 					await runPlanRefine(body.planId);
 					break;
 				case 'verify':
-					await runVerification(body.featureId);
+					// Just creates a durable workflow instance — verify runs exceed
+					// the consumer wall clock routinely (launch discovery + demos).
+					await startVerification(body.featureId);
 					break;
 				default:
 					await processFixMessage(body);
