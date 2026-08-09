@@ -33,7 +33,7 @@ import { mintUserToken } from './user-tokens.ts';
 // the agent does run cache-hot. Each feature works in its own directory for
 // isolation; only the caches are shared.
 const CACHE_DIR = '/workspace/repo-cache';
-const NPM_CACHE_ENV = {
+export const NPM_CACHE_ENV = {
 	npm_config_cache: '/workspace/.npm-cache',
 	npm_config_store_dir: '/workspace/.pnpm-store',
 };
