@@ -7,7 +7,8 @@
 //
 // https://flueframework.com/docs/guide/cloudflare-target/#extending-cloudflarets-entrypoint
 
-import { processFixMessage, type FixQueueMessage } from './lib/fixer.ts';
+import { startFix, FixWorkflow } from './lib/fix-workflow.ts';
+import { type FixQueueMessage } from './lib/fixer.ts';
 import { startGeneration, type GenQueueMessage } from './lib/generation-workflow.ts';
 import { runPlanAnalyze, runPlanRefine, type PlanQueueMessage } from './lib/planner.ts';
 import { startVerification, VerificationWorkflow } from './lib/verification-workflow.ts';
@@ -22,6 +23,7 @@ export { Sandbox } from '@cloudflare/sandbox';
 // retries, no wall-clock kills.
 export { GenerationWorkflow } from './lib/generation-workflow.ts';
 export { VerificationWorkflow };
+export { FixWorkflow };
 
 // Fix and generation runs take minutes, far beyond what a webhook or intake
 // request can wait on, so producers enqueue and these consumers do the work.
@@ -51,7 +53,9 @@ export default {
 					await startVerification(body.featureId);
 					break;
 				default:
-					await processFixMessage(body);
+					// Fix runs get the same no-wall-clock treatment as generation
+					// and verification: the consumer just creates the instance.
+					await startFix(body);
 			}
 			message.ack();
 		}

@@ -46,10 +46,10 @@ export interface FixOutcome {
 const CLONE_DIR = '/workspace/repo';
 const TASK_FILE = '/workspace/fix-task.md';
 const NOTES_FILE = '/workspace/fix-notes.md';
-// Clone (2) + agent (8) + checks (4) + push (1) must fit inside a queue
-// consumer's 15-minute wall clock; typical runs use a fraction of each budget.
-const AGENT_TIMEOUT_MS = 8 * 60_000;
-const TEST_TIMEOUT_MS = 4 * 60_000;
+// Fix runs execute inside a Workflow step (no wall clock — see
+// fix-workflow.ts), so the budgets reflect the work, not a deadline.
+const AGENT_TIMEOUT_MS = 15 * 60_000;
+const TEST_TIMEOUT_MS = 10 * 60_000;
 
 // Fix runs per PR across all triggers. A fix push causes a re-review, which
 // can cause another blocking review and another fix — the cap guarantees the
