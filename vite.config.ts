@@ -9,7 +9,7 @@ export default defineConfig({
 	// Repo style: tabs + single quotes (configured so a future `vp fmt` run
 	// doesn't reindent the codebase as a side effect).
 	fmt: {
-		useTabs: true,
+		useTabs: false,
 		singleQuote: true,
 		printWidth: 100,
 	},

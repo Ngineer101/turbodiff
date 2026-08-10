@@ -40,8 +40,8 @@
 		"esbuild": "^0.28.1",
 		"tailwindcss": "^4.3.3",
 		"typescript": "^7.0.2",
-		"vite": "npm:@voidzero-dev/vite-plus-core@0.2.7",
-		"vite-plus": "0.2.7",
+		"vite": "catalog:",
+		"vite-plus": "catalog:",
 		"wrangler": "^4.97.0"
 	},
 	"overrides": {
