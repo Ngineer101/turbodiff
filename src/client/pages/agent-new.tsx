@@ -12,36 +12,43 @@ import { PageTitle, SectionHeading } from '../components/section.tsx';
 const DEFAULT_MODEL_HINT = 'cloudflare/anthropic/claude-sonnet-5';
 
 export function AgentNewPage() {
-	const { installation } = useSearch({ from: '/agents/new' });
-	const navigate = useNavigate();
-	const queryClient = useQueryClient();
-	const { data } = useSuspenseQuery(agentsQuery);
-	const [error, setError] = useState<string | null>(null);
-	const account = data.installations.find((i) => i.id === installation)?.account_login;
+  const { installation } = useSearch({ from: '/agents/new' });
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { data } = useSuspenseQuery(agentsQuery);
+  const [error, setError] = useState<string | null>(null);
+  const account = data.installations.find((i) => i.id === installation)?.account_login;
 
-	const create = useMutation({
-		mutationFn: (values: AgentFormValues) => api.post(`/api/agents?installation=${installation}`, values),
-		onSuccess: () => {
-			toast.success('agent created');
-			queryClient.invalidateQueries({ queryKey: ['agents'] });
-			navigate({ to: '/agents' });
-		},
-		onError: (err) => setError(err instanceof ApiError ? err.message : 'request failed'),
-	});
+  const create = useMutation({
+    mutationFn: (values: AgentFormValues) =>
+      api.post(`/api/agents?installation=${installation}`, values),
+    onSuccess: () => {
+      toast.success('agent created');
+      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      navigate({ to: '/agents' });
+    },
+    onError: (err) => setError(err instanceof ApiError ? err.message : 'request failed'),
+  });
 
-	return (
-		<>
-			<PageTitle>agents</PageTitle>
-			<SectionHeading>new agent{account ? ` — ${account}` : ''}</SectionHeading>
-			<AgentForm
-				initial={{ name: '', slug: '', description: '', instructions: '', model: DEFAULT_MODEL_HINT }}
-				slugEditable
-				defaultModel={DEFAULT_MODEL_HINT}
-				error={error}
-				busy={create.isPending}
-				onSubmit={(values) => create.mutate(values)}
-				onCancel={() => navigate({ to: '/agents' })}
-			/>
-		</>
-	);
+  return (
+    <>
+      <PageTitle>agents</PageTitle>
+      <SectionHeading>new agent{account ? ` — ${account}` : ''}</SectionHeading>
+      <AgentForm
+        initial={{
+          name: '',
+          slug: '',
+          description: '',
+          instructions: '',
+          model: DEFAULT_MODEL_HINT,
+        }}
+        slugEditable
+        defaultModel={DEFAULT_MODEL_HINT}
+        error={error}
+        busy={create.isPending}
+        onSubmit={(values) => create.mutate(values)}
+        onCancel={() => navigate({ to: '/agents' })}
+      />
+    </>
+  );
 }

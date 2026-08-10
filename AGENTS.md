@@ -23,16 +23,26 @@ Workers at <https://turbodiff.dev> (repo: <https://github.com/Ngineer101/turbodi
 
 ## Commands
 
-- `npx flue run src/agents/hello.ts --message "Hi"` — run an agent locally, no server.
-- `npm run dev` — start the dev server.
-- `npm run deploy` — build and deploy the Worker.
-- `npm run check:types` — typecheck.
-- `npx flue docs search <query>` — search the Flue docs from the terminal (then `flue docs read <path>`).
-- `npx flue add` — list blueprints for adding channels, sandboxes, and databases.
+The toolchain is [Vite+](https://viteplus.dev) (`vp`), which owns the package manager
+(pnpm 11 via `devEngines`), the Node version (`.node-version`), and the task runner
+(tasks live in `vite.config.ts` `run.tasks` — task names may not collide with
+package.json script names, which is why dev/build/deploy exist only as tasks).
 
-`package.json` pins npm ≥ 12 via `devEngines`; if npm refuses to run scripts, call the
-binaries directly (`./node_modules/.bin/vite dev`, `./node_modules/.bin/tsc --noEmit`,
-`./node_modules/.bin/wrangler deploy`). `npm install` needs `--legacy-peer-deps`.
+- `vp install` — install dependencies (pnpm underneath; `pnpm-workspace.yaml` carries
+  the `@flue/runtime` patch and native-build allowlist — the patch is load-bearing).
+- `vp run dev` — start the dev server (builds the client SPA first).
+- `vp run build` / `vp run deploy` — build, or build and deploy the Worker.
+- `vp run check:types` — typecheck both tsconfig programs (cached).
+- `vp check` — lint + typecheck (format-check is off until the repo is oxfmt-formatted).
+- `vp test` — Vitest smoke tests via the plugin-free `vitest.config.ts` (the root Vite
+  config's Cloudflare plugin is incompatible with Vitest's environment options — do not
+  move the `test` block into it).
+- `vp lint` / `vp fmt` — Oxlint / Oxfmt (fmt configured for the repo's tabs + single
+  quotes in `vite.config.ts`).
+- `vp exec <bin>` — escape hatch for anything a `vp` subcommand doesn't cover
+  (e.g. `vp exec wrangler ...`).
+- `npx flue run src/agents/hello.ts --message "Hi"` — run an agent locally, no server.
+- `npx flue docs search <query>` — search the Flue docs from the terminal (then `flue docs read <path>`).
 
 ## Conventions
 

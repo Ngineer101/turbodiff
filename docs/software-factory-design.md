@@ -19,7 +19,7 @@ Intake ──▶ Plan ──▶ [approve?] ──▶ Generate ──▶ PR ─�
 
 What already exists in this repo is more than the "Review" box:
 
-- **Blocking reviews** (P1 → `REQUEST_CHANGES`, clean → `APPROVE`) *is* the merge gate.
+- **Blocking reviews** (P1 → `REQUEST_CHANGES`, clean → `APPROVE`) _is_ the merge gate.
 - **Risk tiering** (`src/lib/risk.ts`) is a generic "size the work, scale the workers"
   primitive that generalizes beyond review (e.g. sizing the fix/codegen model).
 - GitHub App auth, per-repo settings, agents-as-data, metering, and the D1 schema are
@@ -33,14 +33,14 @@ Two things are genuinely new:
 
 ## Cloudflare primitive mapping
 
-| Pipeline piece    | Primitive                                   | Why |
-|-------------------|---------------------------------------------|-----|
-| Orchestration     | Cloudflare Workflows                        | Durable steps, retries, `step.waitForEvent()` for plan approval and CI webhooks; sleeps for days without compute cost |
-| Codegen / fixer   | Sandbox SDK (containers)                    | Claude Code headless with git, real filesystem, test execution |
-| Review + gate     | Turbodiff as-is (Flue agents on DOs)        | Already built |
-| Frontend evidence | Playwright/agent-browser in the sandbox     | Record a video of the feature; store in R2, link in PR |
-| Pipeline state    | D1 (extend existing schema)                 | `features`, `fix_attempts` tables; FK from `reviews` |
-| Intake/approvals  | Existing Hono dashboard + session auth      | Already built |
+| Pipeline piece    | Primitive                               | Why                                                                                                                   |
+| ----------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Orchestration     | Cloudflare Workflows                    | Durable steps, retries, `step.waitForEvent()` for plan approval and CI webhooks; sleeps for days without compute cost |
+| Codegen / fixer   | Sandbox SDK (containers)                | Claude Code headless with git, real filesystem, test execution                                                        |
+| Review + gate     | Turbodiff as-is (Flue agents on DOs)    | Already built                                                                                                         |
+| Frontend evidence | Playwright/agent-browser in the sandbox | Record a video of the feature; store in R2, link in PR                                                                |
+| Pipeline state    | D1 (extend existing schema)             | `features`, `fix_attempts` tables; FK from `reviews`                                                                  |
+| Intake/approvals  | Existing Hono dashboard + session auth  | Already built                                                                                                         |
 
 ## Design decisions (from the braindump review)
 
@@ -48,7 +48,7 @@ Two things are genuinely new:
    emit machine-checkable acceptance criteria; a spec-conformance persona (an `agents`
    row, not new code) reviews the diff against them. A flawless diff that builds the
    wrong thing must not pass the gate.
-2. **Test before review.** The codegen/fix sandbox runs unit tests *before* pushing —
+2. **Test before review.** The codegen/fix sandbox runs unit tests _before_ pushing —
    the cheapest iteration loop. CI on the PR is the ground truth the workflow waits on
    (`check_suite` webhook); we do not rebuild CI. The browser video is evidence for the
    human, not a gate.
@@ -65,14 +65,14 @@ Two things are genuinely new:
 ## Runner auth: bring-your-own-subscription
 
 Users already pay for Claude (Pro/Max) or ChatGPT (Codex) subscriptions. The fixer and
-codegen steps should be able to spend *those* instead of API tokens through the gateway.
+codegen steps should be able to spend _those_ instead of API tokens through the gateway.
 The runner abstraction supports three auth modes:
 
-| Mode                  | Mechanism | Notes |
-|-----------------------|-----------|-------|
-| `claude_subscription` | `claude setup-token` → long-lived OAuth token → `CLAUDE_CODE_OAUTH_TOKEN` env in the sandbox; Claude Code CLI runs headless (`claude -p`) | Officially supported by Anthropic for CI/headless use. Token is user-scoped: store per-user, sealed. |
-| `gateway`             | Claude Code CLI with `ANTHROPIC_BASE_URL` pointed at the AI Gateway's Anthropic endpoint (BYOK) + gateway auth header | Same metering/caching path as reviews. Default when no subscription token is configured. |
-| `codex_subscription`  | Codex CLI (`codex exec`) with a ChatGPT-authenticated `auth.json` | **Future.** OpenAI's terms around headless/server reuse of ChatGPT subscriptions are less clear than Anthropic's `setup-token` flow — needs a ToS check before shipping to users. |
+| Mode                  | Mechanism                                                                                                                                 | Notes                                                                                                                                                                             |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `claude_subscription` | `claude setup-token` → long-lived OAuth token → `CLAUDE_CODE_OAUTH_TOKEN` env in the sandbox; Claude Code CLI runs headless (`claude -p`) | Officially supported by Anthropic for CI/headless use. Token is user-scoped: store per-user, sealed.                                                                              |
+| `gateway`             | Claude Code CLI with `ANTHROPIC_BASE_URL` pointed at the AI Gateway's Anthropic endpoint (BYOK) + gateway auth header                     | Same metering/caching path as reviews. Default when no subscription token is configured.                                                                                          |
+| `codex_subscription`  | Codex CLI (`codex exec`) with a ChatGPT-authenticated `auth.json`                                                                         | **Future.** OpenAI's terms around headless/server reuse of ChatGPT subscriptions are less clear than Anthropic's `setup-token` flow — needs a ToS check before shipping to users. |
 
 The agent CLI is the abstraction boundary: the sandbox runs "a coding CLI with env-var
 auth", so adding a runner is a Dockerfile line plus an env mapping — no orchestration
@@ -102,17 +102,17 @@ fix_attempts (
 1. **Phase 1 — close the loop (fix iteration).** On `pull_request_review` submitted
    with `REQUEST_CHANGES` from turbodiff (opt-in per repo), dispatch a fix agent in a
    Cloudflare Sandbox: clone head branch → apply findings → run tests → push. Works on
-   human-authored PRs too — standalone value before any factory exists. *Status: done —
+   human-authored PRs too — standalone value before any factory exists. _Status: done —
    manual trigger (`POST /internal/fix`), webhook trigger (`pull_request_review` →
    `FIX_QUEUE` → consumer in `src/cloudflare.ts`), per-repo `auto_fix` dashboard toggle,
    and the `fix_attempts` cap with human-handoff comment. The GitHub App needs
-   Contents: Read & write and the Pull request review webhook event.*
+   Contents: Read & write and the Pull request review webhook event._
 2. **Phase 2 — generation.** A Workflow: spec → sandbox codegen → tests → open PR →
    existing review + fix loop take over. API-triggered, no UI.
 3. **Phase 3 — planning intake.** Dashboard feature entry; planning agent asks
    clarifying questions, produces plan + acceptance criteria; `waitForEvent` approval
    gate; spec-conformance reviewer persona.
-4. **Phase 4 — verification artifacts.** *Built:* an empirical verification step
+4. **Phase 4 — verification artifacts.** _Built:_ an empirical verification step
    doubling as the spec-conformance gate. After generation opens a PR, a verify
    run checks each acceptance criterion against the checked-out branch — static
    criteria by reading the tree, runtime criteria by launching the app
@@ -121,7 +121,7 @@ fix_attempts (
    Evidence lands on the PR as a report comment (✅/❌ table + inline images
    served from R2 via `GET /artifacts/*`); unmet criteria feed the auto-fix
    loop as findings. Screenshots-over-video: they render inline in PR comments.
-5. **Phase 5 — auto-merge + trust.** *Built:* per-repo `auto_merge` toggle (default
+5. **Phase 5 — auto-merge + trust.** _Built:_ per-repo `auto_merge` toggle (default
    off, only honored alongside blocking reviews). A factory PR merges itself only
    when the latest empirical verification passed AND at least one review exists
    with zero blocking-intent reviews in the PR's history; both completion paths
@@ -139,8 +139,8 @@ fix_attempts (
 {
   "pr_url": "https://github.com/<owner>/<repo>/pull/<n>",
   "findings": "markdown list of P1/P2 findings to address",
-  "auth_mode": "claude_subscription | gateway",   // optional; auto-detected
-  "test_command": "npm test"                      // optional
+  "auth_mode": "claude_subscription | gateway", // optional; auto-detected
+  "test_command": "npm test" // optional
 }
 ```
 

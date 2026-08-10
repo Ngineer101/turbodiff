@@ -6,5 +6,19 @@ allowBuilds:
   node-liblzma: false
   protobufjs: false
   workerd: true
+minimumReleaseAgeExclude:
+  - '@tanstack/react-router@1.170.22'
+  - '@tanstack/router-core@1.171.19'
+  - lucide-react@1.30.0
 patchedDependencies:
   '@flue/runtime': patches/@flue__runtime.patch
+catalog:
+  vite: npm:@voidzero-dev/vite-plus-core@0.2.8
+  vite-plus: 0.2.8
+overrides:
+  vite: 'catalog:'
+peerDependencyRules:
+  allowAny:
+    - vite
+  allowedVersions:
+    vite: '*'
