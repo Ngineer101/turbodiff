@@ -33,9 +33,13 @@ export const GENERATION_STOPPED = new Set(['failed', 'checks_failed', 'no_change
 
 export function taskIsLive(p: ApiPlan): boolean {
   if (RUNNING_PLAN_STATUSES.has(p.status)) return true;
-  if (p.verification?.status === 'running') return true;
-  // Approved and no PR yet: generation is in flight unless it stopped.
-  return p.status === 'approved' && !p.pr_number && !GENERATION_STOPPED.has(p.feature_status ?? '');
+  if (p.repos.some((r) => r.verification?.status === 'running')) return true;
+  // Approved and some repo has no PR yet: that repo's generation is in
+  // flight unless it stopped.
+  return (
+    p.status === 'approved' &&
+    p.repos.some((r) => !r.pr_number && !GENERATION_STOPPED.has(r.feature_status ?? ''))
+  );
 }
 
 export const meQuery = queryOptions({

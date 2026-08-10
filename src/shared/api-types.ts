@@ -71,25 +71,32 @@ export interface ApiVerificationSummary {
   failed: number;
 }
 
+// One repo attached to a task, with its independent feature/PR/verification
+// status — a multi-repo task carries one of these per repo, each generated
+// and retryable independently of the others.
+export interface ApiTaskRepo {
+  repository_id: number;
+  owner: string;
+  name: string;
+  feature_id: number | null;
+  pr_number: number | null;
+  feature_status: string | null;
+  feature_error: string | null;
+  verification: ApiVerificationSummary | null;
+}
+
 export interface ApiPlan {
   id: number;
   title: string;
-  repo: string; // "owner/name"
   status: PlanStatus | string;
   error: string | null;
   created_at: string;
   questions: string[];
   acceptance: string[];
   plan: string | null;
-  feature_id: number | null;
-  pr_number: number | null;
-  // Lifecycle of the linked feature once the plan is approved: generating /
-  // pr_opened / checks_failed / no_changes / failed (+ its error detail).
-  feature_status: string | null;
-  feature_error: string | null;
   archived: boolean;
   attachments: { name: string }[];
-  verification: ApiVerificationSummary | null;
+  repos: ApiTaskRepo[];
 }
 
 export interface ApiFactoryLegacy_unused {
@@ -227,6 +234,7 @@ export interface ApiTodo {
   title: string;
   notes: string | null;
   created_at: string;
+  repos: { id: number; owner: string; name: string }[];
 }
 
 // The kanban home: unstarted todos + started tasks (plans). Columns are

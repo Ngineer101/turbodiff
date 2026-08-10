@@ -233,7 +233,7 @@ app.post('/internal/plans', async (c) => {
   if (!repo) return c.json({ error: `Turbodiff is not installed on ${payload.repo}` }, 404);
   if (!repo.enabled) return c.json({ error: 'reviews are disabled for this repository' }, 409);
 
-  const planId = await createPlan(repo.id, payload.title.trim(), payload.requirements.trim());
+  const planId = await createPlan([repo.id], payload.title.trim(), payload.requirements.trim());
   await env.FACTORY_QUEUE.send({ kind: 'plan_analyze', planId });
   return c.json({ accepted: true, plan_id: planId, status_url: `/internal/plans/${planId}` });
 });
@@ -269,16 +269,18 @@ app.post('/internal/plans/:id/answers', async (c) => {
 // acceptance criteria) and enqueues generation.
 app.post('/internal/plans/:id/approve', async (c) => {
   const id = Number(c.req.param('id'));
-  const featureId = await approvePlan(id);
-  if (featureId === null) {
+  const featureIds = await approvePlan(id);
+  if (featureIds === null) {
     return c.json({ error: 'plan not found or not in plan_ready state' }, 409);
   }
-  await env.FACTORY_QUEUE.send({ kind: 'generate', featureId });
+  await Promise.all(
+    featureIds.map((featureId) => env.FACTORY_QUEUE.send({ kind: 'generate', featureId })),
+  );
   return c.json({
     accepted: true,
     plan_id: id,
-    feature_id: featureId,
-    status_url: `/internal/features/${featureId}`,
+    feature_ids: featureIds,
+    status_url: `/internal/features/${featureIds[0]}`,
   });
 });
 

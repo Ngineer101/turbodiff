@@ -6,7 +6,9 @@ import { GENERATION_STOPPED } from './queries.ts';
 export type TaskTone = 'running' | 'on' | 'red' | 'warn' | 'neutral';
 
 export function taskColumn(p: ApiPlan): 'in_progress' | 'done' {
-  return p.feature_status === 'merged' ? 'done' : 'in_progress';
+  return p.repos.length > 0 && p.repos.every((r) => r.feature_status === 'merged')
+    ? 'done'
+    : 'in_progress';
 }
 
 export function taskState(p: ApiPlan): { label: string; tone: TaskTone; hint: string } {
@@ -34,26 +36,36 @@ export function taskState(p: ApiPlan): { label: string; tone: TaskTone; hint: st
     case 'failed':
       return { label: 'planning failed', tone: 'red', hint: p.error ?? 'planning failed' };
     case 'approved': {
-      if (p.feature_status === 'merged')
+      // Aggregated over every attached repo — done only once ALL of them
+      // merged; a stopped/open repo never blocks the others' progress.
+      const total = p.repos.length;
+      const merged = p.repos.filter((r) => r.feature_status === 'merged').length;
+      const stopped = p.repos.filter((r) => GENERATION_STOPPED.has(r.feature_status ?? ''));
+      const open = p.repos.filter((r) => r.pr_number && r.feature_status !== 'merged').length;
+      if (total > 0 && merged === total) {
         return { label: 'merged', tone: 'on', hint: 'pull request merged' };
-      if (p.feature_status === 'pr_closed')
+      }
+      if (stopped.length > 0) {
         return {
-          label: 'PR closed',
-          tone: 'neutral',
-          hint: 'the pull request was closed without merging',
-        };
-      if (GENERATION_STOPPED.has(p.feature_status ?? ''))
-        return {
-          label: 'generation stopped',
+          label: `generation stopped (${stopped.length})`,
           tone: 'red',
-          hint: p.feature_error ?? 'generation stopped',
+          hint: stopped[0].feature_error ?? 'generation stopped',
         };
-      if (p.pr_number)
+      }
+      if (merged > 0) {
         return {
-          label: `PR #${p.pr_number}`,
+          label: `${merged}/${total} merged`,
           tone: 'on',
-          hint: 'pull request open — review and merge',
+          hint: 'some repos are still in flight',
         };
+      }
+      if (open > 0) {
+        return {
+          label: `${open}/${total} PRs open`,
+          tone: 'on',
+          hint: 'pull request(s) open — review and merge',
+        };
+      }
       return { label: 'generating', tone: 'running', hint: 'the coding agent is working…' };
     }
     default:

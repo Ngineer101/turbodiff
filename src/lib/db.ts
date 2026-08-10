@@ -254,6 +254,105 @@ export async function listCockpitComments(featureId: number): Promise<CockpitCom
   return res.results;
 }
 
+// --- multi-repo task/plan repo lists (migration 0024) ---
+
+// Replaces a todo's repo list wholesale (delete-then-insert), so repeated
+// calls with a different array simply replace the prior selection.
+export async function setTodoRepositories(todoId: number, repositoryIds: number[]): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM todo_repositories WHERE todo_id = ?1').bind(todoId),
+    ...repositoryIds.map((repoId, i) =>
+      env.DB.prepare(
+        'INSERT INTO todo_repositories (todo_id, repository_id, position) VALUES (?1, ?2, ?3)',
+      ).bind(todoId, repoId, i),
+    ),
+  ]);
+}
+
+export async function listReposForTodo(todoId: number): Promise<RepositoryRow[]> {
+  const res = await env.DB.prepare(
+    `SELECT r.* FROM todo_repositories tr
+		 JOIN repositories r ON r.id = tr.repository_id
+		 WHERE tr.todo_id = ?1
+		 ORDER BY tr.position`,
+  )
+    .bind(todoId)
+    .all<RepositoryRow>();
+  return res.results;
+}
+
+export interface TodoRepoRow {
+  todo_id: number;
+  repository_id: number;
+  owner: string;
+  name: string;
+}
+
+// Batched repo lists for the board's todo cards — one query for every todo
+// instead of one per row.
+export async function todoRepositoriesForTodos(todoIds: number[]): Promise<TodoRepoRow[]> {
+  if (todoIds.length === 0) return [];
+  const placeholders = todoIds.map((_, i) => `?${i + 1}`).join(', ');
+  const res = await env.DB.prepare(
+    `SELECT tr.todo_id, tr.repository_id, r.owner, r.name
+		 FROM todo_repositories tr
+		 JOIN repositories r ON r.id = tr.repository_id
+		 WHERE tr.todo_id IN (${placeholders})
+		 ORDER BY tr.todo_id, tr.position`,
+  )
+    .bind(...todoIds)
+    .all<TodoRepoRow>();
+  return res.results;
+}
+
+export async function listReposForPlan(planId: number): Promise<RepositoryRow[]> {
+  const res = await env.DB.prepare(
+    `SELECT r.* FROM plan_repositories pr
+		 JOIN repositories r ON r.id = pr.repository_id
+		 WHERE pr.plan_id = ?1
+		 ORDER BY pr.position`,
+  )
+    .bind(planId)
+    .all<RepositoryRow>();
+  return res.results;
+}
+
+export interface TaskRepoStatusRow {
+  plan_id: number;
+  repository_id: number;
+  owner: string;
+  name: string;
+  feature_id: number | null;
+  feature_status: string | null;
+  feature_error: string | null;
+  pr_number: number | null;
+  verification_status: string | null;
+  verification_results: string | null;
+}
+
+// One row per repo attached to each of the given plans — the board/task
+// routes' per-repo status array. Independent of listPlansForInstallations /
+// getPlanWithRepoById, which stay keyed to the primary repo only.
+export async function getTaskRepoStatuses(planIds: number[]): Promise<TaskRepoStatusRow[]> {
+  if (planIds.length === 0) return [];
+  const placeholders = planIds.map((_, i) => `?${i + 1}`).join(', ');
+  const res = await env.DB.prepare(
+    `SELECT pr.plan_id, pr.repository_id, r.owner, r.name,
+		        f.id AS feature_id, f.status AS feature_status, f.error AS feature_error,
+		        f.pr_number AS pr_number,
+		        v.status AS verification_status, v.results AS verification_results
+		 FROM plan_repositories pr
+		 JOIN repositories r ON r.id = pr.repository_id
+		 LEFT JOIN features f ON f.plan_id = pr.plan_id AND f.repository_id = pr.repository_id
+		 LEFT JOIN verifications v ON v.id = (SELECT MAX(id) FROM verifications WHERE feature_id = f.id)
+		 WHERE pr.plan_id IN (${placeholders})
+		 ORDER BY pr.plan_id, pr.position`,
+  )
+    .bind(...planIds)
+    .all<TaskRepoStatusRow>();
+  return res.results;
+}
+
 // The feature a factory PR belongs to (null for human-authored PRs).
 export async function getFeatureByRepoPr(
   repositoryId: number,
@@ -320,8 +419,13 @@ export async function finishVerification(
 }
 
 // The plan a factory feature came from (null for direct /internal/generate).
+// Every plan-originated feature sets features.plan_id at creation, so this
+// resolves correctly for every repo's feature in a multi-repo task — not
+// just the primary repo's via the legacy plans.feature_id pointer.
 export async function getPlanByFeatureId(featureId: number): Promise<PlanRow | null> {
-  return env.DB.prepare('SELECT * FROM plans WHERE feature_id = ?1 ORDER BY id DESC LIMIT 1')
+  return env.DB.prepare(
+    `SELECT p.* FROM plans p JOIN features f ON f.plan_id = p.id WHERE f.id = ?1`,
+  )
     .bind(featureId)
     .first<PlanRow>();
 }
@@ -403,11 +507,14 @@ export async function createFeature(
   coauthor?: { login: string; id: number },
   // trivial | standard — scales the generation agent's budget and prompt.
   tier?: string,
+  // The plan this feature was approved from, when any (null for direct
+  // /internal/generate intakes).
+  planId?: number,
 ): Promise<number> {
   const row = await env.DB.prepare(
     `INSERT INTO features
-		 (repository_id, title, spec, acceptance, author_login, author_id, coauthor_login, coauthor_id, tier)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) RETURNING id`,
+     (repository_id, title, spec, acceptance, author_login, author_id, coauthor_login, coauthor_id, tier, plan_id)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) RETURNING id`,
   )
     .bind(
       repositoryId,
@@ -419,6 +526,7 @@ export async function createFeature(
       coauthor?.login ?? null,
       coauthor?.id ?? null,
       tier ?? null,
+      planId ?? null,
     )
     .first<{ id: number }>();
   return row!.id;
@@ -501,8 +609,12 @@ export interface PlanRow {
   attachments: string | null; // JSON [{key, name, content_type}] in R2
 }
 
+// repositoryIds[0] becomes plans.repository_id (the "primary" repo — every
+// existing single-repo read path keeps working unchanged); the full ordered
+// list is snapshotted into plan_repositories for the multi-repo fan-out at
+// approval.
 export async function createPlan(
-  repositoryId: number,
+  repositoryIds: number[],
   title: string,
   requirements: string,
   // The signed-in user who submitted the requirements; null for operator/API
@@ -516,7 +628,7 @@ export async function createPlan(
 		 VALUES (?1, ?2, ?3, ?4, ?5, ?6) RETURNING id`,
   )
     .bind(
-      repositoryId,
+      repositoryIds[0],
       title,
       requirements,
       createdBy?.login ?? null,
@@ -524,7 +636,15 @@ export async function createPlan(
       attachments ?? null,
     )
     .first<{ id: number }>();
-  return row!.id;
+  const planId = row!.id;
+  await env.DB.batch(
+    repositoryIds.map((repoId, i) =>
+      env.DB.prepare(
+        'INSERT INTO plan_repositories (plan_id, repository_id, position) VALUES (?1, ?2, ?3)',
+      ).bind(planId, repoId, i),
+    ),
+  );
+  return planId;
 }
 
 export async function getPlan(id: number): Promise<PlanRow | null> {

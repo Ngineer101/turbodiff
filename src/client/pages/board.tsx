@@ -85,18 +85,8 @@ function QuickAdd({ board }: { board: ApiBoard }) {
   );
 }
 
-function StartDialog({
-  todo,
-  board,
-  onClose,
-}: {
-  todo: ApiTodo;
-  board: ApiBoard;
-  onClose: () => void;
-}) {
+function StartDialog({ todo, onClose }: { todo: ApiTodo; onClose: () => void }) {
   const queryClient = useQueryClient();
-  const repos = board.repos.filter((r) => r.installation_id === todo.installation_id);
-  const [repo, setRepo] = useState(repos[0] ? `${repos[0].owner}/${repos[0].name}` : '');
   const [title, setTitle] = useState(todo.title);
   const [requirements, setRequirements] = useState(todo.notes ?? todo.title);
   const [files, setFiles] = useState<File[]>([]);
@@ -125,7 +115,7 @@ function StartDialog({
           content_type: data.content_type ?? file.type,
         });
       }
-      return api.post(`/api/todos/${todo.id}/start`, { repo, title, requirements, attachments });
+      return api.post(`/api/todos/${todo.id}/start`, { title, requirements, attachments });
     },
     onSuccess: () => {
       toast.success('task started — the planning agent is on it');
@@ -138,103 +128,138 @@ function StartDialog({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-lg">
         <DialogTitle className="text-base font-medium">Start task</DialogTitle>
-        {repos.length === 0 ? (
-          <p className="mt-3 text-[0.85rem] text-mute">
-            No factory-enabled repositories in this installation — enable one in settings first.
-          </p>
-        ) : (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (repo && requirements.trim()) start.mutate();
-            }}
-          >
-            <Field label="repository">
-              <Select value={repo} onChange={(e) => setRepo(e.target.value)} required>
-                {repos.map((r) => (
-                  <option key={r.id} value={`${r.owner}/${r.name}`}>
-                    {r.owner}/{r.name}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Field label="title">
-              <Input
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                required
-                maxLength={200}
-              />
-            </Field>
-            <Field label="requirements">
-              <Textarea
-                value={requirements}
-                onChange={(e) => setRequirements(e.target.value)}
-                required
-                className="min-h-28"
-                placeholder="What should be built? The planning agent reads the repo and drafts a plan you approve."
-              />
-            </Field>
-            <div className="mt-3">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="application/pdf,image/*"
-                multiple
-                className="hidden"
-                onChange={(e) => {
-                  const picked = Array.from(e.target.files ?? []);
-                  setFiles((prev) => [...prev, ...picked].slice(0, 5));
-                  e.target.value = '';
-                }}
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <Paperclip className="size-3.5" aria-hidden /> attach files (pdf, images)
-              </Button>
-              {files.length > 0 ? (
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {files.map((f, i) => (
-                    <span
-                      key={`${f.name}-${i}`}
-                      className="inline-flex items-center gap-1.5 rounded-full bg-raised/70 py-1 pr-1.5 pl-2.5 text-xs"
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (requirements.trim()) start.mutate();
+          }}
+        >
+          <Field label="repositories">
+            <p className="text-[0.85rem] text-ink-dim">
+              {todo.repos.map((r) => `${r.owner}/${r.name}`).join(', ')}
+            </p>
+          </Field>
+          <Field label="title">
+            <Input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              required
+              maxLength={200}
+            />
+          </Field>
+          <Field label="requirements">
+            <Textarea
+              value={requirements}
+              onChange={(e) => setRequirements(e.target.value)}
+              required
+              className="min-h-28"
+              placeholder="What should be built? The planning agent reads the repo and drafts a plan you approve."
+            />
+          </Field>
+          <div className="mt-3">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="application/pdf,image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                const picked = Array.from(e.target.files ?? []);
+                setFiles((prev) => [...prev, ...picked].slice(0, 5));
+                e.target.value = '';
+              }}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Paperclip className="size-3.5" aria-hidden /> attach files (pdf, images)
+            </Button>
+            {files.length > 0 ? (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {files.map((f, i) => (
+                  <span
+                    key={`${f.name}-${i}`}
+                    className="inline-flex items-center gap-1.5 rounded-full bg-raised/70 py-1 pr-1.5 pl-2.5 text-xs"
+                  >
+                    <span className="max-w-40 truncate">{f.name}</span>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${f.name}`}
+                      className="cursor-pointer rounded-full p-0.5 text-mute hover:text-danger"
+                      onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))}
                     >
-                      <span className="max-w-40 truncate">{f.name}</span>
-                      <button
-                        type="button"
-                        aria-label={`Remove ${f.name}`}
-                        className="cursor-pointer rounded-full p-0.5 text-mute hover:text-danger"
-                        onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))}
-                      >
-                        <X className="size-3" aria-hidden />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <Button type="button" variant="secondary" onClick={onClose}>
-                Cancel
-              </Button>
-              <Button type="submit" loading={start.isPending}>
-                Start planning
-              </Button>
-            </div>
-          </form>
-        )}
+                      <X className="size-3" aria-hidden />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <div className="mt-4 flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" loading={start.isPending}>
+              Start planning
+            </Button>
+          </div>
+        </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// The pre-start repo picker: chips sourced from the installation's
+// factory-enabled repos, capped at 3. Posts the replace-all selection on
+// every toggle so the todo's persisted list (GET /board) always reflects it.
+function RepoPicker({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
+  const queryClient = useQueryClient();
+  const available = board.repos.filter((r) => r.installation_id === todo.installation_id);
+  const selectedIds = todo.repos.map((r) => r.id);
+  const setRepos = useMutation({
+    mutationFn: (ids: number[]) => api.post(`/api/todos/${todo.id}/repos`, { repository_ids: ids }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['board'] }),
+    onError: onApiError,
+  });
+  const toggle = (id: number) => {
+    const selected = selectedIds.includes(id);
+    const next = selected ? selectedIds.filter((i) => i !== id) : [...selectedIds, id];
+    if (next.length === 0 || next.length > 3) return;
+    setRepos.mutate(next);
+  };
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {available.map((r) => {
+        const selected = selectedIds.includes(r.id);
+        const disabled = setRepos.isPending || (!selected && selectedIds.length >= 3);
+        return (
+          <button
+            key={r.id}
+            type="button"
+            disabled={disabled}
+            onClick={() => toggle(r.id)}
+            className={cn(
+              'cursor-pointer rounded-full border px-2.5 py-0.5 text-xs whitespace-nowrap transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+              selected
+                ? 'border-accent/40 bg-accent/15 text-accent-bright'
+                : 'border-line-2 text-mute hover:text-ink',
+            )}
+          >
+            {r.owner}/{r.name}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
 function TodoCard({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
   const queryClient = useQueryClient();
   const [starting, setStarting] = useState(false);
+  const [editingRepos, setEditingRepos] = useState(false);
   const remove = useMutation({
     mutationFn: () => api.delete(`/api/todos/${todo.id}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['board'] }),
@@ -259,15 +284,37 @@ function TodoCard({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
         </ConfirmButton>
       </div>
       {todo.notes ? <p className="mt-1 line-clamp-3 text-xs text-mute">{todo.notes}</p> : null}
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        {todo.repos.map((r) => (
+          <span
+            key={r.id}
+            className="inline-flex items-center rounded-full bg-raised/70 px-2.5 py-0.5 text-xs text-mute"
+          >
+            {r.owner}/{r.name}
+          </span>
+        ))}
+        <button
+          type="button"
+          className="cursor-pointer text-xs text-mute underline hover:text-ink"
+          onClick={() => setEditingRepos((v) => !v)}
+        >
+          {todo.repos.length === 0 ? 'add repos' : 'edit repos'}
+        </button>
+      </div>
+      {editingRepos ? <RepoPicker todo={todo} board={board} /> : null}
       <div className="mt-2 flex items-center justify-between">
         <Muted className="text-xs">{ago(todo.created_at)}</Muted>
-        <Button size="sm" variant="secondary" onClick={() => setStarting(true)}>
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={todo.repos.length === 0}
+          title={todo.repos.length === 0 ? 'add at least one repository first' : undefined}
+          onClick={() => setStarting(true)}
+        >
           <Play className="size-3" aria-hidden /> Start
         </Button>
       </div>
-      {starting ? (
-        <StartDialog todo={todo} board={board} onClose={() => setStarting(false)} />
-      ) : null}
+      {starting ? <StartDialog todo={todo} onClose={() => setStarting(false)} /> : null}
     </Card>
   );
 }
@@ -309,22 +356,27 @@ function TaskCard({ task }: { task: ApiPlan }) {
       </div>
       <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
         <Pill tone={state.tone}>{state.label}</Pill>
-        {task.verification && task.feature_status !== 'merged' ? (
-          <Pill
-            tone={
-              task.verification.status === 'passed'
-                ? 'on'
-                : task.verification.status === 'running'
-                  ? 'running'
-                  : 'red'
-            }
-          >
-            verify: {task.verification.status}
-          </Pill>
-        ) : null}
+        {task.repos
+          .filter((r) => r.verification && r.feature_status !== 'merged')
+          .map((r) => (
+            <Pill
+              key={r.repository_id}
+              tone={
+                r.verification!.status === 'passed'
+                  ? 'on'
+                  : r.verification!.status === 'running'
+                    ? 'running'
+                    : 'red'
+              }
+            >
+              {r.owner}/{r.name} verify: {r.verification!.status}
+            </Pill>
+          ))}
       </div>
-      <div className="mt-2 flex items-center justify-between text-xs text-mute">
-        <span className="truncate font-mono">{task.repo}</span>
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-x-2 text-xs text-mute">
+        <span className="min-w-0 truncate font-mono">
+          {task.repos.map((r) => `${r.owner}/${r.name}`).join(', ')}
+        </span>
         <span className="shrink-0">{ago(task.created_at)}</span>
       </div>
     </Card>
