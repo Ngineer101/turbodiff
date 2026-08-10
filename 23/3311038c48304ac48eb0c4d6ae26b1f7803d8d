@@ -1,0 +1,21 @@
+.github/workflows/deploy.yml
+  s_e14c7d6967e7df::t_d06bcaf385c96f 1-47
+README.md
+  s_e14c7d6967e7df::t_2d5682874699d4 173-180,182
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "233311038c48304ac48eb0c4d6ae26b1f7803d8d",
+  "prompts": {},
+  "sessions": {
+    "s_e14c7d6967e7df": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27a03fb2-4b9e-4979-bec0-a8e23a07d88e",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
