@@ -1,112 +1,112 @@
 {
-	"$schema": "./node_modules/wrangler/config-schema.json",
-	"name": "turbodiff",
-	"compatibility_date": "2026-06-01",
-	"compatibility_flags": ["nodejs_compat"],
-	// Workers Traces shows each agent response as a trace with agent-level
-	// spans: https://flueframework.com/docs/guide/observability/#cloudflare
-	"observability": { "traces": { "enabled": true } },
-	// Workers AI binding — model calls dispatch through env.AI into the named
-	// AI Gateway (see setProvider in src/app.ts).
-	"ai": { "binding": "AI" },
-	// Exposes the live Worker version (id/tag) to GET /version — see
-	// https://developers.cloudflare.com/workers/configuration/version-metadata/
-	"version_metadata": { "binding": "CF_VERSION_METADATA" },
-	// Installation/repo config store. Apply migrations with:
-	//   npx wrangler d1 migrations apply turbodiff [--local | --remote]
-	"d1_databases": [
-		{
-			"binding": "DB",
-			"database_name": "turbodiff",
-			"database_id": "e4ec5e43-95c5-46de-bb1d-7984b384c0d9",
-			"migrations_dir": "migrations"
-		}
-	],
-	// Verification evidence (Phase 4): screenshots captured in the sandbox land
-	// here and are served publicly via GET /artifacts/*. Create once per account:
-	//   npx wrangler r2 bucket create turbodiff-artifacts
-	"r2_buckets": [{ "binding": "ARTIFACTS", "bucket_name": "turbodiff-artifacts" }],
-	"vars": {
-		// The name of your existing Cloudflare AI Gateway.
-		"AI_GATEWAY_ID": "default",
-		// Public origin of this deployment — used to build absolute artifact URLs
-		// embedded in PR comments.
-		"PUBLIC_BASE_URL": "https://turbodiff.dev",
-		// URL slug of your GitHub App (github.com/apps/<slug>) — used for
-		// install/manage links in the settings UI.
-		"GITHUB_APP_SLUG": "turbodiff",
-		// Max auto-triggered reviews per installation per rolling 24h.
-		"REVIEW_DAILY_LIMIT": "50",
-		// Optional gateway model id used instead of each agent's configured
-		// model on trivial-tier PRs (≤10 reviewable lines) — set a cheap model
-		// (e.g. a haiku-class id) to cut cost. Empty disables the downgrade.
-		"TRIVIAL_MODEL": "",
-		// Gateway-mode auth for the fix runner: the AI Gateway's Anthropic
-		// endpoint (https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/anthropic).
-		// Pair with the FIXER_ANTHROPIC_API_KEY secret. Empty disables gateway mode;
-		// the CLAUDE_CODE_OAUTH_TOKEN secret enables subscription mode instead.
-		"FIXER_ANTHROPIC_BASE_URL": ""
-	},
-	// Fixer/codegen sandbox (docs/software-factory-design.md): each fix run
-	// executes Claude Code inside an isolated container. Local dev needs Docker.
-	"containers": [
-		{
-			"class_name": "Sandbox",
-			"image": "./Dockerfile",
-			// "standard-1" over "lite": fix runs clone repos, run the agent CLI,
-			// and execute test suites — they need the memory/CPU headroom.
-			"instance_type": "standard-1",
-			"max_instances": 5
-		}
-	],
-	"durable_objects": {
-		"bindings": [{ "class_name": "Sandbox", "name": "Sandbox" }]
-	},
-	// Generation runs as a durable Workflow (src/lib/generation-workflow.ts):
-	// each stage is a memoized step with bounded retries, so a killed isolate
-	// resumes instead of stranding, and the paid agent step can never be
-	// silently re-run. The queue message only creates the instance.
-	"workflows": [
-		{
-			"binding": "GEN_WORKFLOW",
-			"name": "turbodiff-generation",
-			"class_name": "GenerationWorkflow"
-		},
-		{
-			"binding": "VERIFY_WORKFLOW",
-			"name": "turbodiff-verification",
-			"class_name": "VerificationWorkflow"
-		},
-		{
-			"binding": "FIX_WORKFLOW",
-			"name": "turbodiff-fix",
-			"class_name": "FixWorkflow"
-		}
-	],
-	// Decouples factory runs (minutes) from the requests that trigger them
-	// (seconds). One queue for both fix and generation messages, discriminated
-	// by a `kind` field — the local dev plugin hangs at boot with two consumers
-	// on one worker. Create once per account:
-	//   npx wrangler queues create turbodiff-factory
-	"queues": {
-		"producers": [{ "binding": "FACTORY_QUEUE", "queue": "turbodiff-factory" }],
-		"consumers": [
-			{
-				"queue": "turbodiff-factory",
-				// One run per invocation so each gets the full 15-minute consumer
-				// wall clock; the fixer/generator record failures themselves, so a
-				// single redelivery only re-runs infra-level crashes.
-				"max_batch_size": 1,
-				"max_retries": 1
-			}
-		]
-	},
-	// Every agent generates a Durable Object class named after its identity
-	// (PrReviewer -> FluePrReviewerAgent), and Cloudflare requires a migration
-	// entry for each one. Append a new tag when you add an agent:
-	// https://flueframework.com/docs/guide/cloudflare-target/#managing-migrations
-	"migrations": [
-		{ "tag": "v1", "new_sqlite_classes": ["FluePrReviewerAgent"] },
-		{ "tag": "v2", "new_sqlite_classes": ["Sandbox"] }
-	]
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "turbodiff",
+  "compatibility_date": "2026-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // Workers Traces shows each agent response as a trace with agent-level
+  // spans: https://flueframework.com/docs/guide/observability/#cloudflare
+  "observability": { "traces": { "enabled": true } },
+  // Workers AI binding — model calls dispatch through env.AI into the named
+  // AI Gateway (see setProvider in src/app.ts).
+  "ai": { "binding": "AI" },
+  // Exposes the live Worker version (id/tag) to GET /version — see
+  // https://developers.cloudflare.com/workers/configuration/version-metadata/
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
+  // Installation/repo config store. Apply migrations with:
+  //   npx wrangler d1 migrations apply turbodiff [--local | --remote]
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "turbodiff",
+      "database_id": "e4ec5e43-95c5-46de-bb1d-7984b384c0d9",
+      "migrations_dir": "migrations",
+    },
+  ],
+  // Verification evidence (Phase 4): screenshots captured in the sandbox land
+  // here and are served publicly via GET /artifacts/*. Create once per account:
+  //   npx wrangler r2 bucket create turbodiff-artifacts
+  "r2_buckets": [{ "binding": "ARTIFACTS", "bucket_name": "turbodiff-artifacts" }],
+  "vars": {
+    // The name of your existing Cloudflare AI Gateway.
+    "AI_GATEWAY_ID": "default",
+    // Public origin of this deployment — used to build absolute artifact URLs
+    // embedded in PR comments.
+    "PUBLIC_BASE_URL": "https://turbodiff.dev",
+    // URL slug of your GitHub App (github.com/apps/<slug>) — used for
+    // install/manage links in the settings UI.
+    "GITHUB_APP_SLUG": "turbodiff",
+    // Max auto-triggered reviews per installation per rolling 24h.
+    "REVIEW_DAILY_LIMIT": "50",
+    // Optional gateway model id used instead of each agent's configured
+    // model on trivial-tier PRs (≤10 reviewable lines) — set a cheap model
+    // (e.g. a haiku-class id) to cut cost. Empty disables the downgrade.
+    "TRIVIAL_MODEL": "",
+    // Gateway-mode auth for the fix runner: the AI Gateway's Anthropic
+    // endpoint (https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/anthropic).
+    // Pair with the FIXER_ANTHROPIC_API_KEY secret. Empty disables gateway mode;
+    // the CLAUDE_CODE_OAUTH_TOKEN secret enables subscription mode instead.
+    "FIXER_ANTHROPIC_BASE_URL": "",
+  },
+  // Fixer/codegen sandbox (docs/software-factory-design.md): each fix run
+  // executes Claude Code inside an isolated container. Local dev needs Docker.
+  "containers": [
+    {
+      "class_name": "Sandbox",
+      "image": "./Dockerfile",
+      // "standard-1" over "lite": fix runs clone repos, run the agent CLI,
+      // and execute test suites — they need the memory/CPU headroom.
+      "instance_type": "standard-1",
+      "max_instances": 5,
+    },
+  ],
+  "durable_objects": {
+    "bindings": [{ "class_name": "Sandbox", "name": "Sandbox" }],
+  },
+  // Generation runs as a durable Workflow (src/lib/generation-workflow.ts):
+  // each stage is a memoized step with bounded retries, so a killed isolate
+  // resumes instead of stranding, and the paid agent step can never be
+  // silently re-run. The queue message only creates the instance.
+  "workflows": [
+    {
+      "binding": "GEN_WORKFLOW",
+      "name": "turbodiff-generation",
+      "class_name": "GenerationWorkflow",
+    },
+    {
+      "binding": "VERIFY_WORKFLOW",
+      "name": "turbodiff-verification",
+      "class_name": "VerificationWorkflow",
+    },
+    {
+      "binding": "FIX_WORKFLOW",
+      "name": "turbodiff-fix",
+      "class_name": "FixWorkflow",
+    },
+  ],
+  // Decouples factory runs (minutes) from the requests that trigger them
+  // (seconds). One queue for both fix and generation messages, discriminated
+  // by a `kind` field — the local dev plugin hangs at boot with two consumers
+  // on one worker. Create once per account:
+  //   npx wrangler queues create turbodiff-factory
+  "queues": {
+    "producers": [{ "binding": "FACTORY_QUEUE", "queue": "turbodiff-factory" }],
+    "consumers": [
+      {
+        "queue": "turbodiff-factory",
+        // One run per invocation so each gets the full 15-minute consumer
+        // wall clock; the fixer/generator record failures themselves, so a
+        // single redelivery only re-runs infra-level crashes.
+        "max_batch_size": 1,
+        "max_retries": 1,
+      },
+    ],
+  },
+  // Every agent generates a Durable Object class named after its identity
+  // (PrReviewer -> FluePrReviewerAgent), and Cloudflare requires a migration
+  // entry for each one. Append a new tag when you add an agent:
+  // https://flueframework.com/docs/guide/cloudflare-target/#managing-migrations
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["FluePrReviewerAgent"] },
+    { "tag": "v2", "new_sqlite_classes": ["Sandbox"] },
+  ],
 }

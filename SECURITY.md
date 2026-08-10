@@ -12,13 +12,13 @@ rather than a public issue.
 
 ## Trust model
 
-| Component | Trust level |
-|---|---|
-| Repository contents, PR diffs, review threads | **Untrusted** — may contain prompt-injection payloads |
-| Feature requirements / plan answers | Untrusted as *content*; submitted only by authenticated repo admins |
-| Per-repo commands (`check_command`, `run_command`) | Trusted — set only by users who already control the repo the commands run against |
-| The sandbox container | Semi-trusted execution: it isolates agent runs from the Worker, but code inside it (including the app under test and anything an agent writes) runs with the container's env and network |
-| The Worker | Trusted — holds the App private key and mints all tokens |
+| Component                                          | Trust level                                                                                                                                                                              |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Repository contents, PR diffs, review threads      | **Untrusted** — may contain prompt-injection payloads                                                                                                                                    |
+| Feature requirements / plan answers                | Untrusted as _content_; submitted only by authenticated repo admins                                                                                                                      |
+| Per-repo commands (`check_command`, `run_command`) | Trusted — set only by users who already control the repo the commands run against                                                                                                        |
+| The sandbox container                              | Semi-trusted execution: it isolates agent runs from the Worker, but code inside it (including the app under test and anything an agent writes) runs with the container's env and network |
+| The Worker                                         | Trusted — holds the App private key and mints all tokens                                                                                                                                 |
 
 ## Mitigations in place
 

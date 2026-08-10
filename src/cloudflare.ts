@@ -32,32 +32,32 @@ export { FixWorkflow };
 type FactoryMessage = FixQueueMessage | GenQueueMessage | PlanQueueMessage | VerifyQueueMessage;
 
 export default {
-	async queue(batch: MessageBatch<FactoryMessage>): Promise<void> {
-		for (const message of batch.messages) {
-			const body = message.body;
-			switch (body.kind) {
-				case 'generate':
-					// Just creates a durable workflow instance (sub-second) — the
-					// run itself lives outside any consumer wall clock.
-					await startGeneration(body.featureId);
-					break;
-				case 'plan_analyze':
-					await runPlanAnalyze(body.planId);
-					break;
-				case 'plan_refine':
-					await runPlanRefine(body.planId);
-					break;
-				case 'verify':
-					// Just creates a durable workflow instance — verify runs exceed
-					// the consumer wall clock routinely (launch discovery + demos).
-					await startVerification(body.featureId);
-					break;
-				default:
-					// Fix runs get the same no-wall-clock treatment as generation
-					// and verification: the consumer just creates the instance.
-					await startFix(body);
-			}
-			message.ack();
-		}
-	},
+  async queue(batch: MessageBatch<FactoryMessage>): Promise<void> {
+    for (const message of batch.messages) {
+      const body = message.body;
+      switch (body.kind) {
+        case 'generate':
+          // Just creates a durable workflow instance (sub-second) — the
+          // run itself lives outside any consumer wall clock.
+          await startGeneration(body.featureId);
+          break;
+        case 'plan_analyze':
+          await runPlanAnalyze(body.planId);
+          break;
+        case 'plan_refine':
+          await runPlanRefine(body.planId);
+          break;
+        case 'verify':
+          // Just creates a durable workflow instance — verify runs exceed
+          // the consumer wall clock routinely (launch discovery + demos).
+          await startVerification(body.featureId);
+          break;
+        default:
+          // Fix runs get the same no-wall-clock treatment as generation
+          // and verification: the consumer just creates the instance.
+          await startFix(body);
+      }
+      message.ack();
+    }
+  },
 };

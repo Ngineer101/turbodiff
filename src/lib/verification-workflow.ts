@@ -11,38 +11,38 @@ import { runVerification } from './verifier.ts';
 // sweep in db.ts mops up any run the engine itself loses.
 
 export type VerificationParams = {
-	featureId: number;
+  featureId: number;
 };
 
 export class VerificationWorkflow extends WorkflowEntrypoint<unknown, VerificationParams> {
-	async run(event: WorkflowEvent<VerificationParams>, step: WorkflowStep): Promise<string> {
-		const { featureId } = event.payload;
-		await step.do(
-			'run verification',
-			{ retries: { limit: 1, delay: '5 minutes' }, timeout: '40 minutes' },
-			async () => {
-				await runVerification(featureId);
-			},
-		);
-		return 'done';
-	}
+  async run(event: WorkflowEvent<VerificationParams>, step: WorkflowStep): Promise<string> {
+    const { featureId } = event.payload;
+    await step.do(
+      'run verification',
+      { retries: { limit: 1, delay: '5 minutes' }, timeout: '40 minutes' },
+      async () => {
+        await runVerification(featureId);
+      },
+    );
+    return 'done';
+  }
 }
 
 // Queue entry point. Dedupe: a fresh 'running' verification for this feature
 // means an instance is already on it (e.g. a queue redelivery) — skip.
 export async function startVerification(featureId: number): Promise<void> {
-	const feature = await getFeature(featureId);
-	if (!feature) return;
-	const latest = await latestVerificationForFeature(featureId);
-	if (latest?.status === 'running') {
-		const startedMs = Date.parse(`${latest.created_at.replace(' ', 'T')}Z`);
-		if (Date.now() - startedMs < 45 * 60_000) {
-			console.log(`turbodiff: verification skipped for feature ${featureId} — a run is in flight`);
-			return;
-		}
-	}
-	await env.VERIFY_WORKFLOW.create({
-		id: `verify-${featureId}-${Date.now()}`,
-		params: { featureId },
-	});
+  const feature = await getFeature(featureId);
+  if (!feature) return;
+  const latest = await latestVerificationForFeature(featureId);
+  if (latest?.status === 'running') {
+    const startedMs = Date.parse(`${latest.created_at.replace(' ', 'T')}Z`);
+    if (Date.now() - startedMs < 45 * 60_000) {
+      console.log(`turbodiff: verification skipped for feature ${featureId} — a run is in flight`);
+      return;
+    }
+  }
+  await env.VERIFY_WORKFLOW.create({
+    id: `verify-${featureId}-${Date.now()}`,
+    params: { featureId },
+  });
 }

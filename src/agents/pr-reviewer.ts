@@ -15,64 +15,64 @@ import { fetchFile, fetchPr, fetchReviewThreads, makePostReview } from '../tools
 // instructions. Edits to an agent's config apply from its next dispatch.
 
 function parseConnections(raw: string | undefined): ConnectionSnapshot[] {
-	if (!raw) return [];
-	try {
-		const parsed = JSON.parse(raw);
-		if (!Array.isArray(parsed)) return [];
-		return parsed.filter(
-			(c): c is ConnectionSnapshot =>
-				c && typeof c.id === 'number' && typeof c.name === 'string' && typeof c.url === 'string',
-		);
-	} catch {
-		return [];
-	}
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (c): c is ConnectionSnapshot =>
+        c && typeof c.id === 'number' && typeof c.name === 'string' && typeof c.url === 'string',
+    );
+  } catch {
+    return [];
+  }
 }
 
 function deliveryConfig(): { agentName: string; model: string; connections: ConnectionSnapshot[] } {
-	const delivery = useDelivery();
-	if (delivery.kind === 'signal' && delivery.type === 'review.request' && delivery.attributes) {
-		return {
-			agentName: delivery.attributes.agent_name || 'Code Review',
-			model: delivery.attributes.model || DEFAULT_MODEL,
-			connections: parseConnections(delivery.attributes.connections),
-		};
-	}
-	// Pre-multi-agent conversations and manual test prompts arrive as plain
-	// user messages; run them as the default reviewer.
-	return { agentName: 'Code Review', model: DEFAULT_MODEL, connections: [] };
+  const delivery = useDelivery();
+  if (delivery.kind === 'signal' && delivery.type === 'review.request' && delivery.attributes) {
+    return {
+      agentName: delivery.attributes.agent_name || 'Code Review',
+      model: delivery.attributes.model || DEFAULT_MODEL,
+      connections: parseConnections(delivery.attributes.connections),
+    };
+  }
+  // Pre-multi-agent conversations and manual test prompts arrive as plain
+  // user messages; run them as the default reviewer.
+  return { agentName: 'Code Review', model: DEFAULT_MODEL, connections: [] };
 }
 
 export function PrReviewer(props: AgentProps) {
-	const cfg = deliveryConfig();
+  const cfg = deliveryConfig();
 
-	// Routed through the Workers AI binding -> the named Cloudflare AI Gateway
-	// (see setProvider in src/app.ts). thinkingLevel stays 'off': claude models
-	// on the gateway path reject the legacy thinking.type=enabled param the
-	// current pi-ai serialization emits for non-off levels — revisit after a
-	// pi-ai bump adds adaptive thinking.
-	useModel(cfg.model, { thinkingLevel: 'off' });
+  // Routed through the Workers AI binding -> the named Cloudflare AI Gateway
+  // (see setProvider in src/app.ts). thinkingLevel stays 'off': claude models
+  // on the gateway path reject the legacy thinking.type=enabled param the
+  // current pi-ai serialization emits for non-off levels — revisit after a
+  // pi-ai bump adds adaptive thinking.
+  useModel(cfg.model, { thinkingLevel: 'off' });
 
-	useTool(fetchPr);
-	useTool(fetchFile);
-	useTool(fetchReviewThreads);
-	// post_review closes over the instance id so completing the D1 review row
-	// can never hit another agent's concurrent review of the same PR.
-	useTool(makePostReview(props.id));
+  useTool(fetchPr);
+  useTool(fetchFile);
+  useTool(fetchReviewThreads);
+  // post_review closes over the instance id so completing the D1 review row
+  // can never hit another agent's concurrent review of the same PR.
+  useTool(makePostReview(props.id));
 
-	// The agent's configured external MCP servers (e.g. an Executor catalog).
-	// Tokens stay sealed in D1: the auth resolver decrypts per request, so
-	// they never enter model context or conversation storage.
-	for (const conn of cfg.connections) {
-		useMcpConnection({
-			name: conn.name,
-			url: conn.url,
-			...(conn.tools ? { tools: conn.tools } : {}),
-			optional: conn.optional,
-			...(conn.hasAuth ? { auth: () => getConnectionAuthToken(conn.id) } : {}),
-		});
-	}
+  // The agent's configured external MCP servers (e.g. an Executor catalog).
+  // Tokens stay sealed in D1: the auth resolver decrypts per request, so
+  // they never enter model context or conversation storage.
+  for (const conn of cfg.connections) {
+    useMcpConnection({
+      name: conn.name,
+      url: conn.url,
+      ...(conn.tools ? { tools: conn.tools } : {}),
+      optional: conn.optional,
+      ...(conn.hasAuth ? { auth: () => getConnectionAuthToken(conn.id) } : {}),
+    });
+  }
 
-	return `You are Turbodiff, a precise code-review agent, running as the "${cfg.agentName}" reviewer. You are given a GitHub pull request reference (owner, repo, number) and must review it, then post the review to GitHub.
+  return `You are Turbodiff, a precise code-review agent, running as the "${cfg.agentName}" reviewer. You are given a GitHub pull request reference (owner, repo, number) and must review it, then post the review to GitHub.
 
 Each review request arrives as a review-request signal naming the pull request and carrying this agent's focus — the specific concerns this reviewer exists to catch. Judge the diff through that focus: report the issues it covers, and stay silent on concerns outside it (other configured agents own those).
 

@@ -7,7 +7,7 @@ import { defineConfig } from 'vite-plus/test/config';
 // pure functions needing no Workers runtime, so they run through this
 // plugin-free config instead, covering both the Worker and client sources.
 export default defineConfig({
-	test: {
-		include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
-	},
+  test: {
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+  },
 });

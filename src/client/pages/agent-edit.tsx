@@ -11,90 +11,88 @@ import { Button } from '../components/ui/button.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 
 function onApiError(err: unknown) {
-	toast.error(err instanceof ApiError ? err.message : 'request failed');
+  toast.error(err instanceof ApiError ? err.message : 'request failed');
 }
 
 export function AgentEditPage() {
-	const { agentId } = useParams({ from: '/agents/$agentId/edit' });
-	const id = Number(agentId);
-	const navigate = useNavigate();
-	const queryClient = useQueryClient();
-	const { data } = useSuspenseQuery(agentQuery(id));
-	const [error, setError] = useState<string | null>(null);
+  const { agentId } = useParams({ from: '/agents/$agentId/edit' });
+  const id = Number(agentId);
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { data } = useSuspenseQuery(agentQuery(id));
+  const [error, setError] = useState<string | null>(null);
 
-	const save = useMutation({
-		mutationFn: (values: AgentFormValues) => api.put(`/api/agents/${id}`, values),
-		onSuccess: () => {
-			toast.success('agent saved');
-			queryClient.invalidateQueries({ queryKey: ['agents'] });
-			queryClient.invalidateQueries({ queryKey: ['agent', id] });
-			navigate({ to: '/agents' });
-		},
-		onError: (err) => setError(err instanceof ApiError ? err.message : 'request failed'),
-	});
-	const remove = useMutation({
-		mutationFn: () => api.delete(`/api/agents/${id}`),
-		onSuccess: () => {
-			toast.success('agent deleted — its review history stays');
-			queryClient.invalidateQueries({ queryKey: ['agents'] });
-			navigate({ to: '/agents' });
-		},
-		onError: onApiError,
-	});
+  const save = useMutation({
+    mutationFn: (values: AgentFormValues) => api.put(`/api/agents/${id}`, values),
+    onSuccess: () => {
+      toast.success('agent saved');
+      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      queryClient.invalidateQueries({ queryKey: ['agent', id] });
+      navigate({ to: '/agents' });
+    },
+    onError: (err) => setError(err instanceof ApiError ? err.message : 'request failed'),
+  });
+  const remove = useMutation({
+    mutationFn: () => api.delete(`/api/agents/${id}`),
+    onSuccess: () => {
+      toast.success('agent deleted — its review history stays');
+      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      navigate({ to: '/agents' });
+    },
+    onError: onApiError,
+  });
 
-	return (
-		<>
-			<PageTitle
-				aside={data.agent.is_builtin ? <Pill>built-in</Pill> : undefined}
-			>
-				edit agent
-			</PageTitle>
-			<AgentForm
-				initial={{
-					name: data.agent.name,
-					slug: data.agent.slug,
-					description: data.agent.description ?? '',
-					instructions: data.agent.instructions,
-					model: data.agent.model,
-				}}
-				slugEditable={false}
-				defaultModel={data.default_model}
-				error={error}
-				busy={save.isPending}
-				onSubmit={(values) => save.mutate(values)}
-				onCancel={() => navigate({ to: '/agents' })}
-			/>
-			{!data.agent.is_builtin ? (
-				<div className="mt-6 border-t border-line pt-4">
-					<ConfirmButton
-						variant="danger"
-						title="Delete this agent?"
-						description="Its review history stays. This cannot be undone."
-						confirmLabel="Delete agent"
-						onConfirm={() => remove.mutate()}
-						busy={remove.isPending}
-					>
-						Delete agent
-					</ConfirmButton>
-				</div>
-			) : null}
-			<SectionHeading aside={<Muted>MCP</Muted>}>attached integrations</SectionHeading>
-			{data.connections.length === 0 ? (
-				<Muted className="block">none attached</Muted>
-			) : (
-				<div className="flex flex-wrap gap-1.5">
-					{data.connections.map((conn) => (
-						<Pill key={conn.id}>{conn.name}</Pill>
-					))}
-				</div>
-			)}
-			<p className="mt-2 text-xs text-mute">
-				Connections are managed centrally on the{' '}
-				<Link to="/integrations" className="text-accent-bright hover:underline">
-					mcp &amp; integrations
-				</Link>{' '}
-				page — attach or detach this agent there.
-			</p>
-		</>
-	);
+  return (
+    <>
+      <PageTitle aside={data.agent.is_builtin ? <Pill>built-in</Pill> : undefined}>
+        edit agent
+      </PageTitle>
+      <AgentForm
+        initial={{
+          name: data.agent.name,
+          slug: data.agent.slug,
+          description: data.agent.description ?? '',
+          instructions: data.agent.instructions,
+          model: data.agent.model,
+        }}
+        slugEditable={false}
+        defaultModel={data.default_model}
+        error={error}
+        busy={save.isPending}
+        onSubmit={(values) => save.mutate(values)}
+        onCancel={() => navigate({ to: '/agents' })}
+      />
+      {!data.agent.is_builtin ? (
+        <div className="mt-6 border-t border-line pt-4">
+          <ConfirmButton
+            variant="danger"
+            title="Delete this agent?"
+            description="Its review history stays. This cannot be undone."
+            confirmLabel="Delete agent"
+            onConfirm={() => remove.mutate()}
+            busy={remove.isPending}
+          >
+            Delete agent
+          </ConfirmButton>
+        </div>
+      ) : null}
+      <SectionHeading aside={<Muted>MCP</Muted>}>attached integrations</SectionHeading>
+      {data.connections.length === 0 ? (
+        <Muted className="block">none attached</Muted>
+      ) : (
+        <div className="flex flex-wrap gap-1.5">
+          {data.connections.map((conn) => (
+            <Pill key={conn.id}>{conn.name}</Pill>
+          ))}
+        </div>
+      )}
+      <p className="mt-2 text-xs text-mute">
+        Connections are managed centrally on the{' '}
+        <Link to="/integrations" className="text-accent-bright hover:underline">
+          mcp &amp; integrations
+        </Link>{' '}
+        page — attach or detach this agent there.
+      </p>
+    </>
+  );
 }

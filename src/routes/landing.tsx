@@ -434,101 +434,101 @@ if (renderer) {
 `;
 
 function GithubIcon() {
-	return (
-		<svg viewBox="0 0 16 16" aria-hidden="true">
-			<path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.5 7.5 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
-		</svg>
-	);
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.5 7.5 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
+    </svg>
+  );
 }
 
 function StarIcon() {
-	return (
-		<svg viewBox="0 0 16 16" aria-hidden="true">
-			<path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z" />
-		</svg>
-	);
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z" />
+    </svg>
+  );
 }
 
 function Landing({ appSlug }: { appSlug: string }) {
-	const installUrl = `https://github.com/apps/${appSlug}/installations/new`;
-	return (
-		<html lang="en">
-			<head>
-				<meta charset="utf-8" />
-				<meta name="viewport" content="width=device-width, initial-scale=1" />
-				<title>Turbodiff — open-source AI code review for every pull request</title>
-				<meta
-					name="description"
-					content="Open-source AI code review for teams that ship constantly. Turbodiff reviews every pull request with inline comments as it opens. Fully built and hosted on Cloudflare Workers, and self-hostable."
-				/>
-				<link rel="icon" type="image/png" href="/logo-small.png" />
-				<link rel="preconnect" href="https://fonts.googleapis.com" />
-				<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
-				<link
-					href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500&display=swap"
-					rel="stylesheet"
-				/>
-				<style dangerouslySetInnerHTML={{ __html: CSS }} />
-			</head>
-			<body>
-				<canvas id="scene" aria-hidden="true"></canvas>
-				<div class="vignette" aria-hidden="true"></div>
-				<div class="grain" aria-hidden="true"></div>
+  const installUrl = `https://github.com/apps/${appSlug}/installations/new`;
+  return (
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Turbodiff — open-source AI code review for every pull request</title>
+        <meta
+          name="description"
+          content="Open-source AI code review for teams that ship constantly. Turbodiff reviews every pull request with inline comments as it opens. Fully built and hosted on Cloudflare Workers, and self-hostable."
+        />
+        <link rel="icon" type="image/png" href="/logo-small.png" />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
+        <link
+          href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500&display=swap"
+          rel="stylesheet"
+        />
+        <style dangerouslySetInnerHTML={{ __html: CSS }} />
+      </head>
+      <body>
+        <canvas id="scene" aria-hidden="true"></canvas>
+        <div class="vignette" aria-hidden="true"></div>
+        <div class="grain" aria-hidden="true"></div>
 
-				<div class="frame">
-					<header>
-						<a class="brand" href="/">
-							<img src="/logo-small.png" alt="" width="30" height="30" />
-							<span class="wordmark">
-								turbo<b>diff</b>
-							</span>
-						</a>
-						<nav class="nav">
-							<a href={REPO_URL}>github</a>
-							<a href="/auth/login">sign in &rarr;</a>
-						</nav>
-					</header>
+        <div class="frame">
+          <header>
+            <a class="brand" href="/">
+              <img src="/logo-small.png" alt="" width="30" height="30" />
+              <span class="wordmark">
+                turbo<b>diff</b>
+              </span>
+            </a>
+            <nav class="nav">
+              <a href={REPO_URL}>github</a>
+              <a href="/auth/login">sign in &rarr;</a>
+            </nav>
+          </header>
 
-					<main>
-						<div class="hero">
-							<h1>
-								Every diff, <em>reviewed</em> in seconds.
-							</h1>
-							<p class="sub">
-                Ship more code than you can review? Let Turbodiff handle the review queue.
-                Using state of the art AI models, you can review code faster than ever before.
-                Open source, self-hostable &amp; built on Cloudflare.
-							</p>
-							<div class="cta-row">
-								<a class="cta" href={installUrl}>
-									<GithubIcon />
-									Install on GitHub
-								</a>
-								<a class="cta-ghost" href={REPO_URL}>
-									<StarIcon />
-									Star on GitHub
-								</a>
-							</div>
-							<span class="cta-note">free &middot; MIT-licensed &middot; yours to run</span>
-						</div>
-					</main>
+          <main>
+            <div class="hero">
+              <h1>
+                Every diff, <em>reviewed</em> in seconds.
+              </h1>
+              <p class="sub">
+                Ship more code than you can review? Let Turbodiff handle the review queue. Using
+                state of the art AI models, you can review code faster than ever before. Open
+                source, self-hostable &amp; built on Cloudflare.
+              </p>
+              <div class="cta-row">
+                <a class="cta" href={installUrl}>
+                  <GithubIcon />
+                  Install on GitHub
+                </a>
+                <a class="cta-ghost" href={REPO_URL}>
+                  <StarIcon />
+                  Star on GitHub
+                </a>
+              </div>
+              <span class="cta-note">free &middot; MIT-licensed &middot; yours to run</span>
+            </div>
+          </main>
 
-					<footer>
-						<span>
-							open source &mdash; <a href={REPO_URL}>Ngineer101/turbodiff</a>
-						</span>
-						<span>fully built &amp; hosted on Cloudflare</span>
-						<span>self-host it &mdash; your keys, your gateway</span>
-					</footer>
-				</div>
+          <footer>
+            <span>
+              open source &mdash; <a href={REPO_URL}>Ngineer101/turbodiff</a>
+            </span>
+            <span>fully built &amp; hosted on Cloudflare</span>
+            <span>self-host it &mdash; your keys, your gateway</span>
+          </footer>
+        </div>
 
-				<script type="importmap" dangerouslySetInnerHTML={{ __html: IMPORT_MAP }} />
-				<script type="module" dangerouslySetInnerHTML={{ __html: SCENE_JS }} />
-			</body>
-		</html>
-	);
+        <script type="importmap" dangerouslySetInnerHTML={{ __html: IMPORT_MAP }} />
+        <script type="module" dangerouslySetInnerHTML={{ __html: SCENE_JS }} />
+      </body>
+    </html>
+  );
 }
 
 export function renderLanding(appSlug: string): string {
-	return `<!doctype html>${(<Landing appSlug={appSlug} />).toString()}`;
+  return `<!doctype html>${(<Landing appSlug={appSlug} />).toString()}`;
 }

@@ -3,99 +3,99 @@
 /* Turbodiff's terminal identity as Tailwind v4 theme tokens: phosphor green
    on near-black, IBM Plex Mono everywhere (loaded in the shell). */
 @theme {
-	--font-sans: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-	--font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-sans: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
-	--color-bg: #070b09;
-	--color-surface: #0a100d;
-	--color-surface-2: #10160f;
-	--color-raised: #131a16;
-	--color-line: #1c2620;
-	--color-line-2: #2a3830;
-	--color-ink: #e6efe9;
-	--color-ink-dim: #b8c4bc;
-	--color-mute: #7d8f85;
-	--color-accent: #3fb950;
-	--color-accent-bright: #56d364;
-	--color-accent-ink: #04140a;
-	--color-danger: #f85149;
-	--color-warn: #d29922;
+  --color-bg: #070b09;
+  --color-surface: #0a100d;
+  --color-surface-2: #10160f;
+  --color-raised: #131a16;
+  --color-line: #1c2620;
+  --color-line-2: #2a3830;
+  --color-ink: #e6efe9;
+  --color-ink-dim: #b8c4bc;
+  --color-mute: #7d8f85;
+  --color-accent: #3fb950;
+  --color-accent-bright: #56d364;
+  --color-accent-ink: #04140a;
+  --color-danger: #f85149;
+  --color-warn: #d29922;
 }
 
 @layer base {
-	html {
-		color-scheme: dark;
-	}
-	body {
-		@apply bg-bg font-mono text-sm text-ink antialiased;
-	}
-	::selection {
-		background: color-mix(in srgb, var(--color-accent) 35%, transparent);
-	}
-	*:focus-visible {
-		outline: 2px solid color-mix(in srgb, var(--color-accent) 70%, transparent);
-		outline-offset: 2px;
-	}
+  html {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-bg font-mono text-sm text-ink antialiased;
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--color-accent) 35%, transparent);
+  }
+  *:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--color-accent) 70%, transparent);
+    outline-offset: 2px;
+  }
 }
 
 @keyframes pulse-dot {
-	0%,
-	100% {
-		opacity: 1;
-	}
-	50% {
-		opacity: 0.25;
-	}
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
 }
 
 @keyframes cursor-blink {
-	0%,
-	49% {
-		opacity: 1;
-	}
-	50%,
-	100% {
-		opacity: 0;
-	}
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
 }
 
 @keyframes rise-in {
-	from {
-		opacity: 0;
-		transform: translateY(6px);
-	}
-	to {
-		opacity: 1;
-		transform: none;
-	}
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .animate-pulse-dot {
-	animation: pulse-dot 1.6s ease-in-out infinite;
+  animation: pulse-dot 1.6s ease-in-out infinite;
 }
 
 .animate-cursor {
-	animation: cursor-blink 1.1s step-end infinite;
+  animation: cursor-blink 1.1s step-end infinite;
 }
 
 .animate-rise {
-	animation: rise-in 0.35s ease-out both;
+  animation: rise-in 0.35s ease-out both;
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.animate-pulse-dot,
-	.animate-cursor,
-	.animate-rise {
-		animation: none;
-	}
+  .animate-pulse-dot,
+  .animate-cursor,
+  .animate-rise {
+    animation: none;
+  }
 }
 
 /* @pierre/diffs core CSS is injected at runtime rescoped from :host to
    .diffs-scope (see components/diff-styles.ts); this frames each surface. */
 .diffs-scope {
-	display: block;
-	border: 1px solid var(--color-line);
-	border-radius: 8px;
-	overflow: hidden;
-	background: var(--color-surface);
+  display: block;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--color-surface);
 }

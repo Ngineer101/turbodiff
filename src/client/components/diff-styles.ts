@@ -5,10 +5,10 @@ import { wrapCoreCSS } from '@pierre/diffs';
 let injected = false;
 
 export function ensureDiffStyles(): void {
-	if (injected) return;
-	injected = true;
-	const style = document.createElement('style');
-	style.dataset.pierreDiffs = '';
-	style.textContent = wrapCoreCSS('').replaceAll(':host', '.diffs-scope');
-	document.head.appendChild(style);
+  if (injected) return;
+  injected = true;
+  const style = document.createElement('style');
+  style.dataset.pierreDiffs = '';
+  style.textContent = wrapCoreCSS('').replaceAll(':host', '.diffs-scope');
+  document.head.appendChild(style);
 }

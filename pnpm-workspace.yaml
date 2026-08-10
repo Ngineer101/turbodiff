@@ -13,8 +13,8 @@ minimumReleaseAgeExclude:
 patchedDependencies:
   '@flue/runtime': patches/@flue__runtime.patch
 catalog:
-  vite: npm:@voidzero-dev/vite-plus-core@0.2.7
-  vite-plus: 0.2.7
+  vite: npm:@voidzero-dev/vite-plus-core@0.2.8
+  vite-plus: 0.2.8
 overrides:
   vite: 'catalog:'
 peerDependencyRules:
