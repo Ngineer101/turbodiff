@@ -2,18 +2,21 @@
 
 <img src="public/logo-small.png" alt="Turbodiff logo" width="64" align="right" />
 
-Open-source AI code review — growing into a software factory. Turbodiff is a
-GitHub App hosted end-to-end on Cloudflare (Workers, Durable Objects, D1,
-Queues, Containers, R2) and built with [Flue](https://flueframework.com).
+The open-source software factory: agents that take a feature from free-form
+requirements to a merged, verified pull request. The goal is to automate ~90%
+of the software creation process — you decide what to build and approve the
+plan; agents do the rest. Turbodiff is a GitHub App hosted end-to-end on
+Cloudflare (Workers, Durable Objects, D1, Queues, Containers, R2) and built
+with [Flue](https://flueframework.com).
 
-Install it and every new pull request gets an automatic review: a short summary
-plus inline comments on the exact lines each finding concerns. Beyond review,
-the factory pipeline takes a feature from free-form requirements to a verified
-pull request: an agent plans it against your actual code (asking clarifying
-questions where the requirements are ambiguous), you approve the plan, agents
-generate the code, review it, fix blocking findings automatically, and verify
-the result empirically — launching the app in a sandbox and posting screenshot
-evidence for every acceptance criterion to the PR.
+Describe a feature and the pipeline takes over: an agent plans it against your
+actual code (asking clarifying questions where the requirements are
+ambiguous), you approve the plan, agents generate the code, review it, fix
+blocking findings automatically, and verify the result empirically — launching
+the app in a sandbox and posting screenshot evidence for every acceptance
+criterion to the PR. The review stage also works standalone: install the app
+and every new pull request gets an automatic review, a short summary plus
+inline comments on the exact lines each finding concerns.
 
 **Live at [turbodiff.dev](https://turbodiff.dev)** — or self-host on your own
 Cloudflare account ([One-time setup](#one-time-setup)).
@@ -27,18 +30,6 @@ Cloudflare account ([One-time setup](#one-time-setup)).
 > align on the approach.
 
 ## What's inside
-
-**Review** (the original product):
-
-- One durable agent instance per PR (`owner--repo--number`), so re-reviews
-  continue the same conversation and reconcile against earlier findings.
-- Risk tiering sizes the effort: trivial changes get one generalist agent,
-  large or sensitive changes the full agent fleet.
-- Optional blocking mode: a P1 finding posts `REQUEST_CHANGES`, a clean review
-  approves.
-- Custom review agents (personas) per installation, with optional remote
-  [MCP](https://modelcontextprotocol.io) tool connections (bearer tokens
-  encrypted at rest; servers are treated as untrusted, like the PR itself).
 
 **Factory** (in active development — see
 [docs/software-factory-design.md](docs/software-factory-design.md)):
@@ -55,6 +46,18 @@ Cloudflare account ([One-time setup](#one-time-setup)).
   the app in the sandbox, visual criteria by driving headless Chrome. The PR
   gets a report comment with a verdict table and inline screenshots; unmet
   criteria feed the auto-fix loop.
+
+**Review** (where Turbodiff started — also works standalone):
+
+- One durable agent instance per PR (`owner--repo--number`), so re-reviews
+  continue the same conversation and reconcile against earlier findings.
+- Risk tiering sizes the effort: trivial changes get one generalist agent,
+  large or sensitive changes the full agent fleet.
+- Optional blocking mode: a P1 finding posts `REQUEST_CHANGES`, a clean review
+  approves.
+- Custom review agents (personas) per installation, with optional remote
+  [MCP](https://modelcontextprotocol.io) tool connections (bearer tokens
+  encrypted at rest; servers are treated as untrusted, like the PR itself).
 
 Agent runs execute inside Cloudflare Containers (the sandbox) and can spend
 either your existing Claude subscription (`claude setup-token`) or API credits
@@ -170,24 +173,30 @@ body in `x-hub-signature-256: sha256=<hex>`).
 
 ## Deploy
 
-```sh
-npm run deploy
-```
+Every commit to `main` deploys automatically via
+[GitHub Actions](.github/workflows/deploy.yml): D1 migrations are applied
+`--remote`, then the Worker and sandbox container image are built and pushed.
+The workflow needs two repository secrets, `CLOUDFLARE_API_TOKEN` (Workers
+Scripts:Edit, D1:Edit, Containers:Edit) and `CLOUDFLARE_ACCOUNT_ID`.
 
-This builds the Worker and the sandbox container image (Docker required) and
-pushes both.
+To deploy manually (Docker required):
+
+```sh
+pnpm vp run deploy
+```
 
 ## Use it
 
-1. Install the GitHub App, selecting the repositories to review.
-2. Open a pull request — Turbodiff reviews it automatically (capped per
-   installation per day via `REVIEW_DAILY_LIMIT`).
-3. Sign in to configure repositories on `/settings` — per-repo toggles for
-   re-review on push, blocking reviews, auto-fix, and the sandbox check
-   command — and watch reviews on `/reviews`.
-4. Plan and build features on `/factory`: submit requirements, answer the
-   planning agent's questions, approve the plan, and follow the generated PR
-   through review and verification.
+1. Install the GitHub App, selecting the repositories it may work on.
+2. Sign in — the board at `/` is the factory: add a todo, start it, answer
+   the planning agent's questions, approve the plan, and follow the generated
+   PR through review, auto-fix, and verification in the cockpit.
+3. Every pull request — yours or the factory's — gets an automatic review
+   (capped per installation per day via `REVIEW_DAILY_LIMIT`); recent reviews
+   and costs are on `/usage`.
+4. Configure per-repo behavior on `/settings`: the factory toggle, re-review
+   on push, blocking reviews, auto-fix, auto-merge, demo videos, and the
+   sandbox check command.
 
 Operator endpoints (Bearer `REVIEW_SECRET`) mirror the UI for automation:
 `POST /review` (manual re-review), `POST /internal/generate`,

@@ -33,22 +33,22 @@ modules**: a single generic reviewer agent is parameterized by a config loaded f
   snapshot with the dispatched message; the agent renders hooks from it
   (`useModel(config.model)`, fixed GitHub tools, conditional `useMcpConnection` per
   configured connection). Config edits take effect on the next dispatch.
-  *Implementation detail to verify: initial-data payload vs. `useAgentStart` +
-  persistent state as the loading mechanism — both are supported Flue patterns.*
+  _Implementation detail to verify: initial-data payload vs. `useAgentStart` +
+  persistent state as the loading mechanism — both are supported Flue patterns._
 - **Prompt = fixed scaffold + user instructions.** The scaffold (review process,
   posting/anchoring rules, P1/P2/P3 taxonomy, re-review authorization, PR-content
   injection defense) is Turbodiff-owned and non-negotiable. User instructions are
-  inserted into a clearly-delimited "focus" section: they steer *what to look for*,
-  not *how to post* or *what to trust*.
+  inserted into a clearly-delimited "focus" section: they steer _what to look for_,
+  not _how to post_ or _what to trust_.
 - **Built-ins are seed rows.** The current reviewer plus security / a11y / o11y
   personas ship as `is_builtin` config rows every installation gets; users clone and
   edit them. One machinery, no special cases.
 
 ### Alternatives considered
 
-- *One Flue agent module per persona* — dead end: no runtime code deployment on
+- _One Flue agent module per persona_ — dead end: no runtime code deployment on
   Workers, and custom agents would be second-class.
-- *Sub-agents under an orchestrating lead reviewer, one combined review* — rejected by
+- _Sub-agents under an orchestrating lead reviewer, one combined review_ — rejected by
   the output-model decision; also couples failures and complicates attribution.
 
 ## Data model (D1)
@@ -102,7 +102,7 @@ approve / block) happens there rather than in Turbodiff.
 - **Secrets**: connection tokens encrypted at rest (AES-GCM with a Worker secret key),
   write-only in the UI, decrypted only inside the auth callback.
 - **Endpoint hygiene**: HTTPS-only URLs; connection failures degrade per Flue's
-  `optional` flag; scaffold prompt treats MCP tool *results* as untrusted content,
+  `optional` flag; scaffold prompt treats MCP tool _results_ as untrusted content,
   same as PR data.
 - **Cost**: metering already attributes per instance; the dashboard gains a per-agent
   cost dimension. Per-agent model choice may need an allowlist (e.g. haiku/sonnet

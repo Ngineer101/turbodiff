@@ -2,18 +2,20 @@ import { collectFile, getSandbox, type Sandbox } from '@cloudflare/sandbox';
 import { env } from 'cloudflare:workers';
 import { gh } from '../tools/github.ts';
 import {
-	createVerification,
-	finishVerification,
-	getFeature,
-	getRepoById,
-	type FeatureRow,
-	type RepositoryRow,
-	setRepoRunCommand,
+  createVerification,
+  finishVerification,
+  getFeature,
+  getRepoById,
+  type FeatureRow,
+  type RepositoryRow,
+  setRepoRunCommand,
+  setRepoLaunchable,
 } from './db.ts';
 import { maybeAutoMerge } from './auto-merge.ts';
 import { signArtifactKey } from './crypto.ts';
 import { resolveRunnerAuth } from './fixer.ts';
 import { installationToken, sandboxGitToken } from './github-app.ts';
+import { NPM_CACHE_ENV } from './generation-workflow.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
 
 // Phase 4 (docs/software-factory-design.md): empirical verification of factory
@@ -24,27 +26,40 @@ import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
 // capturing screenshots. The evidence lands on the PR as a report comment;
 // failed criteria feed the existing auto-fix loop.
 
-const CLONE_DIR = '/workspace/verify-repo';
-const OUT_DIR = '/workspace/verify-out';
-const SHOTS_DIR = `${OUT_DIR}/screenshots`;
-const AGENT_TIMEOUT_MS = 10 * 60_000;
+// Verification shares GENERATION's per-repo container (same sandbox id), so
+// a verify that follows a generation lands on a hot container with the repo
+// git cache and package caches already warm. Work/output dirs are
+// per-feature for isolation; only the caches are shared.
+const CACHE_DIR = '/workspace/repo-cache';
+const cloneDir = (featureId: number) => `/workspace/verify-${featureId}`;
+const outDir = (featureId: number) => `/workspace/verify-out-${featureId}`;
+const shotsDir = (featureId: number) => `${outDir(featureId)}/screenshots`;
+// Verification runs inside a Workflow step (no wall clock), so the agent can
+// afford launch discovery + screenshots + a recording.
+const AGENT_TIMEOUT_MS = 20 * 60_000;
 
 export interface VerifyQueueMessage {
-	kind: 'verify';
-	featureId: number;
+  kind: 'verify';
+  featureId: number;
 }
 
 interface CriterionResult {
-	index: number;
-	verdict: 'pass' | 'fail' | 'skip';
-	note: string;
-	screenshot?: string;
+  index: number;
+  verdict: 'pass' | 'fail' | 'skip';
+  note: string;
+  screenshot?: string;
 }
 
 function verifyPrompt(feature: FeatureRow, repo: RepositoryRow, criteria: string[]): string {
-	const demos = repo.demo_videos === 1;
-	const launch = repo.run_command
-		? `## Running the app
+  const OUT_DIR = outDir(feature.id);
+  const SHOTS_DIR = shotsDir(feature.id);
+  const demos = repo.demo_videos === 1;
+  // launchable is the cached detection verdict: 0 means a previous run
+  // proved this repo can't launch in the sandbox — skip discovery entirely.
+  const detect = !repo.run_command && demos && repo.launchable !== 0;
+  const demosPossible = demos && (repo.run_command !== null || detect);
+  const launch = repo.run_command
+    ? `## Running the app
 The app can be launched with:
 
     ${repo.run_command}
@@ -55,27 +70,35 @@ the port to accept connections, and verify runtime criteria against it with
 curl or small node scripts. If it fails to start, mark runtime criteria as
 "skip" with a note quoting the relevant log lines — do NOT mark them "fail"
 for infrastructure reasons.`
-		: `## Running the app (work it out yourself)
+    : detect
+      ? `## Running the app (work it out yourself)
 No launch command is configured. Determine how to run this app from the
 repository itself: package.json scripts (dev/start/preview), the README,
 framework config, lockfiles. Install dependencies first if needed. Launch in
 the background (\`nohup ... > /tmp/app.log 2>&1 &\`), wait for its port to
 accept connections, and verify runtime criteria against the live app.
 
-If you launch it successfully, record what worked by writing
-${OUT_DIR}/run-command.json:
+Timebox launch discovery to a few minutes. If the app needs Docker,
+containers, cloud bindings (e.g. Cloudflare Workers/D1/R2), a database, or
+other external services to run, treat it as NOT launchable here — do not
+fight it; verify statically instead.
 
-    {"command": "<one shell command, including any install step>", "port": <number>}
-
-so future verification runs can skip this discovery.
+Record your conclusion either way by writing ${OUT_DIR}/run-command.json:
+- launched successfully: {"command": "<one shell command, including any install step>", "port": <number>}
+- not launchable here: {"launchable": false, "reason": "<one line why>"}
+so future verification runs skip this discovery entirely.
 
 If this repository is NOT a launchable app with a web UI (a library, an
 API-only service, a mobile app), do not force it: verify what you can
 statically, mark runtime-only criteria "skip" with a note, and skip
 screenshots and the recording. If it fails to start after honest attempts,
 mark runtime criteria "skip" quoting the relevant log lines — do NOT mark
-them "fail" for infrastructure reasons.`;
-	const runtime = `${launch}
+them "fail" for infrastructure reasons.`
+      : `## Running the app
+This repository is known not to be launchable in this sandbox (cached from a
+previous run). Verify what can be verified statically from the tree; mark
+criteria that would need a running app as "skip" with a note saying why.`;
+  const runtime = `${launch}
 
 ## Screenshots
 A headless Chrome binary is installed (its path is in the env var
@@ -89,8 +112,8 @@ kebab-case filenames and reference each screenshot from the matching
 criterion result.
 
 ${
-		demos
-			? `## Demo recording
+  demosPossible
+    ? `## Demo recording
 Also record ONE short screen recording (10–30 seconds) demonstrating the
 feature's happy path end to end. This is what humans watch, so drive it like a
 demo: pause about a second between meaningful steps and let each state change
@@ -102,10 +125,10 @@ be visible before moving on. In a .cjs script, use puppeteer's screencast API:
 
 Write a one-line caption for the recording to ${OUT_DIR}/demo-caption.txt.
 If the app cannot run, skip the recording.`
-			: `Demo recordings are disabled for this repository — do not record one.`
-	}`;
+    : `Do not record a demo for this repository.`
+}`;
 
-	return `You are a verification agent for ${repo.owner}/${repo.name}. You are in a checkout of the pull request branch for "${feature.title}". You may read anything and run the app, but do NOT modify tracked files, commit, or push.
+  return `You are a verification agent for ${repo.owner}/${repo.name}. You are in a checkout of the pull request branch for "${feature.title}". You may read anything and run the app, but do NOT modify tracked files, commit, or push.
 
 Check every acceptance criterion below against reality — the actual tree and
 (where possible) the actually running app. Do not infer from the diff what you
@@ -129,287 +152,331 @@ ${criteria.map((c, i) => `${i}. ${c}`).join('\n')}
 }
 
 export async function runVerification(featureId: number): Promise<void> {
-	const feature = await getFeature(featureId);
-	if (!feature || !feature.branch || !feature.pr_number) {
-		console.warn(`turbodiff: verify skipped, feature ${featureId} has no branch/PR`);
-		return;
-	}
-	const repo = await getRepoById(feature.repository_id);
-	if (!repo || !repo.enabled) return;
-	const criteria: string[] = feature.acceptance ? JSON.parse(feature.acceptance) : [];
-	if (criteria.length === 0) {
-		console.log(`turbodiff: verify skipped for feature ${featureId} (no acceptance criteria)`);
-		return;
-	}
-	const label = `${repo.owner}/${repo.name}#${feature.pr_number}`;
-	const verificationId = await createVerification(featureId);
+  const feature = await getFeature(featureId);
+  if (!feature || !feature.branch || !feature.pr_number) {
+    console.warn(`turbodiff: verify skipped, feature ${featureId} has no branch/PR`);
+    return;
+  }
+  const repo = await getRepoById(feature.repository_id);
+  if (!repo || !repo.enabled) return;
+  const criteria: string[] = feature.acceptance ? JSON.parse(feature.acceptance) : [];
+  if (criteria.length === 0) {
+    console.log(`turbodiff: verify skipped for feature ${featureId} (no acceptance criteria)`);
+    return;
+  }
+  const label = `${repo.owner}/${repo.name}#${feature.pr_number}`;
+  const verificationId = await createVerification(featureId);
 
-	try {
-		const outcome = await verify(feature, repo, criteria);
-		await finishVerification(verificationId, outcome.status, {
-			results: JSON.stringify(outcome.results),
-			summary: outcome.summary,
-			demo: outcome.demo ? JSON.stringify({ video: outcome.demo.key, caption: outcome.demo.caption }) : undefined,
-		});
-		console.log(`turbodiff: verification ${outcome.status} for ${label}`);
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		await finishVerification(verificationId, 'error', { error: message.slice(0, 500) });
-		console.error(`turbodiff: verification errored for ${label}:`, err);
-	}
+  try {
+    const outcome = await verify(feature, repo, criteria);
+    await finishVerification(verificationId, outcome.status, {
+      results: JSON.stringify(outcome.results),
+      summary: outcome.summary,
+      demo: outcome.demo
+        ? JSON.stringify({ video: outcome.demo.key, caption: outcome.demo.caption })
+        : undefined,
+    });
+    console.log(`turbodiff: verification ${outcome.status} for ${label}`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await finishVerification(verificationId, 'error', { error: message.slice(0, 500) });
+    console.error(`turbodiff: verification errored for ${label}:`, err);
+  }
 }
 
 async function verify(
-	feature: FeatureRow,
-	repo: RepositoryRow,
-	criteria: string[],
+  feature: FeatureRow,
+  repo: RepositoryRow,
+  criteria: string[],
 ): Promise<{ status: string; results: CriterionResult[]; summary?: string; demo?: DemoInfo }> {
-	const token = await installationToken(repo.installation_id);
-	const auth = resolveRunnerAuth();
-	// Verifier sandboxes never push: single-repo, contents READ-ONLY token.
-	const gitToken = await sandboxGitToken(repo.installation_id, repo.name, 'read');
-	const scrub = (s: string) => s.replaceAll(token, '***').replaceAll(gitToken, '***');
-	const full = `${repo.owner}/${repo.name}`;
+  const token = await installationToken(repo.installation_id);
+  const auth = resolveRunnerAuth();
+  // Verifier sandboxes never push: single-repo, contents READ-ONLY token.
+  const gitToken = await sandboxGitToken(repo.installation_id, repo.name, 'read');
+  const scrub = (s: string) => s.replaceAll(token, '***').replaceAll(gitToken, '***');
+  const full = `${repo.owner}/${repo.name}`;
 
-	const sandbox = getSandbox(
-		env.Sandbox as unknown as DurableObjectNamespace<Sandbox>,
-		`verify--${repo.owner}--${repo.name}--${feature.id}`.toLowerCase(),
-		{ sleepAfter: '15m' },
-	);
+  // Same container id as generation: verify usually follows a generation on
+  // the same repo, so the container, repo cache, and package caches are warm.
+  const sandbox = getSandbox(
+    env.Sandbox as unknown as DurableObjectNamespace<Sandbox>,
+    `gen--${repo.owner}--${repo.name}`.toLowerCase(),
+    { sleepAfter: '45m' },
+  );
+  const WORK = cloneDir(feature.id);
+  const OUT = outDir(feature.id);
 
-	try {
-		await sandbox.exec(`rm -rf ${CLONE_DIR} ${OUT_DIR} && mkdir -p ${SHOTS_DIR}`);
-		const clone = await sandbox.exec(
-			`git clone --depth 50 --single-branch --branch "$VERIFY_BRANCH" ` +
-				`"https://x-access-token:$GIT_TOKEN@github.com/${full}.git" ${CLONE_DIR}`,
-			{ env: { GIT_TOKEN: gitToken, VERIFY_BRANCH: feature.branch! }, timeout: 3 * 60_000 },
-		);
-		if (!clone.success) {
-			throw new Error(`git clone failed: ${scrub(clone.stderr).slice(0, 500)}`);
-		}
+  try {
+    await sandbox.exec(`rm -rf ${WORK} ${OUT} && mkdir -p ${shotsDir(feature.id)}`);
+    // Warm path: force-fetch the PR branch into the shared repo cache, then
+    // hardlink-clone it into this feature's own working dir. Cold path
+    // bootstraps the cache. Credentials only ever travel via env to
+    // explicit-URL commands.
+    const sync = await sandbox.exec(
+      `if [ -d ${CACHE_DIR}/.git ]; then ` +
+        `git -C ${CACHE_DIR} fetch --depth 50 "https://x-access-token:$GIT_TOKEN@github.com/${full}.git" "+refs/heads/$VERIFY_BRANCH:refs/heads/$VERIFY_BRANCH"; ` +
+        `else git clone --depth 50 --single-branch --branch "$VERIFY_BRANCH" ` +
+        `"https://x-access-token:$GIT_TOKEN@github.com/${full}.git" ${CACHE_DIR} && ` +
+        `git -C ${CACHE_DIR} remote set-url origin "https://github.com/${full}.git"; fi`,
+      { env: { GIT_TOKEN: gitToken, VERIFY_BRANCH: feature.branch! }, timeout: 3 * 60_000 },
+    );
+    if (!sync.success) {
+      // A corrupted cache must never wedge the repo — drop it for next time.
+      await sandbox.exec(`rm -rf ${CACHE_DIR}`).catch(() => {});
+      throw new Error(`repo cache sync failed: ${scrub(sync.stderr).slice(0, 500)}`);
+    }
+    const clone = await sandbox.exec(`git clone --local ${CACHE_DIR} ${WORK} -b "$VERIFY_BRANCH"`, {
+      env: { VERIFY_BRANCH: feature.branch! },
+      timeout: 2 * 60_000,
+    });
+    if (!clone.success) {
+      throw new Error(`working-copy clone failed: ${scrub(clone.stderr).slice(0, 500)}`);
+    }
 
-		await sandbox.writeFile(`${OUT_DIR}/task.md`, verifyPrompt(feature, repo, criteria));
-		const agent = await sandbox.exec(
-			`claude -p --dangerously-skip-permissions --output-format text < ${OUT_DIR}/task.md`,
-			{
-				cwd: CLONE_DIR,
-				timeout: AGENT_TIMEOUT_MS,
-				env: {
-					...auth.vars,
-					IS_SANDBOX: '1',
-					DISABLE_AUTOUPDATER: '1',
-					CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
-				},
-			},
-		);
-		if (!agent.success) {
-			throw new Error(
-				`verifier agent exited ${agent.exitCode}: ${scrub(`${agent.stdout}\n${agent.stderr}`).trim().slice(-1_000)}`,
-			);
-		}
+    await sandbox.writeFile(`${OUT}/task.md`, verifyPrompt(feature, repo, criteria));
+    const agent = await sandbox.exec(
+      `claude -p --dangerously-skip-permissions --output-format text < ${OUT}/task.md`,
+      {
+        cwd: WORK,
+        timeout: AGENT_TIMEOUT_MS,
+        env: {
+          ...auth.vars,
+          ...NPM_CACHE_ENV,
+          IS_SANDBOX: '1',
+          DISABLE_AUTOUPDATER: '1',
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+        },
+      },
+    );
+    if (!agent.success) {
+      throw new Error(
+        `verifier agent exited ${agent.exitCode}: ${scrub(`${agent.stdout}\n${agent.stderr}`).trim().slice(-1_000)}`,
+      );
+    }
 
-		const results = await readResults(sandbox, criteria.length);
-		const summary = await readText(sandbox, `${OUT_DIR}/summary.md`);
-		const shots = await uploadScreenshots(sandbox, feature.id, results);
-		const demo = repo.demo_videos === 1 ? await uploadDemo(sandbox, feature.id) : undefined;
+    const results = await readResults(sandbox, OUT, criteria.length);
+    const summary = await readText(sandbox, `${OUT}/summary.md`);
+    const shots = await uploadScreenshots(sandbox, feature.id, results);
+    const demo = repo.demo_videos === 1 ? await uploadDemo(sandbox, feature.id) : undefined;
 
-		// Cache the agent's successful launch discovery so future runs (and the
-		// generation check gate) skip it. Same trust domain as running the
-		// repo's own code — the sandbox is the boundary.
-		if (!repo.run_command) {
-			try {
-				const detected = JSON.parse(
-					(await sandbox.readFile(`${OUT_DIR}/run-command.json`)).content,
-				) as { command?: unknown; port?: unknown };
-				const cmd = typeof detected.command === 'string' ? detected.command.trim() : '';
-				const port = Number(detected.port);
-				if (cmd && cmd.length <= 500 && Number.isInteger(port) && port > 0 && port < 65536) {
-					await setRepoRunCommand(repo.id, cmd, port);
-					console.log(`turbodiff: cached auto-detected run command for ${full} (port ${port})`);
-				}
-			} catch {
-				// nothing written — repo isn't launchable or launch failed
-			}
-		}
+    // Cache the agent's discovery verdict — positive OR negative — so future
+    // runs skip it entirely. Same trust domain as running the repo's own
+    // code; the sandbox is the boundary.
+    if (!repo.run_command && repo.launchable !== 0) {
+      try {
+        const detected = JSON.parse(
+          (await sandbox.readFile(`${OUT}/run-command.json`)).content,
+        ) as { command?: unknown; port?: unknown; launchable?: unknown; reason?: unknown };
+        if (detected.launchable === false) {
+          await setRepoLaunchable(repo.id, false);
+          console.log(
+            `turbodiff: cached NOT-launchable verdict for ${full}: ${String(detected.reason ?? '').slice(0, 120)}`,
+          );
+        } else {
+          const cmd = typeof detected.command === 'string' ? detected.command.trim() : '';
+          const port = Number(detected.port);
+          if (cmd && cmd.length <= 500 && Number.isInteger(port) && port > 0 && port < 65536) {
+            await setRepoRunCommand(repo.id, cmd, port);
+            await setRepoLaunchable(repo.id, true);
+            console.log(`turbodiff: cached auto-detected run command for ${full} (port ${port})`);
+          }
+        }
+      } catch {
+        // nothing written — discovery inconclusive; try again next run
+      }
+    }
 
-		const failed = results.filter((r) => r.verdict === 'fail');
-		await postReport(token, repo, feature, criteria, results, shots, summary, demo);
-		if (failed.length === 0) {
-			await maybeAutoMerge(repo, feature.pr_number!);
-		}
+    const failed = results.filter((r) => r.verdict === 'fail');
+    await postReport(token, repo, feature, criteria, results, shots, summary, demo);
+    if (failed.length === 0) {
+      await maybeAutoMerge(repo, feature.pr_number!);
+    }
 
-		// Conformance gate: unmet criteria feed the existing fix loop (toggle and
-		// cap are re-validated by the consumer, exactly like review-driven fixes).
-		if (failed.length > 0 && repo.auto_fix === 1) {
-			await env.FACTORY_QUEUE.send({
-				kind: 'fix',
-				repoId: repo.id,
-				prNumber: feature.pr_number!,
-				trigger: 'verification_failed',
-				findings: failed
-					.map((f) => `**P1** — Acceptance criterion not met: ${criteria[f.index]}\n\nEvidence: ${f.note}`)
-					.join('\n\n'),
-			});
-		}
-		return { status: failed.length > 0 ? 'failed' : 'passed', results, summary, demo };
-	} finally {
-		await sandbox
-			.exec(`git -C ${CLONE_DIR} remote set-url origin "https://github.com/${full}.git"`)
-			.catch(() => {});
-	}
+    // Conformance gate: unmet criteria feed the existing fix loop (toggle and
+    // cap are re-validated by the consumer, exactly like review-driven fixes).
+    if (failed.length > 0 && repo.auto_fix === 1) {
+      await env.FACTORY_QUEUE.send({
+        kind: 'fix',
+        repoId: repo.id,
+        prNumber: feature.pr_number!,
+        trigger: 'verification_failed',
+        findings: failed
+          .map(
+            (f) =>
+              `**P1** — Acceptance criterion not met: ${criteria[f.index]}\n\nEvidence: ${f.note}`,
+          )
+          .join('\n\n'),
+      });
+    }
+    return { status: failed.length > 0 ? 'failed' : 'passed', results, summary, demo };
+  } finally {
+    // The working copy's origin is the local cache path (no credentials);
+    // drop this feature's dirs to bound the warm container's disk.
+    await sandbox.exec(`rm -rf ${WORK} ${OUT}`).catch(() => {});
+  }
 }
 
-async function readResults(sandbox: Sandbox, count: number): Promise<CriterionResult[]> {
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse((await sandbox.readFile(`${OUT_DIR}/results.json`)).content);
-	} catch {
-		throw new Error('verifier agent did not produce a parseable results.json');
-	}
-	if (!Array.isArray(parsed)) throw new Error('results.json is not an array');
-	const byIndex = new Map<number, CriterionResult>();
-	for (const raw of parsed as Record<string, unknown>[]) {
-		const index = Number(raw.index);
-		if (!Number.isInteger(index) || index < 0 || index >= count) continue;
-		const verdict = raw.verdict === 'pass' || raw.verdict === 'fail' ? raw.verdict : 'skip';
-		byIndex.set(index, {
-			index,
-			verdict,
-			note: String(raw.note ?? '').slice(0, 500),
-			screenshot: typeof raw.screenshot === 'string' ? raw.screenshot : undefined,
-		});
-	}
-	// A criterion the agent silently dropped is unverified, not passed.
-	return Array.from({ length: count }, (_, i) => {
-		return byIndex.get(i) ?? { index: i, verdict: 'skip', note: 'no result reported' };
-	});
+async function readResults(
+  sandbox: Sandbox,
+  out: string,
+  count: number,
+): Promise<CriterionResult[]> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse((await sandbox.readFile(`${out}/results.json`)).content);
+  } catch {
+    throw new Error('verifier agent did not produce a parseable results.json');
+  }
+  if (!Array.isArray(parsed)) throw new Error('results.json is not an array');
+  const byIndex = new Map<number, CriterionResult>();
+  for (const raw of parsed as Record<string, unknown>[]) {
+    const index = Number(raw.index);
+    if (!Number.isInteger(index) || index < 0 || index >= count) continue;
+    const verdict = raw.verdict === 'pass' || raw.verdict === 'fail' ? raw.verdict : 'skip';
+    byIndex.set(index, {
+      index,
+      verdict,
+      note: String(raw.note ?? '').slice(0, 500),
+      screenshot: typeof raw.screenshot === 'string' ? raw.screenshot : undefined,
+    });
+  }
+  // A criterion the agent silently dropped is unverified, not passed.
+  return Array.from({ length: count }, (_, i) => {
+    return byIndex.get(i) ?? { index: i, verdict: 'skip', note: 'no result reported' };
+  });
 }
 
 async function readText(sandbox: Sandbox, path: string): Promise<string | undefined> {
-	try {
-		return (await sandbox.readFile(path)).content.trim() || undefined;
-	} catch {
-		return undefined;
-	}
+  try {
+    return (await sandbox.readFile(path)).content.trim() || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // Binary-safe read out of the sandbox via the SDK's file streaming.
 async function readBinary(sandbox: Sandbox, path: string): Promise<Uint8Array | null> {
-	try {
-		const { content } = await collectFile(await sandbox.readFileStream(path));
-		return content instanceof Uint8Array ? content : new TextEncoder().encode(content);
-	} catch {
-		return null;
-	}
+  try {
+    const { content } = await collectFile(await sandbox.readFileStream(path));
+    return content instanceof Uint8Array ? content : new TextEncoder().encode(content);
+  } catch {
+    return null;
+  }
 }
 
 // Screenshots land in R2 under verify/<featureId>/, served via the signed
 // GET /artifacts/* route so they render inline in the PR comment.
 async function uploadScreenshots(
-	sandbox: Sandbox,
-	featureId: number,
-	results: CriterionResult[],
+  sandbox: Sandbox,
+  featureId: number,
+  results: CriterionResult[],
 ): Promise<Map<string, string>> {
-	const urls = new Map<string, string>();
-	const wanted = [...new Set(results.map((r) => r.screenshot).filter((s): s is string => !!s))];
-	for (const name of wanted) {
-		const safe = name.replace(/[^\w.-]/g, '');
-		if (!safe.endsWith('.png')) continue;
-		const bytes = await readBinary(sandbox, `${SHOTS_DIR}/${safe}`);
-		if (!bytes || bytes.length === 0) continue;
-		const key = `verify/${featureId}/${safe}`;
-		await env.ARTIFACTS.put(key, bytes, { httpMetadata: { contentType: 'image/png' } });
-		const sig = await signArtifactKey(key);
-		urls.set(name, `${env.PUBLIC_BASE_URL}/artifacts/${key}?sig=${sig}`);
-	}
-	return urls;
+  const urls = new Map<string, string>();
+  const wanted = [...new Set(results.map((r) => r.screenshot).filter((s): s is string => !!s))];
+  for (const name of wanted) {
+    const safe = name.replace(/[^\w.-]/g, '');
+    if (!safe.endsWith('.png')) continue;
+    const bytes = await readBinary(sandbox, `${shotsDir(featureId)}/${safe}`);
+    if (!bytes || bytes.length === 0) continue;
+    const key = `verify/${featureId}/${safe}`;
+    await env.ARTIFACTS.put(key, bytes, { httpMetadata: { contentType: 'image/png' } });
+    const sig = await signArtifactKey(key);
+    urls.set(name, `${env.PUBLIC_BASE_URL}/artifacts/${key}?sig=${sig}`);
+  }
+  return urls;
 }
 
 interface DemoInfo {
-	key: string;
-	url: string;
-	caption?: string;
+  key: string;
+  url: string;
+  caption?: string;
 }
 
 // The demo recording: Chrome's screencast emits VP9 WebM, which iOS Safari
 // cannot play (renders a black box) — transcode to H.264 MP4 in the sandbox
 // so the demo plays everywhere. 40MB guard against runaway recordings.
 async function uploadDemo(sandbox: Sandbox, featureId: number): Promise<DemoInfo | undefined> {
-	const stat = await sandbox.exec(`stat -c %s "${OUT_DIR}/demo.webm"`, { timeout: 15_000 });
-	const size = Number(stat.stdout.trim());
-	if (!stat.success || !Number.isFinite(size) || size === 0) return undefined;
-	if (size > 40 * 1024 * 1024) {
-		console.warn(`turbodiff: demo recording too large (${size} bytes), skipping upload`);
-		return undefined;
-	}
-	const transcode = await sandbox.exec(
-		`ffmpeg -y -v error -i "${OUT_DIR}/demo.webm" -c:v libx264 -pix_fmt yuv420p ` +
-			`-movflags +faststart -crf 26 "${OUT_DIR}/demo.mp4"`,
-		{ timeout: 3 * 60_000 },
-	);
-	if (!transcode.success) {
-		console.warn(`turbodiff: demo transcode failed: ${transcode.stderr.slice(0, 300)}`);
-		return undefined;
-	}
-	const bytes = await readBinary(sandbox, `${OUT_DIR}/demo.mp4`);
-	if (!bytes || bytes.length === 0) return undefined;
-	const key = `verify/${featureId}/demo.mp4`;
-	await env.ARTIFACTS.put(key, bytes, { httpMetadata: { contentType: 'video/mp4' } });
-	const sig = await signArtifactKey(key);
-	const caption = await readText(sandbox, `${OUT_DIR}/demo-caption.txt`);
-	return { key, url: `${env.PUBLIC_BASE_URL}/artifacts/${key}?sig=${sig}`, caption };
+  const OUT_DIR = outDir(featureId);
+  const stat = await sandbox.exec(`stat -c %s "${OUT_DIR}/demo.webm"`, { timeout: 15_000 });
+  const size = Number(stat.stdout.trim());
+  if (!stat.success || !Number.isFinite(size) || size === 0) return undefined;
+  if (size > 40 * 1024 * 1024) {
+    console.warn(`turbodiff: demo recording too large (${size} bytes), skipping upload`);
+    return undefined;
+  }
+  const transcode = await sandbox.exec(
+    `ffmpeg -y -v error -i "${OUT_DIR}/demo.webm" -c:v libx264 -pix_fmt yuv420p ` +
+      `-movflags +faststart -crf 26 "${OUT_DIR}/demo.mp4"`,
+    { timeout: 3 * 60_000 },
+  );
+  if (!transcode.success) {
+    console.warn(`turbodiff: demo transcode failed: ${transcode.stderr.slice(0, 300)}`);
+    return undefined;
+  }
+  const bytes = await readBinary(sandbox, `${OUT_DIR}/demo.mp4`);
+  if (!bytes || bytes.length === 0) return undefined;
+  const key = `verify/${featureId}/demo.mp4`;
+  await env.ARTIFACTS.put(key, bytes, { httpMetadata: { contentType: 'video/mp4' } });
+  const sig = await signArtifactKey(key);
+  const caption = await readText(sandbox, `${OUT_DIR}/demo-caption.txt`);
+  return { key, url: `${env.PUBLIC_BASE_URL}/artifacts/${key}?sig=${sig}`, caption };
 }
 
 const VERDICT_BADGE: Record<CriterionResult['verdict'], string> = {
-	pass: '✅',
-	fail: '❌',
-	skip: '⚪',
+  pass: '✅',
+  fail: '❌',
+  skip: '⚪',
 };
 
 async function postReport(
-	token: string,
-	repo: RepositoryRow,
-	feature: FeatureRow,
-	criteria: string[],
-	results: CriterionResult[],
-	shots: Map<string, string>,
-	summary?: string,
-	demo?: DemoInfo,
+  token: string,
+  repo: RepositoryRow,
+  feature: FeatureRow,
+  criteria: string[],
+  results: CriterionResult[],
+  shots: Map<string, string>,
+  summary?: string,
+  demo?: DemoInfo,
 ): Promise<void> {
-	const failed = results.filter((r) => r.verdict === 'fail').length;
-	const cockpit = `${env.PUBLIC_BASE_URL}/factory/features/${feature.id}`;
-	const lines = [
-		`## 🔍 Turbodiff verification — ${failed === 0 ? 'all criteria met' : `${failed} criteria not met`}`,
-		'',
-		...(demo
-			? [`🎬 **[Watch the demo & review this PR in Turbodiff](${cockpit})** — ${demo.caption ?? 'screen recording of the feature in action'} ([raw video](${demo.url}))`, '']
-			: [`🔎 **[Review this PR in Turbodiff](${cockpit})**`, '']),
-		'| | Criterion | Evidence |',
-		'|---|---|---|',
-		...results.map((r) => {
-			const note = r.note.replaceAll('|', '\\|').replaceAll('\n', ' ');
-			return `| ${VERDICT_BADGE[r.verdict]} | ${criteria[r.index].replaceAll('|', '\\|')} | ${note} |`;
-		}),
-	];
-	const embedded = results
-		.map((r) => (r.screenshot && shots.get(r.screenshot) ? { r, url: shots.get(r.screenshot)! } : null))
-		.filter((x): x is { r: CriterionResult; url: string } => x !== null);
-	if (embedded.length > 0) {
-		lines.push('', '### Evidence');
-		for (const { r, url } of embedded) {
-			lines.push('', `**${criteria[r.index]}**`, `![${r.screenshot}](${url})`);
-		}
-	}
-	if (summary) lines.push('', '### How it works', '', summary.slice(0, 3_000));
-	if (failed > 0 && repo.auto_fix === 1) {
-		lines.push('', '_The unmet criteria have been handed to the fix agent._');
-	}
-	try {
-		await gh(token, `/repos/${repo.owner}/${repo.name}/issues/${feature.pr_number}/comments`, {
-			method: 'POST',
-			body: JSON.stringify({ body: lines.join('\n') }),
-		});
-	} catch (err) {
-		console.error('turbodiff: verification report comment failed:', err);
-	}
+  const failed = results.filter((r) => r.verdict === 'fail').length;
+  const cockpit = `${env.PUBLIC_BASE_URL}/factory/features/${feature.id}`;
+  const lines = [
+    `## 🔍 Turbodiff verification — ${failed === 0 ? 'all criteria met' : `${failed} criteria not met`}`,
+    '',
+    ...(demo
+      ? [
+          `🎬 **[Watch the demo & review this PR in Turbodiff](${cockpit})** — ${demo.caption ?? 'screen recording of the feature in action'} ([raw video](${demo.url}))`,
+          '',
+        ]
+      : [`🔎 **[Review this PR in Turbodiff](${cockpit})**`, '']),
+    '| | Criterion | Evidence |',
+    '|---|---|---|',
+    ...results.map((r) => {
+      const note = r.note.replaceAll('|', '\\|').replaceAll('\n', ' ');
+      return `| ${VERDICT_BADGE[r.verdict]} | ${criteria[r.index].replaceAll('|', '\\|')} | ${note} |`;
+    }),
+  ];
+  const embedded = results
+    .map((r) =>
+      r.screenshot && shots.get(r.screenshot) ? { r, url: shots.get(r.screenshot)! } : null,
+    )
+    .filter((x): x is { r: CriterionResult; url: string } => x !== null);
+  if (embedded.length > 0) {
+    lines.push('', '### Evidence');
+    for (const { r, url } of embedded) {
+      lines.push('', `**${criteria[r.index]}**`, `![${r.screenshot}](${url})`);
+    }
+  }
+  if (summary) lines.push('', '### How it works', '', summary.slice(0, 3_000));
+  if (failed > 0 && repo.auto_fix === 1) {
+    lines.push('', '_The unmet criteria have been handed to the fix agent._');
+  }
+  try {
+    await gh(token, `/repos/${repo.owner}/${repo.name}/issues/${feature.pr_number}/comments`, {
+      method: 'POST',
+      body: JSON.stringify({ body: lines.join('\n') }),
+    });
+  } catch (err) {
+    console.error('turbodiff: verification report comment failed:', err);
+  }
 }
