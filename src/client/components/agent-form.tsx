@@ -57,6 +57,7 @@ export function AgentForm({
           readOnly={!slugEditable}
           required
           maxLength={31}
+          className="font-mono"
         />
       </Field>
       <Field label="description" hint="shown in lists">
@@ -77,7 +78,12 @@ export function AgentForm({
         />
       </Field>
       <Field label="model" hint={`any AI Gateway model id; default ${defaultModel}`}>
-        <Input value={values.model} onChange={(e) => set({ model: e.target.value })} required />
+        <Input
+          value={values.model}
+          onChange={(e) => set({ model: e.target.value })}
+          required
+          className="font-mono"
+        />
       </Field>
       {error ? <p className="mt-4 text-[0.85rem] text-danger">{error}</p> : null}
       <div className="mt-5 flex gap-2">

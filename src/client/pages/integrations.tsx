@@ -51,9 +51,9 @@ function TestDialog({
             <tbody>
               {result.tools.map((t) => (
                 <tr key={t}>
-                  <Td>{t}</Td>
+                  <Td className="font-mono">{t}</Td>
                   <Td>
-                    <Muted>
+                    <Muted className="font-mono">
                       mcp__{name}__{t}
                     </Muted>
                   </Td>
@@ -126,9 +126,11 @@ function IntegrationCard({ conn }: { conn: ApiIntegration }) {
           </ConfirmButton>
         </span>
       </div>
-      <div className="mt-1 text-xs break-all text-mute">{conn.url}</div>
+      <div className="mt-1 font-mono text-xs break-all text-mute">{conn.url}</div>
       {conn.tools ? (
-        <div className="mt-1 text-xs text-mute">tools: {conn.tools.join(', ')}</div>
+        <div className="mt-1 text-xs text-mute">
+          tools: <span className="font-mono">{conn.tools.join(', ')}</span>
+        </div>
       ) : null}
       {conn.kind === 'mcp' ? (
         <div className="mt-3 flex flex-wrap items-center gap-1.5">

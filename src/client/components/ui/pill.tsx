@@ -5,7 +5,7 @@ import { cn } from '../../lib/utils.ts';
 // The v1 status pill, kept as the app's core status vocabulary. `running`
 // prefixes a pulsing dot.
 const pillVariants = cva(
-  'inline-flex items-center gap-1 rounded-full border px-2.5 py-px text-xs whitespace-nowrap',
+  'inline-flex items-center gap-1 rounded-full border px-2.5 py-px font-mono text-xs whitespace-nowrap',
   {
     variants: {
       tone: {

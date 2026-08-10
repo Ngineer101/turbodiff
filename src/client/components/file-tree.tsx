@@ -154,5 +154,9 @@ export function FileTree({
     </ul>
   );
 
-  return <nav aria-label="Changed files">{renderChildren(tree, 0)}</nav>;
+  return (
+    <nav aria-label="Changed files" className="font-mono">
+      {renderChildren(tree, 0)}
+    </nav>
+  );
 }

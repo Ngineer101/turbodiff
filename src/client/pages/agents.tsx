@@ -56,7 +56,7 @@ export function AgentsPage() {
                     {a.description ? (
                       <p className="mt-1 truncate text-xs text-mute">{a.description}</p>
                     ) : null}
-                    <p className="mt-0.5 text-xs text-mute/70">
+                    <p className="mt-0.5 font-mono text-xs text-mute/70">
                       {a.model.replace('cloudflare/', '')}
                     </p>
                   </div>
