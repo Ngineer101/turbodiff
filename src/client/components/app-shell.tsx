@@ -1,13 +1,13 @@
 import { Link, useRouterState } from '@tanstack/react-router';
-import { Bot, Factory, GitPullRequest, LayoutDashboard, LogOut, Settings } from 'lucide-react';
+import { BarChart2, Bot, LayoutDashboard, LogOut, Plug, Settings } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { cn } from '../lib/utils.ts';
 
 const NAV = [
-	{ to: '/', label: 'dashboard', icon: LayoutDashboard, exact: true },
-	{ to: '/factory', label: 'factory', icon: Factory },
-	{ to: '/reviews', label: 'reviews', icon: GitPullRequest },
+	{ to: '/', label: 'board', icon: LayoutDashboard, exact: true },
 	{ to: '/agents', label: 'agents', icon: Bot },
+	{ to: '/integrations', label: 'integrations', icon: Plug },
+	{ to: '/usage', label: 'usage', icon: BarChart2 },
 	{ to: '/settings', label: 'settings', icon: Settings },
 ] as const;
 
@@ -22,15 +22,16 @@ function Logo() {
 	);
 }
 
-function NavLinks({ vertical }: { vertical?: boolean }) {
+function isActive(pathname: string, to: string, exact?: boolean): boolean {
+	return exact ? pathname === to : pathname.startsWith(to);
+}
+
+function SidebarNav() {
 	const pathname = useRouterState({ select: (s) => s.location.pathname });
 	return (
-		<nav
-			aria-label="Main"
-			className={cn('flex gap-1', vertical ? 'flex-col' : 'items-center overflow-x-auto')}
-		>
+		<nav aria-label="Main" className="flex flex-col gap-1">
 			{NAV.map(({ to, label, icon: Icon, ...item }) => {
-				const active = 'exact' in item && item.exact ? pathname === to : pathname.startsWith(to);
+				const active = isActive(pathname, to, 'exact' in item && item.exact);
 				return (
 					<Link
 						key={to}
@@ -46,6 +47,38 @@ function NavLinks({ vertical }: { vertical?: boolean }) {
 					</Link>
 				);
 			})}
+		</nav>
+	);
+}
+
+// Mobile: a fixed bottom tab bar — every destination always visible and
+// thumb-reachable, instead of a horizontally scrolling top row.
+function BottomTabs() {
+	const pathname = useRouterState({ select: (s) => s.location.pathname });
+	return (
+		<nav
+			aria-label="Main"
+			className="fixed inset-x-0 bottom-0 z-40 border-t border-line/60 bg-bg/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
+		>
+			<div className="grid grid-cols-5">
+				{NAV.map(({ to, label, icon: Icon, ...item }) => {
+					const active = isActive(pathname, to, 'exact' in item && item.exact);
+					return (
+						<Link
+							key={to}
+							to={to}
+							aria-current={active ? 'page' : undefined}
+							className={cn(
+								'flex flex-col items-center gap-1 py-2 text-[10px] tracking-wide transition-colors active:scale-95',
+								active ? 'text-accent-bright' : 'text-mute',
+							)}
+						>
+							<Icon className={cn('size-5', active && 'drop-shadow-[0_0_6px_rgba(86,211,100,0.4)]')} aria-hidden />
+							{label}
+						</Link>
+					);
+				})}
+			</div>
 		</nav>
 	);
 }
@@ -78,26 +111,28 @@ export function AppShell({ login, children }: { login: string; children: ReactNo
 			<aside className="sticky top-0 hidden h-dvh w-52 shrink-0 flex-col justify-between border-r border-line bg-surface/50 p-4 md:flex">
 				<div className="space-y-6">
 					<Logo />
-					<NavLinks vertical />
+					<SidebarNav />
 				</div>
 				<UserBlock login={login} />
 			</aside>
 
-			<div className="sticky top-0 z-40 border-b border-line bg-bg/90 backdrop-blur md:hidden">
-				<div className="flex items-center justify-between px-4 pt-3">
-					<Logo />
-					<UserBlock login={login} />
-				</div>
-				<div className="px-2 py-1.5">
-					<NavLinks />
-				</div>
+			<div className="sticky top-0 z-40 flex items-center justify-between border-b border-line/60 bg-bg/95 px-4 py-2.5 backdrop-blur md:hidden">
+				<Logo />
+				<UserBlock login={login} />
 			</div>
 
 			<main className="min-w-0 flex-1">
-				<div className={cn('mx-auto px-4 py-8 md:px-8', wide ? 'max-w-[96rem]' : 'max-w-4xl')}>
+				<div
+					className={cn(
+						'mx-auto px-4 py-5 pb-28 sm:py-8 md:px-8 md:pb-8',
+						wide ? 'max-w-[96rem]' : 'max-w-4xl',
+					)}
+				>
 					{children}
 				</div>
 			</main>
+
+			<BottomTabs />
 		</div>
 	);
 }

@@ -320,6 +320,18 @@ app.get('/internal/features/:id', async (c) => {
 	return c.json(feature);
 });
 
+// Operator re-verification: enqueue a fresh verify run for a feature.
+app.post('/internal/features/:id/verify', async (c) => {
+	const id = Number(c.req.param('id'));
+	const feature = Number.isInteger(id) ? await getFeature(id) : null;
+	if (!feature) return c.json({ error: 'unknown feature' }, 404);
+	if (!feature.pr_number || !feature.acceptance) {
+		return c.json({ error: 'feature has no PR or no acceptance criteria' }, 409);
+	}
+	await env.FACTORY_QUEUE.send({ kind: 'verify', featureId: id });
+	return c.json({ accepted: true, feature_id: id });
+});
+
 // Operator retry for a failed generation: re-enqueues the SAME feature row,
 // preserving its spec and commit attribution (unlike /internal/generate,
 // which would mint a fresh unattributed feature). An optional
@@ -337,11 +349,13 @@ app.post('/internal/features/:id/retry', async (c) => {
 	}
 	const body = await c.req.json<{ delay_seconds?: number }>().catch(() => null);
 	const delay = Math.min(Math.max(Math.floor(body?.delay_seconds ?? 0), 0), 12 * 3600);
+	// The workflow's first step flips status to 'generating' — pre-setting it
+	// here would trip startGeneration's in-flight guard.
 	if (delay > 0) {
 		await updateFeature(id, { error: `retry scheduled in ${Math.round(delay / 60)}m` });
 		await env.FACTORY_QUEUE.send({ kind: 'generate', featureId: id }, { delaySeconds: delay });
 	} else {
-		await updateFeature(id, { status: 'generating', runStartedAt: 'now' });
+		await updateFeature(id, { error: 'retry queued' });
 		await env.FACTORY_QUEUE.send({ kind: 'generate', featureId: id });
 	}
 	return c.json({

@@ -38,14 +38,6 @@
 	}
 }
 
-@layer components {
-	/* '// heading' — the section marker carried over from v1. */
-	.section-mark::before {
-		content: '// ';
-		color: var(--color-accent);
-	}
-}
-
 @keyframes pulse-dot {
 	0%,
 	100% {

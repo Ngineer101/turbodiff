@@ -22,6 +22,8 @@ export interface RepositoryRow {
 	blocking_reviews: number; // P1 → REQUEST_CHANGES, clean → APPROVE
 	auto_fix: number; // dispatch the fix agent when a blocking review lands
 	auto_merge: number; // merge factory PRs when verification + review are clean
+	demo_videos: number; // record a verification demo video (runtime auto-detected)
+	launchable: number | null; // cached detection: null unknown, 1 yes, 0 no
 	check_command: string | null; // sandbox verification gate before factory pushes
 	run_command: string | null; // how to launch the app for runtime verification
 	app_port: number | null; // port the launched app listens on
@@ -159,6 +161,18 @@ export async function setRepoAutoMerge(id: number, on: boolean): Promise<void> {
 }
 
 // The sandbox verification gate for factory pushes. Empty string clears it.
+export async function setRepoLaunchable(id: number, launchable: boolean): Promise<void> {
+	await env.DB.prepare('UPDATE repositories SET launchable = ?2 WHERE id = ?1')
+		.bind(id, launchable ? 1 : 0)
+		.run();
+}
+
+export async function setRepoDemoVideos(id: number, on: boolean): Promise<void> {
+	await env.DB.prepare('UPDATE repositories SET demo_videos = ?2 WHERE id = ?1')
+		.bind(id, on ? 1 : 0)
+		.run();
+}
+
 export async function setRepoCheckCommand(id: number, command: string): Promise<void> {
 	const trimmed = command.trim();
 	await env.DB.prepare('UPDATE repositories SET check_command = ?2 WHERE id = ?1')
@@ -262,6 +276,21 @@ export async function latestVerificationForFeature(
 		.first<VerificationRow>();
 }
 
+// Verification runs killed mid-flight (isolate death) never reach their
+// error handler, stranding rows in 'running' and the UI in an endless poll.
+// Lazy sweep from the read paths, like failStrandedGeneration.
+const VERIFICATION_STRAND_MINUTES = 45;
+
+export async function failStrandedVerifications(): Promise<number> {
+	const res = await env.DB.prepare(
+		`UPDATE verifications SET status = 'error',
+		   error = 'verification run was killed before finishing — re-run it from the PR or wait for the next push'
+		 WHERE status = 'running'
+		   AND created_at < datetime('now', '-${VERIFICATION_STRAND_MINUTES} minutes')`,
+	).run();
+	return res.meta.changes ?? 0;
+}
+
 export async function createVerification(featureId: number): Promise<number> {
 	const row = await env.DB.prepare(
 		'INSERT INTO verifications (feature_id) VALUES (?1) RETURNING id',
@@ -353,6 +382,7 @@ export interface FeatureRow {
 	error: string | null;
 	created_at: string;
 	run_started_at: string | null; // start of the current generation attempt
+	tier: string | null; // trivial | standard; scales the agent budget
 	author_login: string | null; // instructing user (plan approver); null = bot
 	author_id: number | null;
 	coauthor_login: string | null; // plan creator when different from author
@@ -371,11 +401,13 @@ export async function createFeature(
 	// Null for operator/API intakes — the generator commits as the bot.
 	author?: { login: string; id: number },
 	coauthor?: { login: string; id: number },
+	// trivial | standard — scales the generation agent's budget and prompt.
+	tier?: string,
 ): Promise<number> {
 	const row = await env.DB.prepare(
 		`INSERT INTO features
-		 (repository_id, title, spec, acceptance, author_login, author_id, coauthor_login, coauthor_id)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) RETURNING id`,
+		 (repository_id, title, spec, acceptance, author_login, author_id, coauthor_login, coauthor_id, tier)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) RETURNING id`,
 	)
 		.bind(
 			repositoryId,
@@ -386,6 +418,7 @@ export async function createFeature(
 			author?.id ?? null,
 			coauthor?.login ?? null,
 			coauthor?.id ?? null,
+			tier ?? null,
 		)
 		.first<{ id: number }>();
 	return row!.id;
@@ -395,12 +428,13 @@ export async function getFeature(id: number): Promise<FeatureRow | null> {
 	return env.DB.prepare('SELECT * FROM features WHERE id = ?1').bind(id).first<FeatureRow>();
 }
 
-// A queue-consumer wall-clock kill dies without reaching the failure handler,
-// stranding the feature in 'generating' forever. This lazy sweep (called from
-// the factory read paths) flips any run silent past the wall clock + slack to
-// failed, so the UI shows the truth and the retry button lights up. Legacy
-// rows without run_started_at fall back to created_at.
-const GENERATION_STRAND_MINUTES = 25;
+// Generation runs as a durable Workflow whose steps heartbeat run_started_at,
+// so a stranded 'generating' row should be near-impossible — this lazy sweep
+// (called from the factory read paths) is the last-resort backstop for an
+// engine-level failure. The threshold must exceed the longest heartbeat gap
+// (the 25-minute agent step) plus retry delays. Legacy rows without
+// run_started_at fall back to created_at.
+const GENERATION_STRAND_MINUTES = 45;
 
 export async function failStrandedGeneration(): Promise<number> {
 	const res = await env.DB.prepare(
@@ -461,6 +495,10 @@ export interface PlanRow {
 	created_at: string;
 	created_by_login: string | null; // signed-in submitter; null = operator/API
 	created_by_id: number | null;
+	tier: string | null; // trivial | standard; null = pre-tiering (standard)
+	archived: number; // started tasks are never deleted, only hidden
+	feedback: string | null; // JSON [{snippet, comment}] awaiting a revise run
+	attachments: string | null; // JSON [{key, name, content_type}] in R2
 }
 
 export async function createPlan(
@@ -470,12 +508,21 @@ export async function createPlan(
 	// The signed-in user who submitted the requirements; null for operator/API
 	// intakes. Carried onto the feature at approval for commit attribution.
 	createdBy?: { login: string; id: number },
+	// JSON [{key, name, content_type}] of user-uploaded context files.
+	attachments?: string,
 ): Promise<number> {
 	const row = await env.DB.prepare(
-		`INSERT INTO plans (repository_id, title, requirements, created_by_login, created_by_id)
-		 VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id`,
+		`INSERT INTO plans (repository_id, title, requirements, created_by_login, created_by_id, attachments)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6) RETURNING id`,
 	)
-		.bind(repositoryId, title, requirements, createdBy?.login ?? null, createdBy?.id ?? null)
+		.bind(
+			repositoryId,
+			title,
+			requirements,
+			createdBy?.login ?? null,
+			createdBy?.id ?? null,
+			attachments ?? null,
+		)
 		.first<{ id: number }>();
 	return row!.id;
 }
@@ -523,6 +570,25 @@ export async function listPlansForInstallations(
 	return res.results;
 }
 
+// One plan with the same repo/feature/verification context as the list query
+// (the board's task-detail view).
+export async function getPlanWithRepoById(id: number): Promise<PlanWithRepo | null> {
+	return env.DB.prepare(
+		`SELECT p.*, r.owner, r.name, r.installation_id, f.pr_number AS pr_number,
+		        f.status AS feature_status, f.error AS feature_error,
+		        v.status AS verification_status, v.results AS verification_results,
+		        v.demo AS verification_demo
+		 FROM plans p
+		 JOIN repositories r ON r.id = p.repository_id
+		 LEFT JOIN features f ON f.id = p.feature_id
+		 LEFT JOIN verifications v ON v.id =
+		   (SELECT MAX(id) FROM verifications WHERE feature_id = p.feature_id)
+		 WHERE p.id = ?1`,
+	)
+		.bind(id)
+		.first<PlanWithRepo>();
+}
+
 export async function updatePlan(
 	id: number,
 	fields: {
@@ -534,6 +600,8 @@ export async function updatePlan(
 		acceptance?: string;
 		featureId?: number;
 		error?: string;
+		tier?: string;
+		feedback?: string;
 	},
 ): Promise<void> {
 	await env.DB.prepare(
@@ -545,7 +613,9 @@ export async function updatePlan(
 		 plan = COALESCE(?6, plan),
 		 acceptance = COALESCE(?7, acceptance),
 		 feature_id = COALESCE(?8, feature_id),
-		 error = COALESCE(?9, error)
+		 error = COALESCE(?9, error),
+		 tier = COALESCE(?10, tier),
+		 feedback = COALESCE(?11, feedback)
 		 WHERE id = ?1`,
 	)
 		.bind(
@@ -558,6 +628,8 @@ export async function updatePlan(
 			fields.acceptance ?? null,
 			fields.featureId ?? null,
 			fields.error ?? null,
+			fields.tier ?? null,
+			fields.feedback ?? null,
 		)
 		.run();
 }
@@ -806,10 +878,14 @@ export async function setRepoAgentEnabled(
 
 // --- External MCP tool connections per agent (migration 0005) ---
 
-export interface AgentConnectionRow {
+// Installation-level integrations registry (kanban-era model): connections
+// are added once per installation on the integrations page; MCP-kind
+// connections are attached to agents via agent_connection_links.
+export interface ConnectionRow {
 	id: number;
-	agent_id: number;
+	installation_id: number;
 	name: string;
+	kind: string; // 'mcp' (agent-mountable) | 'api' (stored bearer integration)
 	url: string;
 	tool_allowlist: string | null; // JSON string array; null = all tools
 	auth_ciphertext: string | null;
@@ -829,7 +905,7 @@ export interface ConnectionSnapshot {
 	optional: boolean;
 }
 
-export function connectionSnapshot(row: AgentConnectionRow): ConnectionSnapshot {
+export function connectionSnapshot(row: ConnectionRow): ConnectionSnapshot {
 	let tools: string[] | undefined;
 	if (row.tool_allowlist) {
 		try {
@@ -849,55 +925,105 @@ export function connectionSnapshot(row: AgentConnectionRow): ConnectionSnapshot 
 	};
 }
 
-export async function listAgentConnections(agentId: number): Promise<AgentConnectionRow[]> {
+// MCP connections attached to one agent, via the registry links.
+export async function listAgentConnections(agentId: number): Promise<ConnectionRow[]> {
 	const res = await env.DB.prepare(
-		'SELECT * FROM agent_connections WHERE agent_id = ?1 ORDER BY name',
+		`SELECT c.* FROM connections c
+		 JOIN agent_connection_links l ON l.connection_id = c.id
+		 WHERE l.agent_id = ?1 AND c.kind = 'mcp'
+		 ORDER BY c.name`,
 	)
 		.bind(agentId)
-		.all<AgentConnectionRow>();
+		.all<ConnectionRow>();
 	return res.results;
 }
 
-export async function getAgentConnection(id: number): Promise<AgentConnectionRow | null> {
-	return env.DB.prepare('SELECT * FROM agent_connections WHERE id = ?1')
-		.bind(id)
-		.first<AgentConnectionRow>();
+export async function listConnections(installationIds: number[]): Promise<ConnectionRow[]> {
+	if (installationIds.length === 0) return [];
+	const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+	const res = await env.DB.prepare(
+		`SELECT * FROM connections WHERE installation_id IN (${placeholders}) ORDER BY name`,
+	)
+		.bind(...installationIds)
+		.all<ConnectionRow>();
+	return res.results;
 }
 
-export async function createAgentConnection(
-	agentId: number,
-	fields: {
-		name: string;
-		url: string;
-		toolAllowlist: string[] | null;
-		authCiphertext: string | null;
-		optional: boolean;
-	},
-): Promise<void> {
+export async function getConnection(id: number): Promise<ConnectionRow | null> {
+	return env.DB.prepare('SELECT * FROM connections WHERE id = ?1').bind(id).first<ConnectionRow>();
+}
+
+export async function createConnection(fields: {
+	installationId: number;
+	name: string;
+	kind: string;
+	url: string;
+	toolAllowlist: string[] | null;
+	authCiphertext: string | null;
+}): Promise<void> {
 	await env.DB.prepare(
-		`INSERT INTO agent_connections (agent_id, name, url, tool_allowlist, auth_ciphertext, optional)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+		`INSERT INTO connections (installation_id, name, kind, url, tool_allowlist, auth_ciphertext, optional)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)`,
 	)
 		.bind(
-			agentId,
+			fields.installationId,
 			fields.name,
+			fields.kind,
 			fields.url,
 			fields.toolAllowlist ? JSON.stringify(fields.toolAllowlist) : null,
 			fields.authCiphertext,
-			fields.optional ? 1 : 0,
 		)
 		.run();
 }
 
-export async function deleteAgentConnection(id: number): Promise<void> {
-	await env.DB.prepare('DELETE FROM agent_connections WHERE id = ?1').bind(id).run();
+export async function deleteConnection(id: number): Promise<void> {
+	await env.DB.prepare('DELETE FROM agent_connection_links WHERE connection_id = ?1').bind(id).run();
+	await env.DB.prepare('DELETE FROM connections WHERE id = ?1').bind(id).run();
+}
+
+export interface AgentConnectionLink {
+	agent_id: number;
+	connection_id: number;
+}
+
+export async function listConnectionLinks(installationIds: number[]): Promise<AgentConnectionLink[]> {
+	if (installationIds.length === 0) return [];
+	const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+	const res = await env.DB.prepare(
+		`SELECT l.agent_id, l.connection_id FROM agent_connection_links l
+		 JOIN connections c ON c.id = l.connection_id
+		 WHERE c.installation_id IN (${placeholders})`,
+	)
+		.bind(...installationIds)
+		.all<AgentConnectionLink>();
+	return res.results;
+}
+
+export async function setAgentConnectionLink(
+	agentId: number,
+	connectionId: number,
+	attached: boolean,
+): Promise<void> {
+	if (attached) {
+		await env.DB.prepare(
+			'INSERT OR IGNORE INTO agent_connection_links (agent_id, connection_id) VALUES (?1, ?2)',
+		)
+			.bind(agentId, connectionId)
+			.run();
+	} else {
+		await env.DB.prepare(
+			'DELETE FROM agent_connection_links WHERE agent_id = ?1 AND connection_id = ?2',
+		)
+			.bind(agentId, connectionId)
+			.run();
+	}
 }
 
 // The MCP auth resolver: called by the Flue transport on every request to an
 // authenticated server. Fetches and unseals the token on demand — it never
 // lands in the conversation, the signal, or the UI.
 export async function getConnectionAuthToken(connectionId: number): Promise<string> {
-	const row = await getAgentConnection(connectionId);
+	const row = await getConnection(connectionId);
 	if (!row?.auth_ciphertext) {
 		throw new Error(`turbodiff: connection ${connectionId} has no stored token`);
 	}
@@ -1156,4 +1282,99 @@ export async function reviewCountLastDay(installationId: number): Promise<number
 		.bind(installationId)
 		.first<{ n: number }>();
 	return row?.n ?? 0;
+}
+
+// --- durable user OAuth credentials (PR-opener attribution) ---
+
+export interface UserTokenRow {
+	user_id: number;
+	login: string;
+	refresh_ciphertext: string;
+	updated_at: string;
+}
+
+export async function saveUserRefreshToken(
+	userId: number,
+	login: string,
+	refreshCiphertext: string,
+): Promise<void> {
+	await env.DB.prepare(
+		`INSERT INTO user_tokens (user_id, login, refresh_ciphertext, updated_at)
+		 VALUES (?1, ?2, ?3, datetime('now'))
+		 ON CONFLICT(user_id) DO UPDATE SET
+		   login = excluded.login,
+		   refresh_ciphertext = excluded.refresh_ciphertext,
+		   updated_at = excluded.updated_at`,
+	)
+		.bind(userId, login, refreshCiphertext)
+		.run();
+}
+
+export async function getUserRefreshToken(userId: number): Promise<UserTokenRow | null> {
+	return env.DB.prepare('SELECT * FROM user_tokens WHERE user_id = ?1')
+		.bind(userId)
+		.first<UserTokenRow>();
+}
+
+export async function deleteUserRefreshToken(userId: number): Promise<void> {
+	await env.DB.prepare('DELETE FROM user_tokens WHERE user_id = ?1').bind(userId).run();
+}
+
+// --- kanban board: todos (unstarted backlog cards) + task archiving ---
+
+export interface TodoRow {
+	id: number;
+	installation_id: number;
+	title: string;
+	notes: string | null;
+	created_by_login: string | null;
+	created_by_id: number | null;
+	plan_id: number | null; // set once started; the board then shows the plan
+	created_at: string;
+}
+
+export async function listTodos(installationIds: number[]): Promise<TodoRow[]> {
+	if (installationIds.length === 0) return [];
+	const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+	const res = await env.DB.prepare(
+		`SELECT * FROM todos
+		 WHERE installation_id IN (${placeholders}) AND plan_id IS NULL
+		 ORDER BY id DESC`,
+	)
+		.bind(...installationIds)
+		.all<TodoRow>();
+	return res.results;
+}
+
+export async function createTodo(
+	installationId: number,
+	title: string,
+	notes: string | null,
+	createdBy?: { login: string; id: number },
+): Promise<number> {
+	const row = await env.DB.prepare(
+		`INSERT INTO todos (installation_id, title, notes, created_by_login, created_by_id)
+		 VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id`,
+	)
+		.bind(installationId, title, notes, createdBy?.login ?? null, createdBy?.id ?? null)
+		.first<{ id: number }>();
+	return row!.id;
+}
+
+export async function getTodo(id: number): Promise<TodoRow | null> {
+	return env.DB.prepare('SELECT * FROM todos WHERE id = ?1').bind(id).first<TodoRow>();
+}
+
+export async function deleteTodo(id: number): Promise<void> {
+	await env.DB.prepare('DELETE FROM todos WHERE id = ?1').bind(id).run();
+}
+
+export async function linkTodoToPlan(id: number, planId: number): Promise<void> {
+	await env.DB.prepare('UPDATE todos SET plan_id = ?2 WHERE id = ?1').bind(id, planId).run();
+}
+
+export async function setPlanArchived(id: number, archived: boolean): Promise<void> {
+	await env.DB.prepare('UPDATE plans SET archived = ?2 WHERE id = ?1')
+		.bind(id, archived ? 1 : 0)
+		.run();
 }

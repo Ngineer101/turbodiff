@@ -8,11 +8,14 @@ import {
 	getRepoById,
 	type FeatureRow,
 	type RepositoryRow,
+	setRepoRunCommand,
+	setRepoLaunchable,
 } from './db.ts';
 import { maybeAutoMerge } from './auto-merge.ts';
 import { signArtifactKey } from './crypto.ts';
 import { resolveRunnerAuth } from './fixer.ts';
 import { installationToken, sandboxGitToken } from './github-app.ts';
+import { NPM_CACHE_ENV } from './generation-workflow.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
 
 // Phase 4 (docs/software-factory-design.md): empirical verification of factory
@@ -23,10 +26,17 @@ import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
 // capturing screenshots. The evidence lands on the PR as a report comment;
 // failed criteria feed the existing auto-fix loop.
 
-const CLONE_DIR = '/workspace/verify-repo';
-const OUT_DIR = '/workspace/verify-out';
-const SHOTS_DIR = `${OUT_DIR}/screenshots`;
-const AGENT_TIMEOUT_MS = 10 * 60_000;
+// Verification shares GENERATION's per-repo container (same sandbox id), so
+// a verify that follows a generation lands on a hot container with the repo
+// git cache and package caches already warm. Work/output dirs are
+// per-feature for isolation; only the caches are shared.
+const CACHE_DIR = '/workspace/repo-cache';
+const cloneDir = (featureId: number) => `/workspace/verify-${featureId}`;
+const outDir = (featureId: number) => `/workspace/verify-out-${featureId}`;
+const shotsDir = (featureId: number) => `${outDir(featureId)}/screenshots`;
+// Verification runs inside a Workflow step (no wall clock), so the agent can
+// afford launch discovery + screenshots + a recording.
+const AGENT_TIMEOUT_MS = 20 * 60_000;
 
 export interface VerifyQueueMessage {
 	kind: 'verify';
@@ -41,7 +51,14 @@ interface CriterionResult {
 }
 
 function verifyPrompt(feature: FeatureRow, repo: RepositoryRow, criteria: string[]): string {
-	const runtime = repo.run_command
+	const OUT_DIR = outDir(feature.id);
+	const SHOTS_DIR = shotsDir(feature.id);
+	const demos = repo.demo_videos === 1;
+	// launchable is the cached detection verdict: 0 means a previous run
+	// proved this repo can't launch in the sandbox — skip discovery entirely.
+	const detect = !repo.run_command && demos && repo.launchable !== 0;
+	const demosPossible = demos && (repo.run_command !== null || detect);
+	const launch = repo.run_command
 		? `## Running the app
 The app can be launched with:
 
@@ -52,7 +69,36 @@ Start it in the background (e.g. \`nohup ... > /tmp/app.log 2>&1 &\`), wait for
 the port to accept connections, and verify runtime criteria against it with
 curl or small node scripts. If it fails to start, mark runtime criteria as
 "skip" with a note quoting the relevant log lines — do NOT mark them "fail"
-for infrastructure reasons.
+for infrastructure reasons.`
+		: detect
+			? `## Running the app (work it out yourself)
+No launch command is configured. Determine how to run this app from the
+repository itself: package.json scripts (dev/start/preview), the README,
+framework config, lockfiles. Install dependencies first if needed. Launch in
+the background (\`nohup ... > /tmp/app.log 2>&1 &\`), wait for its port to
+accept connections, and verify runtime criteria against the live app.
+
+Timebox launch discovery to a few minutes. If the app needs Docker,
+containers, cloud bindings (e.g. Cloudflare Workers/D1/R2), a database, or
+other external services to run, treat it as NOT launchable here — do not
+fight it; verify statically instead.
+
+Record your conclusion either way by writing ${OUT_DIR}/run-command.json:
+- launched successfully: {"command": "<one shell command, including any install step>", "port": <number>}
+- not launchable here: {"launchable": false, "reason": "<one line why>"}
+so future verification runs skip this discovery entirely.
+
+If this repository is NOT a launchable app with a web UI (a library, an
+API-only service, a mobile app), do not force it: verify what you can
+statically, mark runtime-only criteria "skip" with a note, and skip
+screenshots and the recording. If it fails to start after honest attempts,
+mark runtime criteria "skip" quoting the relevant log lines — do NOT mark
+them "fail" for infrastructure reasons.`
+			: `## Running the app
+This repository is known not to be launchable in this sandbox (cached from a
+previous run). Verify what can be verified statically from the tree; mark
+criteria that would need a running app as "skip" with a note saying why.`;
+	const runtime = `${launch}
 
 ## Screenshots
 A headless Chrome binary is installed (its path is in the env var
@@ -65,7 +111,9 @@ Launch with args ['--no-sandbox', '--disable-dev-shm-usage']. Use descriptive
 kebab-case filenames and reference each screenshot from the matching
 criterion result.
 
-## Demo recording
+${
+		demosPossible
+			? `## Demo recording
 Also record ONE short screen recording (10–30 seconds) demonstrating the
 feature's happy path end to end. This is what humans watch, so drive it like a
 demo: pause about a second between meaningful steps and let each state change
@@ -77,10 +125,8 @@ be visible before moving on. In a .cjs script, use puppeteer's screencast API:
 
 Write a one-line caption for the recording to ${OUT_DIR}/demo-caption.txt.
 If the app cannot run, skip the recording.`
-		: `## Running the app
-No run command is configured for this repository, so runtime and visual checks
-are unavailable. Verify what can be verified statically from the tree; mark
-criteria that would need a running app as "skip" with a note saying why.`;
+			: `Do not record a demo for this repository.`
+	}`;
 
 	return `You are a verification agent for ${repo.owner}/${repo.name}. You are in a checkout of the pull request branch for "${feature.title}". You may read anything and run the app, but do NOT modify tracked files, commit, or push.
 
@@ -148,31 +194,52 @@ async function verify(
 	const scrub = (s: string) => s.replaceAll(token, '***').replaceAll(gitToken, '***');
 	const full = `${repo.owner}/${repo.name}`;
 
+	// Same container id as generation: verify usually follows a generation on
+	// the same repo, so the container, repo cache, and package caches are warm.
 	const sandbox = getSandbox(
 		env.Sandbox as unknown as DurableObjectNamespace<Sandbox>,
-		`verify--${repo.owner}--${repo.name}--${feature.id}`.toLowerCase(),
-		{ sleepAfter: '15m' },
+		`gen--${repo.owner}--${repo.name}`.toLowerCase(),
+		{ sleepAfter: '45m' },
 	);
+	const WORK = cloneDir(feature.id);
+	const OUT = outDir(feature.id);
 
 	try {
-		await sandbox.exec(`rm -rf ${CLONE_DIR} ${OUT_DIR} && mkdir -p ${SHOTS_DIR}`);
-		const clone = await sandbox.exec(
-			`git clone --depth 50 --single-branch --branch "$VERIFY_BRANCH" ` +
-				`"https://x-access-token:$GIT_TOKEN@github.com/${full}.git" ${CLONE_DIR}`,
+		await sandbox.exec(`rm -rf ${WORK} ${OUT} && mkdir -p ${shotsDir(feature.id)}`);
+		// Warm path: force-fetch the PR branch into the shared repo cache, then
+		// hardlink-clone it into this feature's own working dir. Cold path
+		// bootstraps the cache. Credentials only ever travel via env to
+		// explicit-URL commands.
+		const sync = await sandbox.exec(
+			`if [ -d ${CACHE_DIR}/.git ]; then ` +
+				`git -C ${CACHE_DIR} fetch --depth 50 "https://x-access-token:$GIT_TOKEN@github.com/${full}.git" "+refs/heads/$VERIFY_BRANCH:refs/heads/$VERIFY_BRANCH"; ` +
+				`else git clone --depth 50 --single-branch --branch "$VERIFY_BRANCH" ` +
+				`"https://x-access-token:$GIT_TOKEN@github.com/${full}.git" ${CACHE_DIR} && ` +
+				`git -C ${CACHE_DIR} remote set-url origin "https://github.com/${full}.git"; fi`,
 			{ env: { GIT_TOKEN: gitToken, VERIFY_BRANCH: feature.branch! }, timeout: 3 * 60_000 },
 		);
+		if (!sync.success) {
+			// A corrupted cache must never wedge the repo — drop it for next time.
+			await sandbox.exec(`rm -rf ${CACHE_DIR}`).catch(() => {});
+			throw new Error(`repo cache sync failed: ${scrub(sync.stderr).slice(0, 500)}`);
+		}
+		const clone = await sandbox.exec(
+			`git clone --local ${CACHE_DIR} ${WORK} -b "$VERIFY_BRANCH"`,
+			{ env: { VERIFY_BRANCH: feature.branch! }, timeout: 2 * 60_000 },
+		);
 		if (!clone.success) {
-			throw new Error(`git clone failed: ${scrub(clone.stderr).slice(0, 500)}`);
+			throw new Error(`working-copy clone failed: ${scrub(clone.stderr).slice(0, 500)}`);
 		}
 
-		await sandbox.writeFile(`${OUT_DIR}/task.md`, verifyPrompt(feature, repo, criteria));
+		await sandbox.writeFile(`${OUT}/task.md`, verifyPrompt(feature, repo, criteria));
 		const agent = await sandbox.exec(
-			`claude -p --dangerously-skip-permissions --output-format text < ${OUT_DIR}/task.md`,
+			`claude -p --dangerously-skip-permissions --output-format text < ${OUT}/task.md`,
 			{
-				cwd: CLONE_DIR,
+				cwd: WORK,
 				timeout: AGENT_TIMEOUT_MS,
 				env: {
 					...auth.vars,
+					...NPM_CACHE_ENV,
 					IS_SANDBOX: '1',
 					DISABLE_AUTOUPDATER: '1',
 					CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
@@ -185,10 +252,37 @@ async function verify(
 			);
 		}
 
-		const results = await readResults(sandbox, criteria.length);
-		const summary = await readText(sandbox, `${OUT_DIR}/summary.md`);
+		const results = await readResults(sandbox, OUT, criteria.length);
+		const summary = await readText(sandbox, `${OUT}/summary.md`);
 		const shots = await uploadScreenshots(sandbox, feature.id, results);
-		const demo = await uploadDemo(sandbox, feature.id);
+		const demo = repo.demo_videos === 1 ? await uploadDemo(sandbox, feature.id) : undefined;
+
+		// Cache the agent's discovery verdict — positive OR negative — so future
+		// runs skip it entirely. Same trust domain as running the repo's own
+		// code; the sandbox is the boundary.
+		if (!repo.run_command && repo.launchable !== 0) {
+			try {
+				const detected = JSON.parse(
+					(await sandbox.readFile(`${OUT}/run-command.json`)).content,
+				) as { command?: unknown; port?: unknown; launchable?: unknown; reason?: unknown };
+				if (detected.launchable === false) {
+					await setRepoLaunchable(repo.id, false);
+					console.log(
+						`turbodiff: cached NOT-launchable verdict for ${full}: ${String(detected.reason ?? '').slice(0, 120)}`,
+					);
+				} else {
+					const cmd = typeof detected.command === 'string' ? detected.command.trim() : '';
+					const port = Number(detected.port);
+					if (cmd && cmd.length <= 500 && Number.isInteger(port) && port > 0 && port < 65536) {
+						await setRepoRunCommand(repo.id, cmd, port);
+						await setRepoLaunchable(repo.id, true);
+						console.log(`turbodiff: cached auto-detected run command for ${full} (port ${port})`);
+					}
+				}
+			} catch {
+				// nothing written — discovery inconclusive; try again next run
+			}
+		}
 
 		const failed = results.filter((r) => r.verdict === 'fail');
 		await postReport(token, repo, feature, criteria, results, shots, summary, demo);
@@ -211,16 +305,16 @@ async function verify(
 		}
 		return { status: failed.length > 0 ? 'failed' : 'passed', results, summary, demo };
 	} finally {
-		await sandbox
-			.exec(`git -C ${CLONE_DIR} remote set-url origin "https://github.com/${full}.git"`)
-			.catch(() => {});
+		// The working copy's origin is the local cache path (no credentials);
+		// drop this feature's dirs to bound the warm container's disk.
+		await sandbox.exec(`rm -rf ${WORK} ${OUT}`).catch(() => {});
 	}
 }
 
-async function readResults(sandbox: Sandbox, count: number): Promise<CriterionResult[]> {
+async function readResults(sandbox: Sandbox, out: string, count: number): Promise<CriterionResult[]> {
 	let parsed: unknown;
 	try {
-		parsed = JSON.parse((await sandbox.readFile(`${OUT_DIR}/results.json`)).content);
+		parsed = JSON.parse((await sandbox.readFile(`${out}/results.json`)).content);
 	} catch {
 		throw new Error('verifier agent did not produce a parseable results.json');
 	}
@@ -273,7 +367,7 @@ async function uploadScreenshots(
 	for (const name of wanted) {
 		const safe = name.replace(/[^\w.-]/g, '');
 		if (!safe.endsWith('.png')) continue;
-		const bytes = await readBinary(sandbox, `${SHOTS_DIR}/${safe}`);
+		const bytes = await readBinary(sandbox, `${shotsDir(featureId)}/${safe}`);
 		if (!bytes || bytes.length === 0) continue;
 		const key = `verify/${featureId}/${safe}`;
 		await env.ARTIFACTS.put(key, bytes, { httpMetadata: { contentType: 'image/png' } });
@@ -293,6 +387,7 @@ interface DemoInfo {
 // cannot play (renders a black box) — transcode to H.264 MP4 in the sandbox
 // so the demo plays everywhere. 40MB guard against runaway recordings.
 async function uploadDemo(sandbox: Sandbox, featureId: number): Promise<DemoInfo | undefined> {
+	const OUT_DIR = outDir(featureId);
 	const stat = await sandbox.exec(`stat -c %s "${OUT_DIR}/demo.webm"`, { timeout: 15_000 });
 	const size = Number(stat.stdout.trim());
 	if (!stat.success || !Number.isFinite(size) || size === 0) return undefined;

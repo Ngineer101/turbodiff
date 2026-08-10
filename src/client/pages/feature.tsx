@@ -110,10 +110,12 @@ function Composer({
 function FileDiff({
 	data,
 	file,
+	diffStyle,
 	onCommented,
 }: {
 	data: ApiFeatureDetail;
 	file: CockpitFile;
+	diffStyle: 'split' | 'unified';
 	onCommented: () => void;
 }) {
 	const [selection, setSelection] = useState<Selection | null>(null);
@@ -178,6 +180,7 @@ function FileDiff({
 				}
 				options={{
 					theme: 'pierre-dark',
+					diffStyle,
 					// The card header (FileSection) owns the filename/stats row.
 					disableFileHeader: true,
 					enableLineSelection: prOpen,
@@ -195,6 +198,7 @@ function FileSection({
 	file,
 	collapsed,
 	commentCount,
+	diffStyle,
 	onToggle,
 	onCommented,
 	sectionRef,
@@ -203,6 +207,7 @@ function FileSection({
 	file: CockpitFile;
 	collapsed: boolean;
 	commentCount: number;
+	diffStyle: 'split' | 'unified';
 	onToggle: () => void;
 	onCommented: () => void;
 	sectionRef: (el: HTMLElement | null) => void;
@@ -251,7 +256,7 @@ function FileSection({
 					{file.deletions > 0 ? <span className="text-danger">−{file.deletions}</span> : null}
 				</span>
 			</button>
-			{collapsed ? null : <FileDiff data={data} file={file} onCommented={onCommented} />}
+			{collapsed ? null : <FileDiff data={data} file={file} diffStyle={diffStyle} onCommented={onCommented} />}
 		</section>
 	);
 }
@@ -265,6 +270,16 @@ export default function FeaturePage() {
 	const refresh = () => queryClient.invalidateQueries({ queryKey: ['feature', id] });
 
 	const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+	// Side-by-side needs width; unified is the sane default on narrow screens.
+	const [diffStyle, setDiffStyleState] = useState<'split' | 'unified'>(() => {
+		const stored = localStorage.getItem('turbodiff.diffStyle');
+		if (stored === 'split' || stored === 'unified') return stored;
+		return window.matchMedia('(min-width: 1024px)').matches ? 'split' : 'unified';
+	});
+	const setDiffStyle = (style: 'split' | 'unified') => {
+		setDiffStyleState(style);
+		localStorage.setItem('turbodiff.diffStyle', style);
+	};
 	const [activeFile, setActiveFile] = useState<string | null>(null);
 	const sectionEls = useRef(new Map<string, HTMLElement>());
 
@@ -334,6 +349,7 @@ export default function FeaturePage() {
 		return (
 			<>
 				<PageTitle
+					titleClassName="text-base sm:text-xl"
 					aside={
 						stopped ? <Pill tone="red">{data.feature.status}</Pill> : <Pill tone="running">generating</Pill>
 					}
@@ -379,37 +395,39 @@ export default function FeaturePage() {
 
 	return (
 		<>
-			<PageTitle
-				aside={
-					<Pill tone={prState === 'merged' ? 'on' : prState === 'open' ? 'running' : 'red'}>{prState}</Pill>
-				}
-			>
-				{data.feature.title}
-			</PageTitle>
-			<p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.85rem] text-mute">
-				{data.repo} · PR{' '}
-				<a
-					href={data.pr.html_url}
-					target="_blank"
-					rel="noopener"
-					className="text-accent-bright hover:underline"
-				>
-					#{data.feature.pr_number}
-				</a>{' '}
-				· {data.pr.changed_files} files,{' '}
-				<span className="text-accent-bright">+{data.pr.additions}</span>{' '}
-				<span className="text-danger">−{data.pr.deletions}</span>
+			<h1 className="text-base leading-snug font-medium break-words sm:text-xl">{data.feature.title}</h1>
+			<div className="mt-3 flex flex-wrap items-center gap-2">
+				<Pill tone={prState === 'merged' ? 'on' : prState === 'open' ? 'running' : 'red'}>{prState}</Pill>
 				{v ? (
 					<Pill tone={v.status === 'passed' ? 'on' : v.status === 'running' ? 'running' : 'red'}>
 						verify: {v.status}
 						{v.status === 'passed' ? ` (${v.total}/${v.total})` : v.status === 'failed' ? ` (${v.failed} unmet)` : ''}
 					</Pill>
 				) : null}
+			</div>
+			<p className="mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-mute sm:text-[0.85rem]">
+				<span className="truncate">{data.repo}</span>
+				<span>·</span>
+				<a
+					href={data.pr.html_url}
+					target="_blank"
+					rel="noopener"
+					className="text-accent-bright hover:underline"
+				>
+					PR #{data.feature.pr_number}
+				</a>
+				<span>·</span>
+				<span>
+					{data.pr.changed_files} files{' '}
+					<span className="text-accent-bright">+{data.pr.additions}</span>{' '}
+					<span className="text-danger">−{data.pr.deletions}</span>
+				</span>
 			</p>
 
 			{prState === 'open' ? (
-				<div className="mt-4">
+				<div className="mt-5">
 					<ConfirmButton
+						className="w-full sm:w-auto"
 						title="Merge pull request?"
 						description={`This merges PR #${data.feature.pr_number} into ${data.repo} on GitHub.`}
 						confirmLabel="Merge"
@@ -438,9 +456,8 @@ export default function FeaturePage() {
 						{data.demo ? (
 							<>
 								<SectionHeading>demo</SectionHeading>
-								{data.demo.caption ? <Muted className="mb-2 block">{data.demo.caption}</Muted> : null}
 								<video
-									className="w-full rounded-lg border border-line bg-black"
+									className="w-full rounded-xl bg-black"
 									controls
 									autoPlay
 									muted
@@ -448,6 +465,9 @@ export default function FeaturePage() {
 									playsInline
 									src={data.demo.url}
 								/>
+								{data.demo.caption ? (
+									<p className="mt-2 text-xs leading-relaxed text-mute">{data.demo.caption}</p>
+								) : null}
 							</>
 						) : null}
 
@@ -513,7 +533,27 @@ export default function FeaturePage() {
 
 					<SectionHeading
 						aside={
-							<span className="flex gap-1">
+							<span className="flex flex-wrap items-center gap-1">
+								<span
+									className="mr-1 inline-flex overflow-hidden rounded-md border border-line-2/70"
+									role="group"
+									aria-label="Diff layout"
+								>
+									{(['unified', 'split'] as const).map((style) => (
+										<button
+											key={style}
+											type="button"
+											aria-pressed={diffStyle === style}
+											onClick={() => setDiffStyle(style)}
+											className={cn(
+												'cursor-pointer px-2.5 py-1 text-xs transition-colors',
+												diffStyle === style ? 'bg-raised text-accent-bright' : 'text-mute hover:text-ink',
+											)}
+										>
+											{style === 'split' ? 'side-by-side' : 'unified'}
+										</button>
+									))}
+								</span>
 								<Button
 									variant="ghost"
 									size="sm"
@@ -547,6 +587,7 @@ export default function FeaturePage() {
 							key={f.filename}
 							data={data}
 							file={f}
+							diffStyle={diffStyle}
 							collapsed={collapsed.has(f.filename)}
 							commentCount={commentCounts.get(f.filename) ?? 0}
 							onToggle={() => toggleFile(f.filename)}

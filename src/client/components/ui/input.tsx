@@ -1,20 +1,22 @@
-import type { InputHTMLAttributes, SelectHTMLAttributes, TextareaHTMLAttributes } from 'react';
+import type { ComponentProps } from 'react';
 import { cn } from '../../lib/utils.ts';
 
+// text-base below sm is deliberate: iOS Safari auto-zooms any focused field
+// with a font size under 16px.
 const fieldClasses =
-	'w-full rounded-md border border-line-2 bg-surface px-2.5 py-1.5 text-sm text-ink placeholder:text-mute/70 read-only:opacity-60 focus-visible:border-accent/50';
+	'w-full rounded-lg border border-line-2/70 bg-surface px-3 py-2 text-base text-ink placeholder:text-mute/70 read-only:opacity-60 focus-visible:border-accent/50 sm:rounded-md sm:px-2.5 sm:py-1.5 sm:text-sm';
 
-export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
+export function Input({ className, ...props }: ComponentProps<'input'>) {
 	return <input className={cn(fieldClasses, className)} {...props} />;
 }
 
-export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+export function Textarea({ className, ...props }: ComponentProps<'textarea'>) {
 	return <textarea className={cn(fieldClasses, 'min-h-40 resize-y leading-relaxed', className)} {...props} />;
 }
 
 // Native select, styled to match — no popover dependency needed for the few
 // pickers in the app.
-export function Select({ className, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
+export function Select({ className, ...props }: ComponentProps<'select'>) {
 	return <select className={cn(fieldClasses, 'appearance-auto', className)} {...props} />;
 }
 

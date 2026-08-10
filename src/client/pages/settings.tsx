@@ -132,11 +132,11 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
 
 	return (
 		<Card className="mt-2">
-			<div className="flex flex-wrap items-center justify-between gap-3">
-				<span className="font-medium">
+			<div className="flex items-center justify-between gap-3">
+				<span className="min-w-0 truncate font-medium" title={`${repo.owner}/${repo.name}`}>
 					{repo.owner}/{repo.name}
 				</span>
-				<label className="flex cursor-pointer items-center gap-2 text-xs text-mute">
+				<label className="flex shrink-0 cursor-pointer items-center gap-2 text-xs text-mute">
 					factory
 					<Switch
 						checked={repo.enabled}
@@ -195,6 +195,13 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
 							onClick={() => patchRepo.mutate({ auto_merge: !repo.auto_merge })}
 						>
 							&#127981; auto-merge
+						</Chip>
+						<Chip
+							on={repo.demo_videos}
+							title={`${repo.demo_videos ? 'verification records a short demo video of each feature (the verify agent auto-detects how to launch the app)' : 'verification skips demo recordings for this repo'} — click to ${repo.demo_videos ? 'disable' : 'enable'}`}
+							onClick={() => patchRepo.mutate({ demo_videos: !repo.demo_videos })}
+						>
+							&#127909; demos
 						</Chip>
 					</div>
 					<CheckCommandForm repo={repo} />
