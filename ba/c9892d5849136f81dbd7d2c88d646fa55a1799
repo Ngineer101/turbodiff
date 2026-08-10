@@ -1,0 +1,76 @@
+src/client/styles.css
+  s_e14c7d6967e7df::t_59b59f25449498 4-5,7
+  s_e14c7d6967e7df::t_dd4b1268192eda 31
+  s_e14c7d6967e7df::t_75bc2c1e3b5089 102
+src/client/components/reviews-table.tsx
+  s_e14c7d6967e7df::t_eea8e48d627a2d 44,49
+src/client/components/file-tree.tsx
+  s_e14c7d6967e7df::t_2c5e57f5baf02d 157-161
+src/client/components/app-shell.tsx
+  s_e14c7d6967e7df::t_14f593edabf662 18
+  s_e14c7d6967e7df::t_bef3cd628a0684 97
+README.md
+  s_e14c7d6967e7df::t_16b9a6ce544353 5-19
+  s_e14c7d6967e7df::t_6462f9aaef2c1c 50-60
+  s_e14c7d6967e7df::t_6256deea13ef95 185-194
+  s_e14c7d6967e7df::t_714b91fbf77967 61
+src/client/components/section.tsx
+  s_e14c7d6967e7df::t_0a31f9e2c1efd6 15-17
+src/routes/ui.ts
+  s_e14c7d6967e7df::t_205d4f726cc4ff 35
+src/client/components/ui/pill.tsx
+  s_e14c7d6967e7df::t_bfb5f601d23260 8
+src/client/pages/board.tsx
+  s_e14c7d6967e7df::t_a3b86b3e40cf9e 347
+  s_e14c7d6967e7df::t_091be67ea9ae0e 327
+src/client/pages/integrations.tsx
+  s_e14c7d6967e7df::t_d822dde5410533 129,131-133
+  s_e14c7d6967e7df::t_971699aa6c98ea 54,56
+src/client/pages/usage.tsx
+  s_e14c7d6967e7df::t_82fb92e80894c3 165-168
+src/client/components/stat-tile.tsx
+  s_e14c7d6967e7df::t_e69dc6d457dc0a 18
+src/client/pages/task.tsx
+  s_e14c7d6967e7df::t_a55ce53c766660 167
+src/routes/landing.tsx
+  s_e14c7d6967e7df::t_e9107f38120848 264
+  s_e14c7d6967e7df::t_2843fb47b3075a 191
+  s_e14c7d6967e7df::t_7423230d405c37 26,33
+  s_e14c7d6967e7df::t_94e6e0dc4da9a0 205,207-208,210,214-217
+  s_e14c7d6967e7df::t_25ef0fdf3b7521 504-506
+  s_e14c7d6967e7df::t_ba3550b1744195 119,124
+  s_e14c7d6967e7df::t_849db4c6959345 518
+  s_e14c7d6967e7df::t_c553e8a441d707 70,76
+  s_e14c7d6967e7df::t_13af39a1567c56 7-8
+  s_e14c7d6967e7df::t_c9d2436d2411ab 464,467,473
+  s_e14c7d6967e7df::t_1d6ff76413944b 500,503
+src/client/main.tsx
+  s_e14c7d6967e7df::t_8b934a4e5706a2 196
+src/client/pages/feature.tsx
+  s_e14c7d6967e7df::t_b158f81eb2bb54 437,443
+  s_e14c7d6967e7df::t_3c09336ebac0e1 256
+src/client/pages/agents.tsx
+  s_e14c7d6967e7df::t_183bd8977b4f71 59
+src/client/pages/settings.tsx
+  s_e14c7d6967e7df::t_721821f184562b 134-137
+  s_e14c7d6967e7df::t_36ab010ee155b0 91
+src/client/components/agent-form.tsx
+  s_e14c7d6967e7df::t_165401a17401f9 60
+  s_e14c7d6967e7df::t_91b8000112c1f4 81-86
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "bac9892d5849136f81dbd7d2c88d646fa55a1799",
+  "prompts": {},
+  "sessions": {
+    "s_e14c7d6967e7df": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27a03fb2-4b9e-4979-bec0-a8e23a07d88e",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
