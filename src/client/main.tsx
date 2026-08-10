@@ -193,7 +193,7 @@ createRoot(document.getElementById('root')!).render(
             background: 'var(--color-surface)',
             border: '1px solid var(--color-line-2)',
             color: 'var(--color-ink)',
-            fontFamily: 'var(--font-mono)',
+            fontFamily: 'var(--font-sans)',
             fontSize: '0.8rem',
           },
         }}

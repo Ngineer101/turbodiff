@@ -12,7 +12,9 @@ export function SectionHeading({
 }) {
   return (
     <div className={cn('mt-9 mb-3 flex flex-wrap items-baseline justify-between gap-2', className)}>
-      <h2 className="text-xs font-medium tracking-[0.14em] text-mute uppercase">{children}</h2>
+      <h2 className="font-mono text-xs font-medium tracking-[0.14em] text-mute uppercase">
+        {children}
+      </h2>
       {aside}
     </div>
   );

@@ -4,8 +4,8 @@
 // The Three.js scene occupies only the right half of desktop viewports (hidden
 // on narrow screens) so it never overlaps the hero copy. It is a floating 3D
 // terminal: a glossy black slab whose screen is a live CanvasTexture where a
-// Turbodiff review session types itself out on loop — prompt, diff hunk,
-// "review posted" — over a scrolling wireframe grid floor. Black, white and
+// Turbodiff factory run types itself out on loop — plan, generate, review,
+// fix, verify, PR — over a scrolling wireframe grid floor. Black, white and
 // the brand greens only.
 //
 // CSS and the client script are kept as plain strings injected with
@@ -23,13 +23,14 @@ const CSS = `
 		--green-bright: #56d364;
 		--red: #f85149;
 		--line: #1c2620;
+		--mono: "IBM Plex Mono", ui-monospace, monospace;
 	}
 	* { box-sizing: border-box; margin: 0; }
 	html, body { height: 100%; }
 	body {
 		background: var(--bg);
 		color: var(--ink);
-		font: 400 15px/1.6 "IBM Plex Mono", ui-monospace, monospace;
+		font: 400 15px/1.6 "IBM Plex Sans", system-ui, sans-serif;
 		overflow: hidden;
 	}
 	/* --- background layers --- */
@@ -66,11 +67,13 @@ const CSS = `
 		mix-blend-mode: screen;
 	}
 	.wordmark {
+		font-family: var(--mono);
 		font-size: 0.95rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink);
 	}
 	.wordmark b { color: var(--green-bright); font-weight: 500; }
 	.nav { display: flex; align-items: center; gap: 1.6rem; }
 	.nav a {
+		font-family: var(--mono);
 		color: var(--muted); text-decoration: none; font-size: 0.85rem;
 		border-bottom: 1px solid transparent; transition: color 0.2s, border-color 0.2s;
 	}
@@ -113,10 +116,12 @@ const CSS = `
 	.cta-ghost:hover { transform: translateY(-2px); border-color: rgba(63, 185, 80, 0.6); background: #0d1310; }
 	.cta svg, .cta-ghost svg { width: 1.1em; height: 1.1em; fill: currentColor; }
 	.cta-note {
+		font-family: var(--mono);
 		display: block; margin-top: 0.9rem; color: var(--muted); font-size: 0.8rem;
 		animation: rise 0.7s 0.38s cubic-bezier(0.2, 0.7, 0.2, 1) both;
 	}
 	footer {
+		font-family: var(--mono);
 		display: flex; gap: 2rem; flex-wrap: wrap;
 		color: var(--muted); font-size: 0.78rem; letter-spacing: 0.06em;
 		border-top: 1px solid var(--line); padding-top: 1.1rem;
@@ -183,7 +188,7 @@ if (renderer) {
 
 	// ---------------------------------------------------------------
 	// The terminal screen: a 2D canvas re-drawn every frame and used
-	// as a texture. A review session types itself out on loop.
+	// as a texture. A factory run types itself out on loop.
 	// ---------------------------------------------------------------
 	const TW = 1024, TH = 800;
 	const tcv = document.createElement('canvas');
@@ -197,19 +202,19 @@ if (renderer) {
 	const DIM = 'rgba(230, 239, 233, 0.45)';
 	// [text, color, ms-per-char, ms-pause-before-line]
 	const SCRIPT = [
-		['$ turbodiff review #128', BRIGHT, 34, 500],
+		['$ turbodiff build "session expiry"', BRIGHT, 34, 500],
 		['', INK, 0, 120],
-		['\\u203a fetching diff\\u2026  4 files, +182 \\u221247', DIM, 10, 420],
-		['\\u203a reading src/lib/session.ts', DIM, 10, 260],
+		['\\u203a planning against your code\\u2026', DIM, 10, 420],
+		['\\u2713 plan approved \\u2014 4 files, 2 criteria', BRIGHT, 12, 300],
 		['', INK, 0, 160],
-		['@@ \\u221240,3 +40,6 @@', DIM, 12, 300],
+		['\\u203a generating in sandbox\\u2026', DIM, 10, 300],
 		['+ const s = await unseal(token)', GREEN, 16, 180],
 		['+ if (s.exp < now()) return null', GREEN, 16, 90],
-		['+ return s', GREEN, 16, 90],
 		['', INK, 0, 200],
-		['\\u203a posting review\\u2026', DIM, 10, 500],
-		['\\u2713 2 inline comments anchored', BRIGHT, 12, 420],
-		['\\u2713 review posted in 38s', BRIGHT, 12, 200],
+		['\\u203a review: 1 finding \\u2192 auto-fixed', DIM, 10, 500],
+		['\\u203a verifying\\u2026 app launched, screenshots', DIM, 10, 420],
+		['\\u2713 2/2 criteria met', BRIGHT, 12, 420],
+		['\\u2713 PR ready to merge', BRIGHT, 12, 200],
 	];
 
 	let li = 0, ci = 0, nextAt = 0, phase = 'type', phaseAt = 0, wipe = 0, lastTypeAt = -1e9;
@@ -256,7 +261,7 @@ if (renderer) {
 		dot(118, null, 'rgba(63, 185, 80, 0.55)');
 		tctx.font = '400 23px "IBM Plex Mono", ui-monospace, monospace';
 		tctx.fillStyle = DIM;
-		tctx.fillText('turbodiff@edge \\u2014 pr #128', 156, CHROME / 2 + 8);
+		tctx.fillText('turbodiff@edge \\u2014 factory run', 156, CHROME / 2 + 8);
 		tctx.fillStyle = 'rgba(63, 185, 80, 0.3)';
 		tctx.fillRect(0, CHROME, TW, 2);
 
@@ -456,16 +461,16 @@ function Landing({ appSlug }: { appSlug: string }) {
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Turbodiff — open-source AI code review for every pull request</title>
+        <title>Turbodiff — the open-source software factory</title>
         <meta
           name="description"
-          content="Open-source AI code review for teams that ship constantly. Turbodiff reviews every pull request with inline comments as it opens. Fully built and hosted on Cloudflare Workers, and self-hostable."
+          content="Turbodiff turns free-form requirements into verified pull requests: agents plan against your real code, generate the change in a sandbox, review it, fix blocking findings, and post screenshot evidence for every acceptance criterion. Open source, self-hostable, built on Cloudflare."
         />
         <link rel="icon" type="image/png" href="/logo-small.png" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
         <link
-          href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500&display=swap"
+          href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap"
           rel="stylesheet"
         />
         <style dangerouslySetInnerHTML={{ __html: CSS }} />
@@ -492,12 +497,13 @@ function Landing({ appSlug }: { appSlug: string }) {
           <main>
             <div class="hero">
               <h1>
-                Every diff, <em>reviewed</em> in seconds.
+                Requirements in. <em>Verified</em> pull requests out.
               </h1>
               <p class="sub">
-                Ship more code than you can review? Let Turbodiff handle the review queue. Using
-                state of the art AI models, you can review code faster than ever before. Open
-                source, self-hostable &amp; built on Cloudflare.
+                Describe a feature and the factory takes over: agents plan it against your real
+                code, build it in a sandbox, review the PR, fix what's blocking, and post screenshot
+                proof for every acceptance criterion. You approve the plan and merge. Open source,
+                self-hostable &amp; built on Cloudflare.
               </p>
               <div class="cta-row">
                 <a class="cta" href={installUrl}>
@@ -509,7 +515,7 @@ function Landing({ appSlug }: { appSlug: string }) {
                   Star on GitHub
                 </a>
               </div>
-              <span class="cta-note">free &middot; MIT-licensed &middot; yours to run</span>
+              <span class="cta-note">free &middot; FSL-licensed &middot; yours to run</span>
             </div>
           </main>
 

@@ -1,9 +1,10 @@
 @import 'tailwindcss';
 
 /* Turbodiff's terminal identity as Tailwind v4 theme tokens: phosphor green
-   on near-black, IBM Plex Mono everywhere (loaded in the shell). */
+   on near-black. IBM Plex Sans for reading text, IBM Plex Mono for code,
+   identifiers, and terminal chrome (both loaded in the shell). */
 @theme {
-  --font-sans: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
   --color-bg: #070b09;
@@ -27,7 +28,7 @@
     color-scheme: dark;
   }
   body {
-    @apply bg-bg font-mono text-sm text-ink antialiased;
+    @apply bg-bg font-sans text-sm text-ink antialiased;
   }
   ::selection {
     background: color-mix(in srgb, var(--color-accent) 35%, transparent);
@@ -98,4 +99,5 @@
   border-radius: 8px;
   overflow: hidden;
   background: var(--color-surface);
+  font-family: var(--font-mono);
 }

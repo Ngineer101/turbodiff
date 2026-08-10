@@ -15,7 +15,7 @@ function Logo() {
   return (
     <Link
       to="/"
-      className="flex items-baseline gap-0.5 text-base font-semibold tracking-wide text-ink"
+      className="flex items-baseline gap-0.5 font-mono text-base font-semibold tracking-wide text-ink"
     >
       turbodiff
       <span className="animate-cursor text-accent-bright" aria-hidden>
@@ -94,7 +94,7 @@ function BottomTabs() {
 function UserBlock({ login }: { login: string }) {
   return (
     <div className="flex items-center justify-between gap-2">
-      <span className="truncate text-xs text-mute">@{login}</span>
+      <span className="truncate font-mono text-xs text-mute">@{login}</span>
       <form method="post" action="/auth/logout">
         <button
           className="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-xs text-mute hover:bg-raised hover:text-ink"

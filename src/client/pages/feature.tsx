@@ -253,7 +253,7 @@ function FileSection({
           )}
           title={file.status}
         />
-        <span className="min-w-0 truncate font-medium">
+        <span className="min-w-0 truncate font-mono font-medium">
           {dir ? <span className="font-normal text-mute">{dir}</span> : null}
           {base}
         </span>
@@ -434,13 +434,13 @@ export default function FeaturePage() {
         ) : null}
       </div>
       <p className="mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-mute sm:text-[0.85rem]">
-        <span className="truncate">{data.repo}</span>
+        <span className="truncate font-mono">{data.repo}</span>
         <span>·</span>
         <a
           href={data.pr.html_url}
           target="_blank"
           rel="noopener"
-          className="text-accent-bright hover:underline"
+          className="font-mono text-accent-bright hover:underline"
         >
           PR #{data.feature.pr_number}
         </a>

@@ -162,7 +162,10 @@ export function UsagePage() {
             {data.recent_repos.map((r) => (
               <tr key={r.id}>
                 <Td>
-                  {r.owner}/{r.name} {r.suspended ? <Pill tone="red">suspended</Pill> : null}
+                  <span className="font-mono">
+                    {r.owner}/{r.name}
+                  </span>{' '}
+                  {r.suspended ? <Pill tone="red">suspended</Pill> : null}
                 </Td>
                 <Td>{r.enabled ? <Pill tone="on">on</Pill> : <Pill>off</Pill>}</Td>
                 <Td numeric>{r.reviews > 0 ? r.reviews : <Muted>0</Muted>}</Td>

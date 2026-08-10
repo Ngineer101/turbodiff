@@ -41,12 +41,12 @@ export function ReviewsTable({ reviews }: { reviews: ApiReview[] }) {
                   href={r.pr_url}
                   target="_blank"
                   rel="noopener"
-                  className="text-accent-bright hover:underline"
+                  className="font-mono text-accent-bright hover:underline"
                 >
                   {r.repo}#{r.pr_number}
                 </a>
               ) : (
-                <>(removed repository)#{r.pr_number}</>
+                <span className="font-mono">(removed repository)#{r.pr_number}</span>
               )}
               <div className="text-xs text-mute">
                 {r.agent_slug ?? 'review'} · {r.trigger_event}

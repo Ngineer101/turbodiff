@@ -88,7 +88,7 @@ function CheckCommandForm({ repo }: { repo: ApiRepoSettings }) {
         value={command}
         onChange={(e) => setCommand(e.target.value)}
         placeholder="check command (e.g. npm ci && npm test) — blocks factory pushes on failure"
-        className="py-1 text-xs"
+        className="py-1 font-mono text-xs"
       />
       <Button size="sm" variant="secondary" type="submit" loading={patchRepo.isPending}>
         save
@@ -131,7 +131,10 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
   return (
     <Card className="mt-2">
       <div className="flex items-center justify-between gap-3">
-        <span className="min-w-0 truncate font-medium" title={`${repo.owner}/${repo.name}`}>
+        <span
+          className="min-w-0 truncate font-mono font-medium"
+          title={`${repo.owner}/${repo.name}`}
+        >
           {repo.owner}/{repo.name}
         </span>
         <label className="flex shrink-0 cursor-pointer items-center gap-2 text-xs text-mute">

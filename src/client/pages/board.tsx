@@ -324,7 +324,7 @@ function TaskCard({ task }: { task: ApiPlan }) {
         ) : null}
       </div>
       <div className="mt-2 flex items-center justify-between text-xs text-mute">
-        <span className="truncate">{task.repo}</span>
+        <span className="truncate font-mono">{task.repo}</span>
         <span className="shrink-0">{ago(task.created_at)}</span>
       </div>
     </Card>
@@ -344,7 +344,7 @@ function Column({
 }) {
   return (
     <section className="min-w-0">
-      <h2 className="mb-2.5 text-xs font-medium tracking-[0.14em] text-mute uppercase">
+      <h2 className="mb-2.5 font-mono text-xs font-medium tracking-[0.14em] text-mute uppercase">
         {title} <span className="ml-1 text-mute/60">{count}</span>
       </h2>
       <div className="flex flex-col gap-2.5">

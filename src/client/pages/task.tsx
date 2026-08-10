@@ -164,7 +164,7 @@ export function TaskPage() {
         {task.archived ? <Pill>archived</Pill> : null}
       </div>
       <p className="mt-2.5 text-xs text-mute sm:text-[0.85rem]">
-        {task.repo} · {ago(task.created_at)}
+        <span className="font-mono">{task.repo}</span> · {ago(task.created_at)}
       </p>
       {task.attachments.length > 0 ? (
         <div className="mt-2 flex flex-wrap gap-1.5">
