@@ -22,7 +22,10 @@ export default defineConfig({
     // The pre-Vite+ codebase has never been oxfmt-formatted; a blanket
     // reformat is deliberately NOT part of the migration (land it as its
     // own commit if wanted). Until then `vp check` = lint + types.
-    fmt: false,
+    fmt: true,
+  },
+  staged: {
+    '*': 'vp check --fix',
   },
   run: {
     tasks: {
