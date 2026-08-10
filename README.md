@@ -173,12 +173,17 @@ body in `x-hub-signature-256: sha256=<hex>`).
 
 ## Deploy
 
-```sh
-npm run deploy
-```
+Every commit to `main` deploys automatically via
+[GitHub Actions](.github/workflows/deploy.yml): D1 migrations are applied
+`--remote`, then the Worker and sandbox container image are built and pushed.
+The workflow needs two repository secrets, `CLOUDFLARE_API_TOKEN` (Workers
+Scripts:Edit, D1:Edit, Containers:Edit) and `CLOUDFLARE_ACCOUNT_ID`.
 
-This builds the Worker and the sandbox container image (Docker required) and
-pushes both.
+To deploy manually (Docker required):
+
+```sh
+pnpm vp run deploy
+```
 
 ## Use it
 
