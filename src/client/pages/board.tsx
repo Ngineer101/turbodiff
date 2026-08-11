@@ -86,7 +86,15 @@ function QuickAdd({ board }: { board: ApiBoard }) {
   );
 }
 
-function StartDialog({ todo, onClose }: { todo: ApiTodo; onClose: () => void }) {
+function StartDialog({
+  todo,
+  board,
+  onClose,
+}: {
+  todo: ApiTodo;
+  board: ApiBoard;
+  onClose: () => void;
+}) {
   const queryClient = useQueryClient();
   const [title, setTitle] = useState(todo.title);
   const [requirements, setRequirements] = useState(todo.notes ?? todo.title);
@@ -132,13 +140,11 @@ function StartDialog({ todo, onClose }: { todo: ApiTodo; onClose: () => void }) 
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            if (requirements.trim()) start.mutate();
+            if (requirements.trim() && todo.repos.length > 0) start.mutate();
           }}
         >
           <Field label="repositories">
-            <p className="text-[0.85rem] text-ink-dim">
-              {todo.repos.map((r) => `${r.owner}/${r.name}`).join(', ')}
-            </p>
+            <RepoChips todo={todo} board={board} />
           </Field>
           <Field label="title">
             <Input
@@ -203,7 +209,12 @@ function StartDialog({ todo, onClose }: { todo: ApiTodo; onClose: () => void }) 
             <Button type="button" variant="secondary" onClick={onClose}>
               Cancel
             </Button>
-            <Button type="submit" loading={start.isPending}>
+            <Button
+              type="submit"
+              loading={start.isPending}
+              disabled={todo.repos.length === 0}
+              title={todo.repos.length === 0 ? 'select at least one repository first' : undefined}
+            >
               Start planning
             </Button>
           </div>
@@ -307,6 +318,24 @@ function RepoPickerPopover({ todo, board }: { todo: ApiTodo; board: ApiBoard }) 
   );
 }
 
+function RepoChips({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {todo.repos.map((r) => (
+        <span
+          key={r.id}
+          title={`${r.owner}/${r.name}`}
+          className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-raised/70 py-0.5 pr-2.5 pl-2 text-xs text-ink-dim"
+        >
+          <FolderGit2 className="size-3 shrink-0 text-mute" aria-hidden />
+          <span className="truncate">{r.name}</span>
+        </span>
+      ))}
+      <RepoPickerPopover todo={todo} board={board} />
+    </div>
+  );
+}
+
 function TodoCard({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
   const queryClient = useQueryClient();
   const [starting, setStarting] = useState(false);
@@ -334,32 +363,18 @@ function TodoCard({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
         </ConfirmButton>
       </div>
       {todo.notes ? <p className="mt-1 line-clamp-3 text-xs text-mute">{todo.notes}</p> : null}
-      <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-        {todo.repos.map((r) => (
-          <span
-            key={r.id}
-            title={`${r.owner}/${r.name}`}
-            className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-raised/70 py-0.5 pr-2.5 pl-2 text-xs text-ink-dim"
-          >
-            <FolderGit2 className="size-3 shrink-0 text-mute" aria-hidden />
-            <span className="truncate">{r.name}</span>
-          </span>
-        ))}
-        <RepoPickerPopover todo={todo} board={board} />
+      <div className="mt-2.5">
+        <RepoChips todo={todo} board={board} />
       </div>
       <div className="mt-2.5 flex items-center justify-between">
         <Muted className="text-xs">{ago(todo.created_at)}</Muted>
-        <Button
-          size="sm"
-          variant="secondary"
-          disabled={todo.repos.length === 0}
-          title={todo.repos.length === 0 ? 'add at least one repository first' : undefined}
-          onClick={() => setStarting(true)}
-        >
+        <Button size="sm" variant="secondary" onClick={() => setStarting(true)}>
           <Play className="size-3" aria-hidden /> Start
         </Button>
       </div>
-      {starting ? <StartDialog todo={todo} onClose={() => setStarting(false)} /> : null}
+      {starting ? (
+        <StartDialog todo={todo} board={board} onClose={() => setStarting(false)} />
+      ) : null}
     </Card>
   );
 }
