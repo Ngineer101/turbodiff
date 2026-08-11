@@ -1,5 +1,6 @@
 import { getSandbox, type Sandbox } from '@cloudflare/sandbox';
 import { env } from 'cloudflare:workers';
+import type { ApiPlanQuestion as Question } from '../shared/api-types.ts';
 import { gh } from '../tools/github.ts';
 import { signArtifactKey } from './crypto.ts';
 import {
@@ -79,6 +80,45 @@ async function readJsonArray(sandbox: Sandbox, path: string): Promise<string[]> 
   try {
     const parsed = JSON.parse((await sandbox.readFile(path)).content);
     return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+// Parses questions.json into the structured { text, options?, recommended? }
+// shape. Fails open per-entry (and per-file) the same way readJsonArray
+// does: a malformed question is dropped or demoted to free-text rather than
+// failing the whole analyze step.
+async function readQuestions(sandbox: Sandbox, path: string): Promise<Question[]> {
+  try {
+    const parsed = JSON.parse((await sandbox.readFile(path)).content);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((raw: unknown): Question | null => {
+        if (typeof raw === 'string') {
+          const text = raw.trim();
+          return text ? { text } : null;
+        }
+        if (!raw || typeof raw !== 'object') return null;
+        const obj = raw as Record<string, unknown>;
+        const text = typeof obj.text === 'string' ? obj.text.trim() : '';
+        if (!text) return null;
+        const rawOptions = Array.isArray(obj.options) ? obj.options : [];
+        const options = [
+          ...new Set(
+            rawOptions
+              .filter((o): o is string => typeof o === 'string' && o.trim().length > 0)
+              .map((o: string) => o.trim()),
+          ),
+        ];
+        if (options.length < 2) return { text };
+        const recommended =
+          typeof obj.recommended === 'string' && options.includes(obj.recommended.trim())
+            ? obj.recommended.trim()
+            : options[0];
+        return { text, options, recommended };
+      })
+      .filter((q): q is Question => q !== null);
   } catch {
     return [];
   }
@@ -209,7 +249,7 @@ ${trivial ? '\nThis request is classified TRIVIAL: a small, localized change. Ke
 Analyze the feature requirements below against the actual codebase, then write these files (create the directory if needed):
 
 1. ${OUT_DIR}/analysis.md — a ${trivial ? 'brief (≤10 lines)' : 'short'} grounding analysis: which files/modules this touches, how it fits existing conventions, and any risks.
-2. ${OUT_DIR}/questions.json — a JSON array of clarifying questions (strings). Include ONLY genuine ambiguities or decisions the requirements leave open and that would change the implementation. If the requirements are clear enough to implement well, write an empty array [].${trivial ? ' For a trivial request the answer is almost always [].' : ''}
+2. ${OUT_DIR}/questions.json — a JSON array of clarifying questions. Each question is an object: \`{ "text": "...", "options": ["...", "...", "..."], "recommended": "<exact text of one of the options>" }\`. Give 2-3 concrete, mutually-exclusive options that a user could tap to answer, and mark the one you'd recommend by repeating its exact text in \`recommended\`. If a question genuinely has no small set of sensible choices (open-ended input needed), omit \`options\`/\`recommended\` and it will be shown as free text. Include ONLY genuine ambiguities or decisions that would change the implementation. If the requirements are clear enough to implement well, write an empty array [].${trivial ? ' For a trivial request the answer is almost always [].' : ''}
 
 ${UNTRUSTED_CONTENT_RULES}
 
@@ -227,7 +267,7 @@ ${reposList(dirs)}
 Analyze the feature requirements below against the actual code in EVERY repository above, as one coherent feature designed across all of them, then write these files (create the directory if needed):
 
 1. ${OUT_DIR}/analysis.md — a ${trivial ? 'brief (≤10 lines)' : 'short'} grounding analysis covering each repository: which files/modules it touches, how it fits existing conventions, and any risks.
-2. ${OUT_DIR}/questions.json — a JSON array of clarifying questions (strings). Include ONLY genuine ambiguities or decisions the requirements leave open and that would change the implementation. If the requirements are clear enough to implement well, write an empty array [].${trivial ? ' For a trivial request the answer is almost always [].' : ''}
+2. ${OUT_DIR}/questions.json — a JSON array of clarifying questions. Each question is an object: \`{ "text": "...", "options": ["...", "...", "..."], "recommended": "<exact text of one of the options>" }\`. Give 2-3 concrete, mutually-exclusive options that a user could tap to answer, and mark the one you'd recommend by repeating its exact text in \`recommended\`. If a question genuinely has no small set of sensible choices (open-ended input needed), omit \`options\`/\`recommended\` and it will be shown as free text. Include ONLY genuine ambiguities or decisions that would change the implementation. If the requirements are clear enough to implement well, write an empty array [].${trivial ? ' For a trivial request the answer is almost always [].' : ''}
 
 ${UNTRUSTED_CONTENT_RULES}
 
@@ -325,7 +365,7 @@ export async function runPlanAnalyze(planId: number): Promise<void> {
     const attachments = attachmentsSection(await fetchPlanAttachments(sandbox, plan));
     await runAgent(sandbox, analyzePrompt(plan, repos, dirs, tier, attachments), booted.scrub);
     const analysis = await readText(sandbox, `${OUT_DIR}/analysis.md`);
-    const questions = await readJsonArray(sandbox, `${OUT_DIR}/questions.json`);
+    const questions = await readQuestions(sandbox, `${OUT_DIR}/questions.json`);
 
     if (questions.length === 0) {
       // No ambiguities — plan immediately in the same run.
@@ -387,12 +427,12 @@ export async function runPlanRefine(planId: number): Promise<void> {
     return;
   }
   const full = repos.map((r) => `${r.owner}/${r.name}`).join(', ');
-  const questions: string[] = plan.questions ? JSON.parse(plan.questions) : [];
+  const questions: Question[] = plan.questions ? JSON.parse(plan.questions) : [];
   const answers: string[] = plan.answers ? JSON.parse(plan.answers) : [];
   const qa =
     questions.length > 0
       ? '\n## Clarifying questions and answers\n' +
-        questions.map((q, i) => `Q: ${q}\nA: ${answers[i] ?? '(no answer)'}`).join('\n\n')
+        questions.map((q, i) => `Q: ${q.text}\nA: ${answers[i] ?? '(no answer)'}`).join('\n\n')
       : '';
   // Snippet-anchored review comments (batched in the UI): a feedback-driven
   // refine revises the previous draft rather than planning from scratch.

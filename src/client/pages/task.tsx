@@ -10,9 +10,10 @@ import { GENERATION_STOPPED, taskQuery } from '../lib/queries.ts';
 import { taskState } from '../lib/task-state.ts';
 import { cn } from '../lib/utils.ts';
 import { ConfirmButton } from '../components/confirm-button.tsx';
+import { QuestionsCarousel } from '../components/questions-carousel.tsx';
 import { SectionHeading } from '../components/section.tsx';
 import { Button, buttonVariants } from '../components/ui/button.tsx';
-import { Field, Input, Textarea } from '../components/ui/input.tsx';
+import { Textarea } from '../components/ui/input.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 
 function onApiError(err: unknown) {
@@ -20,9 +21,9 @@ function onApiError(err: unknown) {
 }
 
 function AnswersForm({ task, onDone }: { task: ApiPlan; onDone: () => void }) {
-  const [answers, setAnswers] = useState<string[]>(() => task.questions.map(() => ''));
   const submit = useMutation({
-    mutationFn: () => api.post(`/api/factory/plans/${task.id}/answers`, { answers }),
+    mutationFn: (answers: string[]) =>
+      api.post(`/api/factory/plans/${task.id}/answers`, { answers }),
     onSuccess: () => {
       toast.success('answers submitted — refining the plan');
       onDone();
@@ -30,29 +31,11 @@ function AnswersForm({ task, onDone }: { task: ApiPlan; onDone: () => void }) {
     onError: onApiError,
   });
   return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        submit.mutate();
-      }}
-    >
-      {task.questions.map((q, i) => (
-        <Field key={i} label={q}>
-          <Input
-            value={answers[i] ?? ''}
-            onChange={(e) =>
-              setAnswers((prev) => prev.map((a, j) => (j === i ? e.target.value : a)))
-            }
-            placeholder="your answer"
-          />
-        </Field>
-      ))}
-      <div className="mt-3">
-        <Button type="submit" loading={submit.isPending}>
-          Submit answers
-        </Button>
-      </div>
-    </form>
+    <QuestionsCarousel
+      questions={task.questions}
+      onSubmit={(answers) => submit.mutate(answers)}
+      submitting={submit.isPending}
+    />
   );
 }
 
