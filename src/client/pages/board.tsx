@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { Archive, Paperclip, Play, Trash2, X } from 'lucide-react';
+import { Archive, Check, FolderGit2, Paperclip, Play, Plus, Search, Trash2, X } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import type { ApiBoard, ApiPlan, ApiTodo } from '../../shared/api-types.ts';
@@ -16,6 +16,7 @@ import { Card } from '../components/ui/card.tsx';
 import { Dialog, DialogContent, DialogTitle } from '../components/ui/dialog.tsx';
 import { Field, Input, Select, Textarea } from '../components/ui/input.tsx';
 import { Pill } from '../components/ui/pill.tsx';
+import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover.tsx';
 
 // The home board: To Do (unstarted todos, deletable) → In Progress (started
 // tasks — planning through open PR) → Done (merged). Started tasks are only
@@ -48,7 +49,7 @@ function QuickAdd({ board }: { board: ApiBoard }) {
     mutationFn: () => api.post('/api/todos', { installation_id: installationId, title }),
     onSuccess: () => {
       setTitle('');
-      queryClient.invalidateQueries({ queryKey: ['board'] });
+      void queryClient.invalidateQueries({ queryKey: ['board'] });
     },
     onError: onApiError,
   });
@@ -119,7 +120,7 @@ function StartDialog({ todo, onClose }: { todo: ApiTodo; onClose: () => void }) 
     },
     onSuccess: () => {
       toast.success('task started — the planning agent is on it');
-      queryClient.invalidateQueries({ queryKey: ['board'] });
+      void queryClient.invalidateQueries({ queryKey: ['board'] });
       onClose();
     },
     onError: onApiError,
@@ -212,12 +213,18 @@ function StartDialog({ todo, onClose }: { todo: ApiTodo; onClose: () => void }) 
   );
 }
 
-// The pre-start repo picker: chips sourced from the installation's
-// factory-enabled repos, capped at 3. Posts the replace-all selection on
-// every toggle so the todo's persisted list (GET /board) always reflects it.
-function RepoPicker({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
+// The pre-start repo picker: a popover listing the installation's
+// factory-enabled repos, capped at 3 selections. Posts the replace-all
+// selection on every toggle so the todo's persisted list (GET /board)
+// always reflects it. A todo can't be deselected to zero repos here —
+// removing the last one is a no-op, matching the API's guard.
+function RepoPickerPopover({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
   const queryClient = useQueryClient();
+  const [query, setQuery] = useState('');
   const available = board.repos.filter((r) => r.installation_id === todo.installation_id);
+  const filtered = query.trim()
+    ? available.filter((r) => `${r.owner}/${r.name}`.toLowerCase().includes(query.toLowerCase()))
+    : available;
   const selectedIds = todo.repos.map((r) => r.id);
   const setRepos = useMutation({
     mutationFn: (ids: number[]) => api.post(`/api/todos/${todo.id}/repos`, { repository_ids: ids }),
@@ -231,35 +238,78 @@ function RepoPicker({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
     setRepos.mutate(next);
   };
   return (
-    <div className="mt-2 flex flex-wrap gap-1.5">
-      {available.map((r) => {
-        const selected = selectedIds.includes(r.id);
-        const disabled = setRepos.isPending || (!selected && selectedIds.length >= 3);
-        return (
-          <button
-            key={r.id}
-            type="button"
-            disabled={disabled}
-            onClick={() => toggle(r.id)}
-            className={cn(
-              'cursor-pointer rounded-full border px-2.5 py-0.5 text-xs whitespace-nowrap transition-colors disabled:cursor-not-allowed disabled:opacity-40',
-              selected
-                ? 'border-accent/40 bg-accent/15 text-accent-bright'
-                : 'border-line-2 text-mute hover:text-ink',
-            )}
-          >
-            {r.owner}/{r.name}
-          </button>
-        );
-      })}
-    </div>
+    <Popover onOpenChange={(open) => !open && setQuery('')}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            'inline-flex cursor-pointer items-center gap-1 rounded-full border border-dashed border-line-2 px-2 py-0.5 text-xs text-mute transition-colors hover:border-accent/40 hover:text-accent-bright',
+          )}
+        >
+          <Plus className="size-3" aria-hidden />
+          {todo.repos.length === 0 ? 'repos' : 'edit'}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent>
+        {available.length > 6 ? (
+          <div className="relative mb-1.5">
+            <Search
+              className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-mute"
+              aria-hidden
+            />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="filter repositories…"
+              aria-label="Filter repositories"
+              className="py-1.5 pl-8 text-xs sm:py-1.5 sm:pl-8"
+            />
+          </div>
+        ) : null}
+        <div className="max-h-64 overflow-y-auto" role="listbox" aria-label="Repositories">
+          {filtered.length === 0 ? (
+            <p className="px-2 py-3 text-center text-xs text-mute">no repositories match</p>
+          ) : (
+            filtered.map((r) => {
+              const selected = selectedIds.includes(r.id);
+              const disabled = setRepos.isPending || (!selected && selectedIds.length >= 3);
+              return (
+                <button
+                  key={r.id}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  disabled={disabled}
+                  onClick={() => toggle(r.id)}
+                  className={cn(
+                    'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+                    selected ? 'text-accent-bright' : 'text-ink-dim hover:bg-raised/70',
+                  )}
+                >
+                  <span className="flex size-4 shrink-0 items-center justify-center">
+                    {selected ? <Check className="size-3.5" aria-hidden /> : null}
+                  </span>
+                  <FolderGit2 className="size-3.5 shrink-0 text-mute" aria-hidden />
+                  <span className="min-w-0 truncate">
+                    <span className="text-mute">{r.owner}/</span>
+                    {r.name}
+                  </span>
+                </button>
+              );
+            })
+          )}
+        </div>
+        <p className="mt-1.5 border-t border-line px-2 pt-1.5 text-[11px] text-mute/70">
+          {selectedIds.length}/3 selected — a task targets up to 3 repos
+        </p>
+      </PopoverContent>
+    </Popover>
   );
 }
 
 function TodoCard({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
   const queryClient = useQueryClient();
   const [starting, setStarting] = useState(false);
-  const [editingRepos, setEditingRepos] = useState(false);
   const remove = useMutation({
     mutationFn: () => api.delete(`/api/todos/${todo.id}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['board'] }),
@@ -284,25 +334,20 @@ function TodoCard({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
         </ConfirmButton>
       </div>
       {todo.notes ? <p className="mt-1 line-clamp-3 text-xs text-mute">{todo.notes}</p> : null}
-      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
         {todo.repos.map((r) => (
           <span
             key={r.id}
-            className="inline-flex items-center rounded-full bg-raised/70 px-2.5 py-0.5 text-xs text-mute"
+            title={`${r.owner}/${r.name}`}
+            className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-raised/70 py-0.5 pr-2.5 pl-2 text-xs text-ink-dim"
           >
-            {r.owner}/{r.name}
+            <FolderGit2 className="size-3 shrink-0 text-mute" aria-hidden />
+            <span className="truncate">{r.name}</span>
           </span>
         ))}
-        <button
-          type="button"
-          className="cursor-pointer text-xs text-mute underline hover:text-ink"
-          onClick={() => setEditingRepos((v) => !v)}
-        >
-          {todo.repos.length === 0 ? 'add repos' : 'edit repos'}
-        </button>
+        <RepoPickerPopover todo={todo} board={board} />
       </div>
-      {editingRepos ? <RepoPicker todo={todo} board={board} /> : null}
-      <div className="mt-2 flex items-center justify-between">
+      <div className="mt-2.5 flex items-center justify-between">
         <Muted className="text-xs">{ago(todo.created_at)}</Muted>
         <Button
           size="sm"
@@ -326,7 +371,7 @@ function TaskCard({ task }: { task: ApiPlan }) {
     mutationFn: () => api.post(`/api/tasks/${task.id}/archive`, { archived: true }),
     onSuccess: () => {
       toast.success('task archived');
-      queryClient.invalidateQueries({ queryKey: ['board'] });
+      void queryClient.invalidateQueries({ queryKey: ['board'] });
     },
     onError: onApiError,
   });
@@ -514,7 +559,7 @@ export function BoardPage() {
         ))}
       </div>
 
-      <div className="mt-6 hidden gap-5 lg:grid lg:grid-cols-3">{columns.map((col) => col.el)}</div>
+      <div className="mt-6 hidden gap-6 lg:grid lg:grid-cols-3">{columns.map((col) => col.el)}</div>
       <div className="mt-4 flex flex-col gap-7 lg:hidden">
         {columns.filter((col) => show(col.key)).map((col) => col.el)}
       </div>

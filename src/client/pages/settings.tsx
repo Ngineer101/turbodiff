@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { Clapperboard, GitMerge, OctagonMinus, RefreshCw, Search, Wrench } from 'lucide-react';
+import { useState, type FormEvent, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import type { ApiRepoSettings, ApiSettings } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
@@ -45,6 +46,8 @@ function usePatchRepo(repoId: number) {
   });
 }
 
+// A toggle chip: the on-state reads at a glance (filled accent) instead of
+// only a border-color change.
 function Chip({
   on,
   title,
@@ -54,7 +57,7 @@ function Chip({
   on: boolean;
   title: string;
   onClick: () => void;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <button
@@ -63,8 +66,10 @@ function Chip({
       aria-pressed={on}
       onClick={onClick}
       className={cn(
-        'cursor-pointer rounded-full border px-2.5 py-px text-xs whitespace-nowrap transition-colors',
-        on ? 'border-accent/40 text-accent-bright' : 'border-line-2 text-mute hover:bg-raised',
+        'inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs whitespace-nowrap transition-colors',
+        on
+          ? 'border-accent/40 bg-accent/10 text-accent-bright'
+          : 'border-line-2/70 text-mute hover:border-line-2 hover:text-ink-dim',
       )}
     >
       {children}
@@ -72,9 +77,22 @@ function Chip({
   );
 }
 
+// Label column for one config group inside a repo card.
+function ConfigRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex items-start gap-3">
+      <span className="w-14 shrink-0 pt-1.5 text-right font-mono text-[10px] tracking-[0.12em] text-mute/70 uppercase">
+        {label}
+      </span>
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">{children}</div>
+    </div>
+  );
+}
+
 function CheckCommandForm({ repo }: { repo: ApiRepoSettings }) {
   const patchRepo = usePatchRepo(repo.id);
   const [command, setCommand] = useState(repo.check_command ?? '');
+  const dirty = command !== (repo.check_command ?? '');
   const save = (e: FormEvent) => {
     e.preventDefault();
     patchRepo.mutate(
@@ -83,16 +101,19 @@ function CheckCommandForm({ repo }: { repo: ApiRepoSettings }) {
     );
   };
   return (
-    <form onSubmit={save} className="mt-2 flex w-full items-center gap-1.5">
+    <form onSubmit={save} className="flex w-full items-center gap-1.5">
       <Input
         value={command}
         onChange={(e) => setCommand(e.target.value)}
-        placeholder="check command (e.g. npm ci && npm test) — blocks factory pushes on failure"
-        className="py-1 font-mono text-xs"
+        placeholder="npm ci && npm test — blocks factory pushes on failure"
+        aria-label={`check command for ${repo.owner}/${repo.name}`}
+        className="py-1 font-mono text-xs sm:text-xs"
       />
-      <Button size="sm" variant="secondary" type="submit" loading={patchRepo.isPending}>
-        save
-      </Button>
+      {dirty ? (
+        <Button size="sm" variant="secondary" type="submit" loading={patchRepo.isPending}>
+          save
+        </Button>
+      ) : null}
     </form>
   );
 }
@@ -135,7 +156,8 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
           className="min-w-0 truncate font-mono font-medium"
           title={`${repo.owner}/${repo.name}`}
         >
-          {repo.owner}/{repo.name}
+          <span className="text-mute">{repo.owner}/</span>
+          {repo.name}
         </span>
         <label className="flex shrink-0 cursor-pointer items-center gap-2 text-xs text-mute">
           factory
@@ -158,9 +180,8 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
       </div>
 
       {repo.enabled ? (
-        <>
-          <div className="mt-3 flex flex-wrap items-center gap-1.5">
-            <Muted className="mr-1 text-xs">agents:</Muted>
+        <div className="mt-3 flex flex-col gap-2 border-t border-line/70 pt-3">
+          <ConfigRow label="agents">
             {repo.agents.map((a) => (
               <Chip
                 key={a.id}
@@ -171,47 +192,48 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
                 {a.slug}
               </Chip>
             ))}
-          </div>
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            <Muted className="mr-1 text-xs">behavior:</Muted>
+          </ConfigRow>
+          <ConfigRow label="behavior">
             <Chip
               on={repo.review_on_push}
               title={`${repo.review_on_push ? 'stop' : 'start'} re-reviewing this repo's factory PRs when new commits are pushed (debounced)`}
               onClick={() => patchRepo.mutate({ review_on_push: !repo.review_on_push })}
             >
-              &#8635; on push
+              <RefreshCw className="size-3" aria-hidden /> on push
             </Chip>
             <Chip
               on={repo.blocking_reviews}
               title={`${repo.blocking_reviews ? 'reviews post as plain comments' : 'P1 findings request changes; clean reviews approve'} — click to ${repo.blocking_reviews ? 'disable' : 'enable'}`}
               onClick={() => patchRepo.mutate({ blocking_reviews: !repo.blocking_reviews })}
             >
-              &#9940; blocking
+              <OctagonMinus className="size-3" aria-hidden /> blocking
             </Chip>
             <Chip
               on={repo.auto_fix}
               title={`${repo.auto_fix ? 'blocking reviews are left for a human to address' : 'a blocking review dispatches the fix agent to address the findings (max 3 runs per PR)'} — click to ${repo.auto_fix ? 'disable' : 'enable'}`}
               onClick={() => patchRepo.mutate({ auto_fix: !repo.auto_fix })}
             >
-              &#128295; auto-fix
+              <Wrench className="size-3" aria-hidden /> auto-fix
             </Chip>
             <Chip
               on={repo.auto_merge}
               title={`${repo.auto_merge ? 'factory PRs stay open for a human to merge' : 'factory PRs merge automatically once verification passes and the review is clean (requires blocking reviews)'} — click to ${repo.auto_merge ? 'disable' : 'enable'}`}
               onClick={() => patchRepo.mutate({ auto_merge: !repo.auto_merge })}
             >
-              &#127981; auto-merge
+              <GitMerge className="size-3" aria-hidden /> auto-merge
             </Chip>
             <Chip
               on={repo.demo_videos}
               title={`${repo.demo_videos ? 'verification records a short demo video of each feature (the verify agent auto-detects how to launch the app)' : 'verification skips demo recordings for this repo'} — click to ${repo.demo_videos ? 'disable' : 'enable'}`}
               onClick={() => patchRepo.mutate({ demo_videos: !repo.demo_videos })}
             >
-              &#127909; demos
+              <Clapperboard className="size-3" aria-hidden /> demos
             </Chip>
-          </div>
-          <CheckCommandForm repo={repo} />
-        </>
+          </ConfigRow>
+          <ConfigRow label="check">
+            <CheckCommandForm repo={repo} />
+          </ConfigRow>
+        </div>
       ) : null}
     </Card>
   );
@@ -219,6 +241,19 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
 
 export function SettingsPage() {
   const { data } = useSuspenseQuery(settingsQuery);
+  const [query, setQuery] = useState('');
+
+  const q = query.trim().toLowerCase();
+  const installations = data.installations
+    .map((inst) => ({
+      ...inst,
+      repos: q
+        ? inst.repos.filter((r) => `${r.owner}/${r.name}`.toLowerCase().includes(q))
+        : inst.repos,
+    }))
+    // While searching, orgs with no matches drop out entirely.
+    .filter((inst) => !q || inst.repos.length > 0);
+  const repoCount = data.installations.reduce((n, i) => n + i.repos.length, 0);
 
   return (
     <>
@@ -235,6 +270,22 @@ export function SettingsPage() {
         settings
       </PageTitle>
 
+      {repoCount > 5 ? (
+        <div className="relative mt-5 sm:max-w-sm">
+          <Search
+            className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-mute"
+            aria-hidden
+          />
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={`search ${repoCount} repositories…`}
+            aria-label="Search repositories"
+            className="pl-8 sm:pl-8"
+          />
+        </div>
+      ) : null}
+
       {data.installations.length === 0 ? (
         <div className="mt-6">
           <EmptyState>
@@ -242,10 +293,20 @@ export function SettingsPage() {
             here.
           </EmptyState>
         </div>
+      ) : installations.length === 0 ? (
+        <div className="mt-6">
+          <EmptyState>No repositories match “{query.trim()}”.</EmptyState>
+        </div>
       ) : (
-        data.installations.map((inst) => (
+        installations.map((inst) => (
           <section key={inst.id}>
-            <SectionHeading>
+            <SectionHeading
+              aside={
+                <Muted className="text-xs">
+                  {inst.repos.length} {inst.repos.length === 1 ? 'repo' : 'repos'}
+                </Muted>
+              }
+            >
               {inst.account_login} {inst.suspended ? <Pill tone="red">suspended</Pill> : null}
             </SectionHeading>
             {inst.repos.length === 0 ? (

@@ -81,6 +81,13 @@ export async function addRepositories(installationId: number, repos: WebhookRepo
   );
 }
 
+export async function listRepositoryIdsForInstallation(installationId: number): Promise<number[]> {
+  const rows = await env.DB.prepare('SELECT id FROM repositories WHERE installation_id = ?1')
+    .bind(installationId)
+    .all<{ id: number }>();
+  return rows.results.map((r) => r.id);
+}
+
 export async function removeRepositories(repoIds: number[]): Promise<void> {
   if (repoIds.length === 0) return;
   await env.DB.batch(

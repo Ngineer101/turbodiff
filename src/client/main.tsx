@@ -133,10 +133,6 @@ const agentsRoute = createRoute({
 const agentNewRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/agents/new',
-  validateSearch: (search: Record<string, unknown>) => ({
-    installation: Number(search.installation) || 0,
-  }),
-  loader: () => queryClient.ensureQueryData(agentsQuery),
   component: AgentNewPage,
 });
 

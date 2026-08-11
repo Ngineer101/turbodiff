@@ -88,7 +88,8 @@ export interface ApiTaskRepo {
 export interface ApiPlan {
   id: number;
   title: string;
-  status: PlanStatus | string;
+  // Known statuses plus forward-compat for values newer than this client.
+  status: PlanStatus | (string & {});
   error: string | null;
   created_at: string;
   questions: string[];
@@ -127,7 +128,7 @@ export interface ApiFeatureDetail {
   plan: string | null;
   // Null while generation hasn't opened a PR yet.
   pr: {
-    state: 'open' | 'merged' | 'closed' | string;
+    state: 'open' | 'merged' | 'closed' | (string & {});
     html_url: string;
     additions: number;
     deletions: number;
@@ -164,14 +165,11 @@ export interface ApiAgentSummary {
   is_builtin: boolean;
 }
 
+// Agents are generic (one entry per slug, deduped across installations);
+// writes fan out server-side so every installation stays in step.
 export interface ApiAgentsList {
   github_app_slug: string;
-  installations: {
-    id: number;
-    account_login: string;
-    suspended: boolean;
-    agents: ApiAgentSummary[];
-  }[];
+  agents: ApiAgentSummary[];
 }
 
 export interface ApiConnection {

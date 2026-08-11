@@ -1,9 +1,8 @@
-import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
-import { useNavigate, useSearch } from '@tanstack/react-router';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { api, ApiError } from '../lib/api.ts';
-import { agentsQuery } from '../lib/queries.ts';
 import { AgentForm, type AgentFormValues } from '../components/agent-form.tsx';
 import { PageTitle, SectionHeading } from '../components/section.tsx';
 
@@ -11,21 +10,19 @@ import { PageTitle, SectionHeading } from '../components/section.tsx';
 // the field is blank and validates the final value either way.
 const DEFAULT_MODEL_HINT = 'cloudflare/anthropic/claude-sonnet-5';
 
+// Agents are generic — the server creates the agent for every installation,
+// so no organization picker is needed here.
 export function AgentNewPage() {
-  const { installation } = useSearch({ from: '/agents/new' });
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { data } = useSuspenseQuery(agentsQuery);
   const [error, setError] = useState<string | null>(null);
-  const account = data.installations.find((i) => i.id === installation)?.account_login;
 
   const create = useMutation({
-    mutationFn: (values: AgentFormValues) =>
-      api.post(`/api/agents?installation=${installation}`, values),
+    mutationFn: (values: AgentFormValues) => api.post('/api/agents', values),
     onSuccess: () => {
       toast.success('agent created');
-      queryClient.invalidateQueries({ queryKey: ['agents'] });
-      navigate({ to: '/agents' });
+      void queryClient.invalidateQueries({ queryKey: ['agents'] });
+      void navigate({ to: '/agents' });
     },
     onError: (err) => setError(err instanceof ApiError ? err.message : 'request failed'),
   });
@@ -33,7 +30,7 @@ export function AgentNewPage() {
   return (
     <>
       <PageTitle>agents</PageTitle>
-      <SectionHeading>new agent{account ? ` — ${account}` : ''}</SectionHeading>
+      <SectionHeading>new agent</SectionHeading>
       <AgentForm
         initial={{
           name: '',

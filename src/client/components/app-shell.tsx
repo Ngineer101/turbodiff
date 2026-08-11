@@ -114,6 +114,8 @@ function UserBlock({ login }: { login: string }) {
 export function AppShell({ login, children }: { login: string; children: ReactNode }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const wide = pathname.startsWith('/factory/features/');
+  // The board's three lanes need more room than the reading-width default.
+  const board = pathname === '/';
   return (
     <div className="min-h-dvh md:flex">
       <aside className="sticky top-0 hidden h-dvh w-52 shrink-0 flex-col justify-between border-r border-line bg-surface/50 p-4 md:flex">
@@ -133,7 +135,7 @@ export function AppShell({ login, children }: { login: string; children: ReactNo
         <div
           className={cn(
             'mx-auto px-4 py-5 pb-28 sm:py-8 md:px-8 md:pb-8',
-            wide ? 'max-w-[96rem]' : 'max-w-4xl',
+            wide ? 'max-w-[96rem]' : board ? 'max-w-7xl' : 'max-w-4xl',
           )}
         >
           {children}

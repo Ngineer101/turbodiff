@@ -67,6 +67,7 @@ import {
   type TaskRepoStatusRow,
 } from '../lib/db.ts';
 import { requireUser, type AuthedUser } from '../lib/auth.ts';
+import { syncInstallationRepos } from '../lib/repo-sync.ts';
 import { approvePlan } from '../lib/planner.ts';
 import { encryptionConfigured, openToken, sealToken, signArtifactKey } from '../lib/crypto.ts';
 import { gh } from '../tools/github.ts';
@@ -538,7 +539,10 @@ export function createApiRoutes() {
     }
     const given = body.answers as unknown[];
     const questions: string[] = plan.questions ? JSON.parse(plan.questions) : [];
-    const answers = questions.map((_, i) => String(given[i] ?? ''));
+    const answers = questions.map((_, i) => {
+      const v = given[i];
+      return typeof v === 'string' ? v : v == null ? '' : JSON.stringify(v);
+    });
     await updatePlan(plan.id, { status: 'refining', answers: JSON.stringify(answers) });
     await env.FACTORY_QUEUE.send({ kind: 'plan_refine', planId: plan.id });
     return c.json({ ok: true });
@@ -856,47 +860,45 @@ export function createApiRoutes() {
 
   // --- Agents: list, create, edit, delete + MCP connections ---
 
+  // Agents are generic, not per-organization: every installation carries the
+  // same set of rows (UNIQUE(installation_id, slug)), and writes fan out by
+  // slug, so the list dedupes to one entry per slug and any repo in any
+  // installation can enable any agent.
   app.get('/agents', async (c) => {
     const { installationIds } = c.get('user');
     await Promise.all(installationIds.map((id) => ensureBuiltinAgents(id)));
-    const [groups, agents] = await Promise.all([
-      listInstallationsWithRepos(installationIds),
-      listAgents(installationIds),
-    ]);
+    const agents = await listAgents(installationIds);
+    const seen = new Set<string>();
     return c.json<ApiAgentsList>({
       github_app_slug: env.GITHUB_APP_SLUG,
-      installations: groups.map(({ installation }) => ({
-        id: installation.id,
-        account_login: installation.account_login,
-        suspended: installation.suspended === 1,
-        agents: agents
-          .filter((a) => a.installation_id === installation.id)
-          .map((a) => ({
-            id: a.id,
-            slug: a.slug,
-            name: a.name,
-            description: a.description,
-            model: a.model,
-            is_builtin: a.is_builtin === 1,
-          })),
-      })),
+      agents: agents
+        .filter((a) => (seen.has(a.slug) ? false : (seen.add(a.slug), true)))
+        .map((a) => ({
+          id: a.id,
+          slug: a.slug,
+          name: a.name,
+          description: a.description,
+          model: a.model,
+          is_builtin: a.is_builtin === 1,
+        })),
     });
   });
 
   app.post('/agents', async (c) => {
-    const installationId = Number(c.req.query('installation'));
-    if (!c.get('user').installationIds.includes(installationId)) {
-      return c.json({ error: 'unknown installation' }, 404);
-    }
+    const { installationIds } = c.get('user');
+    if (installationIds.length === 0) return c.json({ error: 'no installations' }, 404);
     const body = await c.req.json<Record<string, unknown>>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
     const values = readAgentPayload(body);
     let error = validateAgent(values, true);
-    if (!error && (await getAgentBySlug(installationId, values.slug))) {
-      error = `an agent with slug "${values.slug}" already exists`;
+    if (!error) {
+      const existing = await Promise.all(
+        installationIds.map((id) => getAgentBySlug(id, values.slug)),
+      );
+      if (existing.some(Boolean)) error = `an agent with slug "${values.slug}" already exists`;
     }
     if (error) return c.json({ error }, 400);
-    await createAgent(installationId, values);
+    await Promise.all(installationIds.map((id) => createAgent(id, values)));
     return c.json({ ok: true });
   });
 
@@ -938,7 +940,17 @@ export function createApiRoutes() {
     const values = { ...readAgentPayload(body), slug: agent.slug };
     const error = validateAgent(values, false);
     if (error) return c.json({ error }, 400);
-    await updateAgent(agent.id, values);
+    // Fan out by slug so the edit applies everywhere; custom agents that
+    // predate the generic model gain their missing per-installation copies.
+    const { installationIds } = c.get('user');
+    const siblings = (await listAgents(installationIds)).filter((a) => a.slug === agent.slug);
+    await Promise.all(siblings.map((s) => updateAgent(s.id, values)));
+    if (agent.is_builtin === 0) {
+      const covered = new Set(siblings.map((s) => s.installation_id));
+      await Promise.all(
+        installationIds.filter((id) => !covered.has(id)).map((id) => createAgent(id, values)),
+      );
+    }
     return c.json({ ok: true });
   });
 
@@ -946,7 +958,11 @@ export function createApiRoutes() {
     const agent = await authorizedAgent(c);
     if (!agent) return c.json({ error: 'unknown agent' }, 404);
     if (agent.is_builtin === 1) return c.json({ error: 'built-in agents cannot be deleted' }, 403);
-    await deleteAgent(agent.id);
+    // Fan out by slug: deleting a generic agent removes every installation's copy.
+    const siblings = (await listAgents(c.get('user').installationIds)).filter(
+      (a) => a.slug === agent.slug && a.is_builtin === 0,
+    );
+    await Promise.all(siblings.map((s) => deleteAgent(s.id)));
     return c.json({ ok: true });
   });
 
@@ -1101,6 +1117,16 @@ export function createApiRoutes() {
 
   app.get('/settings', async (c) => {
     const { installationIds } = c.get('user');
+    // Self-heal the repo mirror against GitHub — a missed
+    // installation_repositories webhook otherwise leaves stale repos here
+    // (and on every other page reading the repositories table) forever.
+    await Promise.all(
+      installationIds.map((id) =>
+        syncInstallationRepos(id).catch((err) =>
+          console.warn(`turbodiff: repo sync failed for installation ${id}:`, err),
+        ),
+      ),
+    );
     await Promise.all(installationIds.map((id) => ensureBuiltinAgents(id)));
     const [groups, agents, overrides] = await Promise.all([
       listInstallationsWithRepos(installationIds),
