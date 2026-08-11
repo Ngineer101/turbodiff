@@ -485,7 +485,7 @@ export default function FeaturePage() {
               <>
                 <SectionHeading>demo</SectionHeading>
                 <video
-                  className="w-full rounded-xl bg-black"
+                  className="w-full rounded-xl bg-black border border-line-2 shadow-2xl shadow-black/60"
                   controls
                   autoPlay
                   muted
