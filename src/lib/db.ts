@@ -600,7 +600,7 @@ export interface PlanRow {
   title: string;
   requirements: string;
   analysis: string | null;
-  questions: string | null; // JSON array of strings
+  questions: string | null; // JSON array of { text, options?, recommended? } objects
   answers: string | null; // JSON array of strings
   plan: string | null;
   acceptance: string | null; // JSON array of strings

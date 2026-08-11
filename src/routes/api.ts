@@ -83,6 +83,7 @@ import type {
   ApiIntegrations,
   ApiMe,
   ApiPlan,
+  ApiPlanQuestion,
   ApiReview,
   ApiReviewsPage,
   ApiSettings,
@@ -154,7 +155,7 @@ function serializeTask(p: PlanWithRepo, repoStatuses: TaskRepoStatusRow[]): ApiP
     status: p.status,
     error: p.error,
     created_at: p.created_at,
-    questions: p.questions ? (JSON.parse(p.questions) as string[]) : [],
+    questions: p.questions ? (JSON.parse(p.questions) as ApiPlanQuestion[]) : [],
     acceptance: p.acceptance ? (JSON.parse(p.acceptance) as string[]) : [],
     plan: p.plan,
     archived: p.archived === 1,
@@ -538,7 +539,7 @@ export function createApiRoutes() {
       return c.json({ error: 'body must be {"answers": ["...", ...]}' }, 400);
     }
     const given = body.answers as unknown[];
-    const questions: string[] = plan.questions ? JSON.parse(plan.questions) : [];
+    const questions: ApiPlanQuestion[] = plan.questions ? JSON.parse(plan.questions) : [];
     const answers = questions.map((_, i) => {
       const v = given[i];
       return typeof v === 'string' ? v : v == null ? '' : JSON.stringify(v);

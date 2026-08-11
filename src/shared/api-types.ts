@@ -85,6 +85,16 @@ export interface ApiTaskRepo {
   verification: ApiVerificationSummary | null;
 }
 
+export interface ApiPlanQuestion {
+  text: string;
+  // Present only when the model returned 2+ usable options; absent means
+  // render as a free-text-only question (legacy-equivalent fallback).
+  options?: string[];
+  // Always present when `options` is present — the option text to submit
+  // by default if the user advances without answering.
+  recommended?: string;
+}
+
 export interface ApiPlan {
   id: number;
   title: string;
@@ -92,7 +102,7 @@ export interface ApiPlan {
   status: PlanStatus | (string & {});
   error: string | null;
   created_at: string;
-  questions: string[];
+  questions: ApiPlanQuestion[];
   acceptance: string[];
   plan: string | null;
   archived: boolean;
