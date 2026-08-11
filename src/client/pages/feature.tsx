@@ -513,11 +513,13 @@ export default function FeaturePage() {
                           {crit.note ? <div className="text-xs text-mute">{crit.note}</div> : null}
                           {crit.screenshot_url ? (
                             <div className="mt-1">
-                              <img
-                                src={crit.screenshot_url}
-                                alt=""
-                                className="max-h-40 rounded-xl bg-black border border-line-2 shadow-2xl shadow-black/60"
-                              />
+                              <a href={crit.screenshot_url} target="_blank" rel="noopener">
+                                <img
+                                  src={crit.screenshot_url}
+                                  alt=""
+                                  className="max-h-40 rounded-xl bg-black border border-line-2 shadow-2xl shadow-black/60"
+                                />
+                              </a>
                             </div>
                           ) : null}
                         </Td>
