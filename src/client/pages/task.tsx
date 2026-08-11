@@ -10,6 +10,7 @@ import { GENERATION_STOPPED, taskQuery } from '../lib/queries.ts';
 import { taskState } from '../lib/task-state.ts';
 import { cn } from '../lib/utils.ts';
 import { ConfirmButton } from '../components/confirm-button.tsx';
+import { Markdown } from '../components/markdown.tsx';
 import { QuestionsCarousel } from '../components/questions-carousel.tsx';
 import { SectionHeading } from '../components/section.tsx';
 import { Button, buttonVariants } from '../components/ui/button.tsx';
@@ -81,7 +82,7 @@ export function TaskPage() {
 
   // Plan review feedback: select text in the plan, comment via the popover,
   // then submit the whole batch for a revise run.
-  const planRef = useRef<HTMLPreElement>(null);
+  const planRef = useRef<HTMLDivElement>(null);
   const [popover, setPopover] = useState<{ x: number; y: number; snippet: string } | null>(null);
   const [note, setNote] = useState('');
   const [comments, setComments] = useState<{ snippet: string; comment: string }[]>([]);
@@ -189,14 +190,14 @@ export function TaskPage() {
           >
             implementation plan
           </SectionHeading>
-          <pre
+          <div
             ref={planRef}
             onMouseUp={onPlanSelect}
             onTouchEnd={onPlanSelect}
-            className="cursor-text text-xs leading-relaxed whitespace-pre-wrap text-ink-dim selection:bg-accent/30"
+            className="cursor-text selection:bg-accent/30"
           >
-            {task.plan ?? ''}
-          </pre>
+            <Markdown>{task.plan ?? ''}</Markdown>
+          </div>
           {task.acceptance.length > 0 ? (
             <>
               <div className="mt-3 text-xs text-mute">acceptance criteria</div>
@@ -351,9 +352,7 @@ export function TaskPage() {
             <summary className="cursor-pointer text-[0.85rem] text-mute">
               implementation plan (approved)
             </summary>
-            <pre className="mt-1 text-xs leading-relaxed whitespace-pre-wrap text-ink-dim">
-              {task.plan}
-            </pre>
+            <Markdown className="mt-1">{task.plan}</Markdown>
           </details>
         </>
       ) : null}

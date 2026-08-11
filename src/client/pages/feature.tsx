@@ -11,6 +11,7 @@ import { cn } from '../lib/utils.ts';
 import { ConfirmButton } from '../components/confirm-button.tsx';
 import { ensureDiffStyles } from '../components/diff-styles.ts';
 import { FILE_STATUS_DOT, FileTree } from '../components/file-tree.tsx';
+import { Markdown } from '../components/markdown.tsx';
 import { Muted, PageTitle, SectionHeading } from '../components/section.tsx';
 import { Button } from '../components/ui/button.tsx';
 import { Pill } from '../components/ui/pill.tsx';
@@ -51,7 +52,7 @@ function CommentCard({ comment }: { comment: ApiCockpitComment }) {
         <strong>@{comment.author}</strong> ·{' '}
         {comment.status === 'dispatched' ? '🔧 fix dispatched' : comment.status}
       </div>
-      <div className="whitespace-pre-wrap">{comment.body}</div>
+      <Markdown className="markdown-body--compact">{comment.body}</Markdown>
     </div>
   );
 }
@@ -538,9 +539,7 @@ export default function FeaturePage() {
                     <summary className="cursor-pointer text-[0.85rem]">
                       {r.author ?? 'unknown'} · {r.state.toLowerCase()}
                     </summary>
-                    <pre className="mt-1 text-xs leading-relaxed whitespace-pre-wrap text-ink-dim">
-                      {r.body || '(no body)'}
-                    </pre>
+                    <Markdown className="mt-1">{r.body || '(no body)'}</Markdown>
                   </details>
                 ))}
               </>
@@ -553,9 +552,7 @@ export default function FeaturePage() {
                   <summary className="cursor-pointer text-[0.85rem] text-mute">
                     implementation plan (approved)
                   </summary>
-                  <pre className="mt-1 text-xs leading-relaxed whitespace-pre-wrap text-ink-dim">
-                    {data.plan}
-                  </pre>
+                  <Markdown className="mt-1">{data.plan}</Markdown>
                 </details>
               </>
             ) : null}
