@@ -1,0 +1,22 @@
+src/routes/api.ts
+  s_c6e34e4df0fee4::t_5f6ab96acd6098 552-571
+src/client/pages/task.tsx
+  s_c6e34e4df0fee4::t_d976f4b329a03d 73-80
+  s_c6e34e4df0fee4::t_cc058415764eb5 179-189
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "0448d62d44336b05272aa7b5f71a400c92191255",
+  "prompts": {},
+  "sessions": {
+    "s_c6e34e4df0fee4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0b7635af-c0a4-4fcd-84aa-b38a7950c903",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
