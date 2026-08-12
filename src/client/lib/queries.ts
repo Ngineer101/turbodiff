@@ -8,6 +8,7 @@ import type {
   ApiIntegrations,
   ApiMe,
   ApiPlan,
+  ApiRunnerCredentialsList,
   ApiSettings,
   ApiUsage,
 } from '../../shared/api-types.ts';
@@ -100,4 +101,9 @@ export const settingsQuery = queryOptions({
 export const integrationsQuery = queryOptions({
   queryKey: ['integrations'],
   queryFn: () => api.get<ApiIntegrations>('/api/integrations'),
+});
+
+export const runnerCredentialsQuery = queryOptions({
+  queryKey: ['runner-credentials'],
+  queryFn: () => api.get<ApiRunnerCredentialsList>('/api/runner-credentials'),
 });

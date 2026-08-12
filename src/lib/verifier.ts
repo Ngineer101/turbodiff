@@ -13,7 +13,7 @@ import {
 } from './db.ts';
 import { maybeAutoMerge } from './auto-merge.ts';
 import { signArtifactKey } from './crypto.ts';
-import { resolveRunnerAuth } from './fixer.ts';
+import { resolveRunnerAuth, runnerCommand, scrubSecrets, writeRunnerAuthFiles } from './fixer.ts';
 import { installationToken, sandboxGitToken } from './github-app.ts';
 import { NPM_CACHE_ENV } from './generation-workflow.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
@@ -190,10 +190,11 @@ async function verify(
   criteria: string[],
 ): Promise<{ status: string; results: CriterionResult[]; summary?: string; demo?: DemoInfo }> {
   const token = await installationToken(repo.installation_id);
-  const auth = resolveRunnerAuth();
+  const auth = await resolveRunnerAuth(feature.author_id);
   // Verifier sandboxes never push: single-repo, contents READ-ONLY token.
   const gitToken = await sandboxGitToken(repo.installation_id, repo.name, 'read');
-  const scrub = (s: string) => s.replaceAll(token, '***').replaceAll(gitToken, '***');
+  const scrub = (s: string) =>
+    scrubSecrets(s.replaceAll(token, '***').replaceAll(gitToken, '***'), auth);
   const full = `${repo.owner}/${repo.name}`;
 
   // Same container id as generation: verify usually follows a generation on
@@ -234,28 +235,32 @@ async function verify(
     }
 
     await sandbox.writeFile(`${OUT}/task.md`, verifyPrompt(feature, repo, criteria));
-    const agent = await sandbox.exec(
-      `claude -p --dangerously-skip-permissions --output-format text < ${OUT}/task.md`,
-      {
-        cwd: WORK,
-        timeout: AGENT_TIMEOUT_MS,
-        env: {
-          ...auth.vars,
-          ...NPM_CACHE_ENV,
-          IS_SANDBOX: '1',
-          DISABLE_AUTOUPDATER: '1',
-          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
-        },
+    await writeRunnerAuthFiles(sandbox, auth);
+    const agent = await sandbox.exec(runnerCommand(auth, `${OUT}/task.md`), {
+      cwd: WORK,
+      timeout: AGENT_TIMEOUT_MS,
+      env: {
+        ...auth.vars,
+        ...NPM_CACHE_ENV,
+        IS_SANDBOX: '1',
+        DISABLE_AUTOUPDATER: '1',
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       },
-    );
+    });
     if (!agent.success) {
       throw new Error(
         `verifier agent exited ${agent.exitCode}: ${scrub(`${agent.stdout}\n${agent.stderr}`).trim().slice(-1_000)}`,
       );
     }
 
-    const results = await readResults(sandbox, OUT, criteria.length);
-    const summary = await readText(sandbox, `${OUT}/summary.md`);
+    // Agent-authored free text — scrub it too, same as agent stdout/stderr,
+    // in case the agent's own narrative happened to echo a secret env var.
+    const results = (await readResults(sandbox, OUT, criteria.length)).map((r) => ({
+      ...r,
+      note: scrub(r.note),
+    }));
+    const rawSummary = await readText(sandbox, `${OUT}/summary.md`);
+    const summary = rawSummary ? scrub(rawSummary) : undefined;
     const shots = await uploadScreenshots(sandbox, feature.id, results);
     const demo = repo.demo_videos === 1 ? await uploadDemo(sandbox, feature.id) : undefined;
 

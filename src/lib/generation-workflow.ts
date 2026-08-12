@@ -4,7 +4,7 @@ import { NonRetryableError } from 'cloudflare:workflows';
 import { gh } from '../tools/github.ts';
 import { coauthorTrailer, gitAuthorEnv } from './attribution.ts';
 import { getFeature, getRepoById, updateFeature, type FeatureRow } from './db.ts';
-import { resolveRunnerAuth } from './fixer.ts';
+import { resolveRunnerAuth, runnerCommand, scrubSecrets, writeRunnerAuthFiles } from './fixer.ts';
 import { installationToken, sandboxGitToken } from './github-app.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
 import { mintUserToken } from './user-tokens.ts';
@@ -230,26 +230,24 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
         { retries: { limit: 1, delay: '5 minutes' }, timeout: AGENT_STEP_TIMEOUT[ctx.tier] },
         async (): Promise<{ changed: boolean }> => {
           await updateFeature(featureId, { runStartedAt: 'now' });
-          const auth = resolveRunnerAuth();
+          const auth = await resolveRunnerAuth(ctx.authorId);
           const sandbox = sandboxFor(ctx);
           await sandbox.writeFile(specFile(featureId), generationPrompt(ctx));
-          const agent = await sandbox.exec(
-            `claude -p --dangerously-skip-permissions --output-format text < ${specFile(featureId)}`,
-            {
-              cwd: WORK,
-              timeout: AGENT_TIMEOUT_MS[ctx.tier],
-              env: {
-                ...auth.vars,
-                ...NPM_CACHE_ENV,
-                IS_SANDBOX: '1',
-                DISABLE_AUTOUPDATER: '1',
-                CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
-              },
+          await writeRunnerAuthFiles(sandbox, auth);
+          const agent = await sandbox.exec(runnerCommand(auth, specFile(featureId)), {
+            cwd: WORK,
+            timeout: AGENT_TIMEOUT_MS[ctx.tier],
+            env: {
+              ...auth.vars,
+              ...NPM_CACHE_ENV,
+              IS_SANDBOX: '1',
+              DISABLE_AUTOUPDATER: '1',
+              CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
             },
-          );
+          });
           if (!agent.success) {
             throw new Error(
-              `generation agent exited ${agent.exitCode}: ${`${agent.stdout}\n${agent.stderr}`.trim().slice(-1_000)}`,
+              `generation agent exited ${agent.exitCode}: ${scrubSecrets(`${agent.stdout}\n${agent.stderr}`.trim(), auth).slice(-1_000)}`,
             );
           }
           const status = await sandbox.exec(`git -C ${WORK} status --porcelain`);
@@ -336,16 +334,23 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
 
       const prNumber = await step.do('open pull request', QUICK, async (): Promise<number> => {
         const sandbox = sandboxFor(ctx);
+        // Re-resolve (rather than thread the prior step's auth through):
+        // step return values are durably persisted, so a secret must never
+        // be one — only re-derive it, in the step that needs it, to scrub.
+        const auth = await resolveRunnerAuth(ctx.authorId);
         // Concise PR body: the agent's own summary (what changed and why),
         // not a spec dump. Implementation notes ride along only when the
         // agent recorded a judgment call worth surfacing.
         const summary = await sandbox
           .readFile(prFile(featureId))
-          .then((f) => f.content.trim() || undefined)
+          .then((f) => (f.content.trim() ? scrubSecrets(f.content.trim(), auth) : undefined))
           .catch(() => undefined);
         const notes = await sandbox
           .readFile(specFile(featureId))
-          .then((f) => f.content.split('## Implementation notes')[1]?.trim())
+          .then((f) => {
+            const raw = f.content.split('## Implementation notes')[1]?.trim();
+            return raw ? scrubSecrets(raw, auth) : undefined;
+          })
           .catch(() => undefined);
         const createPr = async (authToken: string) =>
           (await (

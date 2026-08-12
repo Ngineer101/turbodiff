@@ -1455,6 +1455,73 @@ export async function deleteUserRefreshToken(userId: number): Promise<void> {
   await env.DB.prepare('DELETE FROM user_tokens WHERE user_id = ?1').bind(userId).run();
 }
 
+// --- bring-your-own runner credentials (per-user Claude/Codex subscriptions) ---
+
+export interface RunnerCredentialRow {
+  user_id: number;
+  runner: string; // 'claude' | 'codex'
+  auth_mode: string; // 'subscription' | 'gateway' | 'api_key'
+  secret_ciphertext: string;
+  base_url: string | null;
+  tos_acknowledged_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function saveRunnerCredential(fields: {
+  userId: number;
+  runner: string;
+  authMode: string;
+  secretCiphertext: string;
+  baseUrl?: string;
+  tosAcknowledged?: boolean;
+}): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO runner_credentials
+		   (user_id, runner, auth_mode, secret_ciphertext, base_url, tos_acknowledged_at, updated_at)
+		 VALUES (?1, ?2, ?3, ?4, ?5, CASE WHEN ?6 THEN datetime('now') ELSE NULL END, datetime('now'))
+		 ON CONFLICT(user_id, runner) DO UPDATE SET
+		   auth_mode = excluded.auth_mode,
+		   secret_ciphertext = excluded.secret_ciphertext,
+		   base_url = excluded.base_url,
+		   tos_acknowledged_at = excluded.tos_acknowledged_at,
+		   updated_at = excluded.updated_at`,
+  )
+    .bind(
+      fields.userId,
+      fields.runner,
+      fields.authMode,
+      fields.secretCiphertext,
+      fields.baseUrl ?? null,
+      fields.tosAcknowledged ? 1 : 0,
+    )
+    .run();
+}
+
+export async function listRunnerCredentials(userId: number): Promise<RunnerCredentialRow[]> {
+  const { results } = await env.DB.prepare(
+    'SELECT * FROM runner_credentials WHERE user_id = ?1 ORDER BY runner',
+  )
+    .bind(userId)
+    .all<RunnerCredentialRow>();
+  return results;
+}
+
+export async function getRunnerCredential(
+  userId: number,
+  runner: string,
+): Promise<RunnerCredentialRow | null> {
+  return env.DB.prepare('SELECT * FROM runner_credentials WHERE user_id = ?1 AND runner = ?2')
+    .bind(userId, runner)
+    .first<RunnerCredentialRow>();
+}
+
+export async function deleteRunnerCredential(userId: number, runner: string): Promise<void> {
+  await env.DB.prepare('DELETE FROM runner_credentials WHERE user_id = ?1 AND runner = ?2')
+    .bind(userId, runner)
+    .run();
+}
+
 // --- kanban board: todos (unstarted backlog cards) + task archiving ---
 
 export interface TodoRow {

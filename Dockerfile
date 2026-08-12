@@ -2,10 +2,13 @@
 # The tag must match the installed @cloudflare/sandbox SDK version.
 FROM docker.io/cloudflare/sandbox:0.12.4
 
-# Coding agent CLI used by the fix/generation runners, plus pnpm for repos
-# whose check_command installs dependencies. Preinstalled so runs don't pay
-# the install on every container cold start.
-RUN npm install -g @anthropic-ai/claude-code pnpm
+# Coding agent CLIs used by the fix/generation runners (runner_credentials
+# picks which one a given run authenticates as — see resolveRunnerAuth in
+# src/lib/fixer.ts), plus pnpm for repos whose check_command installs
+# dependencies. Preinstalled so runs don't pay the install on every container
+# cold start. Codex is pinned like the sandbox base image above; bump its
+# version independently of Claude Code's (which floats on latest).
+RUN npm install -g @anthropic-ai/claude-code @openai/codex@0.147.0 pnpm
 
 # Headless browser for the verification step (Phase 4): the verifier agent
 # drives Chrome via puppeteer-core to capture screenshot evidence of the

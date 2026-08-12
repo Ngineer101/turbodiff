@@ -20,6 +20,7 @@ import {
   integrationsQuery,
   meQuery,
   queryClient,
+  runnerCredentialsQuery,
   settingsQuery,
   taskQuery,
   usageQuery,
@@ -29,6 +30,7 @@ import { AgentNewPage } from './pages/agent-new.tsx';
 import { AgentsPage } from './pages/agents.tsx';
 import { BoardPage } from './pages/board.tsx';
 import { IntegrationsPage } from './pages/integrations.tsx';
+import { RunnerCredentialsPage } from './pages/runner-credentials.tsx';
 import { SettingsPage } from './pages/settings.tsx';
 import { TaskPage } from './pages/task.tsx';
 import { UsagePage } from './pages/usage.tsx';
@@ -114,6 +116,13 @@ const integrationsRoute = createRoute({
   component: IntegrationsPage,
 });
 
+const runnerCredentialsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/my-agents',
+  loader: () => queryClient.ensureQueryData(runnerCredentialsQuery),
+  component: RunnerCredentialsPage,
+});
+
 // The cockpit pulls in @pierre/diffs (+ syntax themes) — lazy so the rest of
 // the app doesn't pay for it.
 const featureRoute = createRoute({
@@ -155,6 +164,7 @@ const routeTree = rootRoute.addChildren([
   taskRoute,
   usageRoute,
   integrationsRoute,
+  runnerCredentialsRoute,
   featureRoute,
   agentsRoute,
   agentNewRoute,

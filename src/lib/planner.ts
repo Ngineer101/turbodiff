@@ -11,7 +11,7 @@ import {
   type PlanRow,
   type RepositoryRow,
 } from './db.ts';
-import { resolveRunnerAuth } from './fixer.ts';
+import { resolveRunnerAuth, runnerCommand, scrubSecrets, writeRunnerAuthFiles } from './fixer.ts';
 import { installationToken, sandboxGitToken } from './github-app.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
 
@@ -136,25 +136,24 @@ async function runAgent(
   sandbox: Sandbox,
   prompt: string,
   scrub: (s: string) => string,
+  userId?: number | null,
 ): Promise<void> {
-  const auth = resolveRunnerAuth();
+  const auth = await resolveRunnerAuth(userId);
   await sandbox.writeFile(`${OUT_DIR}/task.md`, prompt);
-  const res = await sandbox.exec(
-    `claude -p --dangerously-skip-permissions --output-format text < ${OUT_DIR}/task.md`,
-    {
-      cwd: CLONE_DIR,
-      timeout: AGENT_TIMEOUT_MS,
-      env: {
-        ...auth.vars,
-        IS_SANDBOX: '1',
-        DISABLE_AUTOUPDATER: '1',
-        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
-      },
+  await writeRunnerAuthFiles(sandbox, auth);
+  const res = await sandbox.exec(runnerCommand(auth, `${OUT_DIR}/task.md`), {
+    cwd: CLONE_DIR,
+    timeout: AGENT_TIMEOUT_MS,
+    env: {
+      ...auth.vars,
+      IS_SANDBOX: '1',
+      DISABLE_AUTOUPDATER: '1',
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     },
-  );
+  });
   if (!res.success) {
     throw new Error(
-      `planning agent exited ${res.exitCode}: ${scrub(`${res.stdout}\n${res.stderr}`).trim().slice(-1_000)}`,
+      `planning agent exited ${res.exitCode}: ${scrubSecrets(scrub(`${res.stdout}\n${res.stderr}`), auth).trim().slice(-1_000)}`,
     );
   }
 }
@@ -168,7 +167,7 @@ async function classifyTier(
   plan: PlanRow,
   repos: RepositoryRow[],
 ): Promise<'trivial' | 'standard'> {
-  const auth = resolveRunnerAuth();
+  const auth = await resolveRunnerAuth(plan.created_by_id);
   const label = repos.map((r) => `${r.owner}/${r.name}`).join(', ');
   const prompt = `Classify this feature request for ${label}. Reply with EXACTLY one word: trivial or standard.
 
@@ -181,8 +180,11 @@ ${plan.requirements}
 `;
   try {
     await sandbox.writeFile(`${OUT_DIR}/classify.md`, prompt);
+    await writeRunnerAuthFiles(sandbox, auth);
+    // Cheap-model triage only makes sense for Claude's --model flag; Codex
+    // runs its default model for this quick check.
     const res = await sandbox.exec(
-      `claude -p --model haiku --output-format text < ${OUT_DIR}/classify.md`,
+      runnerCommand(auth, `${OUT_DIR}/classify.md`, { model: 'haiku' }),
       {
         cwd: CLONE_DIR,
         timeout: 2 * 60_000,
@@ -363,7 +365,12 @@ export async function runPlanAnalyze(planId: number): Promise<void> {
     const tier = await classifyTier(sandbox, plan, repos);
     await updatePlan(planId, { tier });
     const attachments = attachmentsSection(await fetchPlanAttachments(sandbox, plan));
-    await runAgent(sandbox, analyzePrompt(plan, repos, dirs, tier, attachments), booted.scrub);
+    await runAgent(
+      sandbox,
+      analyzePrompt(plan, repos, dirs, tier, attachments),
+      booted.scrub,
+      plan.created_by_id,
+    );
     const analysis = await readText(sandbox, `${OUT_DIR}/analysis.md`);
     const questions = await readQuestions(sandbox, `${OUT_DIR}/questions.json`);
 
@@ -373,6 +380,7 @@ export async function runPlanAnalyze(planId: number): Promise<void> {
         sandbox,
         planPrompt({ ...plan, analysis: analysis ?? null }, repos, dirs, '', tier, attachments),
         booted.scrub,
+        plan.created_by_id,
       );
       const planMd = await readText(sandbox, `${OUT_DIR}/plan.md`);
       const acceptance = await readJsonArray(sandbox, `${OUT_DIR}/acceptance.json`);
@@ -455,6 +463,7 @@ export async function runPlanRefine(planId: number): Promise<void> {
       sandbox,
       planPrompt(plan, repos, dirs, qa + fb, plan.tier ?? 'standard', attachments),
       booted.scrub,
+      plan.created_by_id,
     );
     const planMd = await readText(sandbox, `${OUT_DIR}/plan.md`);
     const acceptance = await readJsonArray(sandbox, `${OUT_DIR}/acceptance.json`);

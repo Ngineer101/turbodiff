@@ -2,7 +2,14 @@ import { getSandbox, type Sandbox } from '@cloudflare/sandbox';
 import { env } from 'cloudflare:workers';
 import { gh } from '../tools/github.ts';
 import { gitAuthorEnv } from './attribution.ts';
-import { finishFixAttempt, getFeatureByRepoPr, getRepoById, tryRecordFixAttempt } from './db.ts';
+import { openToken } from './crypto.ts';
+import {
+  finishFixAttempt,
+  getFeatureByRepoPr,
+  getRepoById,
+  getRunnerCredential,
+  tryRecordFixAttempt,
+} from './db.ts';
 import { installationToken, sandboxGitToken } from './github-app.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
 
@@ -10,11 +17,30 @@ import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
 // clone a PR's head branch into a Cloudflare Sandbox, run a coding agent CLI
 // against the review findings, run the repo's tests, and push the fix commit.
 //
-// Runner auth is pluggable so users can spend their existing Claude
-// subscription (claude setup-token → CLAUDE_CODE_OAUTH_TOKEN) instead of API
-// credits through the AI Gateway.
+// Runner auth is pluggable so users can spend their existing Claude or Codex
+// subscription instead of API credits through the AI Gateway. Per-user
+// credentials (runner_credentials, sealed) win when the triggering user has
+// one configured; otherwise every mode falls back to the Worker-level
+// secrets below, unchanged from before per-user credentials existed.
 
-export type FixAuthMode = 'claude_subscription' | 'gateway';
+export type FixAuthMode =
+  | 'claude_subscription'
+  | 'gateway'
+  | 'codex_subscription'
+  | 'codex_api_key';
+export type FixRunner = 'claude' | 'codex';
+
+export interface RunnerAuth {
+  mode: FixAuthMode;
+  runner: FixRunner;
+  vars: Record<string, string>;
+  // Absolute sandbox paths to write before invoking the CLI (e.g. Codex's
+  // auth.json for subscription reuse) — written by writeRunnerAuthFiles.
+  files?: Record<string, string>;
+  // Raw secret values behind `vars`/`files` above (never the non-secret
+  // base_url) — scrub every one of these from any surfaced agent output.
+  secrets: string[];
+}
 
 export interface FixParams {
   owner: string;
@@ -29,6 +55,8 @@ export interface FixParams {
   testCommand?: string;
   // The instructing user (e.g. a cockpit commenter) — becomes the git author
   // of the fix commit; the bot stays committer. Absent on auto-triggered runs.
+  // Also whose stored runner credential (if any) authenticates this run —
+  // see resolveRunnerAuth.
   author?: { login: string; id: number };
 }
 
@@ -56,42 +84,141 @@ const TEST_TIMEOUT_MS = 10 * 60_000;
 // loop terminates and hands off to a human.
 export const FIX_MAX_ATTEMPTS = 3;
 
-// Pick the runner credential: explicit request wins, otherwise prefer the
-// user's subscription token over gateway metering. Shared with the generator.
-export function resolveRunnerAuth(requested?: FixAuthMode): {
-  mode: FixAuthMode;
-  vars: Record<string, string>;
-} {
+// Sandbox home for a per-user Codex subscription: Codex CLI reuses a
+// ChatGPT sign-in via an auth.json file rather than a bearer env var, so the
+// stored "secret" for codex_subscription IS that file's content, written
+// here before the CLI runs (see writeRunnerAuthFiles).
+const CODEX_HOME_DIR = '/workspace/.codex-home';
+
+// Pick the runner credential for a factory run. Resolution order when no
+// specific mode is requested: the triggering user's own claude_subscription,
+// then their codex_subscription/codex_api_key, then their own claude
+// gateway, then the Worker-level secrets below (unauthenticated-user and
+// pre-this-feature behavior, unchanged). `requested` always wins when given
+// and configured — used by the operator /internal/fix endpoint, which has
+// no signed-in user (userId stays undefined there, Worker-level only).
+export async function resolveRunnerAuth(
+  userId?: number | null,
+  requested?: FixAuthMode,
+): Promise<RunnerAuth> {
+  const candidates = new Map<FixAuthMode, RunnerAuth>();
+
+  if (userId != null) {
+    const [claudeCred, codexCred] = await Promise.all([
+      getRunnerCredential(userId, 'claude'),
+      getRunnerCredential(userId, 'codex'),
+    ]);
+    if (claudeCred?.auth_mode === 'subscription') {
+      const secret = await openToken(claudeCred.secret_ciphertext);
+      candidates.set('claude_subscription', {
+        mode: 'claude_subscription',
+        runner: 'claude',
+        vars: { CLAUDE_CODE_OAUTH_TOKEN: secret },
+        secrets: [secret],
+      });
+    } else if (claudeCred?.auth_mode === 'gateway' && claudeCred.base_url) {
+      const secret = await openToken(claudeCred.secret_ciphertext);
+      candidates.set('gateway', {
+        mode: 'gateway',
+        runner: 'claude',
+        vars: { ANTHROPIC_BASE_URL: claudeCred.base_url, ANTHROPIC_API_KEY: secret },
+        secrets: [secret],
+      });
+    }
+    if (codexCred?.auth_mode === 'subscription') {
+      const secret = await openToken(codexCred.secret_ciphertext);
+      candidates.set('codex_subscription', {
+        mode: 'codex_subscription',
+        runner: 'codex',
+        vars: { CODEX_HOME: CODEX_HOME_DIR },
+        files: { [`${CODEX_HOME_DIR}/auth.json`]: secret },
+        secrets: [secret],
+      });
+    } else if (codexCred?.auth_mode === 'api_key') {
+      const secret = await openToken(codexCred.secret_ciphertext);
+      candidates.set('codex_api_key', {
+        mode: 'codex_api_key',
+        runner: 'codex',
+        vars: {
+          OPENAI_API_KEY: secret,
+          ...(codexCred.base_url ? { OPENAI_BASE_URL: codexCred.base_url } : {}),
+        },
+        secrets: [secret],
+      });
+    }
+  }
+
+  // Worker-level fallback: only fills modes the user hasn't configured
+  // themselves. No Worker-level fallback exists for Codex — it's opt-in only.
   const subscriptionToken = (env.CLAUDE_CODE_OAUTH_TOKEN ?? '').trim();
   const gatewayKey = (env.FIXER_ANTHROPIC_API_KEY ?? '').trim();
   const gatewayUrl = (env.FIXER_ANTHROPIC_BASE_URL ?? '').trim();
+  if (subscriptionToken && !candidates.has('claude_subscription')) {
+    candidates.set('claude_subscription', {
+      mode: 'claude_subscription',
+      runner: 'claude',
+      vars: { CLAUDE_CODE_OAUTH_TOKEN: subscriptionToken },
+      secrets: [subscriptionToken],
+    });
+  }
+  if (gatewayKey && gatewayUrl && !candidates.has('gateway')) {
+    candidates.set('gateway', {
+      mode: 'gateway',
+      runner: 'claude',
+      vars: { ANTHROPIC_BASE_URL: gatewayUrl, ANTHROPIC_API_KEY: gatewayKey },
+      secrets: [gatewayKey],
+    });
+  }
 
-  const subscription = subscriptionToken
-    ? { mode: 'claude_subscription' as const, vars: { CLAUDE_CODE_OAUTH_TOKEN: subscriptionToken } }
-    : null;
-  const gateway =
-    gatewayKey && gatewayUrl
-      ? {
-          mode: 'gateway' as const,
-          vars: { ANTHROPIC_BASE_URL: gatewayUrl, ANTHROPIC_API_KEY: gatewayKey },
-        }
-      : null;
+  if (requested) {
+    const picked = candidates.get(requested);
+    if (!picked) {
+      throw new Error(`${requested} mode requires a configured ${requested} credential`);
+    }
+    return picked;
+  }
+  const order = ['claude_subscription', 'codex_subscription', 'codex_api_key', 'gateway'] as const;
+  for (const mode of order) {
+    const picked = candidates.get(mode);
+    if (picked) return picked;
+  }
+  throw new Error(
+    'no runner credential configured: connect one under "my agents", or set CLAUDE_CODE_OAUTH_TOKEN ' +
+      '(subscription) or FIXER_ANTHROPIC_API_KEY + FIXER_ANTHROPIC_BASE_URL (gateway) on the Worker',
+  );
+}
 
-  if (requested === 'claude_subscription' && !subscription) {
-    throw new Error('claude_subscription mode requires the CLAUDE_CODE_OAUTH_TOKEN secret');
+// Writes any files a resolved credential needs on disk before the CLI runs
+// (currently only Codex's auth.json for subscription reuse) — writeFile
+// needs the parent directory to already exist, so mkdir it first.
+export async function writeRunnerAuthFiles(sandbox: Sandbox, auth: RunnerAuth): Promise<void> {
+  if (!auth.files) return;
+  for (const [path, content] of Object.entries(auth.files)) {
+    await sandbox.exec(`mkdir -p "$(dirname '${path}')"`);
+    await sandbox.writeFile(path, content);
   }
-  if (requested === 'gateway' && !gateway) {
-    throw new Error(
-      'gateway mode requires the FIXER_ANTHROPIC_API_KEY secret and FIXER_ANTHROPIC_BASE_URL var',
-    );
+}
+
+// The headless invocation for the resolved runner. Centralized so the two
+// CLIs' differing flags/stdin conventions don't drift across the four call
+// sites (fixer, planner, generation workflow, verifier).
+export function runnerCommand(
+  auth: RunnerAuth,
+  promptFile: string,
+  opts: { model?: string } = {},
+): string {
+  if (auth.runner === 'codex') {
+    return `codex exec --full-auto --skip-git-repo-check < ${promptFile}`;
   }
-  const picked = requested === 'gateway' ? gateway : (subscription ?? gateway);
-  if (!picked) {
-    throw new Error(
-      'no runner credential configured: set CLAUDE_CODE_OAUTH_TOKEN (subscription) or FIXER_ANTHROPIC_API_KEY + FIXER_ANTHROPIC_BASE_URL (gateway)',
-    );
-  }
-  return picked;
+  const model = opts.model ? ` --model ${opts.model}` : '';
+  return `claude -p --dangerously-skip-permissions --output-format text${model} < ${promptFile}`;
+}
+
+// Every surfaced agent output (stdout/stderr slices, thrown error messages,
+// PR/handoff comments) must have any resolved per-user runner secret
+// scrubbed, exactly like the installation/git tokens already are.
+export function scrubSecrets(s: string, auth: RunnerAuth): string {
+  return auth.secrets.reduce((acc, secret) => (secret ? acc.replaceAll(secret, '***') : acc), s);
 }
 
 async function fetchPrHead(
@@ -181,12 +308,15 @@ export async function sandboxSmoke(checkAuth = false): Promise<Record<string, st
     sleepAfter: '2m',
   });
   const out: Record<string, string> = {};
-  for (const cmd of ['git --version', 'node --version', 'claude --version']) {
+  for (const cmd of ['git --version', 'node --version', 'claude --version', 'codex --version']) {
     const res = await sandbox.exec(cmd, { timeout: 60_000 });
     out[cmd] = res.success ? res.stdout.trim() : `exit ${res.exitCode}: ${res.stderr.trim()}`;
   }
   if (checkAuth) {
-    const auth = resolveRunnerAuth();
+    // No signed-in user probes this endpoint — always the Worker-level
+    // credential, unaffected by any per-user runner_credentials rows.
+    const auth = await resolveRunnerAuth(null);
+    await writeRunnerAuthFiles(sandbox, auth);
     const ping = await sandbox.exec(`claude -p "Reply with exactly: ok" --output-format text`, {
       timeout: 2 * 60_000,
       env: { ...auth.vars, IS_SANDBOX: '1', DISABLE_AUTOUPDATER: '1' },
@@ -201,12 +331,15 @@ export async function sandboxSmoke(checkAuth = false): Promise<Record<string, st
 export async function runFix(params: FixParams): Promise<FixOutcome> {
   const { owner, repo, prNumber } = params;
   const token = await installationToken(params.installationId);
-  const auth = resolveRunnerAuth(params.authMode);
+  const auth = await resolveRunnerAuth(params.author?.id, params.authMode);
   // Any surfaced output must never leak a token. The sandbox only ever sees
   // gitToken — scoped to this one repository with contents access only — so a
   // prompt-injected agent run cannot touch other repos or App permissions.
+  // scrubSecrets additionally strips the resolved runner credential, per-user
+  // or Worker-level, before anything is returned or posted to GitHub.
   const gitToken = await sandboxGitToken(params.installationId, repo, 'write');
-  const scrub = (s: string) => s.replaceAll(token, '***').replaceAll(gitToken, '***');
+  const scrub = (s: string) =>
+    scrubSecrets(s.replaceAll(token, '***').replaceAll(gitToken, '***'), auth);
 
   const findings =
     params.findings?.trim() || (await latestBlockingFindings(token, owner, repo, prNumber));
@@ -243,22 +376,21 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
       TASK_FILE,
       taskPrompt(`${owner}/${repo}#${prNumber}`, headRef, findings),
     );
+    await writeRunnerAuthFiles(sandbox, auth);
 
-    // Headless Claude Code run. --dangerously-skip-permissions is safe here —
-    // the container is the isolation boundary (IS_SANDBOX acknowledges that).
-    const agent = await sandbox.exec(
-      `claude -p --dangerously-skip-permissions --output-format text < ${TASK_FILE}`,
-      {
-        cwd: CLONE_DIR,
-        timeout: AGENT_TIMEOUT_MS,
-        env: {
-          ...auth.vars,
-          IS_SANDBOX: '1',
-          DISABLE_AUTOUPDATER: '1',
-          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
-        },
+    // Headless coding-agent run. --dangerously-skip-permissions (Claude) /
+    // --full-auto (Codex) are safe here — the container is the isolation
+    // boundary (IS_SANDBOX acknowledges that).
+    const agent = await sandbox.exec(runnerCommand(auth, TASK_FILE), {
+      cwd: CLONE_DIR,
+      timeout: AGENT_TIMEOUT_MS,
+      env: {
+        ...auth.vars,
+        IS_SANDBOX: '1',
+        DISABLE_AUTOUPDATER: '1',
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       },
-    );
+    });
     const agentOutput = scrub(`${agent.stdout}\n${agent.stderr}`.trim()).slice(-8_000);
     if (!agent.success) {
       throw new Error(`fix agent exited ${agent.exitCode}: ${agentOutput.slice(-1_000)}`);
@@ -266,7 +398,7 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
 
     const notes = await sandbox
       .readFile(NOTES_FILE)
-      .then((f) => f.content.trim() || undefined)
+      .then((f) => (f.content.trim() ? scrub(f.content.trim()) : undefined))
       .catch(() => undefined);
 
     const status = await sandbox.exec(`git -C ${CLONE_DIR} status --porcelain`);

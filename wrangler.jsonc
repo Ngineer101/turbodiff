@@ -45,10 +45,15 @@
     // endpoint (https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/anthropic).
     // Pair with the FIXER_ANTHROPIC_API_KEY secret. Empty disables gateway mode;
     // the CLAUDE_CODE_OAUTH_TOKEN secret enables subscription mode instead.
+    // Both are now only the FALLBACK: a signed-in user's own stored runner
+    // credential (see "my agents" in the SPA, runner_credentials table, and
+    // resolveRunnerAuth in src/lib/fixer.ts) wins when the triggering user
+    // has one configured.
     "FIXER_ANTHROPIC_BASE_URL": "",
   },
   // Fixer/codegen sandbox (docs/software-factory-design.md): each fix run
-  // executes Claude Code inside an isolated container. Local dev needs Docker.
+  // executes Claude Code or Codex (whichever the resolved runner is) inside
+  // an isolated container. Local dev needs Docker.
   "containers": [
     {
       "class_name": "Sandbox",

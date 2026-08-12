@@ -143,3 +143,30 @@ approve / block) happens there rather than in Turbodiff.
 
 - Whether mention slugs need namespacing against future reserved commands
   (`@turbodiff help`, `@turbodiff status`).
+
+## Investigated and declined (2026-08-12): per-agent provider/gateway override
+
+Considered letting a review agent point at its own provider or AI Gateway (bring-your-own,
+mirroring the factory runner credentials above) instead of the installation's one
+Worker-wide `setProvider()` call in `src/app.ts`. Declined for now, after inspecting the
+installed `@flue/runtime@2.0.1`:
+
+- `setProvider()` registers globally by the provider's own `id`, and `useModel()` only
+  ever resolves a `<provider-id>/<model-id>` string against whatever's currently
+  registered — there's no per-call/per-dispatch provider parameter. A safe override would
+  have to call `setProvider()` from code that runs inside the same execution context as
+  the `useModel()` call it's meant to affect (i.e. from within the agent module itself,
+  not from `dispatchReviewAgent` in `app.ts`, which runs in the dispatching Worker
+  request, a different execution context from wherever the agent's `useModel()` actually
+  resolves) — and even then, a mutable-by-id global registry is a correctness hazard if
+  more than one dispatch can be in flight against it concurrently.
+- The only provider factory `@flue/runtime` exposes to application code is
+  `cloudflareBindingProvider` (Cloudflare AI Gateway only, via the `env.AI` binding).
+  Anything else (a custom Anthropic/OpenAI-compatible endpoint) would need a `Provider`
+  built from `@earendil-works/pi-ai` directly — a transitive dependency this repo doesn't
+  currently depend on directly, with no bundled docs to verify its API against.
+
+Model validation (`MODEL_RE` in `src/routes/api.ts`) is therefore unchanged: every agent's
+model is still a Cloudflare AI Gateway id, and review continues to dispatch through the
+installation's one default gateway exactly as before. Revisit if a future `@flue/runtime`
+version exposes a documented per-dispatch provider selector.

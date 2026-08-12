@@ -12,6 +12,7 @@ import {
   dashboardStats,
   deleteAgent,
   deleteConnection,
+  deleteRunnerCredential,
   deleteTodo,
   ensureBuiltinAgents,
   failStrandedGeneration,
@@ -38,11 +39,13 @@ import {
   listRecentReviews,
   listRepoAgentOverrides,
   listReposForTodo,
+  listRunnerCredentials,
   listTodos,
   markCockpitCommentDispatched,
   monthlyUsage,
   repoUsageForMonth,
   resolveAgentEnabled,
+  saveRunnerCredential,
   setAgentConnectionLink,
   setPlanArchived,
   setRepoAgentEnabled,
@@ -86,6 +89,7 @@ import type {
   ApiPlanQuestion,
   ApiReview,
   ApiReviewsPage,
+  ApiRunnerCredentialsList,
   ApiSettings,
   ApiUsage,
   ApiVerificationSummary,
@@ -228,6 +232,16 @@ function currentMonth(): string {
   return new Date().toISOString().slice(0, 7);
 }
 
+// Bring-your-own runner subscriptions: which auth_mode values are valid for
+// each runner, and which (runner, auth_mode) combinations the software-factory
+// design doc flags as ToS-uncertain — those require an explicit acknowledgment
+// (tos_ack) before the credential can be saved, rather than a hard block.
+const RUNNER_AUTH_MODES: Record<string, string[]> = {
+  claude: ['subscription', 'gateway'],
+  codex: ['subscription', 'api_key'],
+};
+const TOS_GATED_RUNNER_MODES = new Set(['codex:subscription']);
+
 type ApiEnv = { Variables: { user: AuthedUser } };
 
 // Load the plan named by the :id param only if the caller may manage the repo
@@ -270,6 +284,76 @@ export function createApiRoutes() {
       login: c.get('user').session.login,
       github_app_slug: env.GITHUB_APP_SLUG,
     });
+  });
+
+  // --- Runner credentials: bring-your-own Claude/Codex subscription, per
+  // signed-in user (not per-installation — a subscription belongs to one
+  // human, so any teammate spending it silently would be wrong). Factory
+  // runs the user triggers use it instead of the Worker-level secrets; see
+  // resolveRunnerAuth in src/lib/fixer.ts. ---
+
+  app.get('/runner-credentials', async (c) => {
+    const rows = await listRunnerCredentials(c.get('user').session.userId);
+    return c.json<ApiRunnerCredentialsList>({
+      encryption_configured: encryptionConfigured(),
+      credentials: rows.map((r) => ({
+        runner: r.runner,
+        auth_mode: r.auth_mode,
+        has_secret: true,
+        base_url: r.base_url,
+        tos_acknowledged_at: r.tos_acknowledged_at,
+        updated_at: r.updated_at,
+      })),
+    });
+  });
+
+  app.post('/runner-credentials', async (c) => {
+    const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+    if (!body) return c.json({ error: 'invalid JSON body' }, 400);
+    const get = (k: string) => (typeof body[k] === 'string' ? (body[k] as string).trim() : '');
+    const runner = get('runner');
+    const authMode = get('auth_mode');
+    const secret = get('secret');
+    const baseUrl = get('base_url');
+    const tosAck = body.tos_ack === true;
+    const gated = TOS_GATED_RUNNER_MODES.has(`${runner}:${authMode}`);
+
+    const modes = RUNNER_AUTH_MODES[runner];
+    let error: string | null = null;
+    if (!modes) {
+      error = 'runner must be "claude" or "codex"';
+    } else if (!modes.includes(authMode)) {
+      error = `auth_mode for ${runner} must be one of: ${modes.join(', ')}`;
+    } else if (!secret) {
+      error = 'secret is required';
+    } else if (authMode === 'gateway' && !validConnectionUrl(baseUrl)) {
+      error = 'base_url must be an https:// URL for gateway mode';
+    } else if (baseUrl && authMode !== 'gateway' && !validConnectionUrl(baseUrl)) {
+      error = 'base_url must be an https:// URL';
+    } else if (!encryptionConfigured()) {
+      error =
+        'credential storage needs the TOKEN_ENCRYPTION_KEY secret (openssl rand -hex 32, then wrangler secret put TOKEN_ENCRYPTION_KEY)';
+    } else if (gated && !tosAck) {
+      error =
+        `${runner} ${authMode} reuses your own account session headlessly — its provider's terms ` +
+        'around that are less clear than a first-party API. Acknowledge to continue (tos_ack).';
+    }
+    if (error) return c.json({ error }, 400);
+
+    await saveRunnerCredential({
+      userId: c.get('user').session.userId,
+      runner,
+      authMode,
+      secretCiphertext: await sealToken(secret),
+      baseUrl: baseUrl || undefined,
+      tosAcknowledged: gated,
+    });
+    return c.json({ ok: true });
+  });
+
+  app.delete('/runner-credentials/:runner', async (c) => {
+    await deleteRunnerCredential(c.get('user').session.userId, c.req.param('runner'));
+    return c.json({ ok: true });
   });
 
   // Usage page: headline metrics, monthly cost, per-repo/agent cost, recent

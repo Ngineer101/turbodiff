@@ -64,21 +64,33 @@ Two things are genuinely new:
 
 ## Runner auth: bring-your-own-subscription
 
-Users already pay for Claude (Pro/Max) or ChatGPT (Codex) subscriptions. The fixer and
-codegen steps should be able to spend _those_ instead of API tokens through the gateway.
-The runner abstraction supports three auth modes:
+Users already pay for Claude (Pro/Max) or ChatGPT (Codex) subscriptions. The fixer,
+planner, generator, and verifier steps can spend _those_ instead of API tokens through
+the gateway. The runner abstraction supports four auth modes:
 
-| Mode                  | Mechanism                                                                                                                                 | Notes                                                                                                                                                                             |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `claude_subscription` | `claude setup-token` → long-lived OAuth token → `CLAUDE_CODE_OAUTH_TOKEN` env in the sandbox; Claude Code CLI runs headless (`claude -p`) | Officially supported by Anthropic for CI/headless use. Token is user-scoped: store per-user, sealed.                                                                              |
-| `gateway`             | Claude Code CLI with `ANTHROPIC_BASE_URL` pointed at the AI Gateway's Anthropic endpoint (BYOK) + gateway auth header                     | Same metering/caching path as reviews. Default when no subscription token is configured.                                                                                          |
-| `codex_subscription`  | Codex CLI (`codex exec`) with a ChatGPT-authenticated `auth.json`                                                                         | **Future.** OpenAI's terms around headless/server reuse of ChatGPT subscriptions are less clear than Anthropic's `setup-token` flow — needs a ToS check before shipping to users. |
+| Mode                  | Mechanism                                                                                                                                 | Notes                                                                                                                                                                |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `claude_subscription` | `claude setup-token` → long-lived OAuth token → `CLAUDE_CODE_OAUTH_TOKEN` env in the sandbox; Claude Code CLI runs headless (`claude -p`) | Officially supported by Anthropic for CI/headless use.                                                                                                              |
+| `gateway`              | Claude Code CLI with `ANTHROPIC_BASE_URL` pointed at an Anthropic-API-compatible endpoint (BYOK) + API key                               | Same env-var shape as an AI Gateway; also works with any Anthropic-compatible proxy (OpenRouter, LiteLLM, a self-hosted gateway, …) — "other AI gateways" for free. |
+| `codex_subscription`   | Codex CLI (`codex exec`) with a ChatGPT-authenticated `auth.json` written into the sandbox                                                | **Shipped, opt-in with a ToS gate.** OpenAI's terms around headless/server reuse of a ChatGPT session are less clear than Anthropic's `setup-token` flow, so the UI requires an explicit acknowledgment (`tos_ack`) before this credential can be saved — turbodiff doesn't decide ToS-safety on the user's behalf. |
+| `codex_api_key`        | Codex CLI with `OPENAI_API_KEY` (+ optional `OPENAI_BASE_URL` for a custom OpenAI-compatible gateway)                                     | No ToS gate — a first-party API key.                                                                                                                                |
 
 The agent CLI is the abstraction boundary: the sandbox runs "a coding CLI with env-var
 auth", so adding a runner is a Dockerfile line plus an env mapping — no orchestration
-changes. Production credential storage: a `runner_credentials` D1 table sealed with
-AES-256-GCM via the existing `src/lib/crypto.ts` (same pattern as `agent_connections`
-auth). The spike uses Worker secrets instead (see below).
+changes (Codex followed exactly this shape; see the Dockerfile and `resolveRunnerAuth`
+in `src/lib/fixer.ts`). Credentials are stored **per user** (`user_id`, not per
+installation — a subscription belongs to one human) in a `runner_credentials` D1 table
+sealed with AES-256-GCM via the existing `src/lib/crypto.ts` (same pattern as
+`agent_connections` auth), managed from the "my agents" page. Every factory stage
+(`fixer.ts`, `planner.ts`, `generation-workflow.ts`, `verifier.ts`) resolves auth via the
+triggering user's id (plan/feature `created_by_id`/`author_id`, or the cockpit
+commenter); when that user has no stored credential, or for operator/API-triggered runs
+with no signed-in user, resolution falls back to the Worker-level secrets below,
+unchanged from before this table existed.
+
+Cursor is intentionally not a runner yet — no verified public headless/CLI
+subscription-reuse story as of this writing. The `runner` enum and Dockerfile/env-mapping
+pattern are ready to extend once that changes.
 
 ## Data model (Phase 2+)
 
@@ -155,7 +167,10 @@ Config:
 - Secrets: `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) enables subscription
   mode; `FIXER_ANTHROPIC_API_KEY` (+ `FIXER_ANTHROPIC_BASE_URL` var) enables gateway
   mode. If both are set, `auth_mode` in the request picks; default prefers subscription.
-- `Dockerfile` extends `cloudflare/sandbox` with the Claude Code CLI preinstalled.
+  This endpoint has no signed-in user, so it only ever sees these Worker-level secrets —
+  it's exactly the fallback every per-user `runner_credentials` resolution also lands on
+  when the triggering user hasn't connected their own (see "Runner auth" above).
+- `Dockerfile` extends `cloudflare/sandbox` with the Claude Code and Codex CLIs preinstalled.
 - Local dev needs Docker running; deploy with `pnpm run deploy` (builds the container
   image).
 

@@ -273,3 +273,19 @@ export interface ApiIntegrations {
   agents: ApiAgentSummary[];
   connections: ApiIntegration[];
 }
+
+// Bring-your-own runner subscription (Claude/Codex), stored per-user —
+// never the plaintext secret, only whether one is set.
+export interface ApiRunnerCredential {
+  runner: string; // 'claude' | 'codex'
+  auth_mode: string; // 'subscription' | 'gateway' | 'api_key'
+  has_secret: true;
+  base_url: string | null;
+  tos_acknowledged_at: string | null;
+  updated_at: string;
+}
+
+export interface ApiRunnerCredentialsList {
+  encryption_configured: boolean;
+  credentials: ApiRunnerCredential[];
+}
