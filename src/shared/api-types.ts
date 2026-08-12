@@ -124,6 +124,9 @@ export interface ApiCockpitComment {
   author: string;
   status: string;
   created_at: string;
+  // The linked fix run's status: null before any batch submit; 'running'
+  // while it's in flight; a terminal outcome once it resolves.
+  fix_status: 'running' | 'fixed' | 'no_changes' | 'tests_failed' | 'failed' | null;
 }
 
 export interface ApiFeatureDetail {

@@ -13,6 +13,7 @@ import {
   deleteAgent,
   deleteConnection,
   deleteTodo,
+  dispatchOpenCockpitComments,
   ensureBuiltinAgents,
   failStrandedGeneration,
   failStrandedVerifications,
@@ -39,7 +40,6 @@ import {
   listRepoAgentOverrides,
   listReposForTodo,
   listTodos,
-  markCockpitCommentDispatched,
   monthlyUsage,
   repoUsageForMonth,
   resolveAgentEnabled,
@@ -697,9 +697,9 @@ export function createApiRoutes() {
     return c.json(base);
   });
 
-  // Line-anchored review comment from the cockpit diff. Submitting one
-  // dispatches the fix agent against that exact finding — this replaces
-  // GitHub review threads as the fix channel for factory PRs.
+  // Line-anchored review comment from the cockpit diff. This only records
+  // the comment (status 'open') — it does not dispatch the fix agent. The
+  // fix agent is dispatched in one batch when the user hits Submit below.
   app.post('/factory/features/:id/comments', async (c) => {
     const id = Number(c.req.param('id'));
     const feature = Number.isInteger(id) ? await getFeature(id) : null;
@@ -719,32 +719,54 @@ export function createApiRoutes() {
       return c.json({ error: 'body must be {path, line, side?, body}' }, 400);
     }
     const { session } = c.get('user');
-    const login = session.login;
-    const side = payload.side === 'deletions' ? 'deletions' : 'additions';
     const commentId = await createCockpitComment(
       feature.id,
       payload.path,
       payload.line as number,
-      side,
+      payload.side === 'deletions' ? 'deletions' : 'additions',
       payload.body.trim(),
-      login,
+      session.login,
       session.userId,
     );
-    // The comment IS the work order: dispatch the fixer with it verbatim.
-    // The consumer re-validates the auto_fix toggle and the attempt cap.
-    // The commenter rides along as the fix commit's git author.
+    return c.json({ ok: true, comment_id: commentId });
+  });
+
+  // Batch-submit every open comment on this feature as one fix run: claims
+  // them atomically, links them to a single new fix_attempts row, and
+  // enqueues one fix queue message covering all of them together.
+  app.post('/factory/features/:id/comments/submit', async (c) => {
+    const id = Number(c.req.param('id'));
+    const feature = Number.isInteger(id) ? await getFeature(id) : null;
+    const repo = feature ? await getRepoById(feature.repository_id) : null;
+    if (!feature || !repo || !c.get('user').installationIds.includes(repo.installation_id)) {
+      return c.json({ error: 'unknown feature' }, 404);
+    }
+    if (!feature.pr_number) return c.json({ error: 'no pull request yet' }, 409);
+    if (!repo.auto_fix) {
+      return c.json({ error: 'enable auto-fix for this repo before submitting comments' }, 409);
+    }
+    const claimed = await dispatchOpenCockpitComments(feature.id);
+    if (claimed.length === 0) {
+      return c.json({ error: 'no pending comments to submit' }, 400);
+    }
+    const { session } = c.get('user');
+    const findings = claimed
+      .map(
+        (cm) =>
+          `**P1** — Reviewer comment on \`${cm.path}:${cm.line}\` ` +
+          `(from @${cm.author} in the Turbodiff cockpit):\n\n${cm.body}`,
+      )
+      .join('\n\n---\n\n');
     await env.FACTORY_QUEUE.send({
       kind: 'fix',
       repoId: repo.id,
       prNumber: feature.pr_number,
       trigger: 'cockpit_comment',
-      author: { login, id: session.userId },
-      findings:
-        `**P1** — Reviewer comment on \`${payload.path}:${payload.line}\` ` +
-        `(from @${login} in the Turbodiff cockpit):\n\n${payload.body.trim()}`,
+      author: { login: session.login, id: session.userId },
+      findings,
+      commentIds: claimed.map((cm) => cm.id),
     });
-    await markCockpitCommentDispatched(commentId);
-    return c.json({ ok: true, comment_id: commentId, fix_dispatched: true });
+    return c.json({ ok: true, submitted: claimed.length });
   });
 
   // Re-enqueue generation for a failed feature. The feature row (and its
