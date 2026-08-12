@@ -110,6 +110,25 @@ export interface ApiPlan {
   repos: ApiTaskRepo[];
 }
 
+// One agent-session run (plan analyze/refine, generate, verify, fix) — a
+// pointer to its full stdout+stderr transcript, fetched on demand via
+// GET /api/factory/runs/:id/log.
+export interface ApiAgentRun {
+  id: number;
+  kind: 'plan_analyze' | 'plan_refine' | 'generate' | 'verify' | 'fix';
+  success: boolean;
+  created_at: string;
+}
+
+// GET /api/tasks/:id — the board card's plan detail plus its plan_analyze /
+// plan_refine session logs. Kept separate from ApiPlan (rather than adding
+// runs there) since ApiPlan is also every board card's shape (ApiBoard.tasks),
+// and the board never renders runs — folding it in would cost an extra query
+// per card.
+export interface ApiTaskDetail extends ApiPlan {
+  runs: ApiAgentRun[];
+}
+
 export interface ApiFactoryLegacy_unused {
   repos: { id: number; owner: string; name: string }[]; // enabled repos, plan targets
   plans: ApiPlan[];
@@ -167,6 +186,8 @@ export interface ApiFeatureDetail {
     screenshot_url: string | null;
   }[];
   verification: ApiVerificationSummary | null;
+  // Every generate/verify/fix run recorded for this feature, chronological.
+  runs: ApiAgentRun[];
 }
 
 export interface ApiAgentSummary {

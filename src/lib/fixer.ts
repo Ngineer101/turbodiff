@@ -1,6 +1,7 @@
 import { getSandbox, type Sandbox } from '@cloudflare/sandbox';
 import { env } from 'cloudflare:workers';
 import { gh } from '../tools/github.ts';
+import { persistAgentLog } from './agent-runs.ts';
 import { gitAuthorEnv } from './attribution.ts';
 import {
   finishFixAttempt,
@@ -37,6 +38,9 @@ export interface FixParams {
   // The instructing user (e.g. a cockpit commenter) — becomes the git author
   // of the fix commit; the bot stays committer. Absent on auto-triggered runs.
   author?: { login: string; id: number };
+  // The fix_attempts row this run belongs to, for the full agent log. Absent
+  // on the operator-only POST /internal/fix path, which has no such row.
+  attemptId?: number;
 }
 
 export interface FixOutcome {
@@ -266,7 +270,11 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
         },
       },
     );
-    const agentOutput = scrub(`${agent.stdout}\n${agent.stderr}`.trim()).slice(-8_000);
+    const fullOutput = scrub(`${agent.stdout}\n${agent.stderr}`.trim());
+    const agentOutput = fullOutput.slice(-8_000);
+    if (params.attemptId !== undefined) {
+      await persistAgentLog('fix', fullOutput, agent.success, { fixAttemptId: params.attemptId });
+    }
     if (!agent.success) {
       throw new Error(`fix agent exited ${agent.exitCode}: ${agentOutput.slice(-1_000)}`);
     }
@@ -413,6 +421,7 @@ export async function processFixMessage(msg: FixQueueMessage): Promise<void> {
       findings: msg.findings,
       testCommand: repo.check_command ?? undefined,
       author: msg.author,
+      attemptId,
     });
     await finishFixAttempt(attemptId, outcome.status, outcome.commit);
     console.log(`turbodiff: fix ${outcome.status} for ${label} (attempt ${attemptId})`);

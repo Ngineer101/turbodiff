@@ -8,6 +8,7 @@ import type { ApiCockpitComment, ApiFeatureDetail } from '../../shared/api-types
 import { api, ApiError } from '../lib/api.ts';
 import { featureQuery, FIX_TERMINAL, GENERATION_STOPPED } from '../lib/queries.ts';
 import { cn } from '../lib/utils.ts';
+import { AgentRunLog } from '../components/agent-run-log.tsx';
 import { ConfirmButton } from '../components/confirm-button.tsx';
 import { ensureDiffStyles } from '../components/diff-styles.ts';
 import { FILE_STATUS_DOT, FileTree } from '../components/file-tree.tsx';
@@ -589,6 +590,8 @@ export default function FeaturePage() {
                 </details>
               </>
             ) : null}
+
+            <AgentRunLog runs={data.runs} />
           </div>
 
           <SectionHeading

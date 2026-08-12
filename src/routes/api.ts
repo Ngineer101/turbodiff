@@ -19,6 +19,7 @@ import {
   failStrandedVerifications,
   getAgentById,
   getAgentBySlug,
+  getAgentRunForAuth,
   getConnection,
   getFeature,
   getPlan,
@@ -30,6 +31,8 @@ import {
   latestVerificationForFeature,
   linkTodoToPlan,
   listAgentConnections,
+  listAgentRunsForFeature,
+  listAgentRunsForPlan,
   listAgents,
   listCockpitComments,
   listConnectionLinks,
@@ -59,6 +62,7 @@ import {
   updateFeature,
   updatePlan,
   type AgentRow,
+  type AgentRunRow,
   type ConnectionRow,
   type PlanRow,
   type PlanWithRepo,
@@ -76,6 +80,7 @@ import { testMcpEndpoint } from '../lib/mcp-test.ts';
 import { DEFAULT_MODEL, RESERVED_AGENT_SLUGS } from '../lib/personas.ts';
 import type {
   ApiAgentDetail,
+  ApiAgentRun,
   ApiAgentsList,
   ApiBoard,
   ApiConnectionTest,
@@ -87,6 +92,7 @@ import type {
   ApiReview,
   ApiReviewsPage,
   ApiSettings,
+  ApiTaskDetail,
   ApiUsage,
   ApiVerificationSummary,
 } from '../shared/api-types.ts';
@@ -146,6 +152,10 @@ function verificationSummary(
     // results unparsable — report the bare status
   }
   return { status, total, failed };
+}
+
+function serializeAgentRun(r: AgentRunRow): ApiAgentRun {
+  return { id: r.id, kind: r.kind, success: r.success === 1, created_at: r.created_at };
 }
 
 function serializeTask(p: PlanWithRepo, repoStatuses: TaskRepoStatusRow[]): ApiPlan {
@@ -512,8 +522,14 @@ export function createApiRoutes() {
     if (!plan || !c.get('user').installationIds.includes(plan.installation_id)) {
       return c.json({ error: 'unknown task' }, 404);
     }
-    const repoStatuses = await getTaskRepoStatuses([plan.id]);
-    return c.json<ApiPlan>(serializeTask(plan, repoStatuses));
+    const [repoStatuses, runs] = await Promise.all([
+      getTaskRepoStatuses([plan.id]),
+      listAgentRunsForPlan(plan.id),
+    ]);
+    return c.json<ApiTaskDetail>({
+      ...serializeTask(plan, repoStatuses),
+      runs: runs.map(serializeAgentRun),
+    });
   });
 
   // Started tasks are never deleted — archived hides them from the board.
@@ -563,6 +579,22 @@ export function createApiRoutes() {
     return c.json({ ok: true, feature_ids: featureIds });
   });
 
+  // Full agent-session transcript for one run (plan analyze/refine, generate,
+  // verify, fix). Session-authed rather than the public signed /artifacts/*
+  // capability route — a full agent transcript is more sensitive than a
+  // screenshot, so it's gated by installation ownership like every other
+  // factory read here.
+  app.get('/factory/runs/:id/log', async (c) => {
+    const id = Number(c.req.param('id'));
+    const run = Number.isInteger(id) ? await getAgentRunForAuth(id) : null;
+    if (!run || !c.get('user').installationIds.includes(run.installationId)) {
+      return c.json({ error: 'unknown run' }, 404);
+    }
+    const object = await env.ARTIFACTS.get(run.logKey);
+    if (!object) return c.json({ error: 'log no longer available' }, 404);
+    return c.json({ log: await object.text() });
+  });
+
   // --- Factory PR cockpit ---
 
   app.get('/factory/features/:id', async (c) => {
@@ -593,7 +625,11 @@ export function createApiRoutes() {
       demo: null,
       criteria: [],
       verification: null,
+      runs: [],
     };
+    // Fetched even when generation never opened a PR — a failed run is
+    // exactly the case where an advanced user most wants the full log.
+    base.runs = (await listAgentRunsForFeature(feature.id)).map(serializeAgentRun);
     if (!feature.pr_number) return c.json(base);
 
     const [plan, verification, token, cockpitComments] = await Promise.all([

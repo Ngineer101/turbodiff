@@ -526,6 +526,90 @@ export async function tryRecordFixAttempt(
   return row?.id ?? null;
 }
 
+// --- agent run logs (full session transcripts; content in R2, pointer here) ---
+
+export type AgentRunKind = 'plan_analyze' | 'plan_refine' | 'generate' | 'verify' | 'fix';
+
+export interface AgentRunRow {
+  id: number;
+  kind: AgentRunKind;
+  success: number;
+  created_at: string;
+}
+
+export async function recordAgentRun(
+  kind: AgentRunKind,
+  logKey: string,
+  success: boolean,
+  owner: { planId?: number; featureId?: number; fixAttemptId?: number },
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO agent_runs (kind, plan_id, feature_id, fix_attempt_id, log_key, success)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+  )
+    .bind(
+      kind,
+      owner.planId ?? null,
+      owner.featureId ?? null,
+      owner.fixAttemptId ?? null,
+      logKey,
+      success ? 1 : 0,
+    )
+    .run();
+}
+
+export async function listAgentRunsForPlan(planId: number): Promise<AgentRunRow[]> {
+  const res = await env.DB.prepare(
+    'SELECT id, kind, success, created_at FROM agent_runs WHERE plan_id = ?1 ORDER BY id',
+  )
+    .bind(planId)
+    .all<AgentRunRow>();
+  return res.results;
+}
+
+// Direct feature_id rows (generate/verify) plus fix runs resolved through
+// fix_attempts' (repository_id, pr_number) → the same feature, the same join
+// getFeatureByRepoPr performs — fix_attempts has no feature_id column.
+export async function listAgentRunsForFeature(featureId: number): Promise<AgentRunRow[]> {
+  const res = await env.DB.prepare(
+    `SELECT ar.id, ar.kind, ar.success, ar.created_at
+		 FROM agent_runs ar
+		 WHERE ar.feature_id = ?1
+		 UNION ALL
+		 SELECT ar.id, ar.kind, ar.success, ar.created_at
+		 FROM agent_runs ar
+		 JOIN fix_attempts fa ON fa.id = ar.fix_attempt_id
+		 JOIN features f ON f.repository_id = fa.repository_id AND f.pr_number = fa.pr_number
+		 WHERE f.id = ?1
+		 ORDER BY id`,
+  )
+    .bind(featureId)
+    .all<AgentRunRow>();
+  return res.results;
+}
+
+// Resolves an agent run to its owning installation for the log route's
+// authorization check — only one of the three LEFT JOIN chains matches,
+// since a row's plan_id/feature_id/fix_attempt_id are mutually exclusive.
+export async function getAgentRunForAuth(
+  id: number,
+): Promise<{ logKey: string; installationId: number } | null> {
+  return env.DB.prepare(
+    `SELECT ar.log_key AS logKey,
+		        COALESCE(rp.installation_id, rf.installation_id, rx.installation_id) AS installationId
+		 FROM agent_runs ar
+		 LEFT JOIN plans p ON p.id = ar.plan_id
+		 LEFT JOIN repositories rp ON rp.id = p.repository_id
+		 LEFT JOIN features f ON f.id = ar.feature_id
+		 LEFT JOIN repositories rf ON rf.id = f.repository_id
+		 LEFT JOIN fix_attempts fa ON fa.id = ar.fix_attempt_id
+		 LEFT JOIN repositories rx ON rx.id = fa.repository_id
+		 WHERE ar.id = ?1`,
+  )
+    .bind(id)
+    .first<{ logKey: string; installationId: number }>();
+}
+
 // --- features (Phase 2: spec → generated branch + PR) ---
 
 export interface FeatureRow {
