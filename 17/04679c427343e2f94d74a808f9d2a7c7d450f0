@@ -1,0 +1,23 @@
+src/client/pages/board.tsx
+  s_c6e34e4df0fee4::t_609e924da8b013 518
+  s_c6e34e4df0fee4::t_0eb882ad3265b2 486-517,519-600,604-622,624-633
+  s_c6e34e4df0fee4::t_19f44e91f02819 703-709
+  s_c6e34e4df0fee4::t_94889906e29246 636-638,647-648,650,663,674-679
+  s_c6e34e4df0fee4::t_081a525b919b73 3-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "1704679c427343e2f94d74a808f9d2a7c7d450f0",
+  "prompts": {},
+  "sessions": {
+    "s_c6e34e4df0fee4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0b7635af-c0a4-4fcd-84aa-b38a7950c903",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
