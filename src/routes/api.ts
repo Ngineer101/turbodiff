@@ -1069,9 +1069,12 @@ export function createApiRoutes() {
     if (!skill) return c.json({ error: 'unknown skill' }, 404);
     const body = await c.req.json<Record<string, unknown>>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
-    const values = { ...readSkillPayload(body), slug: skill.slug };
-    const error = validateSkill(values, false);
+    const values = readSkillPayload(body);
+    const error = validateSkill(values, true);
     if (error) return c.json({ error }, 400);
+    // The slug is immutable after creation; the fan-out below always keys off
+    // the existing slug regardless of what the request body sent.
+    values.slug = skill.slug;
     // Fan out by slug so the edit applies everywhere; skills that predate a
     // caller's installation gain their missing per-installation copies.
     const { installationIds } = c.get('user');
