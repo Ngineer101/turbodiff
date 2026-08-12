@@ -67,6 +67,10 @@ export const usageQuery = queryOptions({
   queryFn: () => api.get<ApiUsage>('/api/usage'),
 });
 
+// Terminal fix-run outcomes for a cockpit comment's linked batch — anything
+// else (null while running) means the batch is still in flight.
+export const FIX_TERMINAL = new Set(['fixed', 'no_changes', 'tests_failed', 'failed']);
+
 export const featureQuery = (id: number) =>
   queryOptions({
     queryKey: ['feature', id],
@@ -77,7 +81,13 @@ export const featureQuery = (id: number) =>
       // Poll while generation is in flight (no PR yet, not stopped) or a
       // verification run is live.
       if (!d.pr && !GENERATION_STOPPED.has(d.feature.status)) return LIVE_POLL_MS;
-      return d.verification?.status === 'running' ? LIVE_POLL_MS : false;
+      if (d.verification?.status === 'running') return LIVE_POLL_MS;
+      // Poll while a comment batch's fix run hasn't resolved yet.
+      const fixInFlight = d.comments.some(
+        (c) => c.status === 'dispatched' && !FIX_TERMINAL.has(c.fix_status ?? ''),
+      );
+      if (fixInFlight) return LIVE_POLL_MS;
+      return false;
     },
   });
 

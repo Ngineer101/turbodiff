@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { ApiCockpitComment, ApiFeatureDetail } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
-import { featureQuery, GENERATION_STOPPED } from '../lib/queries.ts';
+import { featureQuery, FIX_TERMINAL, GENERATION_STOPPED } from '../lib/queries.ts';
 import { cn } from '../lib/utils.ts';
 import { ConfirmButton } from '../components/confirm-button.tsx';
 import { ensureDiffStyles } from '../components/diff-styles.ts';
@@ -45,12 +45,21 @@ function onApiError(err: unknown) {
   toast.error(err instanceof ApiError ? err.message : 'request failed');
 }
 
+function CommentFixStatePill({ comment }: { comment: ApiCockpitComment }) {
+  if (comment.fix_status === 'fixed') return <Pill tone="on">fixed</Pill>;
+  if (comment.fix_status === 'no_changes') return <Pill tone="neutral">no changes needed</Pill>;
+  if (comment.fix_status === 'tests_failed') return <Pill tone="warn">tests failed</Pill>;
+  if (comment.fix_status === 'failed') return <Pill tone="red">fix failed</Pill>;
+  if (comment.status === 'dispatched') return <Pill tone="running">fixing…</Pill>;
+  return null;
+}
+
 function CommentCard({ comment }: { comment: ApiCockpitComment }) {
   return (
     <div className="m-2 rounded-md border border-line-2 border-l-2 border-l-accent bg-surface px-3 py-2 text-[0.82rem]">
-      <div className="mb-1 text-xs text-mute">
-        <strong>@{comment.author}</strong> ·{' '}
-        {comment.status === 'dispatched' ? '🔧 fix dispatched' : comment.status}
+      <div className="mb-1 flex items-center gap-1.5 text-xs text-mute">
+        <strong>@{comment.author}</strong>
+        <CommentFixStatePill comment={comment} />
       </div>
       <Markdown className="markdown-body--compact">{comment.body}</Markdown>
     </div>
@@ -78,7 +87,7 @@ function Composer({
         body: body.trim(),
       }),
     onSuccess: () => {
-      toast.success('comment posted — fix agent dispatched');
+      toast.success('comment added');
       onDone();
     },
     onError: onApiError,
@@ -87,7 +96,7 @@ function Composer({
   return (
     <div className="m-2 rounded-md border border-line-2 border-l-2 border-l-accent bg-surface px-3 py-2">
       <div className="mb-1.5 text-xs text-mute">
-        Comment on line {selection.endLine} — submitting dispatches the fix agent
+        Comment on line {selection.endLine} — it'll be addressed the next time you hit Submit
       </div>
       <Textarea
         autoFocus
@@ -103,7 +112,7 @@ function Composer({
           disabled={!body.trim()}
           loading={submit.isPending}
         >
-          {submit.isPending ? 'Dispatching…' : 'Comment & dispatch fix'}
+          {submit.isPending ? 'Adding…' : 'Add comment'}
         </Button>
         <Button size="sm" variant="secondary" onClick={onCancel}>
           Cancel
@@ -360,6 +369,18 @@ export default function FeaturePage() {
     },
     onError: onApiError,
   });
+  const submitBatch = useMutation({
+    mutationFn: () => api.post(`/api/factory/features/${id}/comments/submit`),
+    onSuccess: () => {
+      toast.success('comments submitted — fix agent dispatched');
+      refresh();
+    },
+    onError: onApiError,
+  });
+  const pendingCount = data.comments.filter((c) => c.status === 'open').length;
+  const batchRunning = data.comments.some(
+    (c) => c.status === 'dispatched' && !FIX_TERMINAL.has(c.fix_status ?? ''),
+  );
 
   if (!data.pr) {
     const stopped = GENERATION_STOPPED.has(data.feature.status);
@@ -465,6 +486,21 @@ export default function FeaturePage() {
           >
             Merge pull request
           </ConfirmButton>
+        </div>
+      ) : null}
+
+      {pendingCount > 0 || batchRunning ? (
+        <div className="mt-3 flex items-center gap-2">
+          <Button
+            size="sm"
+            onClick={() => submitBatch.mutate()}
+            disabled={pendingCount === 0 || batchRunning}
+            loading={submitBatch.isPending}
+          >
+            {batchRunning
+              ? 'Fix in progress…'
+              : `Submit ${pendingCount} comment${pendingCount === 1 ? '' : 's'}`}
+          </Button>
         </div>
       ) : null}
 
@@ -597,7 +633,8 @@ export default function FeaturePage() {
           </SectionHeading>
           {prState === 'open' ? (
             <Muted className="block">
-              select a line range in the diff to comment — comments dispatch the fix agent
+              select a line range in the diff to comment — click Submit to address every pending
+              comment in one pass
             </Muted>
           ) : null}
 
