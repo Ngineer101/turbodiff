@@ -2,6 +2,7 @@ import { getSandbox, type Sandbox } from '@cloudflare/sandbox';
 import { env, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
 import { gh } from '../tools/github.ts';
+import { persistAgentLog } from './agent-runs.ts';
 import { coauthorTrailer, gitAuthorEnv } from './attribution.ts';
 import { getFeature, getRepoById, updateFeature, type FeatureRow } from './db.ts';
 import { resolveRunnerAuth } from './fixer.ts';
@@ -231,6 +232,10 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
         async (): Promise<{ changed: boolean }> => {
           await updateFeature(featureId, { runStartedAt: 'now' });
           const auth = resolveRunnerAuth();
+          // The git/installation tokens live in other steps' scopes, not this
+          // one — only the runner credential can appear in this step's output.
+          const scrub = (s: string) =>
+            Object.values(auth.vars).reduce((acc, v) => acc.replaceAll(v, '***'), s);
           const sandbox = sandboxFor(ctx);
           await sandbox.writeFile(specFile(featureId), generationPrompt(ctx));
           const agent = await sandbox.exec(
@@ -246,6 +251,12 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
                 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
               },
             },
+          );
+          await persistAgentLog(
+            'generate',
+            scrub(`${agent.stdout}\n${agent.stderr}`.trim()),
+            agent.success,
+            { featureId },
           );
           if (!agent.success) {
             throw new Error(

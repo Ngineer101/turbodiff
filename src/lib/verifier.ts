@@ -11,6 +11,7 @@ import {
   setRepoRunCommand,
   setRepoLaunchable,
 } from './db.ts';
+import { persistAgentLog } from './agent-runs.ts';
 import { maybeAutoMerge } from './auto-merge.ts';
 import { signArtifactKey } from './crypto.ts';
 import { resolveRunnerAuth } from './fixer.ts';
@@ -247,6 +248,12 @@ async function verify(
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
         },
       },
+    );
+    await persistAgentLog(
+      'verify',
+      scrub(`${agent.stdout}\n${agent.stderr}`.trim()),
+      agent.success,
+      { featureId: feature.id },
     );
     if (!agent.success) {
       throw new Error(

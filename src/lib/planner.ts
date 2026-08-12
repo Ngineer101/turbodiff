@@ -11,6 +11,7 @@ import {
   type PlanRow,
   type RepositoryRow,
 } from './db.ts';
+import { persistAgentLog } from './agent-runs.ts';
 import { resolveRunnerAuth } from './fixer.ts';
 import { installationToken, sandboxGitToken } from './github-app.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
@@ -136,6 +137,8 @@ async function runAgent(
   sandbox: Sandbox,
   prompt: string,
   scrub: (s: string) => string,
+  kind: 'plan_analyze' | 'plan_refine',
+  planId: number,
 ): Promise<void> {
   const auth = resolveRunnerAuth();
   await sandbox.writeFile(`${OUT_DIR}/task.md`, prompt);
@@ -152,6 +155,9 @@ async function runAgent(
       },
     },
   );
+  await persistAgentLog(kind, scrub(`${res.stdout}\n${res.stderr}`.trim()), res.success, {
+    planId,
+  });
   if (!res.success) {
     throw new Error(
       `planning agent exited ${res.exitCode}: ${scrub(`${res.stdout}\n${res.stderr}`).trim().slice(-1_000)}`,
@@ -363,7 +369,13 @@ export async function runPlanAnalyze(planId: number): Promise<void> {
     const tier = await classifyTier(sandbox, plan, repos);
     await updatePlan(planId, { tier });
     const attachments = attachmentsSection(await fetchPlanAttachments(sandbox, plan));
-    await runAgent(sandbox, analyzePrompt(plan, repos, dirs, tier, attachments), booted.scrub);
+    await runAgent(
+      sandbox,
+      analyzePrompt(plan, repos, dirs, tier, attachments),
+      booted.scrub,
+      'plan_analyze',
+      planId,
+    );
     const analysis = await readText(sandbox, `${OUT_DIR}/analysis.md`);
     const questions = await readQuestions(sandbox, `${OUT_DIR}/questions.json`);
 
@@ -373,6 +385,8 @@ export async function runPlanAnalyze(planId: number): Promise<void> {
         sandbox,
         planPrompt({ ...plan, analysis: analysis ?? null }, repos, dirs, '', tier, attachments),
         booted.scrub,
+        'plan_analyze',
+        planId,
       );
       const planMd = await readText(sandbox, `${OUT_DIR}/plan.md`);
       const acceptance = await readJsonArray(sandbox, `${OUT_DIR}/acceptance.json`);
@@ -455,6 +469,8 @@ export async function runPlanRefine(planId: number): Promise<void> {
       sandbox,
       planPrompt(plan, repos, dirs, qa + fb, plan.tier ?? 'standard', attachments),
       booted.scrub,
+      'plan_refine',
+      planId,
     );
     const planMd = await readText(sandbox, `${OUT_DIR}/plan.md`);
     const acceptance = await readJsonArray(sandbox, `${OUT_DIR}/acceptance.json`);

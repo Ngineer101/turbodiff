@@ -9,6 +9,7 @@ import { ago } from '../lib/format.ts';
 import { GENERATION_STOPPED, taskQuery } from '../lib/queries.ts';
 import { taskState } from '../lib/task-state.ts';
 import { cn } from '../lib/utils.ts';
+import { AgentRunLog } from '../components/agent-run-log.tsx';
 import { ConfirmButton } from '../components/confirm-button.tsx';
 import { Markdown } from '../components/markdown.tsx';
 import { QuestionsCarousel } from '../components/questions-carousel.tsx';
@@ -373,6 +374,8 @@ export function TaskPage() {
           </details>
         </>
       ) : null}
+
+      <AgentRunLog runs={task.runs} />
 
       <div className="mt-12 border-t border-line/60 pt-5">
         {task.archived ? (
