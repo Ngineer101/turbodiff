@@ -1,0 +1,44 @@
+src/lib/better-auth.ts
+  s_c6e34e4df0fee4::t_595dc18b34765a 1-26,32-64,71-80
+  s_c6e34e4df0fee4::t_bba105920b271a 65-70
+  s_c6e34e4df0fee4::t_844173ce3d421b 27-31
+src/routes/ui.ts
+  s_c6e34e4df0fee4::t_571263f8dda960 3-4,8-11,13-15
+  s_c6e34e4df0fee4::t_9510b2c643a300 42-44,49,55-61,63-66,69-75,78-92
+src/app.ts
+  s_c6e34e4df0fee4::t_5d588e09245552 150-153
+  s_c6e34e4df0fee4::t_c8d7a34a2f9076 26
+migrations/0026_better_auth.sql
+  s_c6e34e4df0fee4::t_69e83fe76c3685 1-63
+AGENTS.md
+  s_c6e34e4df0fee4::t_91961527d2f060 17
+src/lib/auth.ts
+  s_c6e34e4df0fee4::t_6e16dc4be22e12 3,6-65,76,83-93
+package.json
+  s_c6e34e4df0fee4::t_70cf29a2e7006b 61-63
+  s_c6e34e4df0fee4::t_f534245b9cc32e 22
+src/lib/user-tokens.ts
+  s_c6e34e4df0fee4::t_a8d17b8186e139 26
+  s_c6e34e4df0fee4::t_eff7a82e284947 20,23
+  s_c6e34e4df0fee4::t_a6f77e4301e27d 34-35,38
+  s_c6e34e4df0fee4::t_798608df8f116d 49
+  s_c6e34e4df0fee4::t_dfb584ff47a8ce 1-2,5,7-13,15-17,19,21-22,24-25,27-32
+pnpm-lock.yaml
+  s_c6e34e4df0fee4::t_2f3ebf8ad9ee85 249-251,648-729,1452-1459,3029-3098,3264-3266,3693-3696,4084-4087,4409-4411,4456-4458,5409-5466,6113-6116,7257-7292,7442-7443,7958-7959,8496-8497,8904-8905,8961-8962
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "0b54cb1523936fb04687e6248d5b500cb9876f42",
+  "prompts": {},
+  "sessions": {
+    "s_c6e34e4df0fee4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0b7635af-c0a4-4fcd-84aa-b38a7950c903",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
