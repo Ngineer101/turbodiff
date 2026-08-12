@@ -1,0 +1,23 @@
+src/app.ts
+  s_ffa6c5b5f34418::t_ddf40515e6c440 152-158
+src/lib/better-auth.ts
+  s_ffa6c5b5f34418::t_ebcced2a8318cc 24-32
+  s_ffa6c5b5f34418::t_0e4aeda2a2faa1 59
+  s_ffa6c5b5f34418::t_6eac3dfc7e4bfd 70-71
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "b3d2e9eb8379ee523e983b06a9b58d6b2ab14e54",
+  "prompts": {},
+  "sessions": {
+    "s_ffa6c5b5f34418": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff7a506d-dbde-484e-9f96-f5a461f10dd7",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
