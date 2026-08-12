@@ -549,6 +549,26 @@ export function createApiRoutes() {
     return c.json({ ok: true });
   });
 
+  // Re-run planning for a failed plan (transient sandbox/platform errors are
+  // the common cause). A failure before the user answered anything re-runs
+  // the analyze step from scratch; once answers or plan feedback exist, the
+  // refine step re-runs so that input is kept. Status flips immediately so
+  // the UI resumes polling without waiting on the queue.
+  app.post('/factory/plans/:id/retry', async (c) => {
+    const plan = await authorizedPlan(c);
+    if (!plan) return c.json({ error: 'unknown plan' }, 404);
+    if (plan.status !== 'failed') {
+      return c.json({ error: `plan is ${plan.status}, not retryable` }, 409);
+    }
+    const feedback: unknown[] = plan.feedback ? JSON.parse(plan.feedback) : [];
+    const refine = plan.answers !== null || feedback.length > 0;
+    await updatePlan(plan.id, { status: refine ? 'refining' : 'analyzing' });
+    await env.FACTORY_QUEUE.send(
+      refine ? { kind: 'plan_refine', planId: plan.id } : { kind: 'plan_analyze', planId: plan.id },
+    );
+    return c.json({ ok: true });
+  });
+
   app.post('/factory/plans/:id/approve', async (c) => {
     const plan = await authorizedPlan(c);
     if (!plan) return c.json({ error: 'unknown plan' }, 404);

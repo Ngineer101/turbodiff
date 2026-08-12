@@ -70,6 +70,14 @@ export function TaskPage() {
     },
     onError: onApiError,
   });
+  const retryPlan = useMutation({
+    mutationFn: () => api.post(`/api/factory/plans/${task.id}/retry`),
+    onSuccess: () => {
+      toast.success('planning restarted');
+      refresh();
+    },
+    onError: onApiError,
+  });
   const archive = useMutation({
     mutationFn: (archived: boolean) => api.post(`/api/tasks/${task.id}/archive`, { archived }),
     onSuccess: (_d, archived) => {
@@ -168,8 +176,17 @@ export function TaskPage() {
       ) : null}
       {state.hint ? <p className="mt-1 text-xs text-mute/70">{state.hint}</p> : null}
 
-      {task.status === 'failed' && task.error ? (
-        <p className="mt-4 text-[0.85rem] text-danger">{task.error}</p>
+      {task.status === 'failed' ? (
+        <div className="mt-4">
+          {task.error ? <p className="text-[0.85rem] text-danger">{task.error}</p> : null}
+          <Button
+            className="mt-3"
+            onClick={() => retryPlan.mutate()}
+            loading={retryPlan.isPending}
+          >
+            Retry planning
+          </Button>
+        </div>
       ) : null}
 
       {task.status === 'awaiting_answers' && task.questions.length > 0 ? (
