@@ -23,6 +23,7 @@ import {
   type AgentRow,
   type RepositoryRow,
 } from './lib/db.ts';
+import { auth } from './lib/better-auth.ts';
 import { runFix, sandboxSmoke, type FixAuthMode } from './lib/fixer.ts';
 import { approvePlan } from './lib/planner.ts';
 import { registerReviewMetering } from './lib/metering.ts';
@@ -145,6 +146,10 @@ export async function dispatchReviewAgent(
 
 // GitHub App webhooks — authenticated by HMAC signature, not the bearer secret.
 app.route('/webhooks', createWebhookRoutes(dispatchReviewAgent));
+
+// better-auth (sessions, OAuth callback, sign-out). Registered before the
+// /api data plane so it owns the /api/auth prefix.
+app.on(['GET', 'POST'], '/api/auth/*', (c) => auth().handler(c.req.raw));
 
 // SPA data plane (session cookie auth, JSON in/out).
 app.route('/api', createApiRoutes());
