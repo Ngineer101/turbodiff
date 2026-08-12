@@ -9,6 +9,8 @@ import type {
   ApiMe,
   ApiPlan,
   ApiSettings,
+  ApiSkillDetail,
+  ApiSkillsList,
   ApiUsage,
 } from '../../shared/api-types.ts';
 
@@ -90,6 +92,17 @@ export const agentQuery = (id: number) =>
   queryOptions({
     queryKey: ['agent', id],
     queryFn: () => api.get<ApiAgentDetail>(`/api/agents/${id}`),
+  });
+
+export const skillsQuery = queryOptions({
+  queryKey: ['skills'],
+  queryFn: () => api.get<ApiSkillsList>('/api/skills'),
+});
+
+export const skillQuery = (id: number) =>
+  queryOptions({
+    queryKey: ['skill', id],
+    queryFn: () => api.get<ApiSkillDetail>(`/api/skills/${id}`),
   });
 
 export const settingsQuery = queryOptions({

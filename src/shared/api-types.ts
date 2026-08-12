@@ -197,6 +197,21 @@ export interface ApiAgentDetail {
   default_model: string;
 }
 
+export interface ApiSkillSummary {
+  id: number;
+  slug: string;
+  name: string;
+  description: string | null;
+}
+
+export interface ApiSkillsList {
+  skills: ApiSkillSummary[];
+}
+
+export interface ApiSkillDetail {
+  skill: ApiSkillSummary & { instructions: string; installation_id: number };
+}
+
 export interface ApiConnectionTest {
   ok: boolean;
   detail: string;
@@ -215,6 +230,7 @@ export interface ApiRepoSettings {
   demo_videos: boolean;
   check_command: string | null;
   agents: { id: number; slug: string; name: string; enabled: boolean }[];
+  skills: { id: number; slug: string; name: string; enabled: boolean }[];
 }
 
 export interface ApiSettings {

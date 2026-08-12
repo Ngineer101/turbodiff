@@ -1,11 +1,12 @@
 import { Link, useRouterState } from '@tanstack/react-router';
-import { BarChart2, Bot, LayoutDashboard, LogOut, Plug, Settings } from 'lucide-react';
+import { BarChart2, Bot, LayoutDashboard, LogOut, Plug, Settings, Sparkles } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { cn } from '../lib/utils.ts';
 
 const NAV = [
   { to: '/', label: 'board', icon: LayoutDashboard, exact: true },
   { to: '/agents', label: 'agents', icon: Bot },
+  { to: '/skills', label: 'skills', icon: Sparkles },
   { to: '/integrations', label: 'integrations', icon: Plug },
   { to: '/usage', label: 'usage', icon: BarChart2 },
   { to: '/settings', label: 'settings', icon: Settings },
