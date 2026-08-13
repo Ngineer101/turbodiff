@@ -131,7 +131,7 @@ export function TaskPage() {
   };
 
   return (
-    <>
+    <div className="animate-rise">
       <Link
         to="/"
         className="inline-flex items-center gap-1.5 py-1 text-xs text-mute hover:text-ink"
@@ -406,6 +406,6 @@ export function TaskPage() {
           Started tasks can't be deleted — only archived.
         </p>
       </div>
-    </>
+    </div>
   );
 }
