@@ -25,6 +25,8 @@ import {
   meQuery,
   queryClient,
   settingsQuery,
+  skillQuery,
+  skillsQuery,
   taskQuery,
   usageQuery,
 } from './lib/queries.ts';
@@ -34,6 +36,9 @@ import { AgentsPage } from './pages/agents.tsx';
 import { BoardPage } from './pages/board.tsx';
 import { IntegrationsPage } from './pages/integrations.tsx';
 import { SettingsPage } from './pages/settings.tsx';
+import { SkillEditPage } from './pages/skill-edit.tsx';
+import { SkillNewPage } from './pages/skill-new.tsx';
+import { SkillsPage } from './pages/skills.tsx';
 import { TaskPage } from './pages/task.tsx';
 import { UsagePage } from './pages/usage.tsx';
 import './styles.css';
@@ -147,6 +152,26 @@ const agentEditRoute = createRoute({
   component: AgentEditPage,
 });
 
+const skillsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/skills',
+  loader: () => queryClient.ensureQueryData(skillsQuery),
+  component: SkillsPage,
+});
+
+const skillNewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/skills/new',
+  component: SkillNewPage,
+});
+
+const skillEditRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/skills/$skillId/edit',
+  loader: ({ params }) => queryClient.ensureQueryData(skillQuery(Number(params.skillId))),
+  component: SkillEditPage,
+});
+
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
@@ -163,6 +188,9 @@ const routeTree = rootRoute.addChildren([
   agentsRoute,
   agentNewRoute,
   agentEditRoute,
+  skillsRoute,
+  skillNewRoute,
+  skillEditRoute,
   settingsRoute,
 ]);
 

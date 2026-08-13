@@ -148,6 +148,33 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
   });
+  const toggleSkill = useMutation({
+    mutationFn: ({ skillId, enabled }: { skillId: number; enabled: boolean }) =>
+      api.put(`/api/repos/${repo.id}/skills/${skillId}`, { enabled }),
+    onMutate: async ({ skillId, enabled }) => {
+      await queryClient.cancelQueries({ queryKey: ['settings'] });
+      const prev = queryClient.getQueryData<ApiSettings>(['settings']);
+      if (prev) {
+        queryClient.setQueryData<ApiSettings>(['settings'], {
+          ...prev,
+          installations: prev.installations.map((inst) => ({
+            ...inst,
+            repos: inst.repos.map((r) =>
+              r.id === repo.id
+                ? { ...r, skills: r.skills.map((s) => (s.id === skillId ? { ...s, enabled } : s)) }
+                : r,
+            ),
+          })),
+        });
+      }
+      return { prev };
+    },
+    onError: (err, _vars, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(['settings'], ctx.prev);
+      onApiError(err);
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
+  });
 
   return (
     <Card className="mt-2">
@@ -190,6 +217,18 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
                 onClick={() => toggleAgent.mutate({ agentId: a.id, enabled: !a.enabled })}
               >
                 {a.slug}
+              </Chip>
+            ))}
+          </ConfigRow>
+          <ConfigRow label="Skills">
+            {repo.skills.map((s) => (
+              <Chip
+                key={s.id}
+                on={s.enabled}
+                title={`${s.enabled ? 'Disable' : 'Enable'} ${s.name} on this repo`}
+                onClick={() => toggleSkill.mutate({ skillId: s.id, enabled: !s.enabled })}
+              >
+                {s.slug}
               </Chip>
             ))}
           </ConfigRow>

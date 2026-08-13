@@ -9,10 +9,12 @@ import {
   getRepoById,
   hasRunningFixAttempt,
   linkCommentsToFixAttempt,
+  listEnabledSkillsForRepo,
   tryRecordFixAttempt,
 } from './db.ts';
 import { installationToken, sandboxGitToken } from './github-app.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
+import { skillMarkdown } from './skill-files.ts';
 
 // Phase 1 spike of the software factory fix loop (docs/software-factory-design.md):
 // clone a PR's head branch into a Cloudflare Sandbox, run a coding agent CLI
@@ -29,6 +31,7 @@ export interface FixParams {
   repo: string;
   prNumber: number;
   installationId: number;
+  repositoryId: number;
   // Markdown work order. When omitted, the latest blocking (CHANGES_REQUESTED)
   // bot review on the PR — i.e. turbodiff's own — is used instead.
   findings?: string;
@@ -255,6 +258,13 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
       taskPrompt(`${owner}/${repo}#${prNumber}`, headRef, findings),
     );
 
+    const skills = await listEnabledSkillsForRepo(params.repositoryId);
+    for (const skill of skills) {
+      const dir = `${CLONE_DIR}/.claude/skills/${skill.slug}`;
+      await sandbox.exec(`mkdir -p ${dir}`);
+      await sandbox.writeFile(`${dir}/SKILL.md`, skillMarkdown(skill));
+    }
+
     // Headless Claude Code run. --dangerously-skip-permissions is safe here —
     // the container is the isolation boundary (IS_SANDBOX acknowledges that).
     const agent = await sandbox.exec(
@@ -418,6 +428,7 @@ export async function processFixMessage(msg: FixQueueMessage): Promise<void> {
       repo: repo.name,
       prNumber: msg.prNumber,
       installationId: repo.installation_id,
+      repositoryId: repo.id,
       findings: msg.findings,
       testCommand: repo.check_command ?? undefined,
       author: msg.author,

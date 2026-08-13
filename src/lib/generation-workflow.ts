@@ -4,10 +4,18 @@ import { NonRetryableError } from 'cloudflare:workflows';
 import { gh } from '../tools/github.ts';
 import { persistAgentLog } from './agent-runs.ts';
 import { coauthorTrailer, gitAuthorEnv } from './attribution.ts';
-import { getFeature, getRepoById, updateFeature, type FeatureRow } from './db.ts';
+import {
+  getFeature,
+  getRepoById,
+  listEnabledSkillsForRepo,
+  updateFeature,
+  type FeatureRow,
+  type SkillRow,
+} from './db.ts';
 import { resolveRunnerAuth } from './fixer.ts';
 import { installationToken, sandboxGitToken } from './github-app.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
+import { skillMarkdown } from './skill-files.ts';
 import { mintUserToken } from './user-tokens.ts';
 
 // Phase 2 of the software factory, re-architected as a Cloudflare Workflow.
@@ -115,6 +123,7 @@ type RunContext = {
   owner: string;
   name: string;
   installationId: number;
+  repositoryId: number;
   base: string;
   branch: string;
   checkCommand: string | null;
@@ -126,6 +135,7 @@ type RunContext = {
   coauthorId: number | null;
   acceptance: boolean;
   tier: 'trivial' | 'standard';
+  skills: SkillRow[];
 };
 
 const QUICK = {
@@ -159,12 +169,14 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
           const info = (await (await gh(token, `/repos/${repo.owner}/${repo.name}`)).json()) as {
             default_branch: string;
           };
+          const skills = await listEnabledSkillsForRepo(repo.id);
           await updateFeature(featureId, { status: 'generating', runStartedAt: 'now' });
           return {
             featureId,
             owner: repo.owner,
             name: repo.name,
             installationId: repo.installation_id,
+            repositoryId: repo.id,
             base: info.default_branch,
             branch: branchName(feature),
             checkCommand: repo.check_command,
@@ -176,6 +188,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
             coauthorId: feature.coauthor_id,
             acceptance: feature.acceptance !== null,
             tier: feature.tier === 'trivial' ? 'trivial' : 'standard',
+            skills,
           };
         },
       );
@@ -237,6 +250,11 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
           const scrub = (s: string) =>
             Object.values(auth.vars).reduce((acc, v) => acc.replaceAll(v, '***'), s);
           const sandbox = sandboxFor(ctx);
+          for (const skill of ctx.skills) {
+            const dir = `${WORK}/.claude/skills/${skill.slug}`;
+            await sandbox.exec(`mkdir -p ${dir}`);
+            await sandbox.writeFile(`${dir}/SKILL.md`, skillMarkdown(skill));
+          }
           await sandbox.writeFile(specFile(featureId), generationPrompt(ctx));
           const agent = await sandbox.exec(
             `claude -p --dangerously-skip-permissions --output-format text < ${specFile(featureId)}`,

@@ -1138,6 +1138,146 @@ export async function setRepoAgentEnabled(
     .run();
 }
 
+// --- Skills (migration 0025) ---
+
+export interface SkillRow {
+  id: number;
+  installation_id: number;
+  slug: string;
+  name: string;
+  description: string | null;
+  instructions: string;
+  created_at: string;
+}
+
+export async function listSkills(installationIds: number[]): Promise<SkillRow[]> {
+  if (installationIds.length === 0) return [];
+  const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+  const res = await env.DB.prepare(
+    `SELECT * FROM skills WHERE installation_id IN (${placeholders})
+		 ORDER BY name`,
+  )
+    .bind(...installationIds)
+    .all<SkillRow>();
+  return res.results;
+}
+
+export async function getSkillById(id: number): Promise<SkillRow | null> {
+  return env.DB.prepare('SELECT * FROM skills WHERE id = ?1').bind(id).first<SkillRow>();
+}
+
+export async function getSkillBySlug(
+  installationId: number,
+  slug: string,
+): Promise<SkillRow | null> {
+  return env.DB.prepare('SELECT * FROM skills WHERE installation_id = ?1 AND slug = ?2')
+    .bind(installationId, slug)
+    .first<SkillRow>();
+}
+
+export async function createSkill(
+  installationId: number,
+  fields: { slug: string; name: string; description: string; instructions: string },
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO skills (installation_id, slug, name, description, instructions)
+		 VALUES (?1, ?2, ?3, ?4, ?5)`,
+  )
+    .bind(installationId, fields.slug, fields.name, fields.description, fields.instructions)
+    .run();
+}
+
+export async function updateSkill(
+  id: number,
+  fields: { name: string; description: string; instructions: string },
+): Promise<void> {
+  await env.DB.prepare(
+    'UPDATE skills SET name = ?2, description = ?3, instructions = ?4 WHERE id = ?1',
+  )
+    .bind(id, fields.name, fields.description, fields.instructions)
+    .run();
+}
+
+export async function deleteSkill(id: number): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM repo_skills WHERE skill_id = ?1').bind(id),
+    env.DB.prepare('DELETE FROM skills WHERE id = ?1').bind(id),
+  ]);
+}
+
+// Enablement semantics: no built-in default (unlike agents) — a skill is
+// enabled for a repo only via an explicit repo_skills row.
+export function resolveSkillEnabled(override: number | null | undefined): boolean {
+  return override === 1;
+}
+
+export interface RepoSkillOverride {
+  repository_id: number;
+  skill_id: number;
+  enabled: number;
+}
+
+// All explicit repo × skill overrides for these installations, for UIs that
+// render many repos at once without a per-repo query.
+export async function listRepoSkillOverrides(
+  installationIds: number[],
+): Promise<RepoSkillOverride[]> {
+  if (installationIds.length === 0) return [];
+  const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+  const res = await env.DB.prepare(
+    `SELECT rs.repository_id, rs.skill_id, rs.enabled
+		 FROM repo_skills rs
+		 JOIN repositories r ON r.id = rs.repository_id
+		 WHERE r.installation_id IN (${placeholders})`,
+  )
+    .bind(...installationIds)
+    .all<RepoSkillOverride>();
+  return res.results;
+}
+
+export interface RepoSkillRow extends SkillRow {
+  repo_enabled: number | null; // raw repo_skills.enabled; null = no row
+  enabled: boolean; // resolved per resolveSkillEnabled
+}
+
+export async function listSkillsForRepo(repo: RepositoryRow): Promise<RepoSkillRow[]> {
+  const res = await env.DB.prepare(
+    `SELECT s.*, rs.enabled AS repo_enabled
+		 FROM skills s
+		 LEFT JOIN repo_skills rs ON rs.skill_id = s.id AND rs.repository_id = ?2
+		 WHERE s.installation_id = ?1
+		 ORDER BY s.name`,
+  )
+    .bind(repo.installation_id, repo.id)
+    .all<SkillRow & { repo_enabled: number | null }>();
+  return res.results.map((s) => ({ ...s, enabled: resolveSkillEnabled(s.repo_enabled) }));
+}
+
+export async function setRepoSkillEnabled(
+  repositoryId: number,
+  skillId: number,
+  enabled: boolean,
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO repo_skills (repository_id, skill_id, enabled) VALUES (?1, ?2, ?3)
+		 ON CONFLICT(repository_id, skill_id) DO UPDATE SET enabled = ?3`,
+  )
+    .bind(repositoryId, skillId, enabled ? 1 : 0)
+    .run();
+}
+
+export async function listEnabledSkillsForRepo(repositoryId: number): Promise<SkillRow[]> {
+  const res = await env.DB.prepare(
+    `SELECT s.* FROM skills s
+		 JOIN repo_skills rs ON rs.skill_id = s.id
+		 WHERE rs.repository_id = ?1 AND rs.enabled = 1
+		 ORDER BY s.name`,
+  )
+    .bind(repositoryId)
+    .all<SkillRow>();
+  return res.results;
+}
+
 // --- External MCP tool connections per agent (migration 0005) ---
 
 // Installation-level integrations registry (kanban-era model): connections

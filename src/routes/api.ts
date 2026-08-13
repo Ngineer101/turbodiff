@@ -8,10 +8,12 @@ import {
   createCockpitComment,
   createConnection,
   createPlan,
+  createSkill,
   createTodo,
   dashboardStats,
   deleteAgent,
   deleteConnection,
+  deleteSkill,
   deleteTodo,
   dispatchOpenCockpitComments,
   ensureBuiltinAgents,
@@ -24,6 +26,8 @@ import {
   getFeature,
   getPlan,
   getPlanWithRepoById,
+  getSkillById,
+  getSkillBySlug,
   getTaskRepoStatuses,
   getTodo,
   getPlanByFeatureId,
@@ -41,11 +45,14 @@ import {
   listPlansForInstallations,
   listRecentReviews,
   listRepoAgentOverrides,
+  listRepoSkillOverrides,
   listReposForTodo,
+  listSkills,
   listTodos,
   monthlyUsage,
   repoUsageForMonth,
   resolveAgentEnabled,
+  resolveSkillEnabled,
   setAgentConnectionLink,
   setPlanArchived,
   setRepoAgentEnabled,
@@ -56,18 +63,22 @@ import {
   setRepoDemoVideos,
   setRepoEnabled,
   setRepoReviewOnPush,
+  setRepoSkillEnabled,
   setTodoRepositories,
   todoRepositoriesForTodos,
   updateAgent,
   updateFeature,
   updatePlan,
+  updateSkill,
   type AgentRow,
   type AgentRunRow,
+  type CockpitCommentRow,
   type ConnectionRow,
   type PlanRow,
   type PlanWithRepo,
   type RepositoryRow,
   type ReviewActivityRow,
+  type SkillRow,
   type TaskRepoStatusRow,
 } from '../lib/db.ts';
 import { requireUser, type AuthedUser } from '../lib/auth.ts';
@@ -83,6 +94,7 @@ import type {
   ApiAgentRun,
   ApiAgentsList,
   ApiBoard,
+  ApiCockpitComment,
   ApiConnectionTest,
   ApiFeatureDetail,
   ApiIntegrations,
@@ -92,6 +104,8 @@ import type {
   ApiReview,
   ApiReviewsPage,
   ApiSettings,
+  ApiSkillDetail,
+  ApiSkillsList,
   ApiTaskDetail,
   ApiUsage,
   ApiVerificationSummary,
@@ -158,6 +172,33 @@ function serializeAgentRun(r: AgentRunRow): ApiAgentRun {
   return { id: r.id, kind: r.kind, success: r.success === 1, created_at: r.created_at };
 }
 
+type CockpitFixStatus = NonNullable<ApiCockpitComment['fix_status']>;
+const COCKPIT_FIX_STATUSES = new Set<CockpitFixStatus>([
+  'running',
+  'fixed',
+  'no_changes',
+  'tests_failed',
+  'failed',
+]);
+
+function serializeCockpitComment(r: CockpitCommentRow): ApiCockpitComment {
+  const fixStatus: CockpitFixStatus | null =
+    r.fix_status && COCKPIT_FIX_STATUSES.has(r.fix_status as CockpitFixStatus)
+      ? (r.fix_status as CockpitFixStatus)
+      : null;
+  return {
+    id: r.id,
+    path: r.path,
+    line: r.line,
+    side: r.side,
+    body: r.body,
+    author: r.author,
+    status: r.status,
+    created_at: r.created_at,
+    fix_status: fixStatus,
+  };
+}
+
 function serializeTask(p: PlanWithRepo, repoStatuses: TaskRepoStatusRow[]): ApiPlan {
   return {
     id: p.id,
@@ -221,6 +262,31 @@ function validateAgent(v: AgentFormValues, checkSlug: boolean): string | null {
   return null;
 }
 
+interface SkillFormValues {
+  name: string;
+  slug: string;
+  description: string;
+  instructions: string;
+}
+
+function readSkillPayload(body: Record<string, unknown>): SkillFormValues {
+  const get = (k: string) => (typeof body[k] === 'string' ? (body[k] as string).trim() : '');
+  return {
+    name: get('name'),
+    slug: get('slug').toLowerCase(),
+    description: get('description'),
+    instructions: get('instructions'),
+  };
+}
+
+function validateSkill(v: SkillFormValues, checkSlug: boolean): string | null {
+  if (!v.name) return 'name is required';
+  if (checkSlug && !SLUG_RE.test(v.slug))
+    return 'slug must be 2-31 chars: lowercase letters, digits, dashes';
+  if (!v.instructions) return 'instructions are required';
+  return null;
+}
+
 const CONNECTION_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,30}$/;
 
 function validConnectionUrl(raw: string): boolean {
@@ -256,6 +322,13 @@ async function authorizedAgent(c: Context<ApiEnv>): Promise<AgentRow | null> {
   const agent = Number.isInteger(id) ? await getAgentById(id) : null;
   if (!agent || !c.get('user').installationIds.includes(agent.installation_id)) return null;
   return agent;
+}
+
+async function authorizedSkill(c: Context<ApiEnv>): Promise<SkillRow | null> {
+  const id = Number(c.req.param('id'));
+  const skill = Number.isInteger(id) ? await getSkillById(id) : null;
+  if (!skill || !c.get('user').installationIds.includes(skill.installation_id)) return null;
+  return skill;
 }
 
 async function authorizedRepo(c: Context<ApiEnv>): Promise<RepositoryRow | null> {
@@ -715,7 +788,7 @@ export function createApiRoutes() {
       body: r.body,
       author: r.user?.login ?? null,
     }));
-    base.comments = cockpitComments;
+    base.comments = cockpitComments.map(serializeCockpitComment);
     base.plan = plan?.plan ?? null;
 
     const demo = verification?.demo
@@ -1045,6 +1118,93 @@ export function createApiRoutes() {
     return c.json({ ok: true });
   });
 
+  // --- Skills: list, create, edit, delete ---
+
+  // Same generic-across-installations, fan-out-by-slug behavior as agents:
+  // one flat skill list usable on any repo in any of the caller's installations.
+  app.get('/skills', async (c) => {
+    const { installationIds } = c.get('user');
+    const skills = await listSkills(installationIds);
+    const seen = new Set<string>();
+    return c.json<ApiSkillsList>({
+      skills: skills
+        .filter((s) => (seen.has(s.slug) ? false : (seen.add(s.slug), true)))
+        .map((s) => ({
+          id: s.id,
+          slug: s.slug,
+          name: s.name,
+          description: s.description,
+        })),
+    });
+  });
+
+  app.post('/skills', async (c) => {
+    const { installationIds } = c.get('user');
+    if (installationIds.length === 0) return c.json({ error: 'no installations' }, 404);
+    const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+    if (!body) return c.json({ error: 'invalid JSON body' }, 400);
+    const values = readSkillPayload(body);
+    let error = validateSkill(values, true);
+    if (!error) {
+      const existing = await Promise.all(
+        installationIds.map((id) => getSkillBySlug(id, values.slug)),
+      );
+      if (existing.some(Boolean)) error = `a skill with slug "${values.slug}" already exists`;
+    }
+    if (error) return c.json({ error }, 400);
+    await Promise.all(installationIds.map((id) => createSkill(id, values)));
+    return c.json({ ok: true });
+  });
+
+  app.get('/skills/:id', async (c) => {
+    const skill = await authorizedSkill(c);
+    if (!skill) return c.json({ error: 'unknown skill' }, 404);
+    return c.json<ApiSkillDetail>({
+      skill: {
+        id: skill.id,
+        slug: skill.slug,
+        name: skill.name,
+        description: skill.description,
+        instructions: skill.instructions,
+        installation_id: skill.installation_id,
+      },
+    });
+  });
+
+  app.put('/skills/:id', async (c) => {
+    const skill = await authorizedSkill(c);
+    if (!skill) return c.json({ error: 'unknown skill' }, 404);
+    const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+    if (!body) return c.json({ error: 'invalid JSON body' }, 400);
+    const values = readSkillPayload(body);
+    const error = validateSkill(values, true);
+    if (error) return c.json({ error }, 400);
+    // The slug is immutable after creation; the fan-out below always keys off
+    // the existing slug regardless of what the request body sent.
+    values.slug = skill.slug;
+    // Fan out by slug so the edit applies everywhere; skills that predate a
+    // caller's installation gain their missing per-installation copies.
+    const { installationIds } = c.get('user');
+    const siblings = (await listSkills(installationIds)).filter((s) => s.slug === skill.slug);
+    await Promise.all(siblings.map((s) => updateSkill(s.id, values)));
+    const covered = new Set(siblings.map((s) => s.installation_id));
+    await Promise.all(
+      installationIds.filter((id) => !covered.has(id)).map((id) => createSkill(id, values)),
+    );
+    return c.json({ ok: true });
+  });
+
+  app.delete('/skills/:id', async (c) => {
+    const skill = await authorizedSkill(c);
+    if (!skill) return c.json({ error: 'unknown skill' }, 404);
+    // Fan out by slug: deleting a generic skill removes every installation's copy.
+    const siblings = (await listSkills(c.get('user').installationIds)).filter(
+      (s) => s.slug === skill.slug,
+    );
+    await Promise.all(siblings.map((s) => deleteSkill(s.id)));
+    return c.json({ ok: true });
+  });
+
   // --- Integrations registry: installation-level MCP/API connections ---
 
   async function authorizedConnection(c: Context<ApiEnv>): Promise<ConnectionRow | null> {
@@ -1207,19 +1367,25 @@ export function createApiRoutes() {
       ),
     );
     await Promise.all(installationIds.map((id) => ensureBuiltinAgents(id)));
-    const [groups, agents, overrides] = await Promise.all([
+    const [groups, agents, overrides, skills, skillOverrides] = await Promise.all([
       listInstallationsWithRepos(installationIds),
       listAgents(installationIds),
       listRepoAgentOverrides(installationIds),
+      listSkills(installationIds),
+      listRepoSkillOverrides(installationIds),
     ]);
     const overrideMap = new Map(
       overrides.map((o) => [`${o.repository_id}:${o.agent_id}`, o.enabled]),
+    );
+    const skillOverrideMap = new Map(
+      skillOverrides.map((o) => [`${o.repository_id}:${o.skill_id}`, o.enabled]),
     );
 
     return c.json<ApiSettings>({
       github_app_slug: env.GITHUB_APP_SLUG,
       installations: groups.map(({ installation, repos }) => {
         const instAgents = agents.filter((a) => a.installation_id === installation.id);
+        const instSkills = skills.filter((s) => s.installation_id === installation.id);
         return {
           id: installation.id,
           account_login: installation.account_login,
@@ -1240,6 +1406,12 @@ export function createApiRoutes() {
               slug: a.slug,
               name: a.name,
               enabled: resolveAgentEnabled(a, overrideMap.get(`${r.id}:${a.id}`)),
+            })),
+            skills: instSkills.map((s) => ({
+              id: s.id,
+              slug: s.slug,
+              name: s.name,
+              enabled: resolveSkillEnabled(skillOverrideMap.get(`${r.id}:${s.id}`)),
             })),
           })),
         };
@@ -1289,6 +1461,22 @@ export function createApiRoutes() {
       return c.json({ error: 'body must be {"enabled": true|false}' }, 400);
     }
     await setRepoAgentEnabled(repo.id, agent.id, body.enabled);
+    return c.json({ ok: true });
+  });
+
+  app.put('/repos/:id/skills/:skillId', async (c) => {
+    const repo = await authorizedRepo(c);
+    if (!repo) return c.json({ error: 'unknown repository' }, 404);
+    const skillId = Number(c.req.param('skillId'));
+    const skill = Number.isInteger(skillId) ? await getSkillById(skillId) : null;
+    if (!skill || skill.installation_id !== repo.installation_id) {
+      return c.json({ error: 'unknown skill' }, 404);
+    }
+    const body = await c.req.json<{ enabled?: boolean }>().catch(() => null);
+    if (typeof body?.enabled !== 'boolean') {
+      return c.json({ error: 'body must be {"enabled": true|false}' }, 400);
+    }
+    await setRepoSkillEnabled(repo.id, skill.id, body.enabled);
     return c.json({ ok: true });
   });
 
