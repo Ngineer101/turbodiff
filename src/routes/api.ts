@@ -1172,15 +1172,22 @@ export function createApiRoutes() {
     // on older rows must not turn a successful PR close into a reported failure.
     let branchDeleted = false;
     if (feature.branch) {
+      const deletePath = `/repos/${repo.owner}/${repo.name}/git/refs/heads/${encodeURIComponent(feature.branch)}`;
       try {
-        await gh(
-          userToken || appToken,
-          `/repos/${repo.owner}/${repo.name}/git/refs/heads/${encodeURIComponent(feature.branch)}`,
-          { method: 'DELETE' },
-        );
+        await gh(userToken || appToken, deletePath, { method: 'DELETE' });
         branchDeleted = true;
       } catch (err) {
-        console.warn(`turbodiff: branch delete failed for feature ${id}:`, err);
+        if (!userToken) {
+          console.warn(`turbodiff: branch delete failed for feature ${id}:`, err);
+        } else {
+          console.warn(`turbodiff: user-token branch delete failed for feature ${id}, retrying as app:`, err);
+          try {
+            await gh(appToken, deletePath, { method: 'DELETE' });
+            branchDeleted = true;
+          } catch (appErr) {
+            console.warn(`turbodiff: branch delete failed for feature ${id}:`, appErr);
+          }
+        }
       }
     }
     // Reflect the abandon immediately. The closed webhook also fires for this
