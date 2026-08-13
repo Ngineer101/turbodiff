@@ -5,6 +5,7 @@ import {
   connectionSnapshot,
   countReviews,
   createAgent,
+  createAutomation,
   createCockpitComment,
   createConnection,
   createPlan,
@@ -12,6 +13,7 @@ import {
   createTodo,
   dashboardStats,
   deleteAgent,
+  deleteAutomation,
   deleteConnection,
   deleteSkill,
   deleteTodo,
@@ -22,6 +24,8 @@ import {
   getAgentById,
   getAgentBySlug,
   getAgentRunForAuth,
+  getAutomationById,
+  getAutomationRunDetail,
   getConnection,
   getFeature,
   getPlan,
@@ -35,9 +39,12 @@ import {
   latestVerificationForFeature,
   linkTodoToPlan,
   listAgentConnections,
+  listAgentRunsForAutomationRun,
   listAgentRunsForFeature,
   listAgentRunsForPlan,
   listAgents,
+  listAutomationRuns,
+  listAutomationsForInstallations,
   listCockpitComments,
   listConnectionLinks,
   listConnections,
@@ -70,12 +77,15 @@ import {
   setTodoRepositories,
   todoRepositoriesForTodos,
   updateAgent,
+  updateAutomation,
   updateConnectionAuth,
   updateFeature,
   updatePlan,
   updateSkill,
   type AgentRow,
   type AgentRunRow,
+  type AutomationFields,
+  type AutomationRow,
   type CockpitCommentRow,
   type ConnectionRow,
   type PlanRow,
@@ -85,6 +95,7 @@ import {
   type SkillRow,
   type TaskRepoStatusRow,
 } from '../lib/db.ts';
+import { computeNextRunAt } from '../lib/automation-schedule.ts';
 import { requireUser, type AuthedUser } from '../lib/auth.ts';
 import { certificateUrl } from '../lib/certificate.ts';
 import { syncInstallationRepos } from '../lib/repo-sync.ts';
@@ -114,6 +125,12 @@ import type {
   ApiAgentDetail,
   ApiAgentRun,
   ApiAgentsList,
+  ApiAutomationDetail,
+  ApiAutomationRunDetail,
+  ApiAutomationRunSummary,
+  ApiAutomationRunsList,
+  ApiAutomationsList,
+  ApiAutomationSummary,
   ApiBoard,
   ApiCockpitComment,
   ApiConnectionTest,
@@ -308,6 +325,61 @@ function validateSkill(v: SkillFormValues, checkSlug: boolean): string | null {
   return null;
 }
 
+const TIME_OF_DAY_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+const SCHEDULE_KINDS = new Set(['hourly', 'daily', 'weekly']);
+
+function readAutomationPayload(body: Record<string, unknown>): AutomationFields {
+  const get = (k: string) => (typeof body[k] === 'string' ? (body[k] as string).trim() : '');
+  const timeOfDay = get('time_of_day');
+  const dayOfWeek = body.day_of_week;
+  return {
+    name: get('name'),
+    prompt: get('prompt'),
+    schedule_kind: get('schedule_kind'),
+    time_of_day: timeOfDay || null,
+    day_of_week: typeof dayOfWeek === 'number' && Number.isInteger(dayOfWeek) ? dayOfWeek : null,
+  };
+}
+
+function validateAutomation(v: AutomationFields): string | null {
+  if (!v.name) return 'name is required';
+  if (!v.prompt) return 'prompt is required';
+  if (!SCHEDULE_KINDS.has(v.schedule_kind)) {
+    return 'schedule_kind must be hourly, daily, or weekly';
+  }
+  if (v.schedule_kind === 'hourly') {
+    if (v.time_of_day !== null) return 'hourly automations cannot set a time of day';
+  } else if (!v.time_of_day || !TIME_OF_DAY_RE.test(v.time_of_day)) {
+    return 'time_of_day is required (HH:MM, 24h UTC)';
+  }
+  if (v.schedule_kind === 'weekly') {
+    if (v.day_of_week === null || v.day_of_week < 0 || v.day_of_week > 6) {
+      return 'day_of_week is required for weekly automations (0-6)';
+    }
+  } else if (v.day_of_week !== null) {
+    return 'day_of_week is only valid for weekly automations';
+  }
+  return null;
+}
+
+function serializeAutomation(
+  a: AutomationRow,
+  repo: { id: number; owner: string; name: string },
+  lastRun: { id: number; status: string; created_at: string } | null,
+): ApiAutomationSummary {
+  return {
+    id: a.id,
+    name: a.name,
+    repository: { id: repo.id, owner: repo.owner, name: repo.name },
+    schedule_kind: a.schedule_kind as ApiAutomationSummary['schedule_kind'],
+    time_of_day: a.time_of_day,
+    day_of_week: a.day_of_week,
+    enabled: a.enabled === 1,
+    next_run_at: a.next_run_at,
+    last_run: lastRun,
+  };
+}
+
 const CONNECTION_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,30}$/;
 
 function validConnectionUrl(raw: string): boolean {
@@ -357,6 +429,17 @@ async function authorizedRepo(c: Context<ApiEnv>): Promise<RepositoryRow | null>
   const repo = Number.isInteger(id) ? await getRepoById(id) : null;
   if (!repo || !c.get('user').installationIds.includes(repo.installation_id)) return null;
   return repo;
+}
+
+// Ownership runs through the automation's fixed repository_id — an
+// automation has no installation_id of its own.
+async function authorizedAutomation(c: Context<ApiEnv>): Promise<AutomationRow | null> {
+  const id = Number(c.req.param('id'));
+  const automation = Number.isInteger(id) ? await getAutomationById(id) : null;
+  if (!automation) return null;
+  const repo = await getRepoById(automation.repository_id);
+  if (!repo || !c.get('user').installationIds.includes(repo.installation_id)) return null;
+  return automation;
 }
 
 export function createApiRoutes() {
@@ -1247,6 +1330,165 @@ export function createApiRoutes() {
     );
     await Promise.all(siblings.map((s) => deleteSkill(s.id)));
     return c.json({ ok: true });
+  });
+
+  // --- Automations: recurring per-repo prompt runs (migration 0028) ---
+
+  app.get('/automations', async (c) => {
+    const { installationIds } = c.get('user');
+    const [automations, groups] = await Promise.all([
+      listAutomationsForInstallations(installationIds),
+      listInstallationsWithRepos(installationIds),
+    ]);
+    return c.json<ApiAutomationsList>({
+      automations: automations.map((a) =>
+        serializeAutomation(
+          a,
+          { id: a.repository_id, owner: a.owner, name: a.name_repo },
+          a.last_run,
+        ),
+      ),
+      repos: groups
+        .flatMap((g) => g.repos)
+        .filter((r) => r.enabled === 1)
+        .map((r) => ({
+          id: r.id,
+          owner: r.owner,
+          name: r.name,
+          installation_id: r.installation_id,
+        })),
+    });
+  });
+
+  app.post('/automations', async (c) => {
+    const { installationIds } = c.get('user');
+    const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+    if (!body) return c.json({ error: 'invalid JSON body' }, 400);
+    const values = readAutomationPayload(body);
+    const error = validateAutomation(values);
+    if (error) return c.json({ error }, 400);
+    const repositoryId = Number(body.repository_id);
+    const repo = Number.isInteger(repositoryId) ? await getRepoById(repositoryId) : null;
+    if (!repo || !installationIds.includes(repo.installation_id) || repo.enabled !== 1) {
+      return c.json({ error: 'unknown or disabled repository' }, 404);
+    }
+    const nextRunAt = computeNextRunAt(
+      {
+        kind: values.schedule_kind as 'hourly' | 'daily' | 'weekly',
+        timeOfDay: values.time_of_day,
+        dayOfWeek: values.day_of_week,
+      },
+      new Date(),
+    );
+    const id = await createAutomation(repo.id, values, nextRunAt);
+    return c.json({ ok: true, automation_id: id });
+  });
+
+  app.get('/automations/:id', async (c) => {
+    const automation = await authorizedAutomation(c);
+    if (!automation) return c.json({ error: 'unknown automation' }, 404);
+    const repo = await getRepoById(automation.repository_id);
+    if (!repo) return c.json({ error: 'unknown automation' }, 404);
+    const runs = await listAutomationRuns(automation.id);
+    const lastRun = runs[0]
+      ? { id: runs[0].id, status: runs[0].status, created_at: runs[0].created_at }
+      : null;
+    return c.json<ApiAutomationDetail>({
+      automation: { ...serializeAutomation(automation, repo, lastRun), prompt: automation.prompt },
+    });
+  });
+
+  app.put('/automations/:id', async (c) => {
+    const automation = await authorizedAutomation(c);
+    if (!automation) return c.json({ error: 'unknown automation' }, 404);
+    const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+    if (!body) return c.json({ error: 'invalid JSON body' }, 400);
+    const values = readAutomationPayload(body);
+    const error = validateAutomation(values);
+    if (error) return c.json({ error }, 400);
+    const enabled = body.enabled === undefined ? automation.enabled === 1 : Boolean(body.enabled);
+    // Recompute next_run_at only when the schedule actually changed, so an
+    // untouched schedule keeps its already-computed firing time.
+    const scheduleChanged =
+      values.schedule_kind !== automation.schedule_kind ||
+      values.time_of_day !== automation.time_of_day ||
+      values.day_of_week !== automation.day_of_week;
+    const nextRunAt = scheduleChanged
+      ? computeNextRunAt(
+          {
+            kind: values.schedule_kind as 'hourly' | 'daily' | 'weekly',
+            timeOfDay: values.time_of_day,
+            dayOfWeek: values.day_of_week,
+          },
+          new Date(),
+        )
+      : automation.next_run_at;
+    await updateAutomation(automation.id, { ...values, enabled }, nextRunAt);
+    return c.json({ ok: true });
+  });
+
+  app.delete('/automations/:id', async (c) => {
+    const automation = await authorizedAutomation(c);
+    if (!automation) return c.json({ error: 'unknown automation' }, 404);
+    await deleteAutomation(automation.id);
+    return c.json({ ok: true });
+  });
+
+  // Manual trigger: enqueues a run directly, bypassing next_run_at — lets a
+  // user confirm the prompt/schedule works without waiting for the next
+  // scheduled firing.
+  app.post('/automations/:id/run', async (c) => {
+    const automation = await authorizedAutomation(c);
+    if (!automation) return c.json({ error: 'unknown automation' }, 404);
+    await env.FACTORY_QUEUE.send({ kind: 'automation', automationId: automation.id });
+    return c.json({ ok: true });
+  });
+
+  app.get('/automations/:id/runs', async (c) => {
+    const automation = await authorizedAutomation(c);
+    if (!automation) return c.json({ error: 'unknown automation' }, 404);
+    const runs = await listAutomationRuns(automation.id);
+    return c.json<ApiAutomationRunsList>({
+      automation: { id: automation.id, name: automation.name },
+      runs: runs.map((r) => ({
+        id: r.id,
+        status: r.status as ApiAutomationRunSummary['status'],
+        pr_number: r.pr_number,
+        error: r.error,
+        created_at: r.created_at,
+      })),
+    });
+  });
+
+  // Reachable standalone (not nested under /automations/:id) — same shape as
+  // the factory's GET /factory/runs/:id/log being independent of its parent.
+  app.get('/automations/runs/:id', async (c) => {
+    const id = Number(c.req.param('id'));
+    const detail = Number.isInteger(id) ? await getAutomationRunDetail(id) : null;
+    if (!detail || !c.get('user').installationIds.includes(detail.automation.installation_id)) {
+      return c.json({ error: 'unknown run' }, 404);
+    }
+    const runs = await listAgentRunsForAutomationRun(detail.run.id);
+    return c.json<ApiAutomationRunDetail>({
+      run: {
+        id: detail.run.id,
+        status: detail.run.status as ApiAutomationRunSummary['status'],
+        pr_number: detail.run.pr_number,
+        error: detail.run.error,
+        created_at: detail.run.created_at,
+      },
+      automation: {
+        id: detail.automation.id,
+        name: detail.automation.name,
+        repo: `${detail.automation.owner}/${detail.automation.repo}`,
+      },
+      runs: runs.map((r) => ({
+        id: r.id,
+        kind: r.kind,
+        success: r.success === 1,
+        created_at: r.created_at,
+      })),
+    });
   });
 
   // --- Integrations registry: installation-level MCP/API connections ---

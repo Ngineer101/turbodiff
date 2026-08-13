@@ -7,6 +7,12 @@
 //
 // https://flueframework.com/docs/guide/cloudflare-target/#extending-cloudflarets-entrypoint
 
+import {
+  startAutomationRun,
+  AutomationWorkflow,
+  type AutomationQueueMessage,
+} from './lib/automation-workflow.ts';
+import { pollAutomations } from './lib/automation-poll.ts';
 import { ConflictResolveWorkflow, startResolveConflict } from './lib/conflict-resolve-workflow.ts';
 import { type ConflictResolveQueueMessage } from './lib/conflict-resolver.ts';
 import { startFix, FixWorkflow } from './lib/fix-workflow.ts';
@@ -20,12 +26,13 @@ import { type VerifyQueueMessage } from './lib/verifier.ts';
 // wrangler.jsonc under containers/durable_objects with migration tag v2.
 export { Sandbox } from '@cloudflare/sandbox';
 
-// Generation and verification run as durable Workflows (bindings
-// GEN_WORKFLOW / VERIFY_WORKFLOW in wrangler.jsonc): memoized steps, bounded
-// retries, no wall-clock kills.
+// Generation, verification, and automations run as durable Workflows
+// (bindings GEN_WORKFLOW / VERIFY_WORKFLOW / AUTOMATION_WORKFLOW in
+// wrangler.jsonc): memoized steps, bounded retries, no wall-clock kills.
 export { GenerationWorkflow } from './lib/generation-workflow.ts';
 export { VerificationWorkflow };
 export { FixWorkflow };
+export { AutomationWorkflow };
 export { ConflictResolveWorkflow };
 
 // Fix and generation runs take minutes, far beyond what a webhook or intake
@@ -33,6 +40,7 @@ export { ConflictResolveWorkflow };
 // Both processors never throw (failures land in fix_attempts / features), so
 // every message acks — a broken run is not retried into repeat token spend.
 type FactoryMessage =
+  | AutomationQueueMessage
   | FixQueueMessage
   | GenQueueMessage
   | PlanQueueMessage
@@ -60,6 +68,9 @@ export default {
           // the consumer wall clock routinely (launch discovery + demos).
           await startVerification(body.featureId);
           break;
+        case 'automation':
+          await startAutomationRun(body.automationId);
+          break;
         case 'resolve_conflict':
           // A new message kind must not silently fall into the `default`
           // (fix) branch and mis-dispatch.
@@ -72,5 +83,11 @@ export default {
       }
       message.ack();
     }
+  },
+
+  // Fixed-interval poll for due automations (src/lib/automation-poll.ts) —
+  // schedule precision is bounded by the cron interval in wrangler.jsonc.
+  async scheduled(): Promise<void> {
+    await pollAutomations();
   },
 };

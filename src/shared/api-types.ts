@@ -110,12 +110,19 @@ export interface ApiPlan {
   repos: ApiTaskRepo[];
 }
 
-// One agent-session run (plan analyze/refine, generate, verify, fix) — a
-// pointer to its full stdout+stderr transcript, fetched on demand via
-// GET /api/factory/runs/:id/log.
+// One agent-session run (plan analyze/refine, generate, verify, fix,
+// automation) — a pointer to its full stdout+stderr transcript, fetched on
+// demand via GET /api/factory/runs/:id/log.
 export interface ApiAgentRun {
   id: number;
-  kind: 'plan_analyze' | 'plan_refine' | 'generate' | 'verify' | 'fix' | 'resolve_conflict';
+  kind:
+    | 'plan_analyze'
+    | 'plan_refine'
+    | 'generate'
+    | 'verify'
+    | 'fix'
+    | 'automation'
+    | 'resolve_conflict';
   success: boolean;
   created_at: string;
 }
@@ -320,4 +327,45 @@ export interface ApiIntegrations {
   installations: { id: number; account_login: string }[];
   agents: ApiAgentSummary[];
   connections: ApiIntegration[];
+}
+
+export interface ApiAutomationSummary {
+  id: number;
+  name: string;
+  repository: { id: number; owner: string; name: string };
+  schedule_kind: 'hourly' | 'daily' | 'weekly';
+  time_of_day: string | null;
+  day_of_week: number | null;
+  enabled: boolean;
+  next_run_at: string;
+  last_run: { id: number; status: string; created_at: string } | null;
+}
+
+export interface ApiAutomationsList {
+  automations: ApiAutomationSummary[];
+  // Factory-enabled repos, for the new-automation repo picker — mirrors ApiBoard.repos.
+  repos: { id: number; owner: string; name: string; installation_id: number }[];
+}
+
+export interface ApiAutomationDetail {
+  automation: ApiAutomationSummary & { prompt: string };
+}
+
+export interface ApiAutomationRunSummary {
+  id: number;
+  status: 'running' | 'pr_opened' | 'no_changes' | 'checks_failed' | 'failed';
+  pr_number: number | null;
+  error: string | null;
+  created_at: string;
+}
+
+export interface ApiAutomationRunsList {
+  automation: { id: number; name: string };
+  runs: ApiAutomationRunSummary[];
+}
+
+export interface ApiAutomationRunDetail {
+  run: ApiAutomationRunSummary;
+  automation: { id: number; name: string; repo: string };
+  runs: ApiAgentRun[]; // reuse <AgentRunLog> as-is
 }
