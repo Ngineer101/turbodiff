@@ -29,11 +29,14 @@ function parseRpcBody(text: string): { result?: unknown; error?: { message?: str
   return null;
 }
 
-export async function testMcpEndpoint(url: string, token?: string): Promise<McpTestResult> {
+export async function testMcpEndpoint(
+  url: string,
+  auth?: { headerName: string; headerValue: string },
+): Promise<McpTestResult> {
   const baseHeaders: Record<string, string> = {
     'content-type': 'application/json',
     accept: 'application/json, text/event-stream',
-    ...(token ? { authorization: `Bearer ${token}` } : {}),
+    ...(auth ? { [auth.headerName]: auth.headerValue } : {}),
   };
   const rpc = (body: object, session?: string | null) =>
     fetch(url, {

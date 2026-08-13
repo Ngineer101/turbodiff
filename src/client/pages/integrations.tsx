@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 import type { ApiConnectionTest, ApiIntegration } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
@@ -18,8 +18,30 @@ import { Table, Td, Th } from '../components/ui/table.tsx';
 // bearer-auth APIs, added once per installation. MCP integrations attach to
 // review agents with the toggles on each card.
 
+const AUTH_TYPES = ['none', 'bearer', 'api_key', 'client_credentials', 'oauth'] as const;
+type AuthType = (typeof AUTH_TYPES)[number];
+
 function onApiError(err: unknown) {
   toast.error(err instanceof ApiError ? err.message : 'request failed');
+}
+
+// Reads the one-time ?oauth=connected|error query params the
+// /oauth/callback redirect lands with, toasts once, then scrubs the URL so a
+// refresh doesn't re-toast.
+function useOAuthCallbackToast() {
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const oauth = params.get('oauth');
+    if (!oauth) return;
+    if (oauth === 'connected') {
+      const name = params.get('name');
+      toast.success(name ? `connected "${name}" via OAuth` : 'connected via OAuth');
+    } else if (oauth === 'error') {
+      const reason = params.get('reason');
+      toast.error(reason ? `OAuth connect failed: ${reason}` : 'OAuth connect failed');
+    }
+    window.history.replaceState(null, '', window.location.pathname);
+  }, []);
 }
 
 function TestDialog({
@@ -67,6 +89,23 @@ function TestDialog({
   );
 }
 
+function AuthPill({ conn }: { conn: ApiIntegration }) {
+  if (conn.auth_type === 'none') return <Pill>no auth</Pill>;
+  if (conn.auth_type !== 'oauth') {
+    return <Pill tone="on">{conn.auth_type} configured</Pill>;
+  }
+  switch (conn.oauth_status) {
+    case 'connected':
+      return <Pill tone="on">oauth connected</Pill>;
+    case 'expired':
+      return <Pill tone="warn">oauth expired</Pill>;
+    case 'needs_reauth':
+      return <Pill tone="red">oauth needs re-auth</Pill>;
+    default:
+      return <Pill>oauth not connected</Pill>;
+  }
+}
+
 function IntegrationCard({ conn }: { conn: ApiIntegration }) {
   const queryClient = useQueryClient();
   const { data } = useSuspenseQuery(integrationsQuery);
@@ -96,15 +135,29 @@ function IntegrationCard({ conn }: { conn: ApiIntegration }) {
     onError: onApiError,
   });
 
+  const needsOAuthConnect =
+    conn.kind === 'mcp' && conn.auth_type === 'oauth' && conn.oauth_status !== 'connected';
+
   return (
     <Card className="mt-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="flex items-center gap-2">
           <Pill>{conn.kind}</Pill>
           <span className="font-medium">{conn.name}</span>
-          {conn.has_auth ? <Pill tone="on">token set</Pill> : <Pill>no auth</Pill>}
+          <AuthPill conn={conn} />
         </span>
         <span className="flex gap-1.5">
+          {needsOAuthConnect ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                window.location.href = `/api/integrations/${conn.id}/oauth/start`;
+              }}
+            >
+              Connect via OAuth
+            </Button>
+          ) : null}
           <Button
             size="sm"
             variant="secondary"
@@ -117,7 +170,7 @@ function IntegrationCard({ conn }: { conn: ApiIntegration }) {
             size="sm"
             variant="secondary"
             title="Remove this integration?"
-            description={`Agents lose access to "${conn.name}" on their next run. The stored token is deleted.`}
+            description={`Agents lose access to "${conn.name}" on their next run. The stored credential is deleted.`}
             confirmLabel="Remove"
             onConfirm={() => remove.mutate()}
             busy={remove.isPending}
@@ -131,6 +184,13 @@ function IntegrationCard({ conn }: { conn: ApiIntegration }) {
         <div className="mt-1 text-xs text-mute">
           tools: <span className="font-mono">{conn.tools.join(', ')}</span>
         </div>
+      ) : null}
+      {conn.auth_type === 'api_key' && conn.kind === 'mcp' ? (
+        <Muted className="mt-1 block text-xs">
+          Mounted into review agents only when the header name is exactly "Authorization" —
+          otherwise this credential is verified by Test but not used at review time (a @flue/runtime
+          limitation).
+        </Muted>
       ) : null}
       {conn.kind === 'mcp' ? (
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
@@ -174,14 +234,34 @@ function AddForm() {
     kind: 'mcp',
     name: '',
     url: '',
+    auth_type: 'none' as AuthType,
     token: '',
+    header_name: '',
+    header_value: '',
+    client_id: '',
+    client_secret: '',
+    token_endpoint: '',
+    scope: '',
     tools: '',
   });
   const [error, setError] = useState<string | null>(null);
   const add = useMutation({
     mutationFn: () => api.post('/api/integrations', form),
     onSuccess: () => {
-      setForm((f) => ({ ...f, name: '', url: '', token: '', tools: '' }));
+      setForm((f) => ({
+        ...f,
+        name: '',
+        url: '',
+        auth_type: 'none',
+        token: '',
+        header_name: '',
+        header_value: '',
+        client_id: '',
+        client_secret: '',
+        token_endpoint: '',
+        scope: '',
+        tools: '',
+      }));
       setError(null);
       toast.success('integration added');
       queryClient.invalidateQueries({ queryKey: ['integrations'] });
@@ -198,10 +278,18 @@ function AddForm() {
         <Field label="type">
           <Select
             value={form.kind}
-            onChange={(e) => setForm((f) => ({ ...f, kind: e.target.value }))}
+            onChange={(e) => {
+              const kind = e.target.value;
+              setForm((f) => ({
+                ...f,
+                kind,
+                // The OAuth auth type only makes sense for MCP-kind servers.
+                auth_type: kind !== 'mcp' && f.auth_type === 'oauth' ? 'none' : f.auth_type,
+              }));
+            }}
           >
             <option value="mcp">MCP server (agent tools)</option>
-            <option value="api">API (bearer-auth endpoint)</option>
+            <option value="api">API (stored-credential endpoint)</option>
           </Select>
         </Field>
         {data.installations.length > 1 ? (
@@ -239,13 +327,81 @@ function AddForm() {
           placeholder="https://mcp.example.com/…"
         />
       </Field>
-      <Field label="bearer token" hint="optional; stored encrypted, never shown again">
-        <Input
-          value={form.token}
-          onChange={(e) => setForm((f) => ({ ...f, token: e.target.value }))}
-          autoComplete="off"
-        />
+      <Field label="auth type">
+        <Select
+          value={form.auth_type}
+          onChange={(e) => setForm((f) => ({ ...f, auth_type: e.target.value as AuthType }))}
+        >
+          <option value="none">none</option>
+          <option value="bearer">bearer token</option>
+          <option value="api_key">API key (custom header)</option>
+          <option value="client_credentials">OAuth client credentials</option>
+          {form.kind === 'mcp' ? <option value="oauth">OAuth (sign-in)</option> : null}
+        </Select>
       </Field>
+      {form.auth_type === 'bearer' ? (
+        <Field label="bearer token" hint="stored encrypted, never shown again">
+          <Input
+            value={form.token}
+            onChange={(e) => setForm((f) => ({ ...f, token: e.target.value }))}
+            autoComplete="off"
+          />
+        </Field>
+      ) : null}
+      {form.auth_type === 'api_key' ? (
+        <>
+          <Field label="header name">
+            <Input
+              value={form.header_name}
+              onChange={(e) => setForm((f) => ({ ...f, header_name: e.target.value }))}
+              placeholder="X-API-Key"
+            />
+          </Field>
+          <Field label="header value" hint="stored encrypted, never shown again">
+            <Input
+              value={form.header_value}
+              onChange={(e) => setForm((f) => ({ ...f, header_value: e.target.value }))}
+              autoComplete="off"
+            />
+          </Field>
+        </>
+      ) : null}
+      {form.auth_type === 'client_credentials' ? (
+        <>
+          <Field label="client id">
+            <Input
+              value={form.client_id}
+              onChange={(e) => setForm((f) => ({ ...f, client_id: e.target.value }))}
+            />
+          </Field>
+          <Field label="client secret" hint="stored encrypted, never shown again">
+            <Input
+              value={form.client_secret}
+              onChange={(e) => setForm((f) => ({ ...f, client_secret: e.target.value }))}
+              autoComplete="off"
+            />
+          </Field>
+          <Field label="token endpoint" hint="https">
+            <Input
+              value={form.token_endpoint}
+              onChange={(e) => setForm((f) => ({ ...f, token_endpoint: e.target.value }))}
+              placeholder="https://auth.example.com/token"
+            />
+          </Field>
+          <Field label="scope" hint="optional">
+            <Input
+              value={form.scope}
+              onChange={(e) => setForm((f) => ({ ...f, scope: e.target.value }))}
+            />
+          </Field>
+        </>
+      ) : null}
+      {form.auth_type === 'oauth' ? (
+        <p className="mt-4 text-xs text-mute">
+          turbodiff auto-discovers this server's OAuth endpoints and registers itself as a client —
+          click "Connect via OAuth" on the card below after adding.
+        </p>
+      ) : null}
       {form.kind === 'mcp' ? (
         <Field label="tool allowlist" hint="optional, comma-separated; empty = all">
           <Input
@@ -267,6 +423,7 @@ function AddForm() {
 
 export function IntegrationsPage() {
   const { data } = useSuspenseQuery(integrationsQuery);
+  useOAuthCallbackToast();
 
   return (
     <>
@@ -278,6 +435,11 @@ export function IntegrationsPage() {
       <p className="mt-1.5 text-xs text-mute/70">
         Tokens are encrypted and write-only. Connected servers see the PR context agents send them
         and their output is untrusted — connect only servers you control or trust.
+      </p>
+      <p className="mt-1.5 text-xs text-mute/70">
+        MCP connections are remote HTTP servers (streamable-HTTP or SSE) only — stdio-based servers
+        aren't supported, since review agents run in a Cloudflare Durable Object with no subprocess
+        or filesystem access.
       </p>
 
       <SectionHeading>connected</SectionHeading>

@@ -1,5 +1,6 @@
 import { env } from 'cloudflare:workers';
-import { openToken } from './crypto.ts';
+import { openJson, openToken, sealJson } from './crypto.ts';
+import { fetchClientCredentialsToken, refreshOAuthToken } from './mcp-oauth.ts';
 import { BUILTIN_PERSONAS, DEFAULT_AGENT_SLUG, DEFAULT_MODEL } from './personas.ts';
 
 // Thin typed layer over the D1 config store (schema in migrations/).
@@ -1150,13 +1151,17 @@ export interface ConnectionRow {
   kind: string; // 'mcp' (agent-mountable) | 'api' (stored bearer integration)
   url: string;
   tool_allowlist: string | null; // JSON string array; null = all tools
-  auth_ciphertext: string | null;
+  auth_ciphertext: string | null; // sealed bearer token, when auth_type = 'bearer'
   optional: number;
   created_at: string;
+  auth_type: string; // 'none' | 'bearer' | 'api_key' | 'client_credentials' | 'oauth'
+  auth_config_ciphertext: string | null; // sealed JSON blob, shape depends on auth_type
+  oauth_token_expires_at: string | null;
+  oauth_needs_reauth: number;
 }
 
 // The non-secret snapshot that rides the review.request signal so the agent
-// render can mount connections. The bearer token never leaves D1: the auth
+// render can mount connections. Auth material never leaves D1: the auth
 // resolver fetches and decrypts it by connection id at request time.
 export interface ConnectionSnapshot {
   id: number;
@@ -1164,6 +1169,7 @@ export interface ConnectionSnapshot {
   url: string;
   tools?: string[];
   hasAuth: boolean;
+  authType: string;
   optional: boolean;
 }
 
@@ -1182,7 +1188,8 @@ export function connectionSnapshot(row: ConnectionRow): ConnectionSnapshot {
     name: row.name,
     url: row.url,
     ...(tools ? { tools } : {}),
-    hasAuth: row.auth_ciphertext !== null,
+    hasAuth: row.auth_type !== 'none',
+    authType: row.auth_type,
     optional: row.optional === 1,
   };
 }
@@ -1222,10 +1229,13 @@ export async function createConnection(fields: {
   url: string;
   toolAllowlist: string[] | null;
   authCiphertext: string | null;
+  authType: string;
+  authConfigCiphertext: string | null;
 }): Promise<void> {
   await env.DB.prepare(
-    `INSERT INTO connections (installation_id, name, kind, url, tool_allowlist, auth_ciphertext, optional)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)`,
+    `INSERT INTO connections
+		 (installation_id, name, kind, url, tool_allowlist, auth_ciphertext, optional, auth_type, auth_config_ciphertext)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8)`,
   )
     .bind(
       fields.installationId,
@@ -1234,6 +1244,39 @@ export async function createConnection(fields: {
       fields.url,
       fields.toolAllowlist ? JSON.stringify(fields.toolAllowlist) : null,
       fields.authCiphertext,
+      fields.authType,
+      fields.authConfigCiphertext,
+    )
+    .run();
+}
+
+// Persists rotated/registered OAuth or client-credentials material. Every
+// field is optional and left unchanged when omitted (COALESCE), except
+// oauth_needs_reauth which is a boolean so `false` must still bind 0 rather
+// than be skipped.
+export async function updateConnectionAuth(
+  id: number,
+  fields: {
+    authType?: string;
+    authConfigCiphertext?: string;
+    oauthTokenExpiresAt?: string;
+    oauthNeedsReauth?: boolean;
+  },
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE connections SET
+		 auth_type = COALESCE(?2, auth_type),
+		 auth_config_ciphertext = COALESCE(?3, auth_config_ciphertext),
+		 oauth_token_expires_at = COALESCE(?4, oauth_token_expires_at),
+		 oauth_needs_reauth = COALESCE(?5, oauth_needs_reauth)
+		 WHERE id = ?1`,
+  )
+    .bind(
+      id,
+      fields.authType ?? null,
+      fields.authConfigCiphertext ?? null,
+      fields.oauthTokenExpiresAt ?? null,
+      fields.oauthNeedsReauth === undefined ? null : fields.oauthNeedsReauth ? 1 : 0,
     )
     .run();
 }
@@ -1285,15 +1328,134 @@ export async function setAgentConnectionLink(
   }
 }
 
-// The MCP auth resolver: called by the Flue transport on every request to an
-// authenticated server. Fetches and unseals the token on demand — it never
-// lands in the conversation, the signal, or the UI.
-export async function getConnectionAuthToken(connectionId: number): Promise<string> {
-  const row = await getConnection(connectionId);
-  if (!row?.auth_ciphertext) {
-    throw new Error(`turbodiff: connection ${connectionId} has no stored token`);
+export interface ResolvedAuth {
+  headerName: string;
+  headerValue: string;
+}
+
+interface ClientCredentialsConfig {
+  clientId: string;
+  clientSecret: string;
+  tokenEndpoint: string;
+  scope?: string;
+  accessToken?: string;
+  expiresAt?: string;
+}
+
+interface OAuthConfig {
+  clientId: string;
+  clientSecret?: string;
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+  registrationClientUri?: string;
+  accessToken?: string;
+  refreshToken?: string;
+  scope?: string;
+}
+
+// 60s safety margin so a token doesn't expire mid-request.
+const TOKEN_EXPIRY_MARGIN_MS = 60_000;
+
+function stillFresh(expiresAt: string | null | undefined): boolean {
+  return !!expiresAt && new Date(expiresAt).getTime() > Date.now() + TOKEN_EXPIRY_MARGIN_MS;
+}
+
+// The MCP/API auth resolver: called on every request to an authenticated
+// connection. Fetches and unseals the credential on demand — it never lands
+// in the conversation, the signal, or the UI. Auto-refreshes and persists
+// rotated client_credentials/oauth tokens; throws when a connection is
+// configured for auth but has no usable credential (the caller's `optional`
+// flag governs whether that's fatal to a mount).
+export async function resolveConnectionAuth(conn: ConnectionRow): Promise<ResolvedAuth | null> {
+  switch (conn.auth_type) {
+    case 'bearer': {
+      if (!conn.auth_ciphertext) return null;
+      return {
+        headerName: 'authorization',
+        headerValue: `Bearer ${await openToken(conn.auth_ciphertext)}`,
+      };
+    }
+    case 'api_key': {
+      if (!conn.auth_config_ciphertext) return null;
+      return openJson<ResolvedAuth>(conn.auth_config_ciphertext);
+    }
+    case 'client_credentials': {
+      if (!conn.auth_config_ciphertext) return null;
+      const config = await openJson<ClientCredentialsConfig>(conn.auth_config_ciphertext);
+      if (config.accessToken && stillFresh(config.expiresAt)) {
+        return { headerName: 'authorization', headerValue: `Bearer ${config.accessToken}` };
+      }
+      const token = await fetchClientCredentialsToken(
+        config.tokenEndpoint,
+        config.clientId,
+        config.clientSecret,
+        config.scope,
+      );
+      await updateConnectionAuth(conn.id, {
+        authConfigCiphertext: await sealJson<ClientCredentialsConfig>({
+          ...config,
+          accessToken: token.accessToken,
+          expiresAt: token.expiresAt,
+        }),
+      });
+      return { headerName: 'authorization', headerValue: `Bearer ${token.accessToken}` };
+    }
+    case 'oauth': {
+      if (!conn.auth_config_ciphertext) {
+        throw new Error(
+          `turbodiff: connection ${conn.id} has no OAuth credential yet — connect it from the integrations page`,
+        );
+      }
+      const config = await openJson<OAuthConfig>(conn.auth_config_ciphertext);
+      if (config.accessToken && stillFresh(conn.oauth_token_expires_at)) {
+        return { headerName: 'authorization', headerValue: `Bearer ${config.accessToken}` };
+      }
+      if (!config.refreshToken) {
+        await updateConnectionAuth(conn.id, { oauthNeedsReauth: true });
+        throw new Error(
+          `turbodiff: connection ${conn.id}'s OAuth token expired and has no refresh token — reconnect it from the integrations page`,
+        );
+      }
+      const refreshed = await refreshOAuthToken(
+        config.tokenEndpoint,
+        config.refreshToken,
+        config.clientId,
+        config.clientSecret,
+      );
+      if (!refreshed) {
+        await updateConnectionAuth(conn.id, { oauthNeedsReauth: true });
+        throw new Error(
+          `turbodiff: connection ${conn.id}'s OAuth token could not be refreshed — reconnect it from the integrations page`,
+        );
+      }
+      await updateConnectionAuth(conn.id, {
+        authConfigCiphertext: await sealJson<OAuthConfig>({
+          ...config,
+          accessToken: refreshed.accessToken,
+          refreshToken: refreshed.refreshToken ?? config.refreshToken,
+        }),
+        ...(refreshed.expiresAt ? { oauthTokenExpiresAt: refreshed.expiresAt } : {}),
+        oauthNeedsReauth: false,
+      });
+      return { headerName: 'authorization', headerValue: `Bearer ${refreshed.accessToken}` };
+    }
+    case 'none':
+    default:
+      return null;
   }
-  return openToken(row.auth_ciphertext);
+}
+
+// Cheap OAuth status for the integrations list — no decryption needed.
+export function oauthStatus(
+  conn: ConnectionRow,
+): 'not_connected' | 'connected' | 'expired' | 'needs_reauth' | null {
+  if (conn.auth_type !== 'oauth') return null;
+  if (conn.oauth_needs_reauth === 1) return 'needs_reauth';
+  if (conn.auth_config_ciphertext === null) return 'not_connected';
+  if (conn.oauth_token_expires_at && new Date(conn.oauth_token_expires_at).getTime() < Date.now()) {
+    return 'expired';
+  }
+  return 'connected';
 }
 
 export interface AgentUsageRow {

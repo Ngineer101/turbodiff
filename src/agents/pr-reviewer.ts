@@ -1,6 +1,6 @@
 'use agent';
 import { useDelivery, useMcpConnection, useModel, useTool, type AgentProps } from '@flue/runtime';
-import { getConnectionAuthToken, type ConnectionSnapshot } from '../lib/db.ts';
+import { getConnection, resolveConnectionAuth, type ConnectionSnapshot } from '../lib/db.ts';
 import { DEFAULT_MODEL } from '../lib/personas.ts';
 import { fetchFile, fetchPr, fetchReviewThreads, makePostReview } from '../tools/github.ts';
 
@@ -42,6 +42,30 @@ function deliveryConfig(): { agentName: string; model: string; connections: Conn
   return { agentName: 'Code Review', model: DEFAULT_MODEL, connections: [] };
 }
 
+// Step 0 finding (@flue/runtime 2.0.3's node_modules/.../types-*.d.mts):
+// McpAuth is `string | (() => string | Promise<string>)` — a bearer-token
+// resolver only. McpConnectionDefinition.headers exists but is a static
+// HeadersInit, not an async resolver, so it can't carry a per-request
+// decrypted secret either. An api_key connection's custom header can only be
+// honored by the integrations page's Test button (a raw fetch, any header
+// name); at mount time we can only send it when the configured header name
+// is literally "authorization" (then it composes with the runtime's own
+// "Bearer " prefix). Anything else throws instead of mounting unauthenticated
+// — see resolveMountAuth — so a server that requires that header fails the
+// connection (respecting `optional`) rather than silently looking connected.
+async function resolveMountAuth(connectionId: number): Promise<string> {
+  const row = await getConnection(connectionId);
+  if (!row) throw new Error(`turbodiff: connection ${connectionId} no longer exists`);
+  const auth = await resolveConnectionAuth(row);
+  if (!auth) throw new Error(`turbodiff: connection ${connectionId} has no stored credential`);
+  if (auth.headerName.toLowerCase() !== 'authorization') {
+    throw new Error(
+      `turbodiff: connection ${connectionId} uses a custom header ("${auth.headerName}") that @flue/runtime cannot mount into a live agent yet — verify it with the integrations page's Test button instead`,
+    );
+  }
+  return auth.headerValue.replace(/^Bearer\s+/i, '');
+}
+
 export function PrReviewer(props: AgentProps) {
   const cfg = deliveryConfig();
 
@@ -68,7 +92,7 @@ export function PrReviewer(props: AgentProps) {
       url: conn.url,
       ...(conn.tools ? { tools: conn.tools } : {}),
       optional: conn.optional,
-      ...(conn.hasAuth ? { auth: () => getConnectionAuthToken(conn.id) } : {}),
+      ...(conn.hasAuth ? { auth: () => resolveMountAuth(conn.id) } : {}),
     });
   }
 

@@ -1,0 +1,302 @@
+// Hand-rolled OAuth mechanics for MCP server auth: RFC 9728 protected-resource
+// discovery, RFC 8414 authorization-server metadata (falling back to OpenID
+// Connect discovery), RFC 7591 dynamic client registration, RFC 7636 PKCE,
+// and the authorization_code / refresh_token / client_credentials token
+// grants. Mirrors the fetch style of mcp-test.ts and github-app.ts's OAuth
+// exchange/refresh — no MCP SDK or OAuth client library dependency.
+//
+// Deliberately free of any `cloudflare:workers` import (unlike crypto.ts) so
+// this whole module loads under plain Vitest: packState/unpackState take
+// their HMAC secret as an explicit parameter instead of reading
+// env.SESSION_SECRET themselves, keeping every export here a pure function
+// testable without a Workers runtime. Callers (src/routes/api.ts) pass
+// env.SESSION_SECRET in.
+
+function b64url(bytes: Uint8Array): string {
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function b64urlDecode(s: string): Uint8Array {
+  const bin = atob(s.replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+}
+
+// --- endpoint discovery ---
+
+export interface OAuthEndpoints {
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+  registrationEndpoint?: string;
+}
+
+async function fetchJson(url: string): Promise<Record<string, unknown> | null> {
+  try {
+    const res = await fetch(url, { headers: { accept: 'application/json' } });
+    if (!res.ok) return null;
+    return (await res.json()) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+export async function discoverOAuthEndpoints(mcpServerUrl: string): Promise<OAuthEndpoints> {
+  const origin = new URL(mcpServerUrl).origin;
+
+  // RFC 9728: the MCP server names which authorization server(s) protect it.
+  // Fall back to the MCP server's own origin as the authorization server —
+  // the MCP spec's baseline for servers that are their own authorization
+  // server.
+  const resource = await fetchJson(`${origin}/.well-known/oauth-protected-resource`);
+  const servers = resource?.authorization_servers;
+  const authServer =
+    Array.isArray(servers) && typeof servers[0] === 'string' ? (servers[0] as string) : origin;
+
+  // RFC 8414, falling back to OpenID Connect discovery for authorization
+  // servers that only publish that document.
+  const metadata =
+    (await fetchJson(`${authServer}/.well-known/oauth-authorization-server`)) ??
+    (await fetchJson(`${authServer}/.well-known/openid-configuration`));
+  const authorizationEndpoint = metadata?.authorization_endpoint;
+  const tokenEndpoint = metadata?.token_endpoint;
+  if (typeof authorizationEndpoint !== 'string' || typeof tokenEndpoint !== 'string') {
+    throw new Error(
+      `could not discover OAuth endpoints for ${authServer} (no oauth-authorization-server or openid-configuration metadata)`,
+    );
+  }
+  const registrationEndpoint =
+    typeof metadata?.registration_endpoint === 'string'
+      ? metadata.registration_endpoint
+      : undefined;
+  return { authorizationEndpoint, tokenEndpoint, registrationEndpoint };
+}
+
+// --- dynamic client registration (RFC 7591) ---
+
+export interface RegisteredClient {
+  clientId: string;
+  clientSecret?: string;
+}
+
+export async function registerOAuthClient(
+  registrationEndpoint: string,
+  redirectUri: string,
+): Promise<RegisteredClient> {
+  const res = await fetch(registrationEndpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({
+      redirect_uris: [redirectUri],
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'client_secret_post',
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(
+      `dynamic client registration failed: HTTP ${res.status} ${(await res.text()).slice(0, 300)}`,
+    );
+  }
+  const data = (await res.json()) as { client_id?: string; client_secret?: string };
+  if (!data.client_id) throw new Error('dynamic client registration did not return a client_id');
+  return { clientId: data.client_id, clientSecret: data.client_secret };
+}
+
+// --- PKCE (RFC 7636) ---
+
+export interface Pkce {
+  verifier: string;
+  challenge: string;
+}
+
+export async function generatePkce(): Promise<Pkce> {
+  const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  return { verifier, challenge: b64url(new Uint8Array(digest)) };
+}
+
+// --- signed state (no server-side "pending flow" table) ---
+
+export interface OAuthStatePayload {
+  connectionId: number;
+  verifier: string;
+}
+
+const STATE_TTL_MS = 10 * 60_000;
+
+async function hmacKey(secret: string): Promise<CryptoKey> {
+  return crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign', 'verify'],
+  );
+}
+
+// Opaque state: base64url(json) + '.' + base64url(hmac). The expiry (now +
+// 10min) travels inside the signed payload, so a tampered or stale state is
+// simply rejected by unpackState — nothing to clean up server-side.
+export async function packState(payload: OAuthStatePayload, secret: string): Promise<string> {
+  const body = b64url(
+    new TextEncoder().encode(JSON.stringify({ ...payload, exp: Date.now() + STATE_TTL_MS })),
+  );
+  const sig = b64url(
+    new Uint8Array(
+      await crypto.subtle.sign('HMAC', await hmacKey(secret), new TextEncoder().encode(body)),
+    ),
+  );
+  return `${body}.${sig}`;
+}
+
+export async function unpackState(
+  state: string,
+  secret: string,
+): Promise<OAuthStatePayload | null> {
+  const [body, sig] = state.split('.');
+  if (!body || !sig) return null;
+  let valid: boolean;
+  try {
+    valid = await crypto.subtle.verify(
+      'HMAC',
+      await hmacKey(secret),
+      b64urlDecode(sig),
+      new TextEncoder().encode(body),
+    );
+  } catch {
+    return null;
+  }
+  if (!valid) return null;
+  let parsed: { connectionId?: unknown; verifier?: unknown; exp?: unknown };
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(b64urlDecode(body)));
+  } catch {
+    return null;
+  }
+  if (
+    typeof parsed.connectionId !== 'number' ||
+    typeof parsed.verifier !== 'string' ||
+    typeof parsed.exp !== 'number'
+  ) {
+    return null;
+  }
+  if (Date.now() > parsed.exp) return null;
+  return { connectionId: parsed.connectionId, verifier: parsed.verifier };
+}
+
+// --- token grants ---
+
+export interface TokenResult {
+  accessToken: string;
+  refreshToken?: string;
+  expiresAt?: string; // ISO-8601 absolute expiry
+  scope?: string;
+}
+
+function expiresAtFrom(expiresIn: unknown): string | undefined {
+  const seconds = typeof expiresIn === 'number' ? expiresIn : Number(expiresIn);
+  if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
+  return new Date(Date.now() + seconds * 1000).toISOString();
+}
+
+// Standard OAuth 2 token endpoints take application/x-www-form-urlencoded
+// (RFC 6749), unlike the JSON APIs mcp-test.ts/github-app.ts otherwise talk
+// to. Returns null only on a network-level failure — a non-2xx response with
+// a JSON error body still parses, so callers can surface error_description.
+async function tokenRequest(
+  tokenEndpoint: string,
+  params: Record<string, string>,
+): Promise<Record<string, unknown> | null> {
+  let res: Response;
+  try {
+    res = await fetch(tokenEndpoint, {
+      method: 'POST',
+      headers: { accept: 'application/json' },
+      body: new URLSearchParams(params),
+    });
+  } catch {
+    return null;
+  }
+  try {
+    return (await res.json()) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function describeTokenError(data: Record<string, unknown> | null): string {
+  return typeof data?.error_description === 'string'
+    ? data.error_description
+    : typeof data?.error === 'string'
+      ? data.error
+      : 'no access_token returned';
+}
+
+export async function exchangeAuthorizationCode(
+  tokenEndpoint: string,
+  code: string,
+  verifier: string,
+  redirectUri: string,
+  clientId: string,
+  clientSecret?: string,
+): Promise<TokenResult> {
+  const data = await tokenRequest(tokenEndpoint, {
+    grant_type: 'authorization_code',
+    code,
+    redirect_uri: redirectUri,
+    client_id: clientId,
+    code_verifier: verifier,
+    ...(clientSecret ? { client_secret: clientSecret } : {}),
+  });
+  if (!data || typeof data.access_token !== 'string') {
+    throw new Error(`OAuth code exchange failed: ${describeTokenError(data)}`);
+  }
+  return {
+    accessToken: data.access_token,
+    refreshToken: typeof data.refresh_token === 'string' ? data.refresh_token : undefined,
+    expiresAt: expiresAtFrom(data.expires_in),
+    scope: typeof data.scope === 'string' ? data.scope : undefined,
+  };
+}
+
+// Null on any failure (revoked, expired, or rotated elsewhere) — callers set
+// oauth_needs_reauth and drop the stored credential, mirroring
+// refreshUserToken's contract in github-app.ts.
+export async function refreshOAuthToken(
+  tokenEndpoint: string,
+  refreshToken: string,
+  clientId: string,
+  clientSecret?: string,
+): Promise<TokenResult | null> {
+  const data = await tokenRequest(tokenEndpoint, {
+    grant_type: 'refresh_token',
+    refresh_token: refreshToken,
+    client_id: clientId,
+    ...(clientSecret ? { client_secret: clientSecret } : {}),
+  });
+  if (!data || typeof data.access_token !== 'string') return null;
+  return {
+    accessToken: data.access_token,
+    refreshToken: typeof data.refresh_token === 'string' ? data.refresh_token : undefined,
+    expiresAt: expiresAtFrom(data.expires_in),
+  };
+}
+
+export async function fetchClientCredentialsToken(
+  tokenEndpoint: string,
+  clientId: string,
+  clientSecret: string,
+  scope?: string,
+): Promise<{ accessToken: string; expiresAt?: string }> {
+  const data = await tokenRequest(tokenEndpoint, {
+    grant_type: 'client_credentials',
+    client_id: clientId,
+    client_secret: clientSecret,
+    ...(scope ? { scope } : {}),
+  });
+  if (!data || typeof data.access_token !== 'string') {
+    throw new Error(`client-credentials token request failed: ${describeTokenError(data)}`);
+  }
+  return { accessToken: data.access_token, expiresAt: expiresAtFrom(data.expires_in) };
+}
