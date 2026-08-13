@@ -299,19 +299,22 @@ export function TaskPage() {
       {task.status === 'approved' ? (
         <div className="mt-4 flex flex-col gap-3">
           {task.repos.map((r) => {
+            const abandoned = r.feature_status === 'abandoned';
             const stopped = !r.pr_number && GENERATION_STOPPED.has(r.feature_status ?? '');
-            const tone = stopped
+            const tone = stopped || abandoned
               ? 'red'
               : r.feature_status === 'merged' || r.pr_number
                 ? 'on'
                 : 'running';
             const label = stopped
               ? 'Generation stopped'
-              : r.feature_status === 'merged'
-                ? 'Merged'
-                : r.pr_number
-                  ? `PR #${r.pr_number}`
-                  : 'Generating';
+              : abandoned
+                ? 'Abandoned'
+                : r.feature_status === 'merged'
+                  ? 'Merged'
+                  : r.pr_number
+                    ? `PR #${r.pr_number}`
+                    : 'Generating';
             return (
               <div key={r.repository_id} className="rounded-xl bg-raised/40 p-3">
                 <div className="flex flex-wrap items-center gap-2">

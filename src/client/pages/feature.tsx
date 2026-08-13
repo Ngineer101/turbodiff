@@ -393,6 +393,21 @@ export default function FeaturePage() {
     },
     onError: onApiError,
   });
+  const abandon = useMutation({
+    mutationFn: () =>
+      api.post<{ ok: boolean; branchDeleted?: boolean }>(
+        `/api/factory/features/${id}/abandon`,
+      ),
+    onSuccess: (result) => {
+      toast.success(
+        result.branchDeleted === false
+          ? 'Pull request closed (branch could not be deleted — check GitHub)'
+          : 'Pull request closed and branch deleted',
+      );
+      refresh();
+    },
+    onError: onApiError,
+  });
   const retryGeneration = useMutation({
     mutationFn: () => api.post(`/api/factory/features/${id}/retry`),
     onSuccess: () => {
@@ -521,6 +536,19 @@ export default function FeaturePage() {
               busy={merge.isPending}
             >
               Merge pull request
+            </ConfirmButton>
+          ) : null}
+          {prState === 'open' ? (
+            <ConfirmButton
+              className="w-full sm:w-auto"
+              variant="danger"
+              title="Abandon this pull request?"
+              description={`This closes PR #${data.feature.pr_number} on ${data.repo} without merging and deletes its branch. This cannot be undone.`}
+              confirmLabel="Abandon"
+              onConfirm={() => abandon.mutate()}
+              busy={abandon.isPending}
+            >
+              Abandon
             </ConfirmButton>
           ) : null}
           {pendingCount > 0 || batchRunning ? (

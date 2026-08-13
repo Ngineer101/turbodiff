@@ -1137,6 +1137,59 @@ export function createApiRoutes() {
     return c.json({ ok: true });
   });
 
+  // Abandon a PR from the cockpit: closes it without merging and best-effort
+  // deletes the source branch. Closed with the clicking user's own OAuth token
+  // when possible (same attribution rationale as Merge), falling back to the
+  // App installation token.
+  app.post('/factory/features/:id/abandon', async (c) => {
+    const id = Number(c.req.param('id'));
+    const feature = Number.isInteger(id) ? await getFeature(id) : null;
+    const repo = feature ? await getRepoById(feature.repository_id) : null;
+    if (!feature || !repo || !c.get('user').installationIds.includes(repo.installation_id)) {
+      return c.json({ error: 'unknown feature' }, 404);
+    }
+    if (!feature.pr_number) return c.json({ error: 'no pull request yet' }, 409);
+    const appToken = await installationToken(repo.installation_id);
+    const userToken = c.get('user').session.ghToken;
+    const closePath = `/repos/${repo.owner}/${repo.name}/pulls/${feature.pr_number}`;
+    const closeBody = { method: 'PATCH' as const, body: JSON.stringify({ state: 'closed' }) };
+    try {
+      await gh(userToken || appToken, closePath, closeBody);
+    } catch (err) {
+      if (!userToken) {
+        console.error(`turbodiff: cockpit abandon failed for feature ${id}:`, err);
+        return c.json({ error: 'abandon failed — check the PR on GitHub' }, 502);
+      }
+      console.warn(`turbodiff: user-token abandon failed for feature ${id}, retrying as app:`, err);
+      try {
+        await gh(appToken, closePath, closeBody);
+      } catch (appErr) {
+        console.error(`turbodiff: cockpit abandon failed for feature ${id}:`, appErr);
+        return c.json({ error: 'abandon failed — check the PR on GitHub' }, 502);
+      }
+    }
+    // Branch delete is best-effort: already-gone, protected, or a null branch
+    // on older rows must not turn a successful PR close into a reported failure.
+    let branchDeleted = false;
+    if (feature.branch) {
+      try {
+        await gh(
+          userToken || appToken,
+          `/repos/${repo.owner}/${repo.name}/git/refs/heads/${encodeURIComponent(feature.branch)}`,
+          { method: 'DELETE' },
+        );
+        branchDeleted = true;
+      } catch (err) {
+        console.warn(`turbodiff: branch delete failed for feature ${id}:`, err);
+      }
+    }
+    // Reflect the abandon immediately (the closed webhook also fires, but sets
+    // 'pr_closed' since it can't distinguish this from a manual GitHub close —
+    // this explicit update after it is what makes 'abandoned' stick).
+    await updateFeature(feature.id, { status: 'abandoned' });
+    return c.json({ ok: true, branchDeleted });
+  });
+
   // --- Agents: list, create, edit, delete + MCP connections ---
 
   // Agents are generic, not per-organization: every installation carries the
