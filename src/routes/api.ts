@@ -85,6 +85,7 @@ import {
   type TaskRepoStatusRow,
 } from '../lib/db.ts';
 import { requireUser, type AuthedUser } from '../lib/auth.ts';
+import { certificateUrl } from '../lib/certificate.ts';
 import { syncInstallationRepos } from '../lib/repo-sync.ts';
 import { approvePlan } from '../lib/planner.ts';
 import {
@@ -733,6 +734,7 @@ export function createApiRoutes() {
       reviews: [],
       comments: [],
       demo: null,
+      certificate_url: null,
       criteria: [],
       verification: null,
       runs: [],
@@ -741,6 +743,7 @@ export function createApiRoutes() {
     // exactly the case where an advanced user most wants the full log.
     base.runs = (await listAgentRunsForFeature(feature.id)).map(serializeAgentRun);
     if (!feature.pr_number) return c.json(base);
+    base.certificate_url = await certificateUrl(feature.id);
 
     const [plan, verification, token, cockpitComments] = await Promise.all([
       getPlanByFeatureId(feature.id),

@@ -179,6 +179,8 @@ export interface ApiFeatureDetail {
   reviews: { state: string; body: string; author: string | null }[];
   comments: ApiCockpitComment[];
   demo: { url: string; caption: string | null } | null;
+  // Public shareable "Proof of Build" page; null until a PR exists.
+  certificate_url: string | null;
   criteria: {
     text: string;
     verdict: string | null;

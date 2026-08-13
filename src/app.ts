@@ -6,6 +6,8 @@ import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { PrReviewer } from './agents/pr-reviewer.ts';
 import { timingSafeEqual, verifyArtifactSig } from './lib/crypto.ts';
+import { certificateSigKey, loadCertificateData } from './lib/certificate.ts';
+import { renderCertificatePage } from './routes/certificate-page.tsx';
 import {
   connectionSnapshot,
   createFeature,
@@ -84,6 +86,19 @@ app.get('/artifacts/*', async (c) => {
       'cache-control': 'public, max-age=31536000, immutable',
     },
   });
+});
+
+// Shareable "Proof of Build" certificate for a factory feature: the latest
+// verification evidence rendered as a public page. Same capability-URL scheme
+// as /artifacts/* — the signature over cert/<id> is the only credential.
+app.get('/b/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id) || id <= 0) return c.notFound();
+  const sig = c.req.query('sig') ?? '';
+  if (!(await verifyArtifactSig(certificateSigKey(id), sig))) return c.notFound();
+  const data = await loadCertificateData(id);
+  if (!data) return c.notFound();
+  return c.html(renderCertificatePage(data));
 });
 
 // Dispatches one configured agent against one PR and records the review row.
