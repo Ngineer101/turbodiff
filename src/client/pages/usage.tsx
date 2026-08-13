@@ -15,18 +15,18 @@ export function UsagePage() {
 
   return (
     <>
-      <PageTitle>usage</PageTitle>
+      <PageTitle>Usage</PageTitle>
 
       <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile
           index={0}
-          label="cost this month"
+          label="Cost this month"
           value={fmtUsd(data.stats.month_cost_usd)}
           sub={monthLabel(data.month)}
         />
         <StatTile
           index={1}
-          label="reviews this month"
+          label="Reviews this month"
           value={data.stats.month_reviews}
           sub={
             data.stats.running > 0 ? (
@@ -36,7 +36,7 @@ export function UsagePage() {
         />
         <StatTile
           index={2}
-          label="avg review time"
+          label="Average review time"
           value={data.stats.avg_duration_s !== null ? fmtDuration(data.stats.avg_duration_s) : '—'}
           sub={
             <>
@@ -49,24 +49,24 @@ export function UsagePage() {
         />
         <StatTile
           index={3}
-          label="connected repos"
+          label="Connected repos"
           value={data.repo_count}
           sub={`${data.enabled_count} with the factory on`}
         />
       </div>
 
-      <SectionHeading>monthly cost</SectionHeading>
+      <SectionHeading>Monthly cost</SectionHeading>
       {data.months.length === 0 ? (
         <EmptyState>No reviews yet — costs will accumulate here per calendar month.</EmptyState>
       ) : (
         <Table>
           <thead>
             <tr>
-              <Th>month</Th>
+              <Th>Month</Th>
               <Th className="w-2/5" />
-              <Th numeric>cost</Th>
-              <Th numeric>reviews</Th>
-              <Th numeric>tokens</Th>
+              <Th numeric>Cost</Th>
+              <Th numeric>Reviews</Th>
+              <Th numeric>Tokens</Th>
             </tr>
           </thead>
           <tbody>
@@ -93,14 +93,14 @@ export function UsagePage() {
       {data.agent_usage.length > 0 ? (
         <>
           <SectionHeading aside={<Muted>{monthLabel(data.month)}</Muted>}>
-            cost by agent
+            Cost by agent
           </SectionHeading>
           <Table>
             <thead>
               <tr>
-                <Th>agent</Th>
-                <Th numeric>reviews</Th>
-                <Th numeric>cost</Th>
+                <Th>Agent</Th>
+                <Th numeric>Reviews</Th>
+                <Th numeric>Cost</Th>
               </tr>
             </thead>
             <tbody>
@@ -116,7 +116,7 @@ export function UsagePage() {
         </>
       ) : null}
 
-      <SectionHeading>recent reviews</SectionHeading>
+      <SectionHeading>Recent reviews</SectionHeading>
       {data.recent_reviews.length === 0 ? (
         <EmptyState>
           No reviews yet — factory-generated pull requests are reviewed automatically and show up
@@ -130,12 +130,12 @@ export function UsagePage() {
         aside={
           data.repo_count > 0 ? (
             <Link to="/settings" className="text-[0.85rem] text-accent-bright hover:underline">
-              view all repos &rarr;
+              View all repos &rarr;
             </Link>
           ) : undefined
         }
       >
-        repositories
+        Repositories
       </SectionHeading>
       {data.repo_count === 0 ? (
         <EmptyState>
@@ -152,10 +152,10 @@ export function UsagePage() {
         <Table>
           <thead>
             <tr>
-              <Th>repository</Th>
-              <Th>factory</Th>
-              <Th numeric>reviews ({monthLabel(data.month)})</Th>
-              <Th numeric>cost ({monthLabel(data.month)})</Th>
+              <Th>Repository</Th>
+              <Th>Factory</Th>
+              <Th numeric>Reviews ({monthLabel(data.month)})</Th>
+              <Th numeric>Cost ({monthLabel(data.month)})</Th>
             </tr>
           </thead>
           <tbody>
@@ -165,9 +165,9 @@ export function UsagePage() {
                   <span className="font-mono">
                     {r.owner}/{r.name}
                   </span>{' '}
-                  {r.suspended ? <Pill tone="red">suspended</Pill> : null}
+                  {r.suspended ? <Pill tone="red">Suspended</Pill> : null}
                 </Td>
-                <Td>{r.enabled ? <Pill tone="on">on</Pill> : <Pill>off</Pill>}</Td>
+                <Td>{r.enabled ? <Pill tone="on">On</Pill> : <Pill>Off</Pill>}</Td>
                 <Td numeric>{r.reviews > 0 ? r.reviews : <Muted>0</Muted>}</Td>
                 <Td numeric>{r.cost_usd > 0 ? fmtUsd(r.cost_usd) : <Muted>—</Muted>}</Td>
               </tr>

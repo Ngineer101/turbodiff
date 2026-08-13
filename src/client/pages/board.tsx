@@ -36,7 +36,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popove
 type ColumnKey = 'todo' | 'in_progress' | 'done';
 
 function onApiError(err: unknown) {
-  toast.error(err instanceof ApiError ? err.message : 'request failed');
+  toast.error(err instanceof ApiError ? err.message : 'Request failed');
 }
 
 function QuickAdd({ board }: { board: ApiBoard }) {
@@ -74,7 +74,7 @@ function QuickAdd({ board }: { board: ApiBoard }) {
         ref={inputRef}
         value={title}
         onChange={(e) => setTitle(e.target.value)}
-        placeholder="add a todo…  ( / )"
+        placeholder="Add a todo…  ( / )"
         aria-label="New todo title"
         maxLength={200}
         className="flex-1"
@@ -138,7 +138,7 @@ function StartDialog({
       return api.post(`/api/todos/${todo.id}/start`, { title, requirements, attachments });
     },
     onSuccess: () => {
-      toast.success('task started — the planning agent is on it');
+      toast.success('Task started — the planning agent is on it');
       void queryClient.invalidateQueries({ queryKey: ['board'] });
       onClose();
     },
@@ -154,10 +154,10 @@ function StartDialog({
             if (requirements.trim() && todo.repos.length > 0) start.mutate();
           }}
         >
-          <Field label="repositories">
+          <Field label="Repositories">
             <RepoChips todo={todo} board={board} />
           </Field>
-          <Field label="title">
+          <Field label="Title">
             <Input
               value={title}
               onChange={(e) => setTitle(e.target.value)}
@@ -165,7 +165,7 @@ function StartDialog({
               maxLength={200}
             />
           </Field>
-          <Field label="requirements">
+          <Field label="Requirements">
             <Textarea
               value={requirements}
               onChange={(e) => setRequirements(e.target.value)}
@@ -193,7 +193,7 @@ function StartDialog({
               size="sm"
               onClick={() => fileInputRef.current?.click()}
             >
-              <Paperclip className="size-3.5" aria-hidden /> attach files (pdf, images)
+              <Paperclip className="size-3.5" aria-hidden /> Attach files (PDF, images)
             </Button>
             {files.length > 0 ? (
               <div className="mt-2 flex flex-wrap gap-1.5">
@@ -224,7 +224,7 @@ function StartDialog({
               type="submit"
               loading={start.isPending}
               disabled={todo.repos.length === 0}
-              title={todo.repos.length === 0 ? 'select at least one repository first' : undefined}
+              title={todo.repos.length === 0 ? 'Select at least one repository first' : undefined}
             >
               Start planning
             </Button>
@@ -269,7 +269,7 @@ function RepoPickerPopover({ todo, board }: { todo: ApiTodo; board: ApiBoard }) 
           )}
         >
           <Plus className="size-3" aria-hidden />
-          {todo.repos.length === 0 ? 'repos' : 'edit'}
+          {todo.repos.length === 0 ? 'Repos' : 'Edit'}
         </button>
       </PopoverTrigger>
       <PopoverContent>
@@ -282,7 +282,7 @@ function RepoPickerPopover({ todo, board }: { todo: ApiTodo; board: ApiBoard }) 
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="filter repositories…"
+              placeholder="Filter repositories…"
               aria-label="Filter repositories"
               className="py-1.5 pl-8 text-xs sm:py-1.5 sm:pl-8"
             />
@@ -290,7 +290,7 @@ function RepoPickerPopover({ todo, board }: { todo: ApiTodo; board: ApiBoard }) 
         ) : null}
         <div className="max-h-64 overflow-y-auto" role="listbox" aria-label="Repositories">
           {filtered.length === 0 ? (
-            <p className="px-2 py-3 text-center text-xs text-mute">no repositories match</p>
+            <p className="px-2 py-3 text-center text-xs text-mute">No repositories match.</p>
           ) : (
             filtered.map((r) => {
               const selected = selectedIds.includes(r.id);
@@ -322,7 +322,7 @@ function RepoPickerPopover({ todo, board }: { todo: ApiTodo; board: ApiBoard }) 
           )}
         </div>
         <p className="mt-1.5 border-t border-line px-2 pt-1.5 text-[11px] text-mute/70">
-          {selectedIds.length}/3 selected — a task targets up to 3 repos
+          {selectedIds.length}/3 selected — a task targets up to 3 repos.
         </p>
       </PopoverContent>
     </Popover>
@@ -396,7 +396,7 @@ function TaskCard({ task }: { task: ApiPlan }) {
   const archive = useMutation({
     mutationFn: () => api.post(`/api/tasks/${task.id}/archive`, { archived: true }),
     onSuccess: () => {
-      toast.success('task archived');
+      toast.success('Task archived');
       void queryClient.invalidateQueries({ queryKey: ['board'] });
     },
     onError: onApiError,
@@ -440,7 +440,7 @@ function TaskCard({ task }: { task: ApiPlan }) {
                     : 'red'
               }
             >
-              {r.owner}/{r.name} verify: {r.verification!.status}
+              {r.owner}/{r.name} Verify: {r.verification!.status}
             </Pill>
           ))}
       </div>
@@ -532,7 +532,7 @@ function RepoFilter({
           )}
         >
           <FolderGit2 className="size-3.5 shrink-0" aria-hidden />
-          <span className="max-w-44 truncate">{active ? active.name : 'all repos'}</span>
+          <span className="max-w-44 truncate">{active ? active.name : 'All repos'}</span>
           <ChevronDown className="size-3.5 shrink-0 opacity-60" aria-hidden />
         </button>
       </PopoverTrigger>
@@ -546,7 +546,7 @@ function RepoFilter({
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="filter repositories…"
+              placeholder="Filter repositories…"
               aria-label="Filter repositories"
               className="py-1.5 pl-8 text-xs sm:py-1.5 sm:pl-8"
             />
@@ -563,10 +563,10 @@ function RepoFilter({
             <span className="flex size-4 shrink-0 items-center justify-center">
               {!active ? <Check className="size-3.5" aria-hidden /> : null}
             </span>
-            all repositories
+            All repositories
           </button>
           {filtered.length === 0 ? (
-            <p className="px-2 py-3 text-center text-xs text-mute">no repositories match</p>
+            <p className="px-2 py-3 text-center text-xs text-mute">No repositories match.</p>
           ) : (
             filtered.map((r) => {
               const selected = r.id === value;
@@ -635,7 +635,7 @@ export function BoardPage() {
   const show = (key: ColumnKey) => filter === 'all' || filter === key;
   // Generic empty copy misleads while a repo filter is active — the backlog
   // isn't empty, it's filtered.
-  const filteredEmpty = 'nothing for this repository';
+  const filteredEmpty = 'Nothing for this repository.';
 
   const columns: { key: ColumnKey; el: ReactNode }[] = [
     {
@@ -643,9 +643,9 @@ export function BoardPage() {
       el: (
         <Column
           key="todo"
-          title="to do"
+          title="To do"
           count={todos.length}
-          empty={repoFilter !== null ? filteredEmpty : 'backlog is empty — add todos above'}
+          empty={repoFilter !== null ? filteredEmpty : 'The backlog is empty — add todos above.'}
         >
           {todos.map((t) => (
             <TodoCard key={t.id} todo={t} board={data} />
@@ -658,9 +658,9 @@ export function BoardPage() {
       el: (
         <Column
           key="in_progress"
-          title="in progress"
+          title="In progress"
           count={inProgress.length}
-          empty={repoFilter !== null ? filteredEmpty : 'start a todo to put the agents to work'}
+          empty={repoFilter !== null ? filteredEmpty : 'Start a todo to put the agents to work.'}
         >
           {inProgress.map((t) => (
             <TaskCard key={t.id} task={t} />
@@ -673,9 +673,9 @@ export function BoardPage() {
       el: (
         <Column
           key="done"
-          title="done"
+          title="Done"
           count={done.length}
-          empty={repoFilter !== null ? filteredEmpty : 'merged tasks land here'}
+          empty={repoFilter !== null ? filteredEmpty : 'Merged tasks land here.'}
         >
           {done.map((t) => (
             <TaskCard key={t.id} task={t} />
@@ -697,7 +697,7 @@ export function BoardPage() {
           </Muted>
         }
       >
-        board
+        Board
       </PageTitle>
 
       <div className="mt-5 flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
@@ -717,10 +717,10 @@ export function BoardPage() {
       >
         {(
           [
-            ['all', 'all'],
-            ['todo', 'to do'],
-            ['in_progress', 'in progress'],
-            ['done', 'done'],
+            ['all', 'All'],
+            ['todo', 'To do'],
+            ['in_progress', 'In progress'],
+            ['done', 'Done'],
           ] as const
         ).map(([key, label]) => (
           <button

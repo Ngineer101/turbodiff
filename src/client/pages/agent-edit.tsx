@@ -7,11 +7,10 @@ import { agentQuery } from '../lib/queries.ts';
 import { AgentForm, type AgentFormValues } from '../components/agent-form.tsx';
 import { ConfirmButton } from '../components/confirm-button.tsx';
 import { Muted, PageTitle, SectionHeading } from '../components/section.tsx';
-import { Button } from '../components/ui/button.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 
 function onApiError(err: unknown) {
-  toast.error(err instanceof ApiError ? err.message : 'request failed');
+  toast.error(err instanceof ApiError ? err.message : 'Request failed');
 }
 
 export function AgentEditPage() {
@@ -25,27 +24,27 @@ export function AgentEditPage() {
   const save = useMutation({
     mutationFn: (values: AgentFormValues) => api.put(`/api/agents/${id}`, values),
     onSuccess: () => {
-      toast.success('agent saved');
-      queryClient.invalidateQueries({ queryKey: ['agents'] });
-      queryClient.invalidateQueries({ queryKey: ['agent', id] });
-      navigate({ to: '/agents' });
+      toast.success('Agent saved');
+      void queryClient.invalidateQueries({ queryKey: ['agents'] });
+      void queryClient.invalidateQueries({ queryKey: ['agent', id] });
+      void navigate({ to: '/agents' });
     },
-    onError: (err) => setError(err instanceof ApiError ? err.message : 'request failed'),
+    onError: (err) => setError(err instanceof ApiError ? err.message : 'Request failed'),
   });
   const remove = useMutation({
     mutationFn: () => api.delete(`/api/agents/${id}`),
     onSuccess: () => {
-      toast.success('agent deleted — its review history stays');
-      queryClient.invalidateQueries({ queryKey: ['agents'] });
-      navigate({ to: '/agents' });
+      toast.success('Agent deleted — its review history stays');
+      void queryClient.invalidateQueries({ queryKey: ['agents'] });
+      void navigate({ to: '/agents' });
     },
     onError: onApiError,
   });
 
   return (
     <>
-      <PageTitle aside={data.agent.is_builtin ? <Pill>built-in</Pill> : undefined}>
-        edit agent
+      <PageTitle aside={data.agent.is_builtin ? <Pill>Built-in</Pill> : undefined}>
+        Edit agent
       </PageTitle>
       <AgentForm
         initial={{
@@ -76,9 +75,9 @@ export function AgentEditPage() {
           </ConfirmButton>
         </div>
       ) : null}
-      <SectionHeading aside={<Muted>MCP</Muted>}>attached integrations</SectionHeading>
+      <SectionHeading aside={<Muted>MCP</Muted>}>Attached integrations</SectionHeading>
       {data.connections.length === 0 ? (
-        <Muted className="block">none attached</Muted>
+        <Muted className="block">None attached.</Muted>
       ) : (
         <div className="flex flex-wrap gap-1.5">
           {data.connections.map((conn) => (
@@ -89,7 +88,7 @@ export function AgentEditPage() {
       <p className="mt-2 text-xs text-mute">
         Connections are managed centrally on the{' '}
         <Link to="/integrations" className="text-accent-bright hover:underline">
-          mcp &amp; integrations
+          MCP &amp; integrations
         </Link>{' '}
         page — attach or detach this agent there.
       </p>
