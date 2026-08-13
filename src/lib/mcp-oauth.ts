@@ -36,7 +36,8 @@ async function fetchJson(url: string): Promise<Record<string, unknown> | null> {
     const res = await fetch(url, { headers: { accept: 'application/json' } });
     if (!res.ok) return null;
     return (await res.json()) as Record<string, unknown>;
-  } catch {
+  } catch (err) {
+    console.warn(`turbodiff: oauth metadata fetch failed for ${url}:`, err);
     return null;
   }
 }
@@ -215,12 +216,17 @@ async function tokenRequest(
       headers: { accept: 'application/json' },
       body: new URLSearchParams(params),
     });
-  } catch {
+  } catch (err) {
+    console.warn(`turbodiff: oauth token request failed for ${tokenEndpoint}:`, err);
     return null;
   }
   try {
     return (await res.json()) as Record<string, unknown>;
-  } catch {
+  } catch (err) {
+    console.warn(
+      `turbodiff: oauth token response was not JSON from ${tokenEndpoint} (HTTP ${res.status}):`,
+      err,
+    );
     return null;
   }
 }

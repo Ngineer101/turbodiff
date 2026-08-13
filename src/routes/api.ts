@@ -1273,7 +1273,8 @@ export function createApiRoutes() {
     let endpoints: Awaited<ReturnType<typeof discoverOAuthEndpoints>>;
     try {
       endpoints = await discoverOAuthEndpoints(conn.url);
-    } catch {
+    } catch (err) {
+      console.error(`turbodiff: oauth discovery failed for connection ${conn.id}:`, err);
       return c.redirect('/integrations?oauth=error&reason=discovery_failed');
     }
 
@@ -1287,7 +1288,11 @@ export function createApiRoutes() {
       try {
         const registered = await registerOAuthClient(endpoints.registrationEndpoint, redirectUri);
         cache = { ...cache, clientId: registered.clientId, clientSecret: registered.clientSecret };
-      } catch {
+      } catch (err) {
+        console.error(
+          `turbodiff: oauth client registration failed for connection ${conn.id}:`,
+          err,
+        );
         return c.redirect('/integrations?oauth=error&reason=registration_failed');
       }
     }
@@ -1349,7 +1354,8 @@ export function createApiRoutes() {
         cache.clientId,
         cache.clientSecret,
       );
-    } catch {
+    } catch (err) {
+      console.error(`turbodiff: oauth code exchange failed for connection ${conn.id}:`, err);
       return c.redirect('/integrations?oauth=error&reason=exchange_failed');
     }
 
