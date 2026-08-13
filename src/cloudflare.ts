@@ -7,6 +7,12 @@
 //
 // https://flueframework.com/docs/guide/cloudflare-target/#extending-cloudflarets-entrypoint
 
+import {
+  startAutomationRun,
+  AutomationWorkflow,
+  type AutomationQueueMessage,
+} from './lib/automation-workflow.ts';
+import { pollAutomations } from './lib/automation-poll.ts';
 import { startFix, FixWorkflow } from './lib/fix-workflow.ts';
 import { type FixQueueMessage } from './lib/fixer.ts';
 import { startGeneration, type GenQueueMessage } from './lib/generation-workflow.ts';
@@ -18,18 +24,24 @@ import { type VerifyQueueMessage } from './lib/verifier.ts';
 // wrangler.jsonc under containers/durable_objects with migration tag v2.
 export { Sandbox } from '@cloudflare/sandbox';
 
-// Generation and verification run as durable Workflows (bindings
-// GEN_WORKFLOW / VERIFY_WORKFLOW in wrangler.jsonc): memoized steps, bounded
-// retries, no wall-clock kills.
+// Generation, verification, and automations run as durable Workflows
+// (bindings GEN_WORKFLOW / VERIFY_WORKFLOW / AUTOMATION_WORKFLOW in
+// wrangler.jsonc): memoized steps, bounded retries, no wall-clock kills.
 export { GenerationWorkflow } from './lib/generation-workflow.ts';
 export { VerificationWorkflow };
 export { FixWorkflow };
+export { AutomationWorkflow };
 
 // Fix and generation runs take minutes, far beyond what a webhook or intake
 // request can wait on, so producers enqueue and these consumers do the work.
 // Both processors never throw (failures land in fix_attempts / features), so
 // every message acks — a broken run is not retried into repeat token spend.
-type FactoryMessage = FixQueueMessage | GenQueueMessage | PlanQueueMessage | VerifyQueueMessage;
+type FactoryMessage =
+  | AutomationQueueMessage
+  | FixQueueMessage
+  | GenQueueMessage
+  | PlanQueueMessage
+  | VerifyQueueMessage;
 
 export default {
   async queue(batch: MessageBatch<FactoryMessage>): Promise<void> {
@@ -52,6 +64,9 @@ export default {
           // the consumer wall clock routinely (launch discovery + demos).
           await startVerification(body.featureId);
           break;
+        case 'automation':
+          await startAutomationRun(body.automationId);
+          break;
         default:
           // Fix runs get the same no-wall-clock treatment as generation
           // and verification: the consumer just creates the instance.
@@ -59,5 +74,11 @@ export default {
       }
       message.ack();
     }
+  },
+
+  // Fixed-interval poll for due automations (src/lib/automation-poll.ts) —
+  // schedule precision is bounded by the cron interval in wrangler.jsonc.
+  async scheduled(): Promise<void> {
+    await pollAutomations();
   },
 };

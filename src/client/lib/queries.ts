@@ -3,6 +3,10 @@ import { api } from './api.ts';
 import type {
   ApiAgentDetail,
   ApiAgentsList,
+  ApiAutomationDetail,
+  ApiAutomationRunDetail,
+  ApiAutomationRunsList,
+  ApiAutomationsList,
   ApiBoard,
   ApiFeatureDetail,
   ApiIntegrations,
@@ -134,3 +138,29 @@ export const integrationsQuery = queryOptions({
   queryKey: ['integrations'],
   queryFn: () => api.get<ApiIntegrations>('/api/integrations'),
 });
+
+export const automationsQuery = queryOptions({
+  queryKey: ['automations'],
+  queryFn: () => api.get<ApiAutomationsList>('/api/automations'),
+});
+
+export const automationQuery = (id: number) =>
+  queryOptions({
+    queryKey: ['automation', id],
+    queryFn: () => api.get<ApiAutomationDetail>(`/api/automations/${id}`),
+  });
+
+export const automationRunsQuery = (id: number) =>
+  queryOptions({
+    queryKey: ['automation-runs', id],
+    queryFn: () => api.get<ApiAutomationRunsList>(`/api/automations/${id}/runs`),
+    refetchInterval: (query) =>
+      query.state.data?.runs.some((r) => r.status === 'running') ? LIVE_POLL_MS : false,
+  });
+
+export const automationRunQuery = (id: number) =>
+  queryOptions({
+    queryKey: ['automation-run', id],
+    queryFn: () => api.get<ApiAutomationRunDetail>(`/api/automations/runs/${id}`),
+    refetchInterval: (query) => (query.state.data?.run.status === 'running' ? LIVE_POLL_MS : false),
+  });

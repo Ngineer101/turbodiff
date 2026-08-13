@@ -10,7 +10,7 @@ export async function persistAgentLog(
   kind: AgentRunKind,
   content: string,
   success: boolean,
-  owner: { planId?: number; featureId?: number; fixAttemptId?: number },
+  owner: { planId?: number; featureId?: number; fixAttemptId?: number; automationRunId?: number },
 ): Promise<void> {
   const key = `logs/${kind}/${crypto.randomUUID()}.log`;
   await env.ARTIFACTS.put(key, content, {

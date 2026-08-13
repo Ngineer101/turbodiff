@@ -1,5 +1,14 @@
 import { Link, useRouterState } from '@tanstack/react-router';
-import { BarChart2, Bot, LayoutDashboard, LogOut, Plug, Settings, Sparkles } from 'lucide-react';
+import {
+  BarChart2,
+  Bot,
+  LayoutDashboard,
+  LogOut,
+  Plug,
+  Repeat,
+  Settings,
+  Sparkles,
+} from 'lucide-react';
 import type { ReactNode } from 'react';
 import { cn } from '../lib/utils.ts';
 
@@ -7,6 +16,7 @@ const NAV = [
   { to: '/', label: 'Board', icon: LayoutDashboard, exact: true },
   { to: '/agents', label: 'Agents', icon: Bot },
   { to: '/skills', label: 'Skills', icon: Sparkles },
+  { to: '/automations', label: 'Automations', icon: Repeat },
   { to: '/integrations', label: 'Integrations', icon: Plug },
   { to: '/usage', label: 'Usage', icon: BarChart2 },
   { to: '/settings', label: 'Settings', icon: Settings },
@@ -66,7 +76,7 @@ function BottomTabs() {
       aria-label="Main"
       className="fixed inset-x-0 bottom-0 z-40 border-t border-line/60 bg-bg/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
     >
-      <div className="grid grid-cols-5">
+      <div className="grid grid-cols-7">
         {NAV.map(({ to, label, icon: Icon, ...item }) => {
           const active = isActive(pathname, to, 'exact' in item && item.exact);
           return (

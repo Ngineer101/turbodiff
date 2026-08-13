@@ -19,6 +19,9 @@ import { Button } from './components/ui/button.tsx';
 import {
   agentQuery,
   agentsQuery,
+  automationQuery,
+  automationRunQuery,
+  automationsQuery,
   boardQuery,
   featureQuery,
   integrationsQuery,
@@ -33,6 +36,10 @@ import {
 import { AgentEditPage } from './pages/agent-edit.tsx';
 import { AgentNewPage } from './pages/agent-new.tsx';
 import { AgentsPage } from './pages/agents.tsx';
+import { AutomationEditPage } from './pages/automation-edit.tsx';
+import { AutomationNewPage } from './pages/automation-new.tsx';
+import { AutomationRunPage } from './pages/automation-run.tsx';
+import { AutomationsPage } from './pages/automations.tsx';
 import { BoardPage } from './pages/board.tsx';
 import { IntegrationsPage } from './pages/integrations.tsx';
 import { SettingsPage } from './pages/settings.tsx';
@@ -179,6 +186,34 @@ const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
+const automationsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/automations',
+  loader: () => queryClient.ensureQueryData(automationsQuery),
+  component: AutomationsPage,
+});
+
+const automationNewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/automations/new',
+  loader: () => queryClient.ensureQueryData(automationsQuery),
+  component: AutomationNewPage,
+});
+
+const automationEditRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/automations/$automationId/edit',
+  loader: ({ params }) => queryClient.ensureQueryData(automationQuery(Number(params.automationId))),
+  component: AutomationEditPage,
+});
+
+const automationRunRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/automations/runs/$runId',
+  loader: ({ params }) => queryClient.ensureQueryData(automationRunQuery(Number(params.runId))),
+  component: AutomationRunPage,
+});
+
 const routeTree = rootRoute.addChildren([
   boardRoute,
   taskRoute,
@@ -192,6 +227,10 @@ const routeTree = rootRoute.addChildren([
   skillNewRoute,
   skillEditRoute,
   settingsRoute,
+  automationsRoute,
+  automationNewRoute,
+  automationEditRoute,
+  automationRunRoute,
 ]);
 
 const router = createRouter({
