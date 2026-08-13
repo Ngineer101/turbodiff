@@ -410,7 +410,7 @@ export default function FeaturePage() {
   if (!data.pr) {
     const stopped = GENERATION_STOPPED.has(data.feature.status);
     return (
-      <>
+      <div className="animate-rise">
         <PageTitle
           titleClassName="text-base sm:text-xl"
           aside={
@@ -442,7 +442,7 @@ export default function FeaturePage() {
             <Muted>No pull request yet — generation is {data.feature.status}.</Muted>
           </p>
         )}
-      </>
+      </div>
     );
   }
 
@@ -461,7 +461,7 @@ export default function FeaturePage() {
   );
 
   return (
-    <>
+    <div className="animate-rise">
       <h1 className="text-base leading-snug font-medium break-words sm:text-xl">
         {data.feature.title}
       </h1>
@@ -762,6 +762,6 @@ export default function FeaturePage() {
           ) : null}
         </div>
       </div>
-    </>
+    </div>
   );
 }

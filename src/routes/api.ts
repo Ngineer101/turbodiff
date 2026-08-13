@@ -50,8 +50,10 @@ import {
   listSkills,
   listTodos,
   monthlyUsage,
+  oauthStatus,
   repoUsageForMonth,
   resolveAgentEnabled,
+  resolveConnectionAuth,
   resolveSkillEnabled,
   setAgentConnectionLink,
   setPlanArchived,
@@ -67,6 +69,7 @@ import {
   setTodoRepositories,
   todoRepositoriesForTodos,
   updateAgent,
+  updateConnectionAuth,
   updateFeature,
   updatePlan,
   updateSkill,
@@ -84,10 +87,24 @@ import {
 import { requireUser, type AuthedUser } from '../lib/auth.ts';
 import { syncInstallationRepos } from '../lib/repo-sync.ts';
 import { approvePlan } from '../lib/planner.ts';
-import { encryptionConfigured, openToken, sealToken, signArtifactKey } from '../lib/crypto.ts';
+import {
+  encryptionConfigured,
+  openJson,
+  sealJson,
+  sealToken,
+  signArtifactKey,
+} from '../lib/crypto.ts';
 import { gh } from '../tools/github.ts';
 import { installationToken } from '../lib/github-app.ts';
 import { testMcpEndpoint } from '../lib/mcp-test.ts';
+import {
+  discoverOAuthEndpoints,
+  exchangeAuthorizationCode,
+  generatePkce,
+  packState,
+  registerOAuthClient,
+  unpackState,
+} from '../lib/mcp-oauth.ts';
 import { DEFAULT_MODEL, RESERVED_AGENT_SLUGS } from '../lib/personas.ts';
 import type {
   ApiAgentDetail,
@@ -1076,7 +1093,7 @@ export function createApiRoutes() {
           name: conn.name,
           url: conn.url,
           tools: snap.tools ?? null,
-          has_auth: conn.auth_ciphertext !== null,
+          has_auth: conn.auth_type !== 'none',
         };
       }),
       encryption_configured: encryptionConfigured(),
@@ -1246,12 +1263,16 @@ export function createApiRoutes() {
           kind: conn.kind,
           url: conn.url,
           tools: snap.tools ?? null,
-          has_auth: conn.auth_ciphertext !== null,
+          has_auth: conn.auth_type !== 'none',
+          auth_type: conn.auth_type,
+          oauth_status: oauthStatus(conn),
           agent_ids: links.filter((l) => l.connection_id === conn.id).map((l) => l.agent_id),
         };
       }),
     });
   });
+
+  const AUTH_TYPES = ['none', 'bearer', 'api_key', 'client_credentials', 'oauth'];
 
   app.post('/integrations', async (c) => {
     const { installationIds } = c.get('user');
@@ -1267,6 +1288,16 @@ export function createApiRoutes() {
       .split(',')
       .map((t) => t.trim())
       .filter(Boolean);
+    // Preserves the pre-auth_type behavior for clients that only ever sent
+    // `token`: no explicit auth_type + a token means 'bearer'.
+    const rawAuthType = get('auth_type');
+    const authType = AUTH_TYPES.includes(rawAuthType) ? rawAuthType : token ? 'bearer' : 'none';
+    const headerName = get('header_name');
+    const headerValue = get('header_value');
+    const clientId = get('client_id');
+    const clientSecret = get('client_secret');
+    const tokenEndpoint = get('token_endpoint');
+    const scope = get('scope');
 
     let error: string | null = null;
     if (!installationIds.includes(installationId)) {
@@ -1275,13 +1306,44 @@ export function createApiRoutes() {
       error = 'name must be 1-31 chars: lowercase letters, digits, dashes, underscores';
     } else if (!validConnectionUrl(url)) {
       error = 'endpoint must be an https:// URL';
-    } else if (token && !encryptionConfigured()) {
+    } else if (authType !== 'none' && !encryptionConfigured()) {
       error =
-        'token storage needs the TOKEN_ENCRYPTION_KEY secret (openssl rand -hex 32, then wrangler secret put TOKEN_ENCRYPTION_KEY)';
+        'credential storage needs the TOKEN_ENCRYPTION_KEY secret (openssl rand -hex 32, then wrangler secret put TOKEN_ENCRYPTION_KEY)';
+    } else if (authType === 'api_key' && (!headerName || !headerValue)) {
+      error = 'api_key auth needs both a header name and a header value';
+    } else if (
+      authType === 'client_credentials' &&
+      (!clientId || !clientSecret || !tokenEndpoint)
+    ) {
+      error = 'client_credentials auth needs a client id, client secret, and token endpoint';
+    } else if (authType === 'client_credentials' && !validConnectionUrl(tokenEndpoint)) {
+      error = 'token endpoint must be an https:// URL';
+    } else if (authType === 'oauth' && kind !== 'mcp') {
+      // The OAuth *connect* action is MCP-only in the UI, but a bearer-auth
+      // 'api' integration behind OAuth is otherwise a legitimate config —
+      // only reject when auth_type is actually 'oauth' on a non-mcp kind.
+      error = 'OAuth auth is only available for MCP-kind integrations';
     } else if ((await listConnections([installationId])).some((conn) => conn.name === name)) {
       error = `an integration named "${name}" already exists`;
     }
     if (error) return c.json({ error }, 400);
+
+    let authCiphertext: string | null = null;
+    let authConfigCiphertext: string | null = null;
+    if (authType === 'bearer') {
+      authCiphertext = await sealToken(token);
+    } else if (authType === 'api_key') {
+      authConfigCiphertext = await sealJson({ headerName, headerValue });
+    } else if (authType === 'client_credentials') {
+      authConfigCiphertext = await sealJson({
+        clientId,
+        clientSecret,
+        tokenEndpoint,
+        scope: scope || undefined,
+      });
+    }
+    // 'oauth' starts with no config — unusable until "Connect via OAuth"
+    // completes the authorization-code flow (/oauth/start + /oauth/callback).
 
     await createConnection({
       installationId,
@@ -1289,7 +1351,9 @@ export function createApiRoutes() {
       kind,
       url,
       toolAllowlist: tools.length > 0 ? tools : null,
-      authCiphertext: token ? await sealToken(token) : null,
+      authCiphertext,
+      authType,
+      authConfigCiphertext,
     });
     return c.json({ ok: true });
   });
@@ -1302,15 +1366,25 @@ export function createApiRoutes() {
   });
 
   // MCP: handshake (initialize + tools/list) without mounting anything.
-  // API: a bearer-auth GET against the base URL, reporting the status.
+  // API: a GET against the base URL with the resolved auth header, reporting
+  // the status.
   app.post('/integrations/:id/test', async (c) => {
     const conn = await authorizedConnection(c);
     if (!conn) return c.json({ error: 'unknown integration' }, 404);
-    const token = conn.auth_ciphertext ? await openToken(conn.auth_ciphertext) : undefined;
+    let auth: { headerName: string; headerValue: string } | null;
+    try {
+      auth = await resolveConnectionAuth(conn);
+    } catch (err) {
+      return c.json<ApiConnectionTest>({
+        ok: false,
+        detail: err instanceof Error ? err.message : 'could not resolve credentials',
+        tools: [],
+      });
+    }
     if (conn.kind === 'api') {
       try {
         const res = await fetch(conn.url, {
-          headers: token ? { authorization: `Bearer ${token}` } : undefined,
+          headers: auth ? { [auth.headerName]: auth.headerValue } : undefined,
         });
         return c.json<ApiConnectionTest>({
           ok: res.ok,
@@ -1325,12 +1399,137 @@ export function createApiRoutes() {
         });
       }
     }
-    const result = await testMcpEndpoint(conn.url, token);
+    const result = await testMcpEndpoint(conn.url, auth ?? undefined);
     return c.json<ApiConnectionTest>({
       ok: result.ok,
       detail: result.detail,
       tools: result.tools ?? [],
     });
+  });
+
+  interface OAuthConfigCache {
+    clientId?: string;
+    clientSecret?: string;
+    authorizationEndpoint?: string;
+    tokenEndpoint?: string;
+    accessToken?: string;
+    refreshToken?: string;
+    scope?: string;
+  }
+
+  // Browser-navigated (not fetched by the SPA), so failures redirect back to
+  // the integrations page with a query param instead of a JSON error — the
+  // one exception is the two caller-error cases below, which 400 before any
+  // redirect makes sense.
+  app.get('/integrations/:id/oauth/start', async (c) => {
+    const conn = await authorizedConnection(c);
+    if (!conn) return c.json({ error: 'unknown integration' }, 404);
+    if (conn.kind !== 'mcp') {
+      return c.json({ error: 'OAuth connect is only available for MCP-kind integrations' }, 400);
+    }
+    if (conn.auth_type !== 'oauth') return c.json({ error: 'not an OAuth integration' }, 400);
+
+    const redirectUri = `${env.PUBLIC_BASE_URL}/api/integrations/${conn.id}/oauth/callback`;
+    let endpoints: Awaited<ReturnType<typeof discoverOAuthEndpoints>>;
+    try {
+      endpoints = await discoverOAuthEndpoints(conn.url);
+    } catch (err) {
+      console.error(`turbodiff: oauth discovery failed for connection ${conn.id}:`, err);
+      return c.redirect('/integrations?oauth=error&reason=discovery_failed');
+    }
+
+    let cache: OAuthConfigCache = conn.auth_config_ciphertext
+      ? await openJson<OAuthConfigCache>(conn.auth_config_ciphertext)
+      : {};
+    if (!cache.clientId) {
+      if (!endpoints.registrationEndpoint) {
+        return c.redirect('/integrations?oauth=error&reason=no_registration_endpoint');
+      }
+      try {
+        const registered = await registerOAuthClient(endpoints.registrationEndpoint, redirectUri);
+        cache = { ...cache, clientId: registered.clientId, clientSecret: registered.clientSecret };
+      } catch (err) {
+        console.error(
+          `turbodiff: oauth client registration failed for connection ${conn.id}:`,
+          err,
+        );
+        return c.redirect('/integrations?oauth=error&reason=registration_failed');
+      }
+    }
+    // Re-registering on every connect click would be wasteful, but the
+    // discovered endpoints are cheap to refresh each time so /oauth/callback
+    // always exchanges against the server's current metadata.
+    cache = {
+      ...cache,
+      authorizationEndpoint: endpoints.authorizationEndpoint,
+      tokenEndpoint: endpoints.tokenEndpoint,
+    };
+    await updateConnectionAuth(conn.id, { authConfigCiphertext: await sealJson(cache) });
+
+    const { verifier, challenge } = await generatePkce();
+    const state = await packState({ connectionId: conn.id, verifier }, env.SESSION_SECRET);
+    const params = new URLSearchParams({
+      response_type: 'code',
+      client_id: cache.clientId!,
+      redirect_uri: redirectUri,
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
+      state,
+    });
+    return c.redirect(`${endpoints.authorizationEndpoint}?${params}`);
+  });
+
+  app.get('/integrations/:id/oauth/callback', async (c) => {
+    const conn = await authorizedConnection(c);
+    if (!conn) return c.json({ error: 'unknown integration' }, 404);
+
+    const oauthError = c.req.query('error');
+    if (oauthError) {
+      return c.redirect(`/integrations?oauth=error&reason=${encodeURIComponent(oauthError)}`);
+    }
+    const code = c.req.query('code');
+    const state = c.req.query('state');
+    if (!code || !state) return c.redirect('/integrations?oauth=error&reason=missing_code');
+
+    const unpacked = await unpackState(state, env.SESSION_SECRET);
+    if (!unpacked || unpacked.connectionId !== conn.id) {
+      return c.redirect('/integrations?oauth=error&reason=invalid_state');
+    }
+
+    const cache = conn.auth_config_ciphertext
+      ? await openJson<OAuthConfigCache>(conn.auth_config_ciphertext)
+      : null;
+    if (!cache?.clientId || !cache.tokenEndpoint) {
+      return c.redirect('/integrations?oauth=error&reason=not_started');
+    }
+
+    const redirectUri = `${env.PUBLIC_BASE_URL}/api/integrations/${conn.id}/oauth/callback`;
+    let tokens: Awaited<ReturnType<typeof exchangeAuthorizationCode>>;
+    try {
+      tokens = await exchangeAuthorizationCode(
+        cache.tokenEndpoint,
+        code,
+        unpacked.verifier,
+        redirectUri,
+        cache.clientId,
+        cache.clientSecret,
+      );
+    } catch (err) {
+      console.error(`turbodiff: oauth code exchange failed for connection ${conn.id}:`, err);
+      return c.redirect('/integrations?oauth=error&reason=exchange_failed');
+    }
+
+    await updateConnectionAuth(conn.id, {
+      authConfigCiphertext: await sealJson<OAuthConfigCache>({
+        ...cache,
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        scope: tokens.scope,
+      }),
+      ...(tokens.expiresAt ? { oauthTokenExpiresAt: tokens.expiresAt } : {}),
+      oauthNeedsReauth: false,
+    });
+    return c.redirect(`/integrations?oauth=connected&name=${encodeURIComponent(conn.name)}`);
   });
 
   // Attach/detach an MCP integration to an agent.

@@ -133,9 +133,11 @@ export function AppShell({ login, children }: { login: string; children: ReactNo
       </div>
 
       <main className="min-w-0 flex-1">
+        {/* The width change between routes (reading width ↔ wide cockpit)
+            eases instead of snapping while the next page is still pending. */}
         <div
           className={cn(
-            'mx-auto px-4 py-5 pb-28 sm:py-8 md:px-8 md:pb-8',
+            'mx-auto px-4 py-5 pb-28 transition-[max-width] duration-300 ease-out sm:py-8 md:px-8 md:pb-8',
             wide ? 'max-w-[96rem]' : board ? 'max-w-7xl' : 'max-w-4xl',
           )}
         >

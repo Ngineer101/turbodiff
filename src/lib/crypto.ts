@@ -66,6 +66,16 @@ export async function openToken(sealed: string): Promise<string> {
   return new TextDecoder().decode(plain);
 }
 
+// JSON-blob variants of sealToken/openToken, for connection auth configs
+// (api_key, client_credentials, oauth) that carry more than one secret field.
+export async function sealJson<T>(value: T): Promise<string> {
+  return sealToken(JSON.stringify(value));
+}
+
+export async function openJson<T>(sealed: string): Promise<T> {
+  return JSON.parse(await openToken(sealed)) as T;
+}
+
 // --- artifact URL signing (capability URLs for verification screenshots) ---
 //
 // R2 artifact keys are served publicly so GitHub can render them inline in PR

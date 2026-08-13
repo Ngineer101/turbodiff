@@ -304,6 +304,8 @@ export interface ApiIntegration {
   url: string;
   tools: string[] | null;
   has_auth: boolean;
+  auth_type: string; // 'none' | 'bearer' | 'api_key' | 'client_credentials' | 'oauth'
+  oauth_status: 'not_connected' | 'connected' | 'expired' | 'needs_reauth' | null;
   agent_ids: number[]; // agents this MCP connection is attached to
 }
 
