@@ -39,7 +39,7 @@ export function AgentForm({
 
   return (
     <form onSubmit={submit}>
-      <Field label="name">
+      <Field label="Name">
         <Input
           value={values.name}
           onChange={(e) => set({ name: e.target.value })}
@@ -48,7 +48,7 @@ export function AgentForm({
         />
       </Field>
       <Field
-        label="slug"
+        label="Slug"
         hint={`short identifier; lowercase letters, digits, dashes${slugEditable ? '' : '; fixed after creation'}`}
       >
         <Input
@@ -60,7 +60,7 @@ export function AgentForm({
           className="font-mono"
         />
       </Field>
-      <Field label="description" hint="shown in lists">
+      <Field label="Description" hint="shown in lists">
         <Input
           value={values.description}
           onChange={(e) => set({ description: e.target.value })}
@@ -68,7 +68,7 @@ export function AgentForm({
         />
       </Field>
       <Field
-        label="focus instructions"
+        label="Focus instructions"
         hint="what this agent hunts for — process and posting rules are fixed"
       >
         <Textarea
@@ -77,7 +77,7 @@ export function AgentForm({
           required
         />
       </Field>
-      <Field label="model" hint={`any AI Gateway model id; default ${defaultModel}`}>
+      <Field label="Model" hint={`any AI Gateway model id; default ${defaultModel}`}>
         <Input
           value={values.model}
           onChange={(e) => set({ model: e.target.value })}

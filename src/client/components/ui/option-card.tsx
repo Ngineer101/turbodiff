@@ -28,7 +28,7 @@ export function OptionCard({
     <button type="button" className={cn(optionCardVariants({ selected }), className)} {...props}>
       <div className="flex items-start justify-between gap-2">
         <span>{children}</span>
-        {recommended ? <Pill tone="on">recommended</Pill> : null}
+        {recommended ? <Pill tone="on">Recommended</Pill> : null}
       </div>
     </button>
   );

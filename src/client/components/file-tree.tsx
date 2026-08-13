@@ -87,7 +87,7 @@ export function FileTree({
       return next;
     });
 
-  const renderDir = (node: DirNode, depth: number) => {
+  const renderDir = (node: DirNode) => {
     const closed = closedDirs.has(node.path);
     return (
       <li key={node.path}>
@@ -95,8 +95,7 @@ export function FileTree({
           type="button"
           onClick={() => toggleDir(node.path)}
           aria-expanded={!closed}
-          className="flex w-full cursor-pointer items-center gap-1 rounded px-1.5 py-1 text-left text-xs text-mute hover:bg-raised/60 hover:text-ink"
-          style={{ paddingLeft: `${depth * 0.75 + 0.375}rem` }}
+          className="flex w-full cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 text-left text-xs text-mute transition-colors hover:bg-raised/60 hover:text-ink"
         >
           {closed ? (
             <ChevronRight className="size-3 shrink-0" aria-hidden />
@@ -107,14 +106,18 @@ export function FileTree({
             {node.name}
           </span>
         </button>
-        {closed ? null : renderChildren(node, depth + 1)}
+        {closed ? null : renderChildren(node, false)}
       </li>
     );
   };
 
-  const renderChildren = (node: DirNode, depth: number) => (
-    <ul>
-      {node.dirs.map((d) => renderDir(d, depth))}
+  // Nesting is structural: each level is an indented <ul> with a guide line,
+  // so the hierarchy stays readable in deep trees.
+  const renderChildren = (node: DirNode, root: boolean) => (
+    <ul
+      className={cn('flex flex-col gap-px', !root && 'ml-[0.6875rem] border-l border-line/70 pl-1')}
+    >
+      {node.dirs.map((d) => renderDir(d))}
       {node.files.map((f) => {
         const active = f.filename === activeFile;
         const comments = commentCounts.get(f.filename) ?? 0;
@@ -125,12 +128,11 @@ export function FileTree({
               onClick={() => onSelect(f.filename)}
               aria-current={active ? 'true' : undefined}
               className={cn(
-                'flex w-full cursor-pointer items-center gap-1.5 rounded px-1.5 py-1 text-left text-xs transition-colors',
+                'flex w-full cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-xs transition-colors',
                 active
-                  ? 'bg-raised text-accent-bright'
+                  ? 'bg-accent/10 font-medium text-accent-bright'
                   : 'text-ink-dim hover:bg-raised/60 hover:text-ink',
               )}
-              style={{ paddingLeft: `${depth * 0.75 + 0.375}rem` }}
               title={`${f.filename} (${f.status})`}
             >
               <span
@@ -142,7 +144,12 @@ export function FileTree({
               />
               <span className="truncate">{basename(f.filename)}</span>
               {comments > 0 ? (
-                <span className="ml-auto flex shrink-0 items-center gap-0.5 text-mute">
+                <span
+                  className={cn(
+                    'ml-auto flex shrink-0 items-center gap-0.5',
+                    active ? 'text-accent-bright/80' : 'text-mute',
+                  )}
+                >
                   <MessageSquare className="size-3" aria-hidden />
                   {comments}
                 </span>
@@ -156,7 +163,7 @@ export function FileTree({
 
   return (
     <nav aria-label="Changed files" className="font-mono">
-      {renderChildren(tree, 0)}
+      {renderChildren(tree, true)}
     </nav>
   );
 }

@@ -20,17 +20,17 @@ export function AgentNewPage() {
   const create = useMutation({
     mutationFn: (values: AgentFormValues) => api.post('/api/agents', values),
     onSuccess: () => {
-      toast.success('agent created');
+      toast.success('Agent created');
       void queryClient.invalidateQueries({ queryKey: ['agents'] });
       void navigate({ to: '/agents' });
     },
-    onError: (err) => setError(err instanceof ApiError ? err.message : 'request failed'),
+    onError: (err) => setError(err instanceof ApiError ? err.message : 'Request failed'),
   });
 
   return (
     <>
-      <PageTitle>agents</PageTitle>
-      <SectionHeading>new agent</SectionHeading>
+      <PageTitle>Agents</PageTitle>
+      <SectionHeading>New agent</SectionHeading>
       <AgentForm
         initial={{
           name: '',

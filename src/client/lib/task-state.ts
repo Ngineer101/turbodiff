@@ -1,4 +1,5 @@
 import type { ApiPlan } from '../../shared/api-types.ts';
+import { sentence } from './format.ts';
 import { GENERATION_STOPPED } from './queries.ts';
 
 // One task-state vocabulary for board cards and the task detail page.
@@ -15,26 +16,26 @@ export function taskState(p: ApiPlan): { label: string; tone: TaskTone; hint: st
   switch (p.status) {
     case 'analyzing':
       return {
-        label: 'planning',
+        label: 'Planning',
         tone: 'running',
-        hint: 'analyzing the repo and drafting questions…',
+        hint: 'Analyzing the repo and drafting questions…',
       };
     case 'awaiting_answers':
       return {
-        label: 'needs answers',
+        label: 'Needs answers',
         tone: 'warn',
-        hint: 'answer the clarifying questions to continue',
+        hint: 'Answer the clarifying questions to continue.',
       };
     case 'refining':
-      return { label: 'refining plan', tone: 'running', hint: 'incorporating your answers…' };
+      return { label: 'Refining plan', tone: 'running', hint: 'Incorporating your answers…' };
     case 'plan_ready':
       return {
-        label: 'ready to approve',
+        label: 'Ready to approve',
         tone: 'warn',
-        hint: 'review the plan and approve to generate',
+        hint: 'Review the plan and approve to generate.',
       };
     case 'failed':
-      return { label: 'planning failed', tone: 'red', hint: p.error ?? 'planning failed' };
+      return { label: 'Planning failed', tone: 'red', hint: p.error ?? 'Planning failed' };
     case 'approved': {
       // Aggregated over every attached repo — done only once ALL of them
       // merged; a stopped/open repo never blocks the others' progress.
@@ -43,32 +44,32 @@ export function taskState(p: ApiPlan): { label: string; tone: TaskTone; hint: st
       const stopped = p.repos.filter((r) => GENERATION_STOPPED.has(r.feature_status ?? ''));
       const open = p.repos.filter((r) => r.pr_number && r.feature_status !== 'merged').length;
       if (total > 0 && merged === total) {
-        return { label: 'merged', tone: 'on', hint: 'pull request merged' };
+        return { label: 'Merged', tone: 'on', hint: 'Pull request merged.' };
       }
       if (stopped.length > 0) {
         return {
-          label: `generation stopped (${stopped.length})`,
+          label: `Generation stopped (${stopped.length})`,
           tone: 'red',
-          hint: stopped[0].feature_error ?? 'generation stopped',
+          hint: stopped[0].feature_error ?? 'Generation stopped',
         };
       }
       if (merged > 0) {
         return {
           label: `${merged}/${total} merged`,
           tone: 'on',
-          hint: 'some repos are still in flight',
+          hint: 'Some repos are still in flight.',
         };
       }
       if (open > 0) {
         return {
           label: `${open}/${total} PRs open`,
           tone: 'on',
-          hint: 'pull request(s) open — review and merge',
+          hint: 'Pull request(s) open — review and merge.',
         };
       }
-      return { label: 'generating', tone: 'running', hint: 'the coding agent is working…' };
+      return { label: 'Generating', tone: 'running', hint: 'The coding agent is working…' };
     }
     default:
-      return { label: p.status, tone: 'neutral', hint: '' };
+      return { label: sentence(p.status), tone: 'neutral', hint: '' };
   }
 }
