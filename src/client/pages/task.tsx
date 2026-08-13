@@ -220,12 +220,32 @@ export function TaskPage() {
           </div>
           {task.acceptance.length > 0 ? (
             <>
-              <div className="mt-3 text-xs text-mute">Acceptance criteria</div>
-              <ul className="mt-1 list-disc pl-5 text-[0.85rem]">
+              <SectionHeading
+                className="mt-6 mb-2"
+                aside={
+                  <span className="text-xs text-mute tabular-nums">
+                    {task.acceptance.length} to verify
+                  </span>
+                }
+              >
+                Acceptance criteria
+              </SectionHeading>
+              <ol className="divide-y divide-line/40 overflow-hidden rounded-xl border border-line/60 bg-raised/30">
                 {task.acceptance.map((a, i) => (
-                  <li key={i}>{a}</li>
+                  <li
+                    key={i}
+                    className="flex items-baseline gap-3 px-3.5 py-2.5 text-[0.85rem] leading-relaxed"
+                  >
+                    <span className="shrink-0 font-mono text-[0.68rem] tracking-wider text-accent-bright/80">
+                      AC-{String(i + 1).padStart(2, '0')}
+                    </span>
+                    <span className="min-w-0">{a}</span>
+                  </li>
                 ))}
-              </ul>
+              </ol>
+              <p className="mt-2 text-xs text-mute/70">
+                Each criterion is checked against the generated PR during verification.
+              </p>
             </>
           ) : null}
 
