@@ -31,7 +31,7 @@ const SHELL = `<!doctype html>
 			rel="stylesheet"
 		/>
 		<link rel="stylesheet" href="/app/app.css" />
-		<style>html { background: #070b09; }</style>
+		<style>html { background: #15171c; }</style>
 	</head>
 	<body>
 		<div id="root"></div>
@@ -93,7 +93,7 @@ export function createUiRoutes() {
   });
 
   app.get('/', async (c) => {
-    if (!(await hasSession(c))) return c.html(renderLanding(env.GITHUB_APP_SLUG));
+    if (!(await hasSession(c))) return c.html(renderLanding());
     return c.html(SHELL);
   });
 

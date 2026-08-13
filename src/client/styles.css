@@ -1,21 +1,22 @@
 @import 'tailwindcss';
 
-/* Turbodiff's terminal identity as Tailwind v4 theme tokens: phosphor green
-   on near-black. IBM Plex Sans for reading text, IBM Plex Mono for code,
-   identifiers, and terminal chrome (both loaded in the shell). */
+/* Turbodiff's identity as Tailwind v4 theme tokens: dark paper — grainy
+   slate-charcoal sheets, high-contrast ink, phosphor-green accents.
+   IBM Plex Sans for reading text, IBM Plex Mono for code, identifiers, and
+   terminal chrome (both loaded in the shell). */
 @theme {
   --font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
-  --color-bg: #070b09;
-  --color-surface: #0a100d;
-  --color-surface-2: #10160f;
-  --color-raised: #131a16;
-  --color-line: #1c2620;
-  --color-line-2: #2a3830;
-  --color-ink: #e6efe9;
-  --color-ink-dim: #b8c4bc;
-  --color-mute: #7d8f85;
+  --color-bg: #15171c;
+  --color-surface: #191b21;
+  --color-surface-2: #1e2127;
+  --color-raised: #23262d;
+  --color-line: #2b2f37;
+  --color-line-2: #3a4049;
+  --color-ink: #e8eaee;
+  --color-ink-dim: #c2c7cf;
+  --color-mute: #8b919c;
   --color-accent: #3fb950;
   --color-accent-bright: #56d364;
   --color-accent-ink: #04140a;
@@ -29,6 +30,19 @@
   }
   body {
     @apply bg-bg font-sans text-sm text-ink antialiased;
+  }
+  /* Paper tooth: a fixed fractal-noise layer over everything. It's what
+     separates "dark paper" from "flat dark gray" — clearly visible grain,
+     but neutral so it never fights the text. */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    pointer-events: none;
+    opacity: 0.85;
+    mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3'/%3E%3CfeColorMatrix values='0 0 0 0 0.5 0 0 0 0 0.52 0 0 0 0 0.56 0 0 0 0.3 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
   }
   ::selection {
     background: color-mix(in srgb, var(--color-accent) 35%, transparent);
@@ -241,7 +255,7 @@
   font-size: 1rem;
 }
 
-/* highlight.js token classes, mapped onto the terminal palette instead of a
+/* highlight.js token classes, mapped onto the paper palette instead of a
    stock theme. */
 .markdown-body .hljs-comment,
 .markdown-body .hljs-quote {
