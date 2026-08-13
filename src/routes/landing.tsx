@@ -92,8 +92,33 @@ const CSS = `
 		color: var(--muted); max-width: 30rem; font-size: 0.95rem;
 		animation: rise 0.7s 0.24s cubic-bezier(0.2, 0.7, 0.2, 1) both;
 	}
+	.proof-line {
+		margin-top: 1.15rem;
+		font-family: "Instrument Serif", Georgia, serif; font-style: italic;
+		font-size: clamp(1.15rem, 2vw, 1.4rem); line-height: 1.3;
+		color: var(--green-bright);
+		animation: rise 0.7s 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+	}
+	.ledger {
+		display: flex; gap: clamp(1rem, 2vw, 1.5rem); flex-wrap: wrap;
+		margin-top: 1.7rem;
+		animation: rise 0.7s 0.3s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+	}
+	.ledger .stat {
+		font-family: var(--mono);
+		border-left: 2px solid rgba(63, 185, 80, 0.45);
+		padding-left: 0.7rem;
+	}
+	.ledger .stat b {
+		display: block; font-weight: 500; font-size: 1.2rem; letter-spacing: 0.02em;
+		color: var(--ink);
+	}
+	.ledger .stat span {
+		font-size: 0.62rem; letter-spacing: 0.08em; text-transform: uppercase;
+		color: var(--muted);
+	}
 	.cta-row {
-		display: flex; align-items: center; gap: 0.9rem; margin-top: 2rem; flex-wrap: wrap;
+		display: flex; align-items: center; gap: 0.9rem; margin-top: 1.9rem; flex-wrap: wrap;
 		animation: rise 0.7s 0.32s cubic-bezier(0.2, 0.7, 0.2, 1) both;
 	}
 	.cta {
@@ -158,7 +183,7 @@ const CSS = `
 		footer { margin-top: 1.5rem; padding-top: 1.5rem; gap: 0.9rem 1.4rem; padding-bottom: 0.5rem; }
 	}
 	@media (prefers-reduced-motion: reduce) {
-		header, h1, .sub, .cta-row, .cta-note, footer { animation: none; }
+		header, h1, .sub, .proof-line, .ledger, .cta-row, .cta-note, footer { animation: none; }
 		.soon::before { animation: none; }
 	}
 `;
@@ -463,10 +488,10 @@ function Landing() {
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Turbodiff — the open-source software factory</title>
+        <title>Turbodiff — the software factory that built itself</title>
         <meta
           name="description"
-          content="Turbodiff turns free-form requirements into verified pull requests: agents plan against your real code, generate the change in a sandbox, review it, fix blocking findings, and post screenshot evidence for every acceptance criterion. Open source, self-hostable, built on Cloudflare."
+          content="Turbodiff is an open-source software factory whose own commit history is the pitch: features planned, built, reviewed and verified by the factory itself, with screenshot proof for every acceptance criterion. Anyone can generate code. We ship proof."
         />
         <link rel="icon" type="image/png" href="/logo-small.png" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -501,11 +526,26 @@ function Landing() {
                 Requirements in. <em>Working</em> features out.
               </h1>
               <p class="sub">
-                Describe a feature and the factory takes over: agents plan it against your real
-                code, build it in a sandbox, review the PR, fix what's blocking, and post screenshot
-                proof for every acceptance criterion. You approve the plan and merge. Open source,
-                self-hostable &amp; built on Cloudflare.
+                Describe a feature and agents take it from there &mdash; planning against your real
+                code, building in a sandbox, reviewing, fixing, and attaching screenshot proof for
+                every acceptance criterion. You approve the plan and merge the PR. It's how
+                Turbodiff builds itself.
               </p>
+              <p class="proof-line">Anyone can generate code. We ship proof.</p>
+              <div class="ledger" aria-label="factory ledger">
+                <div class="stat">
+                  <b>63%</b>
+                  <span>commits written by agents</span>
+                </div>
+                <div class="stat">
+                  <b>4 min</b>
+                  <span>human time / feature</span>
+                </div>
+                <div class="stat">
+                  <b>PR #58</b>
+                  <span>last merge &middot; checks passed</span>
+                </div>
+              </div>
               <div class="cta-row">
                 <a class="cta" href={REPO_URL}>
                   <StarIcon />
@@ -514,7 +554,7 @@ function Landing() {
                 <span class="soon">coming soon</span>
               </div>
               <span class="cta-note">
-                open source &middot; FSL-licensed &middot; follow along on GitHub
+                open source &middot; FSL-licensed &middot; every PR ships with receipts
               </span>
             </div>
           </main>

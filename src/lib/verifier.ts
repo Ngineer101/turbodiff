@@ -13,6 +13,7 @@ import {
 } from './db.ts';
 import { persistAgentLog } from './agent-runs.ts';
 import { maybeAutoMerge } from './auto-merge.ts';
+import { certificateUrl } from './certificate.ts';
 import { signArtifactKey } from './crypto.ts';
 import { resolveRunnerAuth } from './fixer.ts';
 import { installationToken, sandboxGitToken } from './github-app.ts';
@@ -447,6 +448,7 @@ async function postReport(
 ): Promise<void> {
   const failed = results.filter((r) => r.verdict === 'fail').length;
   const cockpit = `${env.PUBLIC_BASE_URL}/factory/features/${feature.id}`;
+  const cert = failed === 0 ? await certificateUrl(feature.id) : null;
   const lines = [
     `## 🔍 Turbodiff verification — ${failed === 0 ? 'all criteria met' : `${failed} criteria not met`}`,
     '',
@@ -456,6 +458,9 @@ async function postReport(
           '',
         ]
       : [`🔎 **[Review this PR in Turbodiff](${cockpit})**`, '']),
+    ...(cert
+      ? [`📜 **[Proof of build](${cert})** — shareable certificate of this evidence`, '']
+      : []),
     '| | Criterion | Evidence |',
     '|---|---|---|',
     ...results.map((r) => {
