@@ -523,13 +523,13 @@ function Landing() {
           <main>
             <div class="hero">
               <h1>
-                This factory <em>built itself</em>.
+                Requirements in. <em>Working</em> features out.
               </h1>
               <p class="sub">
-                Turbodiff is an open-source software factory &mdash; and its own commit history is
-                the pitch: the features on this site were planned, built, reviewed and verified by
-                the factory itself, with screenshot proof for every acceptance criterion. You
-                describe the feature, approve the plan, and merge the PR.
+                Describe a feature and agents take it from there &mdash; planning against your real
+                code, building in a sandbox, reviewing, fixing, and attaching screenshot proof for
+                every acceptance criterion. You approve the plan and merge the PR. It's how
+                Turbodiff builds itself.
               </p>
               <p class="proof-line">Anyone can generate code. We ship proof.</p>
               <div class="ledger" aria-label="factory ledger">
