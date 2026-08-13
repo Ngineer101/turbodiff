@@ -1183,9 +1183,9 @@ export function createApiRoutes() {
         console.warn(`turbodiff: branch delete failed for feature ${id}:`, err);
       }
     }
-    // Reflect the abandon immediately (the closed webhook also fires, but sets
-    // 'pr_closed' since it can't distinguish this from a manual GitHub close —
-    // this explicit update after it is what makes 'abandoned' stick).
+    // Reflect the abandon immediately. The closed webhook also fires for this
+    // PATCH, but it now skips features already marked 'abandoned' so it can't
+    // clobber this with 'pr_closed' regardless of delivery order.
     await updateFeature(feature.id, { status: 'abandoned' });
     return c.json({ ok: true, branchDeleted });
   });
