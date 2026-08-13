@@ -21,6 +21,15 @@ import { betterAuth } from 'better-auth';
 //     Email addresses permission; mapProfileToUser falls back to the noreply
 //     address so sign-in never depends on it. login/githubId are the fields
 //     the rest of the app actually keys on (attribution, user_tokens).
+//   - login/githubId must NOT be declared with input: false: better-auth
+//     strips input:false fields from the mapProfileToUser result before
+//     creating the user (parseAdditionalUserInputFromProviderProfile), so
+//     they would never persist and requireUser would 401 every session.
+//     The fields stay server-owned anyway — app.ts closes /update-user, the
+//     only route that accepts user additional fields as client input, and
+//     overrideUserInfoOnSignIn rewrites them from the GitHub profile on
+//     every sign-in (which also repairs rows created while the bug shipped,
+//     and tracks GitHub username renames).
 
 const SESSION_DAYS = 30;
 
@@ -47,6 +56,7 @@ function createAuth() {
         clientId: env.GITHUB_OAUTH_CLIENT_ID,
         clientSecret: env.GITHUB_OAUTH_CLIENT_SECRET,
         redirectURI: `${env.PUBLIC_BASE_URL}/auth/callback`,
+        overrideUserInfoOnSignIn: true,
         mapProfileToUser: (profile) => ({
           login: profile.login,
           githubId: profile.id,
@@ -57,8 +67,8 @@ function createAuth() {
     },
     user: {
       additionalFields: {
-        login: { type: 'string', required: false, input: false },
-        githubId: { type: 'number', required: false, input: false },
+        login: { type: 'string', required: false },
+        githubId: { type: 'number', required: false },
       },
     },
   });
