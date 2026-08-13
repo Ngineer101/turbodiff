@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Turbodiff — Certificate of Build (mockup)</title>
+<!--
+  Design mockup for the shareable "Build Certificate" — the OG-card-shaped
+  artifact every shipped unit gets. Manufacturing QC-tag aesthetic: paper
+  stub on the brand's grainy dark floor, green ink, rubber stamp, serial
+  number, perforated inspection stub. Not wired into the app.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --floor: #15171c;
+    --paper: #ece7da;
+    --paper-edge: #dcd6c6;
+    --ink: #242a32;
+    --ink-soft: #5c6470;
+    --green-ink: #1f7a33;
+    --green-bright: #2f9e44;
+    --red-ink: #b8362c;
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
+    --serif: "Instrument Serif", Georgia, serif;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    min-height: 100vh;
+    background: var(--floor);
+    display: grid; place-items: center;
+    padding: 3rem 1.5rem;
+    font: 400 15px/1.5 "IBM Plex Sans", system-ui, sans-serif;
+    color: var(--ink);
+  }
+  .grain {
+    position: fixed; inset: 0; pointer-events: none; opacity: 0.9; mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3'/%3E%3CfeColorMatrix values='0 0 0 0 0.5 0 0 0 0 0.52 0 0 0 0 0.56 0 0 0 0.3 0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  /* ---- the certificate ---- */
+  .cert {
+    position: relative;
+    width: min(1080px, 96vw);
+    display: grid;
+    grid-template-columns: 1fr 280px;
+    background:
+      radial-gradient(120% 90% at 30% 0%, rgba(255,255,255,0.5), transparent 60%),
+      var(--paper);
+    border-radius: 6px;
+    box-shadow:
+      0 1px 0 rgba(255,255,255,0.06),
+      0 30px 80px rgba(0,0,0,0.55),
+      0 6px 18px rgba(0,0,0,0.4);
+    transform: rotate(-0.4deg);
+  }
+  .cert::after { /* paper grain */
+    content: ""; position: absolute; inset: 0; border-radius: 6px; pointer-events: none;
+    opacity: 0.5; mix-blend-mode: multiply;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='p'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0.72 0 0 0 0 0.7 0 0 0 0 0.64 0 0 0 0.16 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23p)'/%3E%3C/svg%3E");
+  }
+
+  .main { padding: 2.2rem 2.4rem 1.9rem; min-width: 0; }
+
+  .cert-head {
+    display: flex; justify-content: space-between; align-items: flex-start; gap: 1.5rem;
+    padding-bottom: 1.1rem; border-bottom: 2px solid var(--ink);
+  }
+  .cert-title { font-family: var(--mono); }
+  .cert-title .kicker {
+    font-size: 0.7rem; letter-spacing: 0.32em; text-transform: uppercase; color: var(--ink);
+    font-weight: 600;
+  }
+  .cert-title .org {
+    margin-top: 0.35rem; font-size: 0.72rem; letter-spacing: 0.08em; color: var(--ink-soft);
+  }
+  .cert-title .org b { color: var(--green-ink); font-weight: 600; }
+  .serial { text-align: right; font-family: var(--mono); }
+  .serial .label { font-size: 0.62rem; letter-spacing: 0.24em; color: var(--ink-soft); text-transform: uppercase; }
+  .serial .no { font-size: 1.5rem; font-weight: 600; letter-spacing: 0.06em; margin-top: 0.1rem; }
+  .barcode {
+    margin-top: 0.4rem; height: 26px; width: 190px; margin-left: auto;
+    background: repeating-linear-gradient(90deg,
+      var(--ink) 0 2px, transparent 2px 4px, var(--ink) 4px 7px, transparent 7px 9px,
+      var(--ink) 9px 10px, transparent 10px 14px, var(--ink) 14px 18px, transparent 18px 20px);
+  }
+
+  .feature { margin-top: 1.5rem; }
+  .feature h1 {
+    font-family: var(--serif); font-weight: 400;
+    font-size: clamp(1.7rem, 3.4vw, 2.5rem); line-height: 1.08; letter-spacing: -0.01em;
+  }
+  .feature .meta {
+    margin-top: 0.55rem; font-family: var(--mono); font-size: 0.76rem;
+    color: var(--ink-soft); letter-spacing: 0.04em;
+  }
+  .feature .meta b { color: var(--ink); font-weight: 500; }
+
+  .criteria { margin-top: 1.4rem; }
+  .criteria .head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-family: var(--mono); font-size: 0.66rem; letter-spacing: 0.22em;
+    text-transform: uppercase; color: var(--ink-soft); margin-bottom: 0.6rem;
+  }
+  .criteria .head .score { color: var(--green-ink); font-weight: 600; letter-spacing: 0.1em; }
+  .criteria ul { list-style: none; padding: 0; columns: 2; column-gap: 2.2rem; }
+  .criteria li {
+    break-inside: avoid; display: flex; gap: 0.55rem; align-items: baseline;
+    font-size: 0.83rem; line-height: 1.4; padding: 0.28rem 0;
+    border-bottom: 1px dotted rgba(36, 42, 50, 0.35);
+  }
+  .criteria li::before {
+    content: "✓"; font-family: var(--mono); font-weight: 600; color: var(--green-ink);
+    flex: none;
+  }
+
+  .captures { margin-top: 1.4rem; }
+  .captures .head {
+    font-family: var(--mono); font-size: 0.66rem; letter-spacing: 0.22em;
+    text-transform: uppercase; color: var(--ink-soft); margin-bottom: 0.55rem;
+  }
+  .thumbs { display: flex; gap: 0.6rem; }
+  .thumb {
+    flex: 1; aspect-ratio: 16 / 10; border: 1px solid rgba(36,42,50,0.5); border-radius: 3px;
+    position: relative; overflow: hidden;
+    background:
+      linear-gradient(160deg, #1b1e24 0%, #23272f 55%, #1b1e24 100%);
+  }
+  .thumb::before { /* fake ui bars */
+    content: ""; position: absolute; inset: 12% 10% auto 10%; height: 8%;
+    background: rgba(232, 234, 238, 0.25); border-radius: 2px;
+    box-shadow: 0 14px 0 rgba(232,234,238,0.14), 0 28px 0 rgba(232,234,238,0.14), 0 42px 0 rgba(63,185,80,0.5);
+  }
+  .thumb figcaption {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    font-family: var(--mono); font-size: 0.52rem; letter-spacing: 0.12em; text-transform: uppercase;
+    color: #9aa2ad; background: rgba(12, 14, 17, 0.75); padding: 0.2rem 0.4rem;
+  }
+
+  .cert-foot {
+    margin-top: 1.6rem; padding-top: 0.9rem; border-top: 2px solid var(--ink);
+    display: flex; justify-content: space-between; align-items: baseline; gap: 1rem;
+    font-family: var(--mono); font-size: 0.72rem; color: var(--ink-soft); letter-spacing: 0.05em;
+  }
+  .cert-foot .tagline { font-family: var(--serif); font-style: italic; font-size: 1.02rem; color: var(--ink); letter-spacing: 0; }
+  .cert-foot .verify b { color: var(--green-ink); font-weight: 600; }
+
+  /* ---- inspection stub ---- */
+  .stub {
+    position: relative;
+    border-left: 2px dashed rgba(36, 42, 50, 0.5);
+    padding: 2rem 1.6rem 1.9rem;
+    display: flex; flex-direction: column;
+    background: linear-gradient(180deg, rgba(31, 122, 51, 0.06), transparent 40%);
+  }
+  .stub::before, .stub::after { /* perforation notches */
+    content: ""; position: absolute; left: -13px; width: 24px; height: 24px; border-radius: 50%;
+    background: var(--floor);
+  }
+  .stub::before { top: -12px; }
+  .stub::after { bottom: -12px; }
+  .punch {
+    position: absolute; top: 1.35rem; right: 1.35rem; width: 22px; height: 22px; border-radius: 50%;
+    background: var(--floor);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.7), 0 1px 0 rgba(255,255,255,0.5);
+  }
+  .stub .head {
+    font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.28em;
+    text-transform: uppercase; color: var(--ink-soft);
+  }
+  .gauges { margin-top: 1.1rem; display: grid; gap: 0.85rem; }
+  .gauge { font-family: var(--mono); border-left: 3px solid var(--green-ink); padding-left: 0.7rem; }
+  .gauge b { display: block; font-size: 1.25rem; font-weight: 600; letter-spacing: 0.02em; }
+  .gauge span { font-size: 0.6rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-soft); }
+  .gauge.human { border-left-color: var(--red-ink); }
+  .gauge.human b { color: var(--red-ink); }
+
+  .stamp-zone { margin-top: auto; padding-top: 1.4rem; display: grid; place-items: center; }
+  .stamp {
+    --sink: var(--green-bright);
+    transform: rotate(-8deg);
+    border: 3px double var(--sink); border-radius: 10px;
+    padding: 0.55rem 1.1rem 0.65rem; text-align: center;
+    color: var(--sink);
+    font-family: var(--mono); text-transform: uppercase;
+    mix-blend-mode: multiply; opacity: 0.9;
+    mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='r'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.11' numOctaves='3'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.92 0.05'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23r)'/%3E%3C/svg%3E");
+    mask-size: 120px;
+  }
+  .stamp .big { font-size: 1.55rem; font-weight: 600; letter-spacing: 0.14em; line-height: 1.1; }
+  .stamp .sub { font-size: 0.58rem; letter-spacing: 0.3em; margin-top: 0.25rem; }
+  .stamp .date { font-size: 0.66rem; letter-spacing: 0.14em; margin-top: 0.35rem; border-top: 1px solid var(--sink); padding-top: 0.3rem; }
+
+  .stub .sig { margin-top: 1.3rem; font-family: var(--mono); font-size: 0.6rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-soft); }
+  .stub .sig .line { font-family: var(--serif); font-style: italic; font-size: 1.05rem; color: var(--ink); text-transform: none; letter-spacing: 0; border-bottom: 1px solid var(--ink); padding-bottom: 0.15rem; margin-bottom: 0.3rem; }
+
+  @media (max-width: 860px) {
+    .cert { grid-template-columns: 1fr; transform: none; }
+    .stub { border-left: 0; border-top: 2px dashed rgba(36,42,50,0.5); }
+    .stub::before { top: -12px; left: -12px; }
+    .stub::after { top: -12px; left: auto; right: -12px; bottom: auto; }
+    .criteria ul { columns: 1; }
+    .thumbs .thumb:nth-child(n+4) { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="grain" aria-hidden="true"></div>
+
+<article class="cert">
+  <div class="main">
+    <header class="cert-head">
+      <div class="cert-title">
+        <div class="kicker">Certificate of Build</div>
+        <div class="org">issued by <b>turbodiff</b> autonomous software factory</div>
+      </div>
+      <div class="serial">
+        <div class="label">Unit No.</div>
+        <div class="no">TD-2026-0058</div>
+        <div class="barcode" aria-hidden="true"></div>
+      </div>
+    </header>
+
+    <section class="feature">
+      <h1>OAuth flow support for MCP servers</h1>
+      <p class="meta">
+        <b>Ngineer101/turbodiff</b> &middot; PR #58 &middot; merged 12 Aug 2026 &middot; shift <b>sh_9f42</b>
+      </p>
+    </section>
+
+    <section class="criteria">
+      <div class="head">
+        <span>Acceptance criteria — inspected</span>
+        <span class="score">9 / 9 passed</span>
+      </div>
+      <ul>
+        <li>Connect button starts the OAuth handshake</li>
+        <li>Callback exchanges code for tokens</li>
+        <li>Tokens stored encrypted per user</li>
+        <li>Expired tokens refresh silently</li>
+        <li>Failed auth shows a recoverable error</li>
+        <li>Server list reflects connection state</li>
+      </ul>
+    </section>
+
+    <section class="captures">
+      <div class="head">QC captures — 14 attached</div>
+      <div class="thumbs">
+        <figure class="thumb"><figcaption>ac-01 · connect</figcaption></figure>
+        <figure class="thumb"><figcaption>ac-03 · callback</figcaption></figure>
+        <figure class="thumb"><figcaption>ac-05 · error state</figcaption></figure>
+        <figure class="thumb"><figcaption>ac-08 · refresh</figcaption></figure>
+        <figure class="thumb"><figcaption>ac-09 · server list</figcaption></figure>
+      </div>
+    </section>
+
+    <footer class="cert-foot">
+      <span class="tagline">Anyone can generate code. We ship proof.</span>
+      <span class="verify">verify this unit &rarr; <b>turbodiff.dev/u/TD-2026-0058</b></span>
+    </footer>
+  </div>
+
+  <aside class="stub">
+    <span class="punch" aria-hidden="true"></span>
+    <div class="head">Inspection stub</div>
+    <div class="gauges">
+      <div class="gauge"><b>38 min</b><span>factory time</span></div>
+      <div class="gauge human"><b>4 min</b><span>human time</span></div>
+      <div class="gauge"><b>2</b><span>rework passes</span></div>
+      <div class="gauge"><b>14</b><span>qc captures</span></div>
+    </div>
+    <div class="stamp-zone">
+      <div class="stamp">
+        <div class="big">Passed QC</div>
+        <div class="sub">Turbodiff factory</div>
+        <div class="date">12 · 08 · 2026</div>
+      </div>
+    </div>
+    <div class="sig">
+      <div class="line">Nico Botha</div>
+      approved &amp; merged by
+    </div>
+  </aside>
+</article>
+
+</body>
+</html>
