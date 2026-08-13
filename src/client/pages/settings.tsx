@@ -14,7 +14,7 @@ import { Switch } from '../components/ui/switch.tsx';
 import { cn } from '../lib/utils.ts';
 
 function onApiError(err: unknown) {
-  toast.error(err instanceof ApiError ? err.message : 'request failed');
+  toast.error(err instanceof ApiError ? err.message : 'Request failed');
 }
 
 // Optimistically patch one repo row in the settings cache; invalidate on
@@ -97,7 +97,7 @@ function CheckCommandForm({ repo }: { repo: ApiRepoSettings }) {
     e.preventDefault();
     patchRepo.mutate(
       { check_command: command },
-      { onSuccess: () => toast.success('check command saved') },
+      { onSuccess: () => toast.success('Check command saved') },
     );
   };
   return (
@@ -106,12 +106,12 @@ function CheckCommandForm({ repo }: { repo: ApiRepoSettings }) {
         value={command}
         onChange={(e) => setCommand(e.target.value)}
         placeholder="npm ci && npm test — blocks factory pushes on failure"
-        aria-label={`check command for ${repo.owner}/${repo.name}`}
+        aria-label={`Check command for ${repo.owner}/${repo.name}`}
         className="py-1 font-mono text-xs sm:text-xs"
       />
       {dirty ? (
         <Button size="sm" variant="secondary" type="submit" loading={patchRepo.isPending}>
-          save
+          Save
         </Button>
       ) : null}
     </form>
@@ -148,6 +148,33 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
   });
+  const toggleSkill = useMutation({
+    mutationFn: ({ skillId, enabled }: { skillId: number; enabled: boolean }) =>
+      api.put(`/api/repos/${repo.id}/skills/${skillId}`, { enabled }),
+    onMutate: async ({ skillId, enabled }) => {
+      await queryClient.cancelQueries({ queryKey: ['settings'] });
+      const prev = queryClient.getQueryData<ApiSettings>(['settings']);
+      if (prev) {
+        queryClient.setQueryData<ApiSettings>(['settings'], {
+          ...prev,
+          installations: prev.installations.map((inst) => ({
+            ...inst,
+            repos: inst.repos.map((r) =>
+              r.id === repo.id
+                ? { ...r, skills: r.skills.map((s) => (s.id === skillId ? { ...s, enabled } : s)) }
+                : r,
+            ),
+          })),
+        });
+      }
+      return { prev };
+    },
+    onError: (err, _vars, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(['settings'], ctx.prev);
+      onApiError(err);
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
+  });
 
   return (
     <Card className="mt-2">
@@ -160,7 +187,7 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
           {repo.name}
         </span>
         <label className="flex shrink-0 cursor-pointer items-center gap-2 text-xs text-mute">
-          factory
+          Factory
           <Switch
             checked={repo.enabled}
             onCheckedChange={(enabled) =>
@@ -169,7 +196,7 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
                 {
                   onSuccess: () =>
                     toast.success(
-                      `factory ${enabled ? 'enabled' : 'disabled'} for ${repo.owner}/${repo.name}`,
+                      `Factory ${enabled ? 'enabled' : 'disabled'} for ${repo.owner}/${repo.name}`,
                     ),
                 },
               )
@@ -181,56 +208,68 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
 
       {repo.enabled ? (
         <div className="mt-3 flex flex-col gap-2 border-t border-line/70 pt-3">
-          <ConfigRow label="agents">
+          <ConfigRow label="Agents">
             {repo.agents.map((a) => (
               <Chip
                 key={a.id}
                 on={a.enabled}
-                title={`${a.enabled ? 'disable' : 'enable'} ${a.name} on this repo`}
+                title={`${a.enabled ? 'Disable' : 'Enable'} ${a.name} on this repo`}
                 onClick={() => toggleAgent.mutate({ agentId: a.id, enabled: !a.enabled })}
               >
                 {a.slug}
               </Chip>
             ))}
           </ConfigRow>
-          <ConfigRow label="behavior">
+          <ConfigRow label="Skills">
+            {repo.skills.map((s) => (
+              <Chip
+                key={s.id}
+                on={s.enabled}
+                title={`${s.enabled ? 'Disable' : 'Enable'} ${s.name} on this repo`}
+                onClick={() => toggleSkill.mutate({ skillId: s.id, enabled: !s.enabled })}
+              >
+                {s.slug}
+              </Chip>
+            ))}
+          </ConfigRow>
+          <ConfigRow label="Behavior">
             <Chip
               on={repo.review_on_push}
-              title={`${repo.review_on_push ? 'stop' : 'start'} re-reviewing this repo's factory PRs when new commits are pushed (debounced)`}
+              title={`${repo.review_on_push ? 'Stop' : 'Start'} re-reviewing this repo's factory PRs when new commits are pushed (debounced)`}
               onClick={() => patchRepo.mutate({ review_on_push: !repo.review_on_push })}
             >
-              <RefreshCw className="size-3" aria-hidden /> on push
+              <RefreshCw className="size-3" aria-hidden /> On push
             </Chip>
             <Chip
               on={repo.blocking_reviews}
-              title={`${repo.blocking_reviews ? 'reviews post as plain comments' : 'P1 findings request changes; clean reviews approve'} — click to ${repo.blocking_reviews ? 'disable' : 'enable'}`}
+              title={`${repo.blocking_reviews ? 'Reviews post as plain comments' : 'P1 findings request changes; clean reviews approve'} — click to ${repo.blocking_reviews ? 'disable' : 'enable'}`}
               onClick={() => patchRepo.mutate({ blocking_reviews: !repo.blocking_reviews })}
             >
-              <OctagonMinus className="size-3" aria-hidden /> blocking
+              <OctagonMinus className="size-3" aria-hidden /> Blocking
             </Chip>
             <Chip
               on={repo.auto_fix}
-              title={`${repo.auto_fix ? 'blocking reviews are left for a human to address' : 'a blocking review dispatches the fix agent to address the findings (max 3 runs per PR)'} — click to ${repo.auto_fix ? 'disable' : 'enable'}`}
+              title={`${repo.auto_fix ? 'Blocking reviews are left for a human to address' : 'A blocking review dispatches the fix agent to address the findings (max 3 runs per PR)'} — click to ${repo.auto_fix ? 'disable' : 'enable'}`}
               onClick={() => patchRepo.mutate({ auto_fix: !repo.auto_fix })}
             >
-              <Wrench className="size-3" aria-hidden /> auto-fix
+              <Wrench className="size-3" aria-hidden /> Auto-fix
             </Chip>
             <Chip
               on={repo.auto_merge}
-              title={`${repo.auto_merge ? 'factory PRs stay open for a human to merge' : 'factory PRs merge automatically once verification passes and the review is clean (requires blocking reviews)'} — click to ${repo.auto_merge ? 'disable' : 'enable'}`}
+              title={`${repo.auto_merge ? 'Factory PRs stay open for a human to merge' : 'Factory PRs merge automatically once verification passes and the review is clean (requires blocking reviews)'} — click to ${repo.auto_merge ? 'disable' : 'enable'}`}
               onClick={() => patchRepo.mutate({ auto_merge: !repo.auto_merge })}
             >
-              <GitMerge className="size-3" aria-hidden /> auto-merge
+              <GitMerge className="size-3" aria-hidden /> Auto-merge
             </Chip>
             <Chip
               on={repo.demo_videos}
-              title={`${repo.demo_videos ? 'verification records a short demo video of each feature (the verify agent auto-detects how to launch the app)' : 'verification skips demo recordings for this repo'} — click to ${repo.demo_videos ? 'disable' : 'enable'}`}
+              title={`${repo.demo_videos ? 'Verification records a short demo video of each feature (the verify agent auto-detects how to launch the app)' : 'Verification skips demo recordings for this repo'} — click to ${repo.demo_videos ? 'disable' : 'enable'}`}
               onClick={() => patchRepo.mutate({ demo_videos: !repo.demo_videos })}
             >
-              <Clapperboard className="size-3" aria-hidden /> demos
+              <Clapperboard className="size-3" aria-hidden /> Demos
             </Chip>
           </ConfigRow>
-          <ConfigRow label="check">
+          <ConfigRow label="Check">
             <CheckCommandForm repo={repo} />
           </ConfigRow>
         </div>
@@ -263,11 +302,11 @@ export function SettingsPage() {
             href={`https://github.com/apps/${data.github_app_slug}/installations/new`}
             className="text-[0.85rem] text-accent-bright hover:underline"
           >
-            add or manage repositories on GitHub &rarr;
+            Add or manage repositories on GitHub &rarr;
           </a>
         }
       >
-        settings
+        Settings
       </PageTitle>
 
       {repoCount > 5 ? (
@@ -279,7 +318,7 @@ export function SettingsPage() {
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder={`search ${repoCount} repositories…`}
+            placeholder={`Search ${repoCount} repositories…`}
             aria-label="Search repositories"
             className="pl-8 sm:pl-8"
           />
@@ -307,7 +346,7 @@ export function SettingsPage() {
                 </Muted>
               }
             >
-              {inst.account_login} {inst.suspended ? <Pill tone="red">suspended</Pill> : null}
+              {inst.account_login} {inst.suspended ? <Pill tone="red">Suspended</Pill> : null}
             </SectionHeading>
             {inst.repos.length === 0 ? (
               <Muted>No repositories selected in this installation.</Muted>

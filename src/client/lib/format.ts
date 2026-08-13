@@ -53,3 +53,10 @@ export function monthLabel(ym: string): string {
   const [y, m] = ym.split('-');
   return `${MONTH_NAMES[Number(m) - 1] ?? m} ${y}`;
 }
+
+// Sentence-case a machine status ('plan_ready' → 'Plan ready') for pills and
+// labels fed straight from API enums.
+export function sentence(s: string): string {
+  const words = s.replaceAll('_', ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}

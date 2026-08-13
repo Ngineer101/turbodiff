@@ -5,15 +5,15 @@ import { Pill } from './ui/pill.tsx';
 import { Table, Td, Th } from './ui/table.tsx';
 
 export function ReviewStatePill({ review }: { review: ApiReview }) {
-  if (review.state === 'running') return <Pill tone="running">reviewing</Pill>;
-  if (review.state === 'stalled') return <Pill tone="red">stalled</Pill>;
-  if (review.state === 'failed') return <Pill tone="red">failed</Pill>;
+  if (review.state === 'running') return <Pill tone="running">Reviewing</Pill>;
+  if (review.state === 'stalled') return <Pill tone="red">Stalled</Pill>;
+  if (review.state === 'failed') return <Pill tone="red">Failed</Pill>;
   return review.review_url ? (
     <a href={review.review_url} target="_blank" rel="noopener">
-      <Pill className="hover:border-accent/40 hover:text-accent-bright">done &rarr;</Pill>
+      <Pill className="hover:border-accent/40 hover:text-accent-bright">Done &rarr;</Pill>
     </a>
   ) : (
-    <Pill>done</Pill>
+    <Pill>Done</Pill>
   );
 }
 
@@ -24,12 +24,12 @@ export function ReviewsTable({ reviews }: { reviews: ApiReview[] }) {
     <Table>
       <thead>
         <tr>
-          <Th>pull request</Th>
-          <Th>status</Th>
-          <Th numeric>tokens</Th>
-          <Th numeric>cost</Th>
-          <Th numeric>time</Th>
-          <Th numeric>when</Th>
+          <Th>Pull request</Th>
+          <Th>Status</Th>
+          <Th numeric>Tokens</Th>
+          <Th numeric>Cost</Th>
+          <Th numeric>Time</Th>
+          <Th numeric>When</Th>
         </tr>
       </thead>
       <tbody>

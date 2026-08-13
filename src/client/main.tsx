@@ -1,3 +1,7 @@
+// The '*.css' module declaration must travel with this file: the pre-commit
+// checker builds a program from the staged files alone, which drops
+// tsconfig-included d.ts files like vite-env.d.ts.
+import './vite-env.d.ts';
 import { QueryClientProvider, useSuspenseQuery } from '@tanstack/react-query';
 import {
   createRootRoute,
@@ -21,6 +25,8 @@ import {
   meQuery,
   queryClient,
   settingsQuery,
+  skillQuery,
+  skillsQuery,
   taskQuery,
   usageQuery,
 } from './lib/queries.ts';
@@ -30,6 +36,9 @@ import { AgentsPage } from './pages/agents.tsx';
 import { BoardPage } from './pages/board.tsx';
 import { IntegrationsPage } from './pages/integrations.tsx';
 import { SettingsPage } from './pages/settings.tsx';
+import { SkillEditPage } from './pages/skill-edit.tsx';
+import { SkillNewPage } from './pages/skill-new.tsx';
+import { SkillsPage } from './pages/skills.tsx';
 import { TaskPage } from './pages/task.tsx';
 import { UsagePage } from './pages/usage.tsx';
 import './styles.css';
@@ -47,7 +56,7 @@ function Pending() {
   return (
     <div className="flex min-h-64 items-center justify-center text-mute" role="status">
       <span>
-        loading<span className="animate-cursor text-accent-bright">_</span>
+        Loading<span className="animate-cursor text-accent-bright">_</span>
       </span>
     </div>
   );
@@ -56,7 +65,7 @@ function Pending() {
 function RouteError({ error, reset }: { error: Error; reset: () => void }) {
   return (
     <div className="mx-auto mt-16 max-w-md text-center">
-      <p className="text-ink-dim">something broke</p>
+      <p className="text-ink-dim">Something broke.</p>
       <p className="mt-2 text-[0.85rem] text-mute">{error.message}</p>
       <div className="mt-4">
         <Button variant="secondary" onClick={reset}>
@@ -73,7 +82,7 @@ function NotFound() {
       <p className="text-ink-dim">404 — no such page</p>
       <p className="mt-2 text-[0.85rem] text-mute">
         <a href="/" className="text-accent-bright hover:underline">
-          back to the dashboard &rarr;
+          Back to the dashboard &rarr;
         </a>
       </p>
     </div>
@@ -143,6 +152,26 @@ const agentEditRoute = createRoute({
   component: AgentEditPage,
 });
 
+const skillsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/skills',
+  loader: () => queryClient.ensureQueryData(skillsQuery),
+  component: SkillsPage,
+});
+
+const skillNewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/skills/new',
+  component: SkillNewPage,
+});
+
+const skillEditRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/skills/$skillId/edit',
+  loader: ({ params }) => queryClient.ensureQueryData(skillQuery(Number(params.skillId))),
+  component: SkillEditPage,
+});
+
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
@@ -159,6 +188,9 @@ const routeTree = rootRoute.addChildren([
   agentsRoute,
   agentNewRoute,
   agentEditRoute,
+  skillsRoute,
+  skillNewRoute,
+  skillEditRoute,
   settingsRoute,
 ]);
 

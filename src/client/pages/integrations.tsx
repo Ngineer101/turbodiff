@@ -22,7 +22,7 @@ const AUTH_TYPES = ['none', 'bearer', 'api_key', 'client_credentials', 'oauth'] 
 type AuthType = (typeof AUTH_TYPES)[number];
 
 function onApiError(err: unknown) {
-  toast.error(err instanceof ApiError ? err.message : 'request failed');
+  toast.error(err instanceof ApiError ? err.message : 'Request failed');
 }
 
 // Reads the one-time ?oauth=connected|error query params the
@@ -57,17 +57,17 @@ function TestDialog({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-lg">
         <DialogTitle className="text-base font-medium">
-          test <Pill>{name}</Pill>
+          Test <Pill>{name}</Pill>
         </DialogTitle>
         <p className="mt-3 text-[0.85rem]">
-          {result.ok ? <Pill tone="on">ok</Pill> : <Pill tone="red">failed</Pill>} {result.detail}
+          {result.ok ? <Pill tone="on">OK</Pill> : <Pill tone="red">Failed</Pill>} {result.detail}
         </p>
         {result.tools.length > 0 ? (
           <Table>
             <thead>
               <tr>
-                <Th>tool</Th>
-                <Th>mounts as</Th>
+                <Th>Tool</Th>
+                <Th>Mounts as</Th>
               </tr>
             </thead>
             <tbody>
@@ -109,9 +109,11 @@ function AuthPill({ conn }: { conn: ApiIntegration }) {
 function IntegrationCard({ conn }: { conn: ApiIntegration }) {
   const queryClient = useQueryClient();
   const { data } = useSuspenseQuery(integrationsQuery);
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ['integrations'] });
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: ['integrations'] });
+  };
   const [test, setTest] = useState<ApiConnectionTest | null>(null);
-  const agents = data.agents.filter((a) =>
+  const agents = data.agents.filter(() =>
     data.installations.some((i) => i.id === conn.installation_id),
   );
 
@@ -123,7 +125,7 @@ function IntegrationCard({ conn }: { conn: ApiIntegration }) {
   const remove = useMutation({
     mutationFn: () => api.delete(`/api/integrations/${conn.id}`),
     onSuccess: () => {
-      toast.success('integration removed');
+      toast.success('Integration removed');
       refresh();
     },
     onError: onApiError,
@@ -142,7 +144,7 @@ function IntegrationCard({ conn }: { conn: ApiIntegration }) {
     <Card className="mt-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="flex items-center gap-2">
-          <Pill>{conn.kind}</Pill>
+          <Pill>{conn.kind === 'mcp' ? 'MCP' : 'API'}</Pill>
           <span className="font-medium">{conn.name}</span>
           <AuthPill conn={conn} />
         </span>
@@ -182,7 +184,7 @@ function IntegrationCard({ conn }: { conn: ApiIntegration }) {
       <div className="mt-1 font-mono text-xs break-all text-mute">{conn.url}</div>
       {conn.tools ? (
         <div className="mt-1 text-xs text-mute">
-          tools: <span className="font-mono">{conn.tools.join(', ')}</span>
+          Tools: <span className="font-mono">{conn.tools.join(', ')}</span>
         </div>
       ) : null}
       {conn.auth_type === 'api_key' && conn.kind === 'mcp' ? (
@@ -194,7 +196,7 @@ function IntegrationCard({ conn }: { conn: ApiIntegration }) {
       ) : null}
       {conn.kind === 'mcp' ? (
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          <Muted className="mr-1 text-xs">agents:</Muted>
+          <Muted className="mr-1 text-xs">Agents:</Muted>
           {agents.map((a) => {
             const attached = conn.agent_ids.includes(a.id);
             return (
@@ -202,7 +204,7 @@ function IntegrationCard({ conn }: { conn: ApiIntegration }) {
                 key={a.id}
                 type="button"
                 aria-pressed={attached}
-                title={`${attached ? 'detach from' : 'attach to'} ${a.name}`}
+                title={`${attached ? 'Detach from' : 'Attach to'} ${a.name}`}
                 onClick={() => toggleAgent.mutate({ agentId: a.id, attached: !attached })}
                 className={cn(
                   'cursor-pointer rounded-full border px-2.5 py-px text-xs whitespace-nowrap transition-colors',
@@ -218,7 +220,7 @@ function IntegrationCard({ conn }: { conn: ApiIntegration }) {
         </div>
       ) : (
         <Muted className="mt-2 block text-xs">
-          stored API credential — not mounted to agents (MCP integrations are)
+          Stored API credential — not mounted to agents (MCP integrations are).
         </Muted>
       )}
       {test ? <TestDialog name={conn.name} result={test} onClose={() => setTest(null)} /> : null}
@@ -263,10 +265,10 @@ function AddForm() {
         tools: '',
       }));
       setError(null);
-      toast.success('integration added');
-      queryClient.invalidateQueries({ queryKey: ['integrations'] });
+      toast.success('Integration added');
+      void queryClient.invalidateQueries({ queryKey: ['integrations'] });
     },
-    onError: (err) => setError(err instanceof ApiError ? err.message : 'request failed'),
+    onError: (err) => setError(err instanceof ApiError ? err.message : 'Request failed'),
   });
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -275,7 +277,7 @@ function AddForm() {
   return (
     <form onSubmit={submit}>
       <div className="grid gap-x-4 sm:grid-cols-2">
-        <Field label="type">
+        <Field label="Type">
           <Select
             value={form.kind}
             onChange={(e) => {
@@ -293,7 +295,7 @@ function AddForm() {
           </Select>
         </Field>
         {data.installations.length > 1 ? (
-          <Field label="installation">
+          <Field label="Installation">
             <Select
               value={form.installation_id}
               onChange={(e) => setForm((f) => ({ ...f, installation_id: Number(e.target.value) }))}
@@ -308,7 +310,7 @@ function AddForm() {
         ) : null}
       </div>
       <Field
-        label="name"
+        label="Name"
         hint={form.kind === 'mcp' ? 'tools mount as mcp__<name>__<tool>' : 'identifier'}
       >
         <Input
@@ -319,7 +321,7 @@ function AddForm() {
           placeholder="executor"
         />
       </Field>
-      <Field label="endpoint URL" hint="https">
+      <Field label="Endpoint URL" hint="https">
         <Input
           value={form.url}
           onChange={(e) => setForm((f) => ({ ...f, url: e.target.value }))}
@@ -327,13 +329,13 @@ function AddForm() {
           placeholder="https://mcp.example.com/…"
         />
       </Field>
-      <Field label="auth type">
+      <Field label="Auth type">
         <Select
           value={form.auth_type}
           onChange={(e) => setForm((f) => ({ ...f, auth_type: e.target.value as AuthType }))}
         >
-          <option value="none">none</option>
-          <option value="bearer">bearer token</option>
+          <option value="none">None</option>
+          <option value="bearer">Bearer token</option>
           <option value="api_key">API key (custom header)</option>
           <option value="client_credentials">OAuth client credentials</option>
           {form.kind === 'mcp' ? <option value="oauth">OAuth (sign-in)</option> : null}
@@ -403,7 +405,7 @@ function AddForm() {
         </p>
       ) : null}
       {form.kind === 'mcp' ? (
-        <Field label="tool allowlist" hint="optional, comma-separated; empty = all">
+        <Field label="Tool allowlist" hint="optional, comma-separated; empty = all">
           <Input
             value={form.tools}
             onChange={(e) => setForm((f) => ({ ...f, tools: e.target.value }))}
@@ -427,7 +429,7 @@ export function IntegrationsPage() {
 
   return (
     <>
-      <PageTitle>mcp &amp; integrations</PageTitle>
+      <PageTitle>MCP &amp; integrations</PageTitle>
       <p className="mt-3 text-[0.85rem] text-mute">
         Connect MCP servers and APIs once, then attach MCP integrations to the agents that should
         use their tools.
@@ -442,14 +444,14 @@ export function IntegrationsPage() {
         or filesystem access.
       </p>
 
-      <SectionHeading>connected</SectionHeading>
+      <SectionHeading>Connected</SectionHeading>
       {data.connections.length === 0 ? (
         <EmptyState>No integrations yet — add one below.</EmptyState>
       ) : (
         data.connections.map((conn) => <IntegrationCard key={conn.id} conn={conn} />)
       )}
 
-      <SectionHeading>add integration</SectionHeading>
+      <SectionHeading>Add integration</SectionHeading>
       <AddForm />
     </>
   );

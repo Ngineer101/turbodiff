@@ -419,6 +419,7 @@ app.post('/internal/fix', async (c) => {
       repo: repo.name,
       prNumber: Number(number),
       installationId: repo.installation_id,
+      repositoryId: repo.id,
       findings: payload?.findings,
       authMode: payload?.auth_mode,
       testCommand: payload?.test_command ?? repo.check_command ?? undefined,
