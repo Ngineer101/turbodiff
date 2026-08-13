@@ -1,5 +1,13 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
-import { Clapperboard, GitMerge, OctagonMinus, RefreshCw, Search, Wrench } from 'lucide-react';
+import {
+  Clapperboard,
+  GitCompare,
+  GitMerge,
+  OctagonMinus,
+  RefreshCw,
+  Search,
+  Wrench,
+} from 'lucide-react';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import type { ApiRepoSettings, ApiSettings } from '../../shared/api-types.ts';
@@ -260,6 +268,15 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
               onClick={() => patchRepo.mutate({ auto_merge: !repo.auto_merge })}
             >
               <GitMerge className="size-3" aria-hidden /> Auto-merge
+            </Chip>
+            <Chip
+              on={repo.auto_resolve_conflicts}
+              title={`${repo.auto_resolve_conflicts ? 'Conflicts are left for a human to resolve' : 'A detected merge conflict dispatches the fix agent to merge the base branch in and push a resolution'} — click to ${repo.auto_resolve_conflicts ? 'disable' : 'enable'}`}
+              onClick={() =>
+                patchRepo.mutate({ auto_resolve_conflicts: !repo.auto_resolve_conflicts })
+              }
+            >
+              <GitCompare className="size-3" aria-hidden /> Auto-resolve conflicts
             </Chip>
             <Chip
               on={repo.demo_videos}

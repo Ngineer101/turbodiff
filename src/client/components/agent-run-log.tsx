@@ -16,6 +16,7 @@ const KIND_LABEL: Record<ApiAgentRun['kind'], string> = {
   verify: 'Verify',
   fix: 'Fix',
   automation: 'Automation',
+  resolve_conflict: 'Resolve conflict',
 };
 
 function AgentRunEntry({ run, open }: { run: ApiAgentRun; open: boolean }) {

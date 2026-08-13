@@ -87,6 +87,11 @@
       "name": "turbodiff-automation",
       "class_name": "AutomationWorkflow",
     },
+    {
+      "binding": "CONFLICT_RESOLVE_WORKFLOW",
+      "name": "turbodiff-resolve-conflict",
+      "class_name": "ConflictResolveWorkflow",
+    },
   ],
   // Decouples factory runs (minutes) from the requests that trigger them
   // (seconds). One queue for both fix and generation messages, discriminated

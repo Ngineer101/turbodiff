@@ -76,7 +76,9 @@ function BottomTabs() {
       aria-label="Main"
       className="fixed inset-x-0 bottom-0 z-40 border-t border-line/60 bg-bg/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
     >
-      <div className="grid grid-cols-7">
+      {/* flex, not a fixed column count, so adding a destination can never
+          wrap the bar onto a second row */}
+      <div className="flex">
         {NAV.map(({ to, label, icon: Icon, ...item }) => {
           const active = isActive(pathname, to, 'exact' in item && item.exact);
           return (
@@ -85,15 +87,18 @@ function BottomTabs() {
               to={to}
               aria-current={active ? 'page' : undefined}
               className={cn(
-                'flex flex-col items-center gap-1 py-2 text-[10px] tracking-wide transition-colors active:scale-95',
+                'flex min-w-0 flex-1 flex-col items-center gap-1 py-2 text-[10px] tracking-wide transition-colors active:scale-95',
                 active ? 'text-accent-bright' : 'text-mute',
               )}
             >
               <Icon
-                className={cn('size-5', active && 'drop-shadow-[0_0_6px_rgba(86,211,100,0.4)]')}
+                className={cn(
+                  'size-5 shrink-0',
+                  active && 'drop-shadow-[0_0_6px_rgba(86,211,100,0.4)]',
+                )}
                 aria-hidden
               />
-              {label}
+              <span className="max-w-full truncate px-0.5">{label}</span>
             </Link>
           );
         })}

@@ -23,6 +23,7 @@ export interface RepositoryRow {
   blocking_reviews: number; // P1 → REQUEST_CHANGES, clean → APPROVE
   auto_fix: number; // dispatch the fix agent when a blocking review lands
   auto_merge: number; // merge factory PRs when verification + review are clean
+  auto_resolve_conflicts: number; // dispatch the fix agent to resolve a merge conflict
   demo_videos: number; // record a verification demo video (runtime auto-detected)
   launchable: number | null; // cached detection: null unknown, 1 yes, 0 no
   check_command: string | null; // sandbox verification gate before factory pushes
@@ -164,6 +165,12 @@ export async function setRepoAutoFix(id: number, on: boolean): Promise<void> {
 
 export async function setRepoAutoMerge(id: number, on: boolean): Promise<void> {
   await env.DB.prepare('UPDATE repositories SET auto_merge = ?2 WHERE id = ?1')
+    .bind(id, on ? 1 : 0)
+    .run();
+}
+
+export async function setRepoAutoResolveConflicts(id: number, on: boolean): Promise<void> {
+  await env.DB.prepare('UPDATE repositories SET auto_resolve_conflicts = ?2 WHERE id = ?1')
     .bind(id, on ? 1 : 0)
     .run();
 }
@@ -535,7 +542,8 @@ export type AgentRunKind =
   | 'generate'
   | 'verify'
   | 'fix'
-  | 'automation';
+  | 'automation'
+  | 'resolve_conflict';
 
 export interface AgentRunRow {
   id: number;

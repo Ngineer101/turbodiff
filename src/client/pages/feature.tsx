@@ -379,9 +379,16 @@ export default function FeaturePage() {
   }, [data.files]);
 
   const merge = useMutation({
-    mutationFn: () => api.post(`/api/factory/features/${id}/merge`),
-    onSuccess: () => {
-      toast.success('Pull request merged');
+    mutationFn: () =>
+      api.post<{ ok: boolean; conflict?: boolean; resolving?: boolean }>(
+        `/api/factory/features/${id}/merge`,
+      ),
+    onSuccess: (result) => {
+      toast.success(
+        result.resolving
+          ? 'Merge conflict detected — auto-resolving…'
+          : 'Pull request merged',
+      );
       refresh();
     },
     onError: onApiError,
@@ -469,6 +476,7 @@ export default function FeaturePage() {
         <Pill tone={prState === 'merged' ? 'on' : prState === 'open' ? 'running' : 'red'}>
           {sentence(prState)}
         </Pill>
+        {data.pr.mergeable_state === 'dirty' ? <Pill tone="red">Merge conflict</Pill> : null}
         {v ? (
           <Pill tone={v.status === 'passed' ? 'on' : v.status === 'running' ? 'running' : 'red'}>
             Verify: {v.status}

@@ -13,6 +13,8 @@ import {
   type AutomationQueueMessage,
 } from './lib/automation-workflow.ts';
 import { pollAutomations } from './lib/automation-poll.ts';
+import { ConflictResolveWorkflow, startResolveConflict } from './lib/conflict-resolve-workflow.ts';
+import { type ConflictResolveQueueMessage } from './lib/conflict-resolver.ts';
 import { startFix, FixWorkflow } from './lib/fix-workflow.ts';
 import { type FixQueueMessage } from './lib/fixer.ts';
 import { startGeneration, type GenQueueMessage } from './lib/generation-workflow.ts';
@@ -31,6 +33,7 @@ export { GenerationWorkflow } from './lib/generation-workflow.ts';
 export { VerificationWorkflow };
 export { FixWorkflow };
 export { AutomationWorkflow };
+export { ConflictResolveWorkflow };
 
 // Fix and generation runs take minutes, far beyond what a webhook or intake
 // request can wait on, so producers enqueue and these consumers do the work.
@@ -41,7 +44,8 @@ type FactoryMessage =
   | FixQueueMessage
   | GenQueueMessage
   | PlanQueueMessage
-  | VerifyQueueMessage;
+  | VerifyQueueMessage
+  | ConflictResolveQueueMessage;
 
 export default {
   async queue(batch: MessageBatch<FactoryMessage>): Promise<void> {
@@ -66,6 +70,11 @@ export default {
           break;
         case 'automation':
           await startAutomationRun(body.automationId);
+          break;
+        case 'resolve_conflict':
+          // A new message kind must not silently fall into the `default`
+          // (fix) branch and mis-dispatch.
+          await startResolveConflict(body);
           break;
         default:
           // Fix runs get the same no-wall-clock treatment as generation

@@ -115,7 +115,14 @@ export interface ApiPlan {
 // demand via GET /api/factory/runs/:id/log.
 export interface ApiAgentRun {
   id: number;
-  kind: 'plan_analyze' | 'plan_refine' | 'generate' | 'verify' | 'fix' | 'automation';
+  kind:
+    | 'plan_analyze'
+    | 'plan_refine'
+    | 'generate'
+    | 'verify'
+    | 'fix'
+    | 'automation'
+    | 'resolve_conflict';
   success: boolean;
   created_at: string;
 }
@@ -165,6 +172,9 @@ export interface ApiFeatureDetail {
     additions: number;
     deletions: number;
     changed_files: number;
+    // GitHub's mergeable_state ('dirty' means a conflict with the base
+    // branch); null while GitHub hasn't finished computing it.
+    mergeable_state: string | null;
   } | null;
   // Pseudo-patch (git-style header prepended) ready for @pierre/diffs; null
   // when the file is binary/renamed/too large.
@@ -179,6 +189,8 @@ export interface ApiFeatureDetail {
   reviews: { state: string; body: string; author: string | null }[];
   comments: ApiCockpitComment[];
   demo: { url: string; caption: string | null } | null;
+  // Public shareable "Proof of Build" page; null until a PR exists.
+  certificate_url: string | null;
   criteria: {
     text: string;
     verdict: string | null;
@@ -251,6 +263,7 @@ export interface ApiRepoSettings {
   blocking_reviews: boolean;
   auto_fix: boolean;
   auto_merge: boolean;
+  auto_resolve_conflicts: boolean;
   demo_videos: boolean;
   check_command: string | null;
   agents: { id: number; slug: string; name: string; enabled: boolean }[];

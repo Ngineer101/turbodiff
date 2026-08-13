@@ -67,6 +67,7 @@ import {
   setRepoAgentEnabled,
   setRepoAutoFix,
   setRepoAutoMerge,
+  setRepoAutoResolveConflicts,
   setRepoBlockingReviews,
   setRepoCheckCommand,
   setRepoDemoVideos,
@@ -96,6 +97,7 @@ import {
 } from '../lib/db.ts';
 import { computeNextRunAt } from '../lib/automation-schedule.ts';
 import { requireUser, type AuthedUser } from '../lib/auth.ts';
+import { certificateUrl } from '../lib/certificate.ts';
 import { syncInstallationRepos } from '../lib/repo-sync.ts';
 import { approvePlan } from '../lib/planner.ts';
 import {
@@ -108,6 +110,8 @@ import {
 import { gh } from '../tools/github.ts';
 import { installationToken } from '../lib/github-app.ts';
 import { testMcpEndpoint } from '../lib/mcp-test.ts';
+import { checkMergeability } from '../lib/merge-conflicts.ts';
+import { type ConflictResolveQueueMessage } from '../lib/conflict-resolver.ts';
 import {
   discoverOAuthEndpoints,
   exchangeAuthorizationCode,
@@ -816,6 +820,7 @@ export function createApiRoutes() {
       reviews: [],
       comments: [],
       demo: null,
+      certificate_url: null,
       criteria: [],
       verification: null,
       runs: [],
@@ -824,6 +829,7 @@ export function createApiRoutes() {
     // exactly the case where an advanced user most wants the full log.
     base.runs = (await listAgentRunsForFeature(feature.id)).map(serializeAgentRun);
     if (!feature.pr_number) return c.json(base);
+    base.certificate_url = await certificateUrl(feature.id);
 
     const [plan, verification, token, cockpitComments] = await Promise.all([
       getPlanByFeatureId(feature.id),
@@ -842,6 +848,7 @@ export function createApiRoutes() {
             additions: number;
             deletions: number;
             changed_files: number;
+            mergeable_state: string | null;
           }>,
       ),
       gh(token, `${ghBase}/pulls/${feature.pr_number}/files?per_page=100`).then(
@@ -882,6 +889,7 @@ export function createApiRoutes() {
       additions: prMeta.additions,
       deletions: prMeta.deletions,
       changed_files: prMeta.changed_files,
+      mergeable_state: prMeta.mergeable_state,
     };
     base.reviews = prReviews.map((r) => ({
       state: r.state,
@@ -1087,11 +1095,30 @@ export function createApiRoutes() {
       return c.json({ error: 'unknown feature' }, 404);
     }
     if (!feature.pr_number) return c.json({ error: 'no pull request yet' }, 409);
+    const appToken = await installationToken(repo.installation_id);
+    const mergeability = await checkMergeability(appToken, repo.owner, repo.name, feature.pr_number, {
+      retryOnUnknown: true,
+    });
+    if (mergeability.hasConflict) {
+      if (repo.auto_resolve_conflicts === 1) {
+        const msg: ConflictResolveQueueMessage = {
+          kind: 'resolve_conflict',
+          repoId: repo.id,
+          prNumber: feature.pr_number,
+        };
+        await env.FACTORY_QUEUE.send(msg);
+        return c.json({ ok: true, conflict: true, resolving: true });
+      }
+      return c.json(
+        { error: 'merge blocked — this PR has a merge conflict with the base branch', conflict: true },
+        409,
+      );
+    }
     const mergePath = `/repos/${repo.owner}/${repo.name}/pulls/${feature.pr_number}/merge`;
     const mergeBody = { method: 'PUT' as const, body: JSON.stringify({ merge_method: 'merge' }) };
     const userToken = c.get('user').session.ghToken;
     try {
-      await gh(userToken || (await installationToken(repo.installation_id)), mergePath, mergeBody);
+      await gh(userToken || appToken, mergePath, mergeBody);
     } catch (err) {
       if (!userToken) {
         console.error(`turbodiff: cockpit merge failed for feature ${id}:`, err);
@@ -1099,7 +1126,7 @@ export function createApiRoutes() {
       }
       console.warn(`turbodiff: user-token merge failed for feature ${id}, retrying as app:`, err);
       try {
-        await gh(await installationToken(repo.installation_id), mergePath, mergeBody);
+        await gh(appToken, mergePath, mergeBody);
       } catch (appErr) {
         console.error(`turbodiff: cockpit merge failed for feature ${id}:`, appErr);
         return c.json({ error: 'merge failed — check the PR on GitHub' }, 502);
@@ -1840,6 +1867,7 @@ export function createApiRoutes() {
             blocking_reviews: r.blocking_reviews === 1,
             auto_fix: r.auto_fix === 1,
             auto_merge: r.auto_merge === 1,
+            auto_resolve_conflicts: r.auto_resolve_conflicts === 1,
             demo_videos: r.demo_videos === 1,
             check_command: r.check_command,
             agents: instAgents.map((a) => ({
@@ -1871,6 +1899,7 @@ export function createApiRoutes() {
         blocking_reviews?: boolean;
         auto_fix?: boolean;
         auto_merge?: boolean;
+        auto_resolve_conflicts?: boolean;
         demo_videos?: boolean;
         check_command?: string;
       }>()
@@ -1883,6 +1912,8 @@ export function createApiRoutes() {
       await setRepoBlockingReviews(repo.id, body.blocking_reviews);
     if (typeof body.auto_fix === 'boolean') await setRepoAutoFix(repo.id, body.auto_fix);
     if (typeof body.auto_merge === 'boolean') await setRepoAutoMerge(repo.id, body.auto_merge);
+    if (typeof body.auto_resolve_conflicts === 'boolean')
+      await setRepoAutoResolveConflicts(repo.id, body.auto_resolve_conflicts);
     if (typeof body.demo_videos === 'boolean') await setRepoDemoVideos(repo.id, body.demo_videos);
     if (typeof body.check_command === 'string')
       await setRepoCheckCommand(repo.id, body.check_command);
