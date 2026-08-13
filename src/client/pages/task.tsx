@@ -9,8 +9,15 @@ import { ago } from '../lib/format.ts';
 import { GENERATION_STOPPED, taskQuery } from '../lib/queries.ts';
 import { taskState } from '../lib/task-state.ts';
 import { cn } from '../lib/utils.ts';
+import { AgentRunLog } from '../components/agent-run-log.tsx';
 import { ConfirmButton } from '../components/confirm-button.tsx';
 import { Markdown } from '../components/markdown.tsx';
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from '../components/ui/accordion.tsx';
 import { QuestionsCarousel } from '../components/questions-carousel.tsx';
 import { SectionHeading } from '../components/section.tsx';
 import { Button, buttonVariants } from '../components/ui/button.tsx';
@@ -18,7 +25,7 @@ import { Textarea } from '../components/ui/input.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 
 function onApiError(err: unknown) {
-  toast.error(err instanceof ApiError ? err.message : 'request failed');
+  toast.error(err instanceof ApiError ? err.message : 'Request failed');
 }
 
 function AnswersForm({ task, onDone }: { task: ApiPlan; onDone: () => void }) {
@@ -26,7 +33,7 @@ function AnswersForm({ task, onDone }: { task: ApiPlan; onDone: () => void }) {
     mutationFn: (answers: string[]) =>
       api.post(`/api/factory/plans/${task.id}/answers`, { answers }),
     onSuccess: () => {
-      toast.success('answers submitted — refining the plan');
+      toast.success('Answers submitted — refining the plan');
       onDone();
     },
     onError: onApiError,
@@ -48,14 +55,14 @@ export function TaskPage() {
   const { data: task } = useSuspenseQuery(taskQuery(id));
   const state = taskState(task);
   const refresh = () => {
-    queryClient.invalidateQueries({ queryKey: ['task', id] });
-    queryClient.invalidateQueries({ queryKey: ['board'] });
+    void queryClient.invalidateQueries({ queryKey: ['task', id] });
+    void queryClient.invalidateQueries({ queryKey: ['board'] });
   };
 
   const approve = useMutation({
     mutationFn: () => api.post(`/api/factory/plans/${task.id}/approve`),
     onSuccess: () => {
-      toast.success('plan approved — generation queued');
+      toast.success('Plan approved — generation queued');
       refresh();
     },
     onError: onApiError,
@@ -65,7 +72,15 @@ export function TaskPage() {
   const retry = useMutation({
     mutationFn: (featureId: number) => api.post(`/api/factory/features/${featureId}/retry`),
     onSuccess: () => {
-      toast.success('generation retried');
+      toast.success('Generation retried');
+      refresh();
+    },
+    onError: onApiError,
+  });
+  const retryPlan = useMutation({
+    mutationFn: () => api.post(`/api/factory/plans/${task.id}/retry`),
+    onSuccess: () => {
+      toast.success('Planning restarted');
       refresh();
     },
     onError: onApiError,
@@ -73,9 +88,9 @@ export function TaskPage() {
   const archive = useMutation({
     mutationFn: (archived: boolean) => api.post(`/api/tasks/${task.id}/archive`, { archived }),
     onSuccess: (_d, archived) => {
-      toast.success(archived ? 'task archived' : 'task restored to the board');
+      toast.success(archived ? 'Task archived' : 'Task restored to the board');
       refresh();
-      if (archived) navigate({ to: '/' });
+      if (archived) void navigate({ to: '/' });
     },
     onError: onApiError,
   });
@@ -90,7 +105,7 @@ export function TaskPage() {
     mutationFn: () => api.post(`/api/factory/plans/${task.id}/feedback`, { comments }),
     onSuccess: () => {
       setComments([]);
-      toast.success('feedback sent — revising the plan');
+      toast.success('Feedback sent — revising the plan');
       refresh();
     },
     onError: onApiError,
@@ -121,7 +136,7 @@ export function TaskPage() {
         to="/"
         className="inline-flex items-center gap-1.5 py-1 text-xs text-mute hover:text-ink"
       >
-        <ArrowLeft className="size-3.5" aria-hidden /> board
+        <ArrowLeft className="size-3.5" aria-hidden /> Board
       </Link>
       <h1 className="mt-2 text-base leading-snug font-medium break-words sm:text-xl">
         {task.title}
@@ -141,11 +156,11 @@ export function TaskPage() {
                     : 'red'
               }
             >
-              {task.repos.length > 1 ? `${r.owner}/${r.name} ` : ''}verify: {r.verification!.status}
+              {task.repos.length > 1 ? `${r.owner}/${r.name} ` : ''}Verify: {r.verification!.status}
               {r.verification!.status === 'failed' ? ` (${r.verification!.failed} unmet)` : ''}
             </Pill>
           ))}
-        {task.archived ? <Pill>archived</Pill> : null}
+        {task.archived ? <Pill>Archived</Pill> : null}
       </div>
       <p className="mt-2.5 text-xs text-mute sm:text-[0.85rem]">
         <span className="font-mono">
@@ -168,13 +183,18 @@ export function TaskPage() {
       ) : null}
       {state.hint ? <p className="mt-1 text-xs text-mute/70">{state.hint}</p> : null}
 
-      {task.status === 'failed' && task.error ? (
-        <p className="mt-4 text-[0.85rem] text-danger">{task.error}</p>
+      {task.status === 'failed' ? (
+        <div className="mt-4">
+          {task.error ? <p className="text-[0.85rem] text-danger">{task.error}</p> : null}
+          <Button className="mt-3" onClick={() => retryPlan.mutate()} loading={retryPlan.isPending}>
+            Retry planning
+          </Button>
+        </div>
       ) : null}
 
       {task.status === 'awaiting_answers' && task.questions.length > 0 ? (
         <>
-          <SectionHeading>clarifying questions</SectionHeading>
+          <SectionHeading>Clarifying questions</SectionHeading>
           <AnswersForm task={task} onDone={refresh} />
         </>
       ) : null}
@@ -184,11 +204,11 @@ export function TaskPage() {
           <SectionHeading
             aside={
               <span className="flex items-center gap-1 text-xs text-mute">
-                <MessageSquarePlus className="size-3.5" aria-hidden /> select text to comment
+                <MessageSquarePlus className="size-3.5" aria-hidden /> Select text to comment
               </span>
             }
           >
-            implementation plan
+            Implementation plan
           </SectionHeading>
           <div
             ref={planRef}
@@ -200,7 +220,7 @@ export function TaskPage() {
           </div>
           {task.acceptance.length > 0 ? (
             <>
-              <div className="mt-3 text-xs text-mute">acceptance criteria</div>
+              <div className="mt-3 text-xs text-mute">Acceptance criteria</div>
               <ul className="mt-1 list-disc pl-5 text-[0.85rem]">
                 {task.acceptance.map((a, i) => (
                   <li key={i}>{a}</li>
@@ -211,7 +231,7 @@ export function TaskPage() {
 
           {comments.length > 0 ? (
             <>
-              <SectionHeading>your feedback</SectionHeading>
+              <SectionHeading>Your feedback</SectionHeading>
               <div className="flex flex-col gap-2">
                 {comments.map((f, i) => (
                   <div key={i} className="rounded-xl bg-raised/50 p-3">
@@ -260,7 +280,7 @@ export function TaskPage() {
                 autoFocus
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
-                placeholder="what should change here?"
+                placeholder="What should change here?"
                 className="mt-2 min-h-16"
               />
               <div className="mt-2 flex justify-end gap-2">
@@ -286,12 +306,12 @@ export function TaskPage() {
                 ? 'on'
                 : 'running';
             const label = stopped
-              ? 'generation stopped'
+              ? 'Generation stopped'
               : r.feature_status === 'merged'
-                ? 'merged'
+                ? 'Merged'
                 : r.pr_number
                   ? `PR #${r.pr_number}`
-                  : 'generating';
+                  : 'Generating';
             return (
               <div key={r.repository_id} className="rounded-xl bg-raised/40 p-3">
                 <div className="flex flex-wrap items-center gap-2">
@@ -347,15 +367,19 @@ export function TaskPage() {
 
       {task.plan && task.status === 'approved' ? (
         <>
-          <SectionHeading>plan</SectionHeading>
-          <details className="mt-1">
-            <summary className="cursor-pointer text-[0.85rem] text-mute">
-              implementation plan (approved)
-            </summary>
-            <Markdown className="mt-1">{task.plan}</Markdown>
-          </details>
+          <SectionHeading>Plan</SectionHeading>
+          <Accordion type="single" collapsible>
+            <AccordionItem value="plan">
+              <AccordionTrigger>Implementation plan (approved)</AccordionTrigger>
+              <AccordionContent>
+                <Markdown>{task.plan}</Markdown>
+              </AccordionContent>
+            </AccordionItem>
+          </Accordion>
         </>
       ) : null}
+
+      <AgentRunLog runs={task.runs} />
 
       <div className="mt-12 border-t border-line/60 pt-5">
         {task.archived ? (
@@ -379,7 +403,7 @@ export function TaskPage() {
           </ConfirmButton>
         )}
         <p className="mt-2.5 text-xs text-mute/70">
-          started tasks can't be deleted — only archived
+          Started tasks can't be deleted — only archived.
         </p>
       </div>
     </>

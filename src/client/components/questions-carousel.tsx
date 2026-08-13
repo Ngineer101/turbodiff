@@ -46,7 +46,7 @@ export function QuestionsCarousel({
           <Input
             value={answer}
             onChange={(e) => setAnswer(e.target.value)}
-            placeholder="or type your own answer"
+            placeholder="Or type your own answer"
             className="mt-1"
           />
         </div>
@@ -55,7 +55,7 @@ export function QuestionsCarousel({
           <Input
             value={answer}
             onChange={(e) => setAnswer(e.target.value)}
-            placeholder="your answer"
+            placeholder="Your answer"
           />
         </Field>
       )}

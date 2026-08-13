@@ -1,26 +1,39 @@
 @import 'tailwindcss';
 
-/* Turbodiff's terminal identity as Tailwind v4 theme tokens: phosphor green
-   on near-black. IBM Plex Sans for reading text, IBM Plex Mono for code,
-   identifiers, and terminal chrome (both loaded in the shell). */
+/* Turbodiff's identity as Tailwind v4 theme tokens: dark paper — grainy
+   slate-charcoal sheets, high-contrast ink, phosphor-green accents.
+   IBM Plex Sans for reading text, IBM Plex Mono for code, identifiers, and
+   terminal chrome (both loaded in the shell). */
 @theme {
   --font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
-  --color-bg: #070b09;
-  --color-surface: #0a100d;
-  --color-surface-2: #10160f;
-  --color-raised: #131a16;
-  --color-line: #1c2620;
-  --color-line-2: #2a3830;
-  --color-ink: #e6efe9;
-  --color-ink-dim: #b8c4bc;
-  --color-mute: #7d8f85;
+  --color-bg: #15171c;
+  --color-surface: #191b21;
+  --color-surface-2: #1e2127;
+  --color-raised: #23262d;
+  --color-line: #2b2f37;
+  --color-line-2: #3a4049;
+  --color-ink: #e8eaee;
+  --color-ink-dim: #c2c7cf;
+  --color-mute: #8b919c;
   --color-accent: #3fb950;
   --color-accent-bright: #56d364;
   --color-accent-ink: #04140a;
   --color-danger: #f85149;
   --color-warn: #d29922;
+
+  /* Syntax-highlight hues (rendered markdown only). The UI chrome stays
+     phosphor-green; code gets a real multi-hue palette so tokens are
+     distinguishable — tuned for the dark-paper background. */
+  --color-code-keyword: #ff7b72;
+  --color-code-fn: #d2a8ff;
+  --color-code-string: #a5d6ff;
+  --color-code-const: #79c0ff;
+  --color-code-type: #ffa657;
+
+  --animate-accordion-down: accordion-down 0.18s ease-out;
+  --animate-accordion-up: accordion-up 0.18s ease-out;
 }
 
 @layer base {
@@ -29,6 +42,19 @@
   }
   body {
     @apply bg-bg font-sans text-sm text-ink antialiased;
+  }
+  /* Paper tooth: a fixed fractal-noise layer over everything. It's what
+     separates "dark paper" from "flat dark gray" — clearly visible grain,
+     but neutral so it never fights the text. */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    pointer-events: none;
+    opacity: 0.85;
+    mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3'/%3E%3CfeColorMatrix values='0 0 0 0 0.5 0 0 0 0 0.52 0 0 0 0 0.56 0 0 0 0.3 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
   }
   ::selection {
     background: color-mix(in srgb, var(--color-accent) 35%, transparent);
@@ -57,6 +83,24 @@
   50%,
   100% {
     opacity: 0;
+  }
+}
+
+@keyframes accordion-down {
+  from {
+    height: 0;
+  }
+  to {
+    height: var(--radix-accordion-content-height);
+  }
+}
+
+@keyframes accordion-up {
+  from {
+    height: var(--radix-accordion-content-height);
+  }
+  to {
+    height: 0;
   }
 }
 
@@ -182,12 +226,19 @@
 }
 
 .markdown-body code {
+  display: inline;
   font-family: var(--font-mono);
   font-size: 0.9em;
   padding: 0.15em 0.35em;
   border-radius: 4px;
-  color: var(--color-accent-bright);
-  background: var(--color-surface-2);
+  color: var(--color-ink);
+  background: var(--color-raised);
+  border: 1px solid var(--color-line);
+  overflow-wrap: break-word;
+  /* Chips that wrap across lines keep their padding/rounding on each
+     fragment instead of rendering as a torn-open box. */
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 
 .markdown-body pre {
@@ -200,9 +251,11 @@
 }
 
 .markdown-body pre code {
+  display: block;
   padding: 0;
   color: inherit;
   background: none;
+  border: none;
 }
 
 .markdown-body table {
@@ -241,49 +294,68 @@
   font-size: 1rem;
 }
 
-/* highlight.js token classes, mapped onto the terminal palette instead of a
-   stock theme. */
+/* highlight.js token classes → the code palette. Multi-hue on purpose:
+   the old mapping pushed keywords AND strings onto the green accent, which
+   read as "everything is green" rather than as highlighting. */
 .markdown-body .hljs-comment,
-.markdown-body .hljs-quote {
+.markdown-body .hljs-quote,
+.markdown-body .hljs-meta {
   color: var(--color-mute);
   font-style: italic;
 }
 
 .markdown-body .hljs-keyword,
 .markdown-body .hljs-selector-tag,
-.markdown-body .hljs-tag,
-.markdown-body .hljs-name,
-.markdown-body .hljs-built_in {
-  color: var(--color-accent);
+.markdown-body .hljs-built_in,
+.markdown-body .hljs-doctag {
+  color: var(--color-code-keyword);
 }
 
 .markdown-body .hljs-string,
-.markdown-body .hljs-attr,
-.markdown-body .hljs-symbol,
-.markdown-body .hljs-bullet,
-.markdown-body .hljs-addition {
-  color: var(--color-accent-bright);
+.markdown-body .hljs-char.escape_,
+.markdown-body .hljs-regexp {
+  color: var(--color-code-string);
 }
 
 .markdown-body .hljs-title,
 .markdown-body .hljs-section,
+.markdown-body .hljs-title.function_ {
+  color: var(--color-code-fn);
+}
+
 .markdown-body .hljs-type,
-.markdown-body .hljs-class .hljs-title {
-  color: var(--color-ink);
-  font-weight: 600;
+.markdown-body .hljs-class .hljs-title,
+.markdown-body .hljs-title.class_,
+.markdown-body .hljs-variable,
+.markdown-body .hljs-template-variable {
+  color: var(--color-code-type);
 }
 
 .markdown-body .hljs-number,
 .markdown-body .hljs-literal,
-.markdown-body .hljs-variable,
-.markdown-body .hljs-template-variable {
-  color: var(--color-warn);
+.markdown-body .hljs-symbol,
+.markdown-body .hljs-bullet,
+.markdown-body .hljs-attr,
+.markdown-body .hljs-attribute,
+.markdown-body .hljs-property {
+  color: var(--color-code-const);
 }
 
-.markdown-body .hljs-deletion,
-.markdown-body .hljs-regexp,
-.markdown-body .hljs-link {
+.markdown-body .hljs-tag,
+.markdown-body .hljs-name,
+.markdown-body .hljs-selector-class,
+.markdown-body .hljs-selector-id,
+.markdown-body .hljs-addition {
+  color: var(--color-accent-bright);
+}
+
+.markdown-body .hljs-deletion {
   color: var(--color-danger);
+}
+
+.markdown-body .hljs-link {
+  color: var(--color-code-const);
+  text-decoration: underline;
 }
 
 .markdown-body .hljs-emphasis {

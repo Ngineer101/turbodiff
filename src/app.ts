@@ -23,6 +23,7 @@ import {
   type AgentRow,
   type RepositoryRow,
 } from './lib/db.ts';
+import { auth } from './lib/better-auth.ts';
 import { runFix, sandboxSmoke, type FixAuthMode } from './lib/fixer.ts';
 import { approvePlan } from './lib/planner.ts';
 import { registerReviewMetering } from './lib/metering.ts';
@@ -145,6 +146,17 @@ export async function dispatchReviewAgent(
 
 // GitHub App webhooks — authenticated by HMAC signature, not the bearer secret.
 app.route('/webhooks', createWebhookRoutes(dispatchReviewAgent));
+
+// better-auth (sessions, OAuth callback, sign-out). Registered before the
+// /api data plane so it owns the /api/auth prefix.
+//
+// /update-user is closed: it's the only better-auth route that accepts user
+// additionalFields as client input, and login/githubId can't be input:false
+// (better-auth would strip them from the OAuth profile mapping — see
+// better-auth.ts). Nothing in the app updates users; GitHub is the source
+// of truth via overrideUserInfoOnSignIn.
+app.on(['GET', 'POST'], '/api/auth/update-user', (c) => c.json({ error: 'not found' }, 404));
+app.on(['GET', 'POST'], '/api/auth/*', (c) => auth().handler(c.req.raw));
 
 // SPA data plane (session cookie auth, JSON in/out).
 app.route('/api', createApiRoutes());

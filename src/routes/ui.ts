@@ -1,24 +1,18 @@
 import { env } from 'cloudflare:workers';
 import { Hono, type Context } from 'hono';
-import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
-import { exchangeOAuthCode, fetchUser, oauthAuthorizeUrl } from '../lib/github-app.ts';
-import { storeUserCredential } from '../lib/user-tokens.ts';
-import {
-  openSession,
-  randomToken,
-  sealSession,
-  SESSION_COOKIE,
-  SESSION_TTL_SECONDS,
-  type Session,
-} from '../lib/session.ts';
+import { deleteCookie } from 'hono/cookie';
+import { auth } from '../lib/better-auth.ts';
 import { renderLanding } from './landing.tsx';
 
 // Signed-in UI: a TanStack Router SPA (src/client, built into public/app by
-// vite.client.config.ts). This module only owns OAuth and serving the shell —
-// all data flows through the JSON API in ./api.ts. Logged-out / serves the
-// landing page.
+// vite.client.config.ts). This module only owns sign-in/out and serving the
+// shell — sessions are better-auth's (src/lib/better-auth.ts), and all data
+// flows through the JSON API in ./api.ts. Logged-out / serves the landing
+// page.
 
-const STATE_COOKIE = 'turbodiff_oauth_state';
+// The pre-better-auth stateless session cookie — deleted on sign-out so
+// nothing stale lingers after the migration.
+const LEGACY_SESSION_COOKIE = 'turbodiff_session';
 
 // The shell references fixed asset names (no content hashes) so it can be a
 // static string here; see build.rollupOptions in vite.client.config.ts.
@@ -37,7 +31,7 @@ const SHELL = `<!doctype html>
 			rel="stylesheet"
 		/>
 		<link rel="stylesheet" href="/app/app.css" />
-		<style>html { background: #070b09; }</style>
+		<style>html { background: #15171c; }</style>
 	</head>
 	<body>
 		<div id="root"></div>
@@ -45,69 +39,61 @@ const SHELL = `<!doctype html>
 	</body>
 </html>`;
 
-// Cheap shell gate: a valid, unexpired session cookie. Installation-level
-// authorization happens per request in the API layer.
+// Cheap shell gate: a live better-auth session (cookie-cached — no D1 read
+// within the cache window). Installation-level authorization happens per
+// request in the API layer.
 async function hasSession(c: Context): Promise<boolean> {
   const fake = (env as { DEV_FAKE_INSTALLATIONS?: string }).DEV_FAKE_INSTALLATIONS;
   const host = new URL(c.req.url).hostname;
   if (fake && (host === 'localhost' || host === '127.0.0.1')) return true;
-  return (await openSession(getCookie(c, SESSION_COOKIE))) !== null;
+  return (await auth().api.getSession({ headers: c.req.raw.headers })) !== null;
 }
 
 export function createUiRoutes() {
   const app = new Hono();
 
-  app.get('/auth/login', (c) => {
-    const state = randomToken();
-    setCookie(c, STATE_COOKIE, state, {
-      httpOnly: true,
-      secure: true,
-      sameSite: 'Lax',
-      maxAge: 600,
-      path: '/',
+  app.get('/auth/login', async (c) => {
+    // Server-initiated better-auth social sign-in. The returned headers carry
+    // the state cookie the OAuth callback validates — they must reach the
+    // browser along with the redirect.
+    const { headers, response } = await auth().api.signInSocial({
+      body: { provider: 'github', callbackURL: '/' },
+      returnHeaders: true,
     });
-    const redirectUri = new URL('/auth/callback', c.req.url).toString();
-    return c.redirect(oauthAuthorizeUrl(redirectUri, state));
+    if (!response.url) return c.text('sign-in failed — start again at /', 502);
+    const res = c.redirect(response.url);
+    for (const cookie of headers.getSetCookie()) res.headers.append('set-cookie', cookie);
+    return res;
   });
 
-  app.get('/auth/callback', async (c) => {
-    const { code, state } = c.req.query();
-    const expectedState = getCookie(c, STATE_COOKIE);
-    deleteCookie(c, STATE_COOKIE, { path: '/' });
-    if (!code || !state || !expectedState || state !== expectedState) {
-      return c.text('OAuth state mismatch — start again at /', 400);
+  // GitHub still redirects to the App-registered /auth/callback; hand the
+  // request to better-auth's github callback route unchanged (query intact),
+  // so the GitHub App needs no callback-URL change.
+  app.get('/auth/callback', (c) => {
+    const url = new URL(c.req.url);
+    url.pathname = '/api/auth/callback/github';
+    return auth().handler(new Request(url, c.req.raw));
+  });
+
+  app.post('/auth/logout', async (c) => {
+    deleteCookie(c, LEGACY_SESSION_COOKIE, { path: '/' });
+    let cookies: string[] = [];
+    try {
+      const { headers } = await auth().api.signOut({
+        headers: c.req.raw.headers,
+        returnHeaders: true,
+      });
+      cookies = headers.getSetCookie();
+    } catch {
+      // No live session to revoke — still land signed out on /.
     }
-    const redirectUri = new URL('/auth/callback', c.req.url).toString();
-    const tokens = await exchangeOAuthCode(code, redirectUri);
-    const user = await fetchUser(tokens.token);
-    // Durable credential for async attribution (user-opened PRs). Best
-    // effort — sign-in never fails over it.
-    await storeUserCredential(user.id, user.login, tokens).catch((err) =>
-      console.warn('turbodiff: storing user refresh token failed:', err),
-    );
-    const session: Session = {
-      userId: user.id,
-      login: user.login,
-      ghToken: tokens.token,
-      exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS,
-    };
-    setCookie(c, SESSION_COOKIE, await sealSession(session), {
-      httpOnly: true,
-      secure: true,
-      sameSite: 'Lax',
-      maxAge: SESSION_TTL_SECONDS,
-      path: '/',
-    });
-    return c.redirect('/');
-  });
-
-  app.post('/auth/logout', (c) => {
-    deleteCookie(c, SESSION_COOKIE, { path: '/' });
-    return c.redirect('/');
+    const res = c.redirect('/');
+    for (const cookie of cookies) res.headers.append('set-cookie', cookie);
+    return res;
   });
 
   app.get('/', async (c) => {
-    if (!(await hasSession(c))) return c.html(renderLanding(env.GITHUB_APP_SLUG));
+    if (!(await hasSession(c))) return c.html(renderLanding());
     return c.html(SHELL);
   });
 

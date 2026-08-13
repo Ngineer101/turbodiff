@@ -1,18 +1,32 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { useParams } from '@tanstack/react-router';
 import { PatchDiff, type DiffLineAnnotation } from '@pierre/diffs/react';
-import { ChevronDown, ChevronRight, MessageSquare } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronRight,
+  MessageSquare,
+  PanelLeftClose,
+  PanelLeftOpen,
+} from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { ApiCockpitComment, ApiFeatureDetail } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
-import { featureQuery, GENERATION_STOPPED } from '../lib/queries.ts';
+import { sentence } from '../lib/format.ts';
+import { featureQuery, FIX_TERMINAL, GENERATION_STOPPED } from '../lib/queries.ts';
 import { cn } from '../lib/utils.ts';
+import { AgentRunLog } from '../components/agent-run-log.tsx';
 import { ConfirmButton } from '../components/confirm-button.tsx';
 import { ensureDiffStyles } from '../components/diff-styles.ts';
 import { FILE_STATUS_DOT, FileTree } from '../components/file-tree.tsx';
 import { Markdown } from '../components/markdown.tsx';
 import { Muted, PageTitle, SectionHeading } from '../components/section.tsx';
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from '../components/ui/accordion.tsx';
 import { Button } from '../components/ui/button.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 import { Table, Td } from '../components/ui/table.tsx';
@@ -42,15 +56,24 @@ interface CommentMeta {
 const VERDICT_BADGE: Record<string, string> = { pass: '✅', fail: '❌', skip: '⚪' };
 
 function onApiError(err: unknown) {
-  toast.error(err instanceof ApiError ? err.message : 'request failed');
+  toast.error(err instanceof ApiError ? err.message : 'Request failed');
+}
+
+function CommentFixStatePill({ comment }: { comment: ApiCockpitComment }) {
+  if (comment.fix_status === 'fixed') return <Pill tone="on">Fixed</Pill>;
+  if (comment.fix_status === 'no_changes') return <Pill tone="neutral">No changes needed</Pill>;
+  if (comment.fix_status === 'tests_failed') return <Pill tone="warn">Tests failed</Pill>;
+  if (comment.fix_status === 'failed') return <Pill tone="red">Fix failed</Pill>;
+  if (comment.status === 'dispatched') return <Pill tone="running">Fixing…</Pill>;
+  return null;
 }
 
 function CommentCard({ comment }: { comment: ApiCockpitComment }) {
   return (
     <div className="m-2 rounded-md border border-line-2 border-l-2 border-l-accent bg-surface px-3 py-2 text-[0.82rem]">
-      <div className="mb-1 text-xs text-mute">
-        <strong>@{comment.author}</strong> ·{' '}
-        {comment.status === 'dispatched' ? '🔧 fix dispatched' : comment.status}
+      <div className="mb-1 flex items-center gap-1.5 text-xs text-mute">
+        <strong>@{comment.author}</strong>
+        <CommentFixStatePill comment={comment} />
       </div>
       <Markdown className="markdown-body--compact">{comment.body}</Markdown>
     </div>
@@ -78,7 +101,7 @@ function Composer({
         body: body.trim(),
       }),
     onSuccess: () => {
-      toast.success('comment posted — fix agent dispatched');
+      toast.success('Comment added');
       onDone();
     },
     onError: onApiError,
@@ -87,7 +110,7 @@ function Composer({
   return (
     <div className="m-2 rounded-md border border-line-2 border-l-2 border-l-accent bg-surface px-3 py-2">
       <div className="mb-1.5 text-xs text-mute">
-        Comment on line {selection.endLine} — submitting dispatches the fix agent
+        Comment on line {selection.endLine} — it'll be addressed the next time you hit Submit.
       </div>
       <Textarea
         autoFocus
@@ -103,7 +126,7 @@ function Composer({
           disabled={!body.trim()}
           loading={submit.isPending}
         >
-          {submit.isPending ? 'Dispatching…' : 'Comment & dispatch fix'}
+          {submit.isPending ? 'Adding…' : 'Add comment'}
         </Button>
         <Button size="sm" variant="secondary" onClick={onCancel}>
           Cancel
@@ -164,7 +187,7 @@ function FileDiff({
   if (!file.patch) {
     return (
       <p className="px-3 py-3 text-xs text-mute">
-        diff not rendered (binary, renamed, or too large) — see the PR on GitHub
+        Diff not rendered (binary, renamed, or too large) — see the PR on GitHub.
       </p>
     );
   }
@@ -284,7 +307,9 @@ export default function FeaturePage() {
   const id = Number(featureId);
   const queryClient = useQueryClient();
   const { data } = useSuspenseQuery(featureQuery(id));
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ['feature', id] });
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: ['feature', id] });
+  };
 
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   // Side-by-side needs width; unified is the sane default on narrow screens.
@@ -298,6 +323,15 @@ export default function FeaturePage() {
     localStorage.setItem('turbodiff.diffStyle', style);
   };
   const [activeFile, setActiveFile] = useState<string | null>(null);
+  // The desktop file-tree panel collapses to a thin rail; remembered across
+  // visits since it's a workspace-layout preference.
+  const [treeOpen, setTreeOpenState] = useState(
+    () => localStorage.getItem('turbodiff.fileTree') !== 'closed',
+  );
+  const setTreeOpen = (open: boolean) => {
+    setTreeOpenState(open);
+    localStorage.setItem('turbodiff.fileTree', open ? 'open' : 'closed');
+  };
   const sectionEls = useRef(new Map<string, HTMLElement>());
 
   const commentCounts = useMemo(() => {
@@ -347,7 +381,7 @@ export default function FeaturePage() {
   const merge = useMutation({
     mutationFn: () => api.post(`/api/factory/features/${id}/merge`),
     onSuccess: () => {
-      toast.success('pull request merged');
+      toast.success('Pull request merged');
       refresh();
     },
     onError: onApiError,
@@ -355,11 +389,23 @@ export default function FeaturePage() {
   const retryGeneration = useMutation({
     mutationFn: () => api.post(`/api/factory/features/${id}/retry`),
     onSuccess: () => {
-      toast.success('generation retried — the run is queued');
+      toast.success('Generation retried — the run is queued');
       refresh();
     },
     onError: onApiError,
   });
+  const submitBatch = useMutation({
+    mutationFn: () => api.post(`/api/factory/features/${id}/comments/submit`),
+    onSuccess: () => {
+      toast.success('Comments submitted — the fix agent is dispatched');
+      refresh();
+    },
+    onError: onApiError,
+  });
+  const pendingCount = data.comments.filter((c) => c.status === 'open').length;
+  const batchRunning = data.comments.some(
+    (c) => c.status === 'dispatched' && !FIX_TERMINAL.has(c.fix_status ?? ''),
+  );
 
   if (!data.pr) {
     const stopped = GENERATION_STOPPED.has(data.feature.status);
@@ -369,9 +415,9 @@ export default function FeaturePage() {
           titleClassName="text-base sm:text-xl"
           aside={
             stopped ? (
-              <Pill tone="red">{data.feature.status}</Pill>
+              <Pill tone="red">{sentence(data.feature.status)}</Pill>
             ) : (
-              <Pill tone="running">generating</Pill>
+              <Pill tone="running">Generating</Pill>
             )
           }
         >
@@ -421,11 +467,11 @@ export default function FeaturePage() {
       </h1>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <Pill tone={prState === 'merged' ? 'on' : prState === 'open' ? 'running' : 'red'}>
-          {prState}
+          {sentence(prState)}
         </Pill>
         {v ? (
           <Pill tone={v.status === 'passed' ? 'on' : v.status === 'running' ? 'running' : 'red'}>
-            verify: {v.status}
+            Verify: {v.status}
             {v.status === 'passed'
               ? ` (${v.total}/${v.total})`
               : v.status === 'failed'
@@ -453,38 +499,91 @@ export default function FeaturePage() {
         </span>
       </p>
 
-      {prState === 'open' ? (
-        <div className="mt-5">
-          <ConfirmButton
-            className="w-full sm:w-auto"
-            title="Merge pull request?"
-            description={`This merges PR #${data.feature.pr_number} into ${data.repo} on GitHub.`}
-            confirmLabel="Merge"
-            onConfirm={() => merge.mutate()}
-            busy={merge.isPending}
-          >
-            Merge pull request
-          </ConfirmButton>
+      {/* One action row: merging is the primary CTA, submitting review
+          comments the secondary one beside it. */}
+      {prState === 'open' || pendingCount > 0 || batchRunning ? (
+        <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:items-center">
+          {prState === 'open' ? (
+            <ConfirmButton
+              className="w-full sm:w-auto"
+              title="Merge pull request?"
+              description={`This merges PR #${data.feature.pr_number} into ${data.repo} on GitHub.`}
+              confirmLabel="Merge"
+              onConfirm={() => merge.mutate()}
+              busy={merge.isPending}
+            >
+              Merge pull request
+            </ConfirmButton>
+          ) : null}
+          {pendingCount > 0 || batchRunning ? (
+            <Button
+              variant="secondary"
+              className="w-full sm:w-auto"
+              onClick={() => submitBatch.mutate()}
+              disabled={pendingCount === 0 || batchRunning}
+              loading={submitBatch.isPending}
+            >
+              {batchRunning
+                ? 'Fix in progress…'
+                : `Submit ${pendingCount} comment${pendingCount === 1 ? '' : 's'}`}
+            </Button>
+          ) : null}
         </div>
       ) : null}
 
-      <div className="lg:grid lg:grid-cols-[15rem_minmax(0,1fr)] lg:items-start lg:gap-8">
-        {/* Sticky file tree, desktop only; small screens get a collapsible
-				    jump list above the diff instead. */}
-        <aside className="hidden lg:sticky lg:top-4 lg:block lg:max-h-[calc(100dvh-2rem)] lg:overflow-y-auto lg:pt-9">
-          <div className="mb-2 px-1.5 text-xs text-mute">
-            {data.files.length} file{data.files.length === 1 ? '' : 's'} ·{' '}
-            <span className="text-accent-bright">+{totalAdditions}</span>{' '}
-            <span className="text-danger">−{totalDeletions}</span>
-          </div>
-          {fileTree}
+      <div
+        className={cn(
+          'lg:grid lg:items-start lg:gap-6 lg:transition-[grid-template-columns] lg:duration-200',
+          treeOpen ? 'lg:grid-cols-[16rem_minmax(0,1fr)]' : 'lg:grid-cols-[2.25rem_minmax(0,1fr)]',
+        )}
+      >
+        {/* Sticky file tree, desktop only — collapsible to a thin rail; small
+            screens get a jump list above the diff instead. */}
+        <aside className="hidden lg:sticky lg:top-4 lg:flex lg:max-h-[calc(100dvh-2rem)] lg:flex-col lg:pt-9">
+          {treeOpen ? (
+            <>
+              <div className="flex items-center justify-between gap-2 px-1.5 pb-2">
+                <span className="font-mono text-xs font-medium tracking-[0.14em] text-mute uppercase">
+                  Files
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setTreeOpen(false)}
+                  title="Hide the file tree"
+                  aria-label="Hide the file tree"
+                  className="cursor-pointer rounded-md p-1 text-mute transition-colors hover:bg-raised/60 hover:text-ink"
+                >
+                  <PanelLeftClose className="size-3.5" aria-hidden />
+                </button>
+              </div>
+              <div className="mb-2 px-1.5 text-xs text-mute">
+                {data.files.length} file{data.files.length === 1 ? '' : 's'} ·{' '}
+                <span className="text-accent-bright">+{totalAdditions}</span>{' '}
+                <span className="text-danger">−{totalDeletions}</span>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto pb-2">{fileTree}</div>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setTreeOpen(true)}
+              title="Show the file tree"
+              aria-label="Show the file tree"
+              className="flex cursor-pointer flex-col items-center gap-2 rounded-md border border-line bg-surface px-1.5 py-2 text-mute transition-colors hover:border-line-2 hover:text-ink"
+            >
+              <PanelLeftOpen className="size-3.5" aria-hidden />
+              <span className="font-mono text-[10px] tabular-nums [writing-mode:vertical-rl]">
+                {data.files.length} files
+              </span>
+            </button>
+          )}
         </aside>
 
         <div className="min-w-0">
           <div className="max-w-3xl">
             {data.demo ? (
               <>
-                <SectionHeading>demo</SectionHeading>
+                <SectionHeading>Demo</SectionHeading>
                 <video
                   className="w-full rounded-xl bg-black border border-line-2 shadow-2xl shadow-black/60"
                   controls
@@ -502,57 +601,85 @@ export default function FeaturePage() {
 
             {data.criteria.length > 0 ? (
               <>
-                <SectionHeading>acceptance criteria</SectionHeading>
-                <Table>
-                  <tbody>
-                    {data.criteria.map((crit, i) => (
-                      <tr key={i}>
-                        <Td className="w-6">{VERDICT_BADGE[crit.verdict ?? ''] ?? '⚪'}</Td>
-                        <Td>
-                          {crit.text}
-                          {crit.note ? <div className="text-xs text-mute">{crit.note}</div> : null}
-                          {crit.screenshot_url ? (
-                            <div className="mt-1">
-                              <img
-                                src={crit.screenshot_url}
-                                alt=""
-                                className="max-h-40 rounded-xl bg-black border border-line-2 shadow-2xl shadow-black/60"
-                              />
-                            </div>
-                          ) : null}
-                        </Td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </Table>
+                <SectionHeading>Acceptance criteria</SectionHeading>
+                <Accordion type="single" collapsible defaultValue="criteria">
+                  <AccordionItem value="criteria">
+                    <AccordionTrigger
+                      aside={
+                        <span className="text-xs text-mute tabular-nums">
+                          {data.criteria.filter((c) => c.verdict === 'pass').length}/
+                          {data.criteria.length} passed
+                        </span>
+                      }
+                    >
+                      {data.criteria.length} criteri{data.criteria.length === 1 ? 'on' : 'a'}
+                    </AccordionTrigger>
+                    <AccordionContent>
+                      <Table className="mt-0">
+                        <tbody>
+                          {data.criteria.map((crit, i) => (
+                            <tr key={i}>
+                              <Td className={cn('w-6', i === 0 && 'border-t-0')}>
+                                {VERDICT_BADGE[crit.verdict ?? ''] ?? '⚪'}
+                              </Td>
+                              <Td className={cn(i === 0 && 'border-t-0')}>
+                                {crit.text}
+                                {crit.note ? (
+                                  <div className="text-xs text-mute">{crit.note}</div>
+                                ) : null}
+                                {crit.screenshot_url ? (
+                                  <div className="mt-1">
+                                    <img
+                                      src={crit.screenshot_url}
+                                      alt=""
+                                      className="max-h-40 rounded-xl bg-black border border-line-2 shadow-2xl shadow-black/60"
+                                    />
+                                  </div>
+                                ) : null}
+                              </Td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </Table>
+                    </AccordionContent>
+                  </AccordionItem>
+                </Accordion>
               </>
             ) : null}
 
             {data.reviews.length > 0 ? (
               <>
-                <SectionHeading>reviews</SectionHeading>
-                {data.reviews.map((r, i) => (
-                  <details key={i} className="mt-2">
-                    <summary className="cursor-pointer text-[0.85rem]">
-                      {r.author ?? 'unknown'} · {r.state.toLowerCase()}
-                    </summary>
-                    <Markdown className="mt-1">{r.body || '(no body)'}</Markdown>
-                  </details>
-                ))}
+                <SectionHeading>Reviews</SectionHeading>
+                <Accordion type="multiple">
+                  {data.reviews.map((r, i) => (
+                    <AccordionItem key={i} value={String(i)}>
+                      <AccordionTrigger>
+                        {r.author ?? 'Unknown'} · {sentence(r.state.toLowerCase())}
+                      </AccordionTrigger>
+                      <AccordionContent>
+                        <Markdown>{r.body || '(no body)'}</Markdown>
+                      </AccordionContent>
+                    </AccordionItem>
+                  ))}
+                </Accordion>
               </>
             ) : null}
 
             {data.plan ? (
               <>
-                <SectionHeading>plan</SectionHeading>
-                <details className="mt-2">
-                  <summary className="cursor-pointer text-[0.85rem] text-mute">
-                    implementation plan (approved)
-                  </summary>
-                  <Markdown className="mt-1">{data.plan}</Markdown>
-                </details>
+                <SectionHeading>Plan</SectionHeading>
+                <Accordion type="single" collapsible>
+                  <AccordionItem value="plan">
+                    <AccordionTrigger>Implementation plan (approved)</AccordionTrigger>
+                    <AccordionContent>
+                      <Markdown>{data.plan}</Markdown>
+                    </AccordionContent>
+                  </AccordionItem>
+                </Accordion>
               </>
             ) : null}
+
+            <AgentRunLog runs={data.runs} />
           </div>
 
           <SectionHeading
@@ -576,7 +703,7 @@ export default function FeaturePage() {
                           : 'text-mute hover:text-ink',
                       )}
                     >
-                      {style === 'split' ? 'side-by-side' : 'unified'}
+                      {style === 'split' ? 'Side-by-side' : 'Unified'}
                     </button>
                   ))}
                 </span>
@@ -585,28 +712,32 @@ export default function FeaturePage() {
                   size="sm"
                   onClick={() => setCollapsed(new Set(data.files.map((f) => f.filename)))}
                 >
-                  collapse all
+                  Collapse all
                 </Button>
                 <Button variant="ghost" size="sm" onClick={() => setCollapsed(new Set())}>
-                  expand all
+                  Expand all
                 </Button>
               </span>
             }
           >
-            diff
+            Diff
           </SectionHeading>
           {prState === 'open' ? (
             <Muted className="block">
-              select a line range in the diff to comment — comments dispatch the fix agent
+              Select a line range in the diff to comment — click Submit to address every pending
+              comment in one pass.
             </Muted>
           ) : null}
 
-          <details className="mt-3 rounded-lg border border-line bg-surface px-3 py-2 lg:hidden">
-            <summary className="cursor-pointer text-xs text-mute">
-              {data.files.length} file{data.files.length === 1 ? '' : 's'} changed — jump to file
-            </summary>
-            <div className="mt-2">{fileTree}</div>
-          </details>
+          <Accordion type="single" collapsible className="mt-3 lg:hidden">
+            <AccordionItem value="files">
+              <AccordionTrigger className="text-xs text-mute">
+                {data.files.length} file{data.files.length === 1 ? '' : 's'} changed — jump to a
+                file
+              </AccordionTrigger>
+              <AccordionContent>{fileTree}</AccordionContent>
+            </AccordionItem>
+          </Accordion>
 
           {data.files.map((f) => (
             <FileSection

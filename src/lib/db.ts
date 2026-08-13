@@ -224,6 +224,10 @@ export interface CockpitCommentRow {
   author_id: number | null; // null on rows predating attribution
   status: string;
   created_at: string;
+  fix_attempt_id: number | null;
+  fix_status: string | null; // the linked fix_attempts row's status, if any
+  fix_commit_sha: string | null;
+  fix_error: string | null;
 }
 
 export async function createCockpitComment(
@@ -246,15 +250,51 @@ export async function createCockpitComment(
   return row!.id;
 }
 
-export async function markCockpitCommentDispatched(id: number): Promise<void> {
-  await env.DB.prepare("UPDATE cockpit_comments SET status = 'dispatched' WHERE id = ?1")
-    .bind(id)
+// Atomically claims every open comment on a feature into one batch, so two
+// concurrent Submit clicks can't both grab the same comment into two
+// separate fix runs.
+export async function dispatchOpenCockpitComments(featureId: number): Promise<CockpitCommentRow[]> {
+  const res = await env.DB.prepare(
+    `UPDATE cockpit_comments SET status = 'dispatched'
+		 WHERE feature_id = ?1 AND status = 'open'
+		 RETURNING *`,
+  )
+    .bind(featureId)
+    .all<CockpitCommentRow>();
+  return res.results;
+}
+
+export async function linkCommentsToFixAttempt(
+  commentIds: number[],
+  attemptId: number,
+): Promise<void> {
+  if (commentIds.length === 0) return;
+  const placeholders = commentIds.map((_, i) => `?${i + 2}`).join(', ');
+  await env.DB.prepare(
+    `UPDATE cockpit_comments SET fix_attempt_id = ?1 WHERE id IN (${placeholders})`,
+  )
+    .bind(attemptId, ...commentIds)
     .run();
+}
+
+export async function hasRunningFixAttempt(
+  repositoryId: number,
+  prNumber: number,
+): Promise<boolean> {
+  const row = await env.DB.prepare(
+    `SELECT id FROM fix_attempts WHERE repository_id = ?1 AND pr_number = ?2 AND status = 'running' LIMIT 1`,
+  )
+    .bind(repositoryId, prNumber)
+    .first<{ id: number }>();
+  return row !== null;
 }
 
 export async function listCockpitComments(featureId: number): Promise<CockpitCommentRow[]> {
   const res = await env.DB.prepare(
-    'SELECT * FROM cockpit_comments WHERE feature_id = ?1 ORDER BY id',
+    `SELECT c.*, fa.status AS fix_status, fa.commit_sha AS fix_commit_sha, fa.error AS fix_error
+		 FROM cockpit_comments c
+		 LEFT JOIN fix_attempts fa ON fa.id = c.fix_attempt_id
+		 WHERE c.feature_id = ?1 ORDER BY c.id`,
   )
     .bind(featureId)
     .all<CockpitCommentRow>();
@@ -450,11 +490,14 @@ export async function countFixAttempts(repositoryId: number, prNumber: number): 
   return row?.n ?? 0;
 }
 
-// Records an attempt only while under the cap, in a single statement so two
-// concurrent consumers can't both slip past the count check. Returns null when
-// the cap is reached. Sweeps zombie rows first: a consumer killed at the
-// platform's wall clock never finishes its row, so old 'running' rows are
-// closed as failed rather than lying on the dashboard forever.
+// Records an attempt only while under the cap and only when no attempt is
+// already running for this PR, in a single statement so two concurrent
+// consumers (any trigger — a cockpit batch submit, the blocking_review
+// webhook) can't both slip past either check and clobber the same sandbox.
+// Returns null when blocked. Sweeps zombie rows first: a consumer killed at
+// the platform's wall clock never finishes its row, so old 'running' rows
+// are closed as failed rather than lying on the dashboard (and blocking new
+// attempts) forever.
 export async function tryRecordFixAttempt(
   repositoryId: number,
   prNumber: number,
@@ -472,11 +515,99 @@ export async function tryRecordFixAttempt(
     `INSERT INTO fix_attempts (repository_id, pr_number, "trigger")
 		 SELECT ?1, ?2, ?3
 		 WHERE (SELECT COUNT(*) FROM fix_attempts WHERE repository_id = ?1 AND pr_number = ?2) < ?4
+		   AND NOT EXISTS (
+		     SELECT 1 FROM fix_attempts
+		     WHERE repository_id = ?1 AND pr_number = ?2 AND status = 'running'
+		   )
 		 RETURNING id`,
   )
     .bind(repositoryId, prNumber, trigger, cap)
     .first<{ id: number }>();
   return row?.id ?? null;
+}
+
+// --- agent run logs (full session transcripts; content in R2, pointer here) ---
+
+export type AgentRunKind = 'plan_analyze' | 'plan_refine' | 'generate' | 'verify' | 'fix';
+
+export interface AgentRunRow {
+  id: number;
+  kind: AgentRunKind;
+  success: number;
+  created_at: string;
+}
+
+export async function recordAgentRun(
+  kind: AgentRunKind,
+  logKey: string,
+  success: boolean,
+  owner: { planId?: number; featureId?: number; fixAttemptId?: number },
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO agent_runs (kind, plan_id, feature_id, fix_attempt_id, log_key, success)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+  )
+    .bind(
+      kind,
+      owner.planId ?? null,
+      owner.featureId ?? null,
+      owner.fixAttemptId ?? null,
+      logKey,
+      success ? 1 : 0,
+    )
+    .run();
+}
+
+export async function listAgentRunsForPlan(planId: number): Promise<AgentRunRow[]> {
+  const res = await env.DB.prepare(
+    'SELECT id, kind, success, created_at FROM agent_runs WHERE plan_id = ?1 ORDER BY id',
+  )
+    .bind(planId)
+    .all<AgentRunRow>();
+  return res.results;
+}
+
+// Direct feature_id rows (generate/verify) plus fix runs resolved through
+// fix_attempts' (repository_id, pr_number) → the same feature, the same join
+// getFeatureByRepoPr performs — fix_attempts has no feature_id column.
+export async function listAgentRunsForFeature(featureId: number): Promise<AgentRunRow[]> {
+  const res = await env.DB.prepare(
+    `SELECT ar.id, ar.kind, ar.success, ar.created_at
+		 FROM agent_runs ar
+		 WHERE ar.feature_id = ?1
+		 UNION ALL
+		 SELECT ar.id, ar.kind, ar.success, ar.created_at
+		 FROM agent_runs ar
+		 JOIN fix_attempts fa ON fa.id = ar.fix_attempt_id
+		 JOIN features f ON f.repository_id = fa.repository_id AND f.pr_number = fa.pr_number
+		 WHERE f.id = ?1
+		 ORDER BY id`,
+  )
+    .bind(featureId)
+    .all<AgentRunRow>();
+  return res.results;
+}
+
+// Resolves an agent run to its owning installation for the log route's
+// authorization check — only one of the three LEFT JOIN chains matches,
+// since a row's plan_id/feature_id/fix_attempt_id are mutually exclusive.
+export async function getAgentRunForAuth(
+  id: number,
+): Promise<{ logKey: string; installationId: number } | null> {
+  return env.DB.prepare(
+    `SELECT ar.log_key AS logKey,
+		        COALESCE(rp.installation_id, rf.installation_id, rx.installation_id) AS installationId
+		 FROM agent_runs ar
+		 LEFT JOIN plans p ON p.id = ar.plan_id
+		 LEFT JOIN repositories rp ON rp.id = p.repository_id
+		 LEFT JOIN features f ON f.id = ar.feature_id
+		 LEFT JOIN repositories rf ON rf.id = f.repository_id
+		 LEFT JOIN fix_attempts fa ON fa.id = ar.fix_attempt_id
+		 LEFT JOIN repositories rx ON rx.id = fa.repository_id
+		 WHERE ar.id = ?1`,
+  )
+    .bind(id)
+    .first<{ logKey: string; installationId: number }>();
 }
 
 // --- features (Phase 2: spec → generated branch + PR) ---

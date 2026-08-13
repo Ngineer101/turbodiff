@@ -15,16 +15,16 @@ export function AgentsPage() {
       <PageTitle
         aside={
           <Link to="/agents/new" className="text-[0.85rem] text-accent-bright hover:underline">
-            + new agent
+            + New agent
           </Link>
         }
       >
-        agents
+        Agents
       </PageTitle>
       <p className="mt-3 text-[0.85rem] text-mute">
         Agents review the factory's generated PRs on the repos they're enabled for (see{' '}
         <Link to="/settings" className="text-accent-bright hover:underline">
-          settings
+          Settings
         </Link>
         ) — their blocking findings drive the auto-fix loop. Any agent can be enabled on any repo.
       </p>
@@ -46,7 +46,7 @@ export function AgentsPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-[0.9rem] font-medium">{a.name}</span>
                   <Pill>{a.slug}</Pill>
-                  {a.is_builtin ? <Pill className="text-mute/70">built-in</Pill> : null}
+                  {a.is_builtin ? <Pill className="text-mute/70">Built-in</Pill> : null}
                 </div>
                 {a.description ? (
                   <p className="mt-1 truncate text-xs text-mute">{a.description}</p>

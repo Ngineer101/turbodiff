@@ -4,12 +4,12 @@ import type { ReactNode } from 'react';
 import { cn } from '../lib/utils.ts';
 
 const NAV = [
-  { to: '/', label: 'board', icon: LayoutDashboard, exact: true },
-  { to: '/agents', label: 'agents', icon: Bot },
-  { to: '/skills', label: 'skills', icon: Sparkles },
-  { to: '/integrations', label: 'integrations', icon: Plug },
-  { to: '/usage', label: 'usage', icon: BarChart2 },
-  { to: '/settings', label: 'settings', icon: Settings },
+  { to: '/', label: 'Board', icon: LayoutDashboard, exact: true },
+  { to: '/agents', label: 'Agents', icon: Bot },
+  { to: '/skills', label: 'Skills', icon: Sparkles },
+  { to: '/integrations', label: 'Integrations', icon: Plug },
+  { to: '/usage', label: 'Usage', icon: BarChart2 },
+  { to: '/settings', label: 'Settings', icon: Settings },
 ] as const;
 
 function Logo() {
@@ -102,7 +102,7 @@ function UserBlock({ login }: { login: string }) {
           title="Sign out"
         >
           <LogOut className="size-3.5" aria-hidden />
-          sign out
+          Sign out
         </button>
       </form>
     </div>

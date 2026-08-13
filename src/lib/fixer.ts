@@ -1,11 +1,14 @@
 import { getSandbox, type Sandbox } from '@cloudflare/sandbox';
 import { env } from 'cloudflare:workers';
 import { gh } from '../tools/github.ts';
+import { persistAgentLog } from './agent-runs.ts';
 import { gitAuthorEnv } from './attribution.ts';
 import {
   finishFixAttempt,
   getFeatureByRepoPr,
   getRepoById,
+  hasRunningFixAttempt,
+  linkCommentsToFixAttempt,
   listEnabledSkillsForRepo,
   tryRecordFixAttempt,
 } from './db.ts';
@@ -38,6 +41,9 @@ export interface FixParams {
   // The instructing user (e.g. a cockpit commenter) — becomes the git author
   // of the fix commit; the bot stays committer. Absent on auto-triggered runs.
   author?: { login: string; id: number };
+  // The fix_attempts row this run belongs to, for the full agent log. Absent
+  // on the operator-only POST /internal/fix path, which has no such row.
+  attemptId?: number;
 }
 
 export interface FixOutcome {
@@ -274,7 +280,11 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
         },
       },
     );
-    const agentOutput = scrub(`${agent.stdout}\n${agent.stderr}`.trim()).slice(-8_000);
+    const fullOutput = scrub(`${agent.stdout}\n${agent.stderr}`.trim());
+    const agentOutput = fullOutput.slice(-8_000);
+    if (params.attemptId !== undefined) {
+      await persistAgentLog('fix', fullOutput, agent.success, { fixAttemptId: params.attemptId });
+    }
     if (!agent.success) {
       throw new Error(`fix agent exited ${agent.exitCode}: ${agentOutput.slice(-1_000)}`);
     }
@@ -367,6 +377,10 @@ export interface FixQueueMessage {
   // Instructing user for commit attribution (cockpit comments); absent on
   // auto-triggered fixes.
   author?: { login: string; id: number };
+  // Cockpit comments this batch addresses, linked to the attempt row once
+  // recorded so the cockpit can show per-comment outcome badges. Absent for
+  // the blocking_review trigger, which has no comments to link.
+  commentIds?: number[];
 }
 
 // Queue consumer body: re-validate against current state (the toggle may have
@@ -381,10 +395,18 @@ export async function processFixMessage(msg: FixQueueMessage): Promise<void> {
   }
   const label = `${repo.owner}/${repo.name}#${msg.prNumber}`;
 
-  // The cap check and the attempt insert are one atomic statement — two
-  // concurrent deliveries for the same PR can't both start a run past the cap.
+  // The cap check, the running-attempt check, and the attempt insert are one
+  // atomic statement — two concurrent deliveries for the same PR can't both
+  // start a run past the cap or clobber an in-flight sandbox.
   const attemptId = await tryRecordFixAttempt(repo.id, msg.prNumber, msg.trigger, FIX_MAX_ATTEMPTS);
   if (attemptId === null) {
+    // A run already in flight for this PR is the single-flight guard doing
+    // its job, not the cap — the "N attempts have run" handoff text would be
+    // misleading here, so only post it when the cap is actually the reason.
+    if (await hasRunningFixAttempt(repo.id, msg.prNumber)) {
+      console.log(`turbodiff: fix already running for ${label}, skipping`);
+      return;
+    }
     console.warn(`turbodiff: fix cap reached for ${label}`);
     await postHandoffComment(
       repo.installation_id,
@@ -394,6 +416,11 @@ export async function processFixMessage(msg: FixQueueMessage): Promise<void> {
       FIX_MAX_ATTEMPTS,
     );
     return;
+  }
+  if (msg.commentIds?.length) {
+    // Link before the (multi-minute) run so the cockpit shows "fixing…"
+    // immediately rather than only after it finishes.
+    await linkCommentsToFixAttempt(msg.commentIds, attemptId);
   }
   try {
     const outcome = await runFix({
@@ -405,6 +432,7 @@ export async function processFixMessage(msg: FixQueueMessage): Promise<void> {
       findings: msg.findings,
       testCommand: repo.check_command ?? undefined,
       author: msg.author,
+      attemptId,
     });
     await finishFixAttempt(attemptId, outcome.status, outcome.commit);
     console.log(`turbodiff: fix ${outcome.status} for ${label} (attempt ${attemptId})`);

@@ -11,6 +11,7 @@ import type {
   ApiSettings,
   ApiSkillDetail,
   ApiSkillsList,
+  ApiTaskDetail,
   ApiUsage,
 } from '../../shared/api-types.ts';
 
@@ -59,7 +60,7 @@ export const boardQuery = queryOptions({
 export const taskQuery = (id: number) =>
   queryOptions({
     queryKey: ['task', id],
-    queryFn: () => api.get<ApiPlan>(`/api/tasks/${id}`),
+    queryFn: () => api.get<ApiTaskDetail>(`/api/tasks/${id}`),
     refetchInterval: (query) =>
       query.state.data && taskIsLive(query.state.data) ? LIVE_POLL_MS : false,
   });
@@ -68,6 +69,10 @@ export const usageQuery = queryOptions({
   queryKey: ['usage'],
   queryFn: () => api.get<ApiUsage>('/api/usage'),
 });
+
+// Terminal fix-run outcomes for a cockpit comment's linked batch — anything
+// else (null while running) means the batch is still in flight.
+export const FIX_TERMINAL = new Set(['fixed', 'no_changes', 'tests_failed', 'failed']);
 
 export const featureQuery = (id: number) =>
   queryOptions({
@@ -79,8 +84,23 @@ export const featureQuery = (id: number) =>
       // Poll while generation is in flight (no PR yet, not stopped) or a
       // verification run is live.
       if (!d.pr && !GENERATION_STOPPED.has(d.feature.status)) return LIVE_POLL_MS;
-      return d.verification?.status === 'running' ? LIVE_POLL_MS : false;
+      if (d.verification?.status === 'running') return LIVE_POLL_MS;
+      // Poll while a comment batch's fix run hasn't resolved yet.
+      const fixInFlight = d.comments.some(
+        (c) => c.status === 'dispatched' && !FIX_TERMINAL.has(c.fix_status ?? ''),
+      );
+      if (fixInFlight) return LIVE_POLL_MS;
+      return false;
     },
+  });
+
+// Full transcript for one agent-session run — fetched lazily (enabled: open)
+// by AgentRunLog, not on page load. Immutable once written, so no refetch.
+export const agentRunLogQuery = (id: number) =>
+  queryOptions({
+    queryKey: ['agent-run-log', id],
+    queryFn: () => api.get<{ log: string }>(`/api/factory/runs/${id}/log`),
+    staleTime: Infinity,
   });
 
 export const agentsQuery = queryOptions({
