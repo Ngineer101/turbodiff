@@ -491,7 +491,7 @@ function Landing() {
         <title>Turbodiff — the software factory that built itself</title>
         <meta
           name="description"
-          content="Turbodiff is an open-source software factory whose own commit history is the pitch: features planned, built, reviewed and QC-stamped by the factory itself, with screenshot proof for every acceptance criterion. Anyone can generate code. We ship proof."
+          content="Turbodiff is an open-source software factory whose own commit history is the pitch: features planned, built, reviewed and verified by the factory itself, with screenshot proof for every acceptance criterion. Anyone can generate code. We ship proof."
         />
         <link rel="icon" type="image/png" href="/logo-small.png" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -527,23 +527,23 @@ function Landing() {
               </h1>
               <p class="sub">
                 Turbodiff is an open-source software factory &mdash; and its own commit history is
-                the pitch: the features on this site were planned, built, reviewed and QC-stamped by
-                the factory itself, with screenshot proof for every acceptance criterion. You write
-                the work order, approve the plan, and merge.
+                the pitch: the features on this site were planned, built, reviewed and verified by
+                the factory itself, with screenshot proof for every acceptance criterion. You
+                describe the feature, approve the plan, and merge the PR.
               </p>
               <p class="proof-line">Anyone can generate code. We ship proof.</p>
               <div class="ledger" aria-label="factory ledger">
                 <div class="stat">
                   <b>63%</b>
-                  <span>commits factory-authored</span>
+                  <span>commits written by agents</span>
                 </div>
                 <div class="stat">
                   <b>4 min</b>
-                  <span>human time / unit</span>
+                  <span>human time / feature</span>
                 </div>
                 <div class="stat">
-                  <b>TD-0058</b>
-                  <span>last unit &middot; qc passed</span>
+                  <b>PR #58</b>
+                  <span>last merge &middot; checks passed</span>
                 </div>
               </div>
               <div class="cta-row">
@@ -554,7 +554,7 @@ function Landing() {
                 <span class="soon">coming soon</span>
               </div>
               <span class="cta-note">
-                open source &middot; FSL-licensed &middot; every unit ships with receipts
+                open source &middot; FSL-licensed &middot; every PR ships with receipts
               </span>
             </div>
           </main>
