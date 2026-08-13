@@ -108,7 +108,7 @@ export function resolveRunnerAuth(requested?: FixAuthMode): {
   return picked;
 }
 
-async function fetchPrHead(
+export async function fetchPrHead(
   token: string,
   owner: string,
   repo: string,
@@ -452,7 +452,7 @@ export async function processFixMessage(msg: FixQueueMessage): Promise<void> {
 }
 
 // Cap exhausted: leave a handoff summary instead of another silent iteration.
-async function postHandoffComment(
+export async function postHandoffComment(
   installationId: number,
   owner: string,
   repo: string,

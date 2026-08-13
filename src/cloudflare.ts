@@ -7,6 +7,8 @@
 //
 // https://flueframework.com/docs/guide/cloudflare-target/#extending-cloudflarets-entrypoint
 
+import { ConflictResolveWorkflow, startResolveConflict } from './lib/conflict-resolve-workflow.ts';
+import { type ConflictResolveQueueMessage } from './lib/conflict-resolver.ts';
 import { startFix, FixWorkflow } from './lib/fix-workflow.ts';
 import { type FixQueueMessage } from './lib/fixer.ts';
 import { startGeneration, type GenQueueMessage } from './lib/generation-workflow.ts';
@@ -24,12 +26,18 @@ export { Sandbox } from '@cloudflare/sandbox';
 export { GenerationWorkflow } from './lib/generation-workflow.ts';
 export { VerificationWorkflow };
 export { FixWorkflow };
+export { ConflictResolveWorkflow };
 
 // Fix and generation runs take minutes, far beyond what a webhook or intake
 // request can wait on, so producers enqueue and these consumers do the work.
 // Both processors never throw (failures land in fix_attempts / features), so
 // every message acks — a broken run is not retried into repeat token spend.
-type FactoryMessage = FixQueueMessage | GenQueueMessage | PlanQueueMessage | VerifyQueueMessage;
+type FactoryMessage =
+  | FixQueueMessage
+  | GenQueueMessage
+  | PlanQueueMessage
+  | VerifyQueueMessage
+  | ConflictResolveQueueMessage;
 
 export default {
   async queue(batch: MessageBatch<FactoryMessage>): Promise<void> {
@@ -51,6 +59,11 @@ export default {
           // Just creates a durable workflow instance — verify runs exceed
           // the consumer wall clock routinely (launch discovery + demos).
           await startVerification(body.featureId);
+          break;
+        case 'resolve_conflict':
+          // A new message kind must not silently fall into the `default`
+          // (fix) branch and mis-dispatch.
+          await startResolveConflict(body);
           break;
         default:
           // Fix runs get the same no-wall-clock treatment as generation

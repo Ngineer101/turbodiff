@@ -2,6 +2,8 @@ import { env } from 'cloudflare:workers';
 import { gh } from '../tools/github.ts';
 import { getFeatureByRepoPr, latestVerificationForFeature, type RepositoryRow } from './db.ts';
 import { installationToken } from './github-app.ts';
+import { checkMergeability, postConflictCommentIfAbsent } from './merge-conflicts.ts';
+import type { ConflictResolveQueueMessage } from './conflict-resolver.ts';
 
 // Phase 5 (docs/software-factory-design.md): opt-in auto-merge for factory
 // PRs. Trust is earned, not configured — even with the toggle on, a PR merges
@@ -49,6 +51,21 @@ export async function maybeAutoMerge(repo: RepositoryRow, prNumber: number): Pro
     );
     if (anyBlocking) {
       console.log(`turbodiff: auto-merge declined for ${label} (a review requested changes)`);
+      return;
+    }
+
+    const mergeability = await checkMergeability(token, repo.owner, repo.name, prNumber, {
+      retryOnUnknown: true,
+    });
+    if (mergeability.hasConflict) {
+      if (repo.auto_resolve_conflicts === 1) {
+        const msg: ConflictResolveQueueMessage = { kind: 'resolve_conflict', repoId: repo.id, prNumber };
+        await env.FACTORY_QUEUE.send(msg);
+        console.log(`turbodiff: conflict detected on ${label}, resolution enqueued`);
+      } else {
+        await postConflictCommentIfAbsent(token, repo.owner, repo.name, prNumber, mergeability.baseRef);
+        console.log(`turbodiff: auto-merge declined for ${label} (merge conflict)`);
+      }
       return;
     }
 

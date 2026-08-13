@@ -130,6 +130,18 @@ fix_attempts (
    evidence and the merge gate always reflect the fixed code (bounded by the
    3-fix cap). Verification status surfaces on the factory tab. Still open:
    per-feature token budgets.
+6. **Phase 5b — merge-conflict detection + auto-resolve.** _Built:_ on-demand
+   mergeability checks (GitHub's `mergeable_state`) at cockpit page load and
+   immediately before any merge attempt — no new webhook/permission, since
+   there's no event for "another PR merged into the base branch." Detection
+   and notification (a de-duplicated PR comment, plus a cockpit pill) are
+   always on. Actually resolving a conflict — merging the base branch in and
+   pushing, dispatching the fix agent when the merge isn't clean — is a new
+   opt-in per-repo `auto_resolve_conflicts` toggle (default off, same trust
+   model as `auto_fix`/`auto_merge`), sharing the `fix_attempts` cap and
+   single-flight guard with regular fixes on the same PR. A resolution push
+   re-enqueues verification, same as a fix push. Fork PRs still get detection
+   only, since they can't be pushed to.
 
 ## Phase 1 spike (this repo, now)
 
