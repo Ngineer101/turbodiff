@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm vp run check:types
+
+      - name: Lint
+        run: pnpm vp lint
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Worker and D1 integration tests
+        run: pnpm test:worker
+
+      - name: Build
+        run: pnpm vp run build
+
+      - name: Validate Worker deployment
+        run: pnpm wrangler deploy --dry-run

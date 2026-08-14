@@ -1,6 +1,6 @@
-# Production deploy: every push to main applies D1 migrations and runs the
-# same `vp run deploy` used locally (Worker + sandbox container image; the
-# runner's Docker daemon does the image build).
+# Production deploy: every push to main first passes the same quality, test,
+# build, and dry-run gates as a pull request. Only then may it apply D1
+# migrations and deploy the Worker + sandbox container image.
 #
 # Requires two repository secrets:
 #   CLOUDFLARE_API_TOKEN   — Workers Scripts:Edit, D1:Edit, Containers:Edit
@@ -17,7 +17,41 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm vp run check:types
+
+      - name: Lint
+        run: pnpm vp lint
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Worker and D1 integration tests
+        run: pnpm test:worker
+
+      - name: Build
+        run: pnpm vp run build
+
+      - name: Validate Worker deployment
+        run: pnpm wrangler deploy --dry-run
+
   deploy:
+    needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

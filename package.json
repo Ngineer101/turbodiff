@@ -7,7 +7,8 @@
     "check": "vp check",
     "lint": "vp lint",
     "fmt": "vp fmt",
-    "test": "vp test"
+    "test": "vp test",
+    "test:worker": "vp test --config vitest.worker.config.ts"
   },
   "dependencies": {
     "@cloudflare/sandbox": "^0.12.4",
@@ -36,6 +37,7 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.39.2",
+    "@cloudflare/vitest-pool-workers": "^0.21.3",
     "@flue/cli": "^2.0.1",
     "@flue/vite": "^2.0.1",
     "@tailwindcss/vite": "^4.3.3",
@@ -43,11 +45,14 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.5",
+    "@vitest/runner": "4.1.10",
+    "@vitest/snapshot": "4.1.10",
     "esbuild": "^0.28.1",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
     "vite": "catalog:",
     "vite-plus": "catalog:",
+    "vitest": "4.1.10",
     "wrangler": "^4.97.0"
   },
   "overrides": {

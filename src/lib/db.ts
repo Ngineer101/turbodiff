@@ -690,6 +690,81 @@ export async function createFeature(
   return row!.id;
 }
 
+export interface ApprovedFeatureFields {
+  repositoryId: number;
+  title: string;
+  spec: string;
+  acceptance: string | null;
+  authorLogin: string | null;
+  authorId: number | null;
+  coauthorLogin: string | null;
+  coauthorId: number | null;
+  tier: string | null;
+}
+
+// Claims a ready plan and creates its per-repository features in one D1
+// transaction. The unique (plan_id, repository_id) index is the final guard:
+// repeated requests and concurrent isolates can never duplicate paid work.
+export async function approvePlanFeatures(
+  planId: number,
+  features: ApprovedFeatureFields[],
+): Promise<number[] | null> {
+  if (features.length === 0) return null;
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE plans SET status = 'approving'
+		 WHERE id = ?1 AND status = 'plan_ready' AND plan IS NOT NULL
+		 RETURNING id`,
+    ).bind(planId),
+    ...features.map((feature) =>
+      env.DB.prepare(
+        `INSERT INTO features
+		   (repository_id, title, spec, acceptance, author_login, author_id,
+		    coauthor_login, coauthor_id, tier, plan_id)
+		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
+		 FROM plans p
+		 JOIN plan_repositories pr ON pr.plan_id = p.id AND pr.repository_id = ?1
+		 WHERE p.id = ?10 AND p.status = 'approving'
+		 ON CONFLICT(plan_id, repository_id) DO NOTHING
+		 RETURNING id`,
+      ).bind(
+        feature.repositoryId,
+        feature.title,
+        feature.spec,
+        feature.acceptance,
+        feature.authorLogin,
+        feature.authorId,
+        feature.coauthorLogin,
+        feature.coauthorId,
+        feature.tier,
+        planId,
+      ),
+    ),
+    env.DB.prepare(
+      `UPDATE plans
+		 SET status = 'approved',
+		     feature_id = (
+		       SELECT id FROM features
+		       WHERE plan_id = ?1 AND repository_id = plans.repository_id
+		       LIMIT 1
+		     )
+		 WHERE id = ?1 AND status = 'approving'`,
+    ).bind(planId),
+  ]);
+  const claimed = (results[0].results as { id: number }[] | undefined)?.length;
+  if (!claimed) return null;
+  const rows = await env.DB.prepare(
+    `SELECT f.id FROM features f
+		 JOIN plan_repositories pr
+		   ON pr.plan_id = f.plan_id AND pr.repository_id = f.repository_id
+		 WHERE f.plan_id = ?1
+		 ORDER BY pr.position`,
+  )
+    .bind(planId)
+    .all<{ id: number }>();
+  return rows.results.map((row) => row.id);
+}
+
 export async function getFeature(id: number): Promise<FeatureRow | null> {
   return env.DB.prepare('SELECT * FROM features WHERE id = ?1').bind(id).first<FeatureRow>();
 }
@@ -765,6 +840,7 @@ export interface PlanRow {
   archived: number; // started tasks are never deleted, only hidden
   feedback: string | null; // JSON [{snippet, comment}] awaiting a revise run
   attachments: string | null; // JSON [{key, name, content_type}] in R2
+  todo_id: number | null; // unique origin todo; prevents concurrent double-start
 }
 
 // repositoryIds[0] becomes plans.repository_id (the "primary" repo — every
@@ -803,6 +879,66 @@ export async function createPlan(
     ),
   );
   return planId;
+}
+
+export interface CreatePlanForTodoResult {
+  planId: number;
+  created: boolean;
+}
+
+// Idempotent todo start. The first caller inserts the plan; concurrent or
+// repeated callers recover the existing plan through plans.todo_id. Repo links
+// and the legacy todos.plan_id pointer are then repaired idempotently, so a
+// retry also completes a partially interrupted start.
+export async function createPlanForTodo(
+  todoId: number,
+  repositoryIds: number[],
+  title: string,
+  requirements: string,
+  createdBy?: { login: string; id: number },
+  attachments?: string,
+): Promise<CreatePlanForTodoResult | null> {
+  if (repositoryIds.length === 0) return null;
+  const inserted = await env.DB.prepare(
+    `INSERT INTO plans
+		 (repository_id, title, requirements, created_by_login, created_by_id, attachments, todo_id)
+		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
+		 FROM todos WHERE id = ?7 AND plan_id IS NULL
+		 ON CONFLICT(todo_id) DO NOTHING
+		 RETURNING id`,
+  )
+    .bind(
+      repositoryIds[0],
+      title,
+      requirements,
+      createdBy?.login ?? null,
+      createdBy?.id ?? null,
+      attachments ?? null,
+      todoId,
+    )
+    .first<{ id: number }>();
+  const existing = inserted
+    ? null
+    : await env.DB.prepare('SELECT id FROM plans WHERE todo_id = ?1')
+        .bind(todoId)
+        .first<{ id: number }>();
+  const planId = inserted?.id ?? existing?.id;
+  if (!planId) return null;
+
+  await env.DB.batch([
+    ...repositoryIds.map((repoId, position) =>
+      env.DB.prepare(
+        `INSERT INTO plan_repositories (plan_id, repository_id, position)
+		   VALUES (?1, ?2, ?3)
+		   ON CONFLICT(plan_id, repository_id) DO NOTHING`,
+      ).bind(planId, repoId, position),
+    ),
+    env.DB.prepare(
+      `UPDATE todos SET plan_id = ?2
+		 WHERE id = ?1 AND (plan_id IS NULL OR plan_id = ?2)`,
+    ).bind(todoId, planId),
+  ]);
+  return { planId, created: inserted !== null };
 }
 
 export async function getPlan(id: number): Promise<PlanRow | null> {

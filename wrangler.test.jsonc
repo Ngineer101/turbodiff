@@ -1,0 +1,34 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "turbodiff-tests",
+  "compatibility_date": "2026-06-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "turbodiff-tests",
+      "database_id": "00000000-0000-0000-0000-000000000001",
+      "migrations_dir": "migrations",
+    },
+    {
+      "binding": "DB_MIGRATIONS_FRESH",
+      "database_name": "turbodiff-tests-migrations-fresh",
+      "database_id": "00000000-0000-0000-0000-000000000002",
+    },
+    {
+      "binding": "DB_MIGRATIONS_CONNECTIONS",
+      "database_name": "turbodiff-tests-migrations-connections",
+      "database_id": "00000000-0000-0000-0000-000000000003",
+    },
+    {
+      "binding": "DB_MIGRATIONS_MULTI_REPO",
+      "database_name": "turbodiff-tests-migrations-multi-repo",
+      "database_id": "00000000-0000-0000-0000-000000000004",
+    },
+    {
+      "binding": "DB_MIGRATIONS_IDEMPOTENCY",
+      "database_name": "turbodiff-tests-migrations-idempotency",
+      "database_id": "00000000-0000-0000-0000-000000000005",
+    },
+  ],
+}

@@ -4,7 +4,7 @@ import type { ApiPlanQuestion as Question } from '../shared/api-types.ts';
 import { gh } from '../tools/github.ts';
 import { signArtifactKey } from './crypto.ts';
 import {
-  createFeature,
+  approvePlanFeatures,
   getPlan,
   listReposForPlan,
   updatePlan,
@@ -529,20 +529,18 @@ export async function approvePlan(
   // Criteria travel structured (not only embedded in the spec text) so the
   // verify step can check them one by one after generation. Each repo's
   // feature is fully independent — one failing never blocks the others.
-  const featureIds = await Promise.all(
-    repos.map((repo) =>
-      createFeature(
-        repo.id,
-        plan.title,
-        spec,
-        plan.acceptance ?? undefined,
-        author,
-        coauthor,
-        plan.tier ?? undefined,
-        plan.id,
-      ),
-    ),
+  return approvePlanFeatures(
+    planId,
+    repos.map((repo) => ({
+      repositoryId: repo.id,
+      title: plan.title,
+      spec,
+      acceptance: plan.acceptance,
+      authorLogin: author?.login ?? null,
+      authorId: author?.id ?? null,
+      coauthorLogin: coauthor?.login ?? null,
+      coauthorId: coauthor?.id ?? null,
+      tier: plan.tier,
+    })),
   );
-  await updatePlan(planId, { status: 'approved', featureId: featureIds[0] });
-  return featureIds;
 }

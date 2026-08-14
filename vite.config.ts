@@ -33,7 +33,10 @@ export default defineConfig({
       dev: { command: 'vp dev', dependsOn: ['build:app'] },
       build: { command: 'vp build', dependsOn: ['build:app'] },
       deploy: { command: 'wrangler deploy', dependsOn: ['build'] },
-      'check:types': { command: 'tsc --noEmit && tsc -p tsconfig.client.json --noEmit' },
+      'check:types': {
+        command:
+          'wrangler types && tsc --noEmit && tsc -p tsconfig.client.json --noEmit && tsc -p tsconfig.worker-tests.json --noEmit',
+      },
     },
   },
   // Tests live in vitest.config.ts (plugin-free) — see the note there.
