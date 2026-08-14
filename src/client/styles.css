@@ -172,20 +172,23 @@
   box-shadow: 0 0 9px 2px color-mix(in srgb, var(--color-danger) 40%, transparent);
 }
 
-/* Guarded control (Job Ticket meets launch console): the amber safety collar
-   over the merge button. */
+/* Guarded control (launch-console merge): a hazard band along the button's
+   own top edge — clipped by the button's radius so it reads as part of the
+   control, not a sticker floating above it. */
+.guarded {
+  overflow: hidden;
+}
 .guarded::before {
   content: '';
   position: absolute;
-  inset: -5px -5px auto -5px;
-  height: 5px;
-  border-radius: 3px 3px 0 0;
+  inset: 0 0 auto 0;
+  height: 4px;
   background: repeating-linear-gradient(
     -45deg,
-    var(--color-hold),
-    var(--color-hold) 5px,
-    var(--color-bg) 5px,
-    var(--color-bg) 10px
+    rgba(4, 20, 10, 0.65),
+    rgba(4, 20, 10, 0.65) 4px,
+    var(--color-hold) 4px,
+    var(--color-hold) 8px
   );
 }
 

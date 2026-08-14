@@ -627,9 +627,15 @@ export function BoardPage() {
   const [filter, setFilter] = useState<ColumnKey | 'all'>('all');
   const [repoId, setRepoId] = useState<number | null>(null);
 
-  // Distinct repos across every card, with how many cards each matches.
+  // Every factory-enabled repo plus any repo referenced by a card (covers
+  // repos disabled after their cards were made), with how many cards each
+  // matches. Seeding from data.repos — not just the cards — keeps the filter
+  // visible whenever the user actually has multiple repos, even if only one
+  // has cards right now; picking a quiet repo shows the honest empty state.
   const filterRepos = useMemo(() => {
     const seen = new Map<number, FilterRepo>();
+    for (const r of data.repos)
+      seen.set(r.id, { id: r.id, owner: r.owner, name: r.name, count: 0 });
     const bump = (id: number, owner: string, name: string) => {
       const cur = seen.get(id) ?? { id, owner, name, count: 0 };
       cur.count += 1;
