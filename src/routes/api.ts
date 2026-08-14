@@ -8,7 +8,7 @@ import {
   createAutomation,
   createCockpitComment,
   createConnection,
-  createPlan,
+  createPlanForTodo,
   createSkill,
   createTodo,
   dashboardStats,
@@ -37,7 +37,6 @@ import {
   getPlanByFeatureId,
   getRepoById,
   latestVerificationForFeature,
-  linkTodoToPlan,
   listAgentConnections,
   listAgentRunsForAutomationRun,
   listAgentRunsForFeature,
@@ -711,16 +710,18 @@ export function createApiRoutes() {
       .filter((a) => a.key.startsWith('plan-uploads/'))
       .slice(0, 5);
     const { session } = c.get('user');
-    const planId = await createPlan(
+    const started = await createPlanForTodo(
+      todo.id,
       repos.map((r) => r.id),
       title,
       requirements,
       { login: session.login, id: session.userId },
       attachments.length > 0 ? JSON.stringify(attachments) : undefined,
     );
-    await linkTodoToPlan(todo.id, planId);
-    await env.FACTORY_QUEUE.send({ kind: 'plan_analyze', planId });
-    return c.json({ ok: true, plan_id: planId });
+    if (!started) return c.json({ error: 'todo could not be started' }, 409);
+    if (!started.created) return c.json({ error: 'already started' }, 409);
+    await env.FACTORY_QUEUE.send({ kind: 'plan_analyze', planId: started.planId });
+    return c.json({ ok: true, plan_id: started.planId });
   });
 
   // Task detail for the board's compact cards.

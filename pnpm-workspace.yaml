@@ -10,6 +10,9 @@ minimumReleaseAgeExclude:
   - '@tanstack/react-router@1.170.22'
   - '@tanstack/router-core@1.171.19'
   - lucide-react@1.30.0
+  - '@cloudflare/vitest-pool-workers@0.21.3'
+  - miniflare@5.20260811.1-alpha
+  - wrangler@4.123.0
 patchedDependencies:
   '@flue/runtime': patches/@flue__runtime.patch
 catalog:

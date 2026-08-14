@@ -14,5 +14,5 @@
     "noEmit": true
   },
   "include": ["src", "worker-configuration.d.ts"],
-  "exclude": ["src/client"]
+  "exclude": ["src/client", "src/**/*.worker.test.ts"]
 }
