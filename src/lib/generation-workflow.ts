@@ -4,6 +4,7 @@ import { NonRetryableError } from 'cloudflare:workflows';
 import { gh } from '../tools/github.ts';
 import { persistAgentLog } from './agent-runs.ts';
 import { coauthorTrailer, gitAuthorEnv } from './attribution.ts';
+import { claudeCliResultText, parseClaudeCliUsage, type CliUsage } from './cli-usage.ts';
 import {
   getFeature,
   getRepoById,
@@ -242,7 +243,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
       const agentRan = await step.do(
         'run coding agent',
         { retries: { limit: 1, delay: '5 minutes' }, timeout: AGENT_STEP_TIMEOUT[ctx.tier] },
-        async (): Promise<{ changed: boolean }> => {
+        async (): Promise<{ changed: boolean; usage: CliUsage | null }> => {
           await updateFeature(featureId, { runStartedAt: 'now' });
           const auth = resolveRunnerAuth();
           // The git/installation tokens live in other steps' scopes, not this
@@ -257,7 +258,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
           }
           await sandbox.writeFile(specFile(featureId), generationPrompt(ctx));
           const agent = await sandbox.exec(
-            `claude -p --dangerously-skip-permissions --output-format text < ${specFile(featureId)}`,
+            `claude -p --dangerously-skip-permissions --output-format json < ${specFile(featureId)}`,
             {
               cwd: WORK,
               timeout: AGENT_TIMEOUT_MS[ctx.tier],
@@ -270,9 +271,11 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
               },
             },
           );
+          const usage = parseClaudeCliUsage(agent.stdout);
+          const resultText = claudeCliResultText(agent.stdout);
           await persistAgentLog(
             'generate',
-            scrub(`${agent.stdout}\n${agent.stderr}`.trim()),
+            scrub(`${resultText}\n${agent.stderr}`.trim()),
             agent.success,
             { featureId },
           );
@@ -280,11 +283,11 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
             // Scrubbed: this message persists to features.error and renders
             // in the dashboard for every installation member.
             throw new Error(
-              `generation agent exited ${agent.exitCode}: ${scrub(`${agent.stdout}\n${agent.stderr}`.trim()).slice(-1_000)}`,
+              `generation agent exited ${agent.exitCode}: ${scrub(`${resultText}\n${agent.stderr}`.trim()).slice(-1_000)}`,
             );
           }
           const status = await sandbox.exec(`git -C ${WORK} status --porcelain`);
-          return { changed: Boolean(status.stdout.trim()) };
+          return { changed: Boolean(status.stdout.trim()), usage };
         },
       );
 
@@ -293,6 +296,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
           await updateFeature(featureId, {
             status: 'no_changes',
             error: 'agent produced no file changes',
+            usage: agentRan.usage ?? undefined,
           });
         });
         return 'no_changes';
@@ -345,7 +349,11 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
         );
         if (!checks.ok) {
           await step.do('record checks_failed', QUICK, async () => {
-            await updateFeature(featureId, { status: 'checks_failed', error: checks.output });
+            await updateFeature(featureId, {
+              status: 'checks_failed',
+              error: checks.output,
+              usage: agentRan.usage ?? undefined,
+            });
           });
           return 'checks_failed';
         }
@@ -419,6 +427,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
           status: 'pr_opened',
           branch: ctx.branch,
           prNumber: pr.number,
+          usage: agentRan.usage ?? undefined,
         });
         // Phase 4: acceptance criteria get an empirical verification run.
         if (ctx.acceptance) await env.FACTORY_QUEUE.send({ kind: 'verify', featureId });

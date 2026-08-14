@@ -21,7 +21,8 @@ import {
   updateFeature,
   updatePlan,
   listAgentConnections,
-  recordReview,
+  markReviewFailed,
+  tryRecordReview,
   type AgentRow,
   type RepositoryRow,
 } from './lib/db.ts';
@@ -137,6 +138,21 @@ export async function dispatchReviewAgent(
   opts: { riskTier?: string; modelOverride?: string } = {},
 ): Promise<boolean> {
   const instanceId = `${agent.slug}--${repo.owner}--${repo.name}--${prNumber}`.toLowerCase();
+  // Claim the instance before dispatching: agent_instance_id is reused across
+  // re-reviews of the same PR (the DO conversation is long-lived), so a
+  // redelivered webhook or debounce-window slip must never dispatch a second
+  // agent run onto a row that's already 'running'.
+  const reviewId = await tryRecordReview(
+    repo.id,
+    repo.installation_id,
+    prNumber,
+    trigger,
+    agent.slug,
+    instanceId,
+    opts.riskTier ?? null,
+  );
+  if (reviewId === null) return false;
+
   // Snapshot the agent's external MCP connections (non-secret fields only;
   // tokens are resolved from D1 at request time by the agent's auth resolver).
   const connections = (await listAgentConnections(agent.id)).map(connectionSnapshot);
@@ -165,17 +181,11 @@ export async function dispatchReviewAgent(
       `turbodiff: dispatch failed for ${instanceId} (${agent.slug} on ${repo.owner}/${repo.name}#${prNumber}):`,
       err,
     );
+    // The claimed row would otherwise sit 'running' for 20 minutes over a
+    // dispatch that never reached the agent.
+    await markReviewFailed(instanceId);
     return false;
   }
-  await recordReview(
-    repo.id,
-    repo.installation_id,
-    prNumber,
-    trigger,
-    agent.slug,
-    instanceId,
-    opts.riskTier ?? null,
-  );
   return true;
 }
 

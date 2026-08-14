@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { Hono, type Context } from 'hono';
 import {
   agentUsageForMonth,
+  automationUsageForMonth,
   connectionSnapshot,
   countReviews,
   createAgent,
@@ -47,16 +48,21 @@ import {
   listCockpitComments,
   listConnectionLinks,
   listConnections,
+  listFixAttemptsForRepoPrs,
   listInstallationsWithRepos,
   listPlansForInstallations,
+  listRecentFeaturesForUsage,
   listRecentReviews,
   listRepoAgentOverrides,
   listRepoSkillOverrides,
   listReposForTodo,
+  listReviewsForRepoPrs,
   listSkills,
   listTodos,
+  listVerificationsForFeatures,
   monthlyUsage,
   oauthStatus,
+  pipelineCostForMonth,
   repoUsageForMonth,
   resolveAgentEnabled,
   resolveConnectionAuth,
@@ -87,12 +93,15 @@ import {
   type AutomationRow,
   type CockpitCommentRow,
   type ConnectionRow,
+  type FeatureUsageRow,
+  type FixAttemptRow,
   type PlanRow,
   type PlanWithRepo,
   type RepositoryRow,
   type ReviewActivityRow,
   type SkillRow,
   type TaskRepoStatusRow,
+  type VerificationRow,
 } from '../lib/db.ts';
 import { computeNextRunAt } from '../lib/automation-schedule.ts';
 import { requireUser, userCanPushToRepo, type AuthedUser } from '../lib/auth.ts';
@@ -134,6 +143,8 @@ import type {
   ApiCockpitComment,
   ApiConnectionTest,
   ApiFeatureDetail,
+  ApiFeatureUsage,
+  ApiFeatureUsageSession,
   ApiIntegrations,
   ApiMe,
   ApiPlan,
@@ -158,13 +169,25 @@ function parseUtc(sql: string): number {
 }
 
 // A dispatch that never completed and is older than this is presumed dead
-// (agent error before post_review) rather than still running.
+// (agent error before post_review) rather than still running. Matches the
+// sweep threshold in db.ts's tryRecordReview — keep both in sync if changed.
 const STALL_AFTER_MS = 20 * 60 * 1000;
 
 function reviewState(r: ReviewActivityRow): ApiReview['state'] {
   if (r.status === 'failed') return 'failed';
   if (r.status !== 'running') return 'completed';
   return Date.now() - parseUtc(r.created_at) > STALL_AFTER_MS ? 'stalled' : 'running';
+}
+
+// Shared by every usage-cost row shape (reviews, fix attempts, verifications,
+// features' own generation row) — they all carry the same 4 token columns.
+function totalTokens(row: {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+}): number {
+  return row.input_tokens + row.output_tokens + row.cache_read_tokens + row.cache_write_tokens;
 }
 
 function serializeReview(r: ReviewActivityRow): ApiReview {
@@ -180,12 +203,116 @@ function serializeReview(r: ReviewActivityRow): ApiReview {
     findings_count: r.findings_count,
     state: reviewState(r),
     review_url: r.review_url,
-    total_tokens: r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_write_tokens,
+    total_tokens: totalTokens(r),
     cost_usd: r.cost_usd,
     duration_s:
       r.completed_at === null ? null : (parseUtc(r.completed_at) - parseUtc(r.created_at)) / 1000,
     created_at: r.created_at,
   };
+}
+
+// A generation attempt actually ran only when its usage columns hold real
+// data — a still-queued (or never-metered) feature keeps its all-zero
+// defaults, and the accordion shows no "generate" session for it rather than
+// a misleading all-dashes row.
+function hasUsage(row: { cost_usd: number; model: string | null }): boolean {
+  return row.cost_usd > 0 || row.model !== null;
+}
+
+// Every session belonging to one shipped feature, chronological. Reuses
+// totalTokens/reviewState for the review sessions; fix/verify/generate rows
+// sum their own 4 token columns the same way.
+async function serializeFeatureUsage(
+  f: FeatureUsageRow,
+  reviews: ReviewActivityRow[],
+  fixes: FixAttemptRow[],
+  verifications: VerificationRow[],
+): Promise<ApiFeatureUsage> {
+  const repo = `${f.repo_owner}/${f.repo_name}`;
+  const prUrl = f.pr_number !== null ? `https://github.com/${repo}/pull/${f.pr_number}` : null;
+
+  const sessions: ApiFeatureUsageSession[] = [];
+  if (hasUsage(f)) {
+    sessions.push({
+      kind: 'generate',
+      label: 'generate',
+      status: f.status,
+      cost_usd: f.cost_usd,
+      total_tokens: totalTokens(f),
+      duration_s: null,
+      created_at: f.created_at,
+      url: prUrl,
+    });
+  }
+  for (const r of reviews) {
+    sessions.push({
+      kind: 'review',
+      label: r.agent_slug ?? 'review',
+      status: reviewState(r),
+      cost_usd: r.cost_usd,
+      total_tokens: totalTokens(r),
+      duration_s:
+        r.completed_at === null ? null : (parseUtc(r.completed_at) - parseUtc(r.created_at)) / 1000,
+      created_at: r.created_at,
+      url: r.review_url,
+    });
+  }
+  for (const fx of fixes) {
+    sessions.push({
+      kind: 'fix',
+      label: fx.trigger,
+      status: fx.status,
+      cost_usd: fx.cost_usd,
+      total_tokens: totalTokens(fx),
+      duration_s: null, // fix_attempts has no completion timestamp
+      created_at: fx.created_at,
+      url: prUrl,
+    });
+  }
+  for (const v of verifications) {
+    // The shareable "Proof of Build" certificate only exists once
+    // verification has actually passed (mirrors postReport's cert gate).
+    const url = v.status === 'passed' ? await certificateUrl(f.id) : null;
+    sessions.push({
+      kind: 'verify',
+      label: 'verify',
+      status: v.status,
+      cost_usd: v.cost_usd,
+      total_tokens: totalTokens(v),
+      duration_s: null, // verifications has no completion timestamp
+      created_at: v.created_at,
+      url,
+    });
+  }
+  sessions.sort((a, b) => parseUtc(a.created_at) - parseUtc(b.created_at));
+
+  return {
+    id: f.id,
+    title: f.title,
+    repo,
+    status: f.status,
+    pr_number: f.pr_number,
+    pr_url: prUrl,
+    created_at: f.created_at,
+    total_cost_usd: sessions.reduce((sum, s) => sum + s.cost_usd, 0),
+    total_tokens: sessions.reduce((sum, s) => sum + s.total_tokens, 0),
+    sessions,
+  };
+}
+
+// Groups reviews/fix attempts (over-fetched by repo id + PR number
+// separately, D1 having no clean tuple-IN) down to the exact pair.
+function groupByRepoPr<T extends { repository_id: number; pr_number: number }>(
+  rows: T[],
+): Map<string, T[]> {
+  const map = new Map<string, T[]>();
+  for (const row of rows) {
+    const key = `${row.repository_id}:${row.pr_number}`;
+    const list = map.get(key);
+    if (list) list.push(row);
+    else map.set(key, [row]);
+  }
+  return map;
 }
 
 function verificationSummary(
@@ -499,19 +626,51 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     });
   });
 
-  // Usage page: headline metrics, monthly cost, per-repo/agent cost, recent
-  // reviews (the pre-board dashboard).
+  // Usage page: headline metrics, monthly cost, per-repo/agent cost, and the
+  // features-shipped accordion (the pre-board dashboard).
   app.get('/usage', async (c) => {
     const { installationIds } = c.get('user');
     const month = currentMonth();
-    const [stats, months, repoUsage, agentUsage, groups, recent] = await Promise.all([
-      dashboardStats(installationIds),
-      monthlyUsage(installationIds, 6),
-      repoUsageForMonth(installationIds, month),
-      agentUsageForMonth(installationIds, month),
-      listInstallationsWithRepos(installationIds),
-      listRecentReviews(installationIds, 5),
+    const [stats, months, repoUsage, agentUsage, groups, features, automationUsage, pipelineCost] =
+      await Promise.all([
+        dashboardStats(installationIds),
+        monthlyUsage(installationIds, 6),
+        repoUsageForMonth(installationIds, month),
+        agentUsageForMonth(installationIds, month),
+        listInstallationsWithRepos(installationIds),
+        listRecentFeaturesForUsage(installationIds),
+        automationUsageForMonth(installationIds, month),
+        pipelineCostForMonth(installationIds, month),
+      ]);
+
+    // Second fan-out needs the feature ids/repo-pr pairs from the first.
+    const prPairs = features
+      .filter((f) => f.pr_number !== null)
+      .map((f) => ({ repositoryId: f.repository_id, prNumber: f.pr_number! }));
+    const [reviews, fixes, verifications] = await Promise.all([
+      listReviewsForRepoPrs(prPairs),
+      listFixAttemptsForRepoPrs(prPairs),
+      listVerificationsForFeatures(features.map((f) => f.id)),
     ]);
+    const reviewsByPr = groupByRepoPr(reviews);
+    const fixesByPr = groupByRepoPr(fixes);
+    const verificationsByFeature = new Map<number, VerificationRow[]>();
+    for (const v of verifications) {
+      const list = verificationsByFeature.get(v.feature_id);
+      if (list) list.push(v);
+      else verificationsByFeature.set(v.feature_id, [v]);
+    }
+    const featureUsages = await Promise.all(
+      features.map((f) => {
+        const prKey = f.pr_number !== null ? `${f.repository_id}:${f.pr_number}` : null;
+        return serializeFeatureUsage(
+          f,
+          prKey ? (reviewsByPr.get(prKey) ?? []) : [],
+          prKey ? (fixesByPr.get(prKey) ?? []) : [],
+          verificationsByFeature.get(f.id) ?? [],
+        );
+      }),
+    );
 
     const usageByRepo = new Map(repoUsage.map((u) => [u.repository_id, u]));
     // The 5 most recently connected repos; the rest live on /settings.
@@ -522,12 +681,20 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
 
     return c.json<ApiUsage>({
       month,
-      stats,
+      stats: {
+        month_reviews: stats.month_reviews,
+        month_review_cost_usd: stats.month_cost_usd,
+        month_pipeline_cost_usd: pipelineCost,
+        month_tokens: stats.month_tokens,
+        avg_duration_s: stats.avg_duration_s,
+        avg_findings: stats.avg_findings,
+        running: stats.running,
+      },
       months: months.map((m) => ({
         month: m.month,
         reviews: m.reviews,
         total_tokens: m.total_tokens,
-        cost_usd: m.cost_usd,
+        review_cost_usd: m.cost_usd,
       })),
       agent_usage: agentUsage,
       repo_count: groups.reduce((n, g) => n + g.repos.length, 0),
@@ -544,7 +711,14 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
           cost_usd: u?.cost_usd ?? 0,
         };
       }),
-      recent_reviews: recent.map(serializeReview),
+      features: featureUsages,
+      automation_usage: automationUsage.map((a) => ({
+        automation_id: a.automation_id,
+        name: a.name,
+        repo: `${a.repo_owner}/${a.repo_name}`,
+        runs: a.runs,
+        cost_usd: a.cost_usd,
+      })),
     });
   });
 

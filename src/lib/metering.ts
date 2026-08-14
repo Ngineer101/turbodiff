@@ -3,8 +3,8 @@ import { addReviewUsage, markReviewFailed } from './db.ts';
 
 // Meters model usage per review. Every completed model call emits a `turn`
 // event carrying provider-reported tokens and catalog-priced cost; review
-// rows store their exact agent instance id (recordReview), so attribution is
-// a direct match on event.instanceId — no id parsing.
+// rows store their exact agent instance id (tryRecordReview), so attribution
+// is a direct match on event.instanceId — no id parsing.
 //
 // On Cloudflare each agent conversation runs in its own Durable Object
 // isolate; this subscriber registers in every isolate and sees only that

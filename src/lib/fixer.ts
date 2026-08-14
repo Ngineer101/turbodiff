@@ -3,6 +3,7 @@ import { env } from 'cloudflare:workers';
 import { gh } from '../tools/github.ts';
 import { persistAgentLog } from './agent-runs.ts';
 import { gitAuthorEnv } from './attribution.ts';
+import { claudeCliResultText, parseClaudeCliUsage, type CliUsage } from './cli-usage.ts';
 import {
   finishFixAttempt,
   getFeatureByRepoPr,
@@ -55,6 +56,7 @@ export interface FixOutcome {
   notes?: string;
   testOutput?: string;
   agentOutput: string;
+  usage: CliUsage | null;
 }
 
 const CLONE_DIR = '/workspace/repo';
@@ -274,7 +276,7 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
     // Headless Claude Code run. --dangerously-skip-permissions is safe here —
     // the container is the isolation boundary (IS_SANDBOX acknowledges that).
     const agent = await sandbox.exec(
-      `claude -p --dangerously-skip-permissions --output-format text < ${TASK_FILE}`,
+      `claude -p --dangerously-skip-permissions --output-format json < ${TASK_FILE}`,
       {
         cwd: CLONE_DIR,
         timeout: AGENT_TIMEOUT_MS,
@@ -286,7 +288,8 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
         },
       },
     );
-    const fullOutput = scrub(`${agent.stdout}\n${agent.stderr}`.trim());
+    const usage = parseClaudeCliUsage(agent.stdout);
+    const fullOutput = scrub(`${claudeCliResultText(agent.stdout)}\n${agent.stderr}`.trim());
     const agentOutput = fullOutput.slice(-8_000);
     if (params.attemptId !== undefined) {
       await persistAgentLog('fix', fullOutput, agent.success, { fixAttemptId: params.attemptId });
@@ -303,7 +306,14 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
     const status = await sandbox.exec(`git -C ${CLONE_DIR} status --porcelain`);
     if (!status.stdout.trim()) {
       await postFixComment(token, params, { changed: false, notes });
-      return { status: 'no_changes', authMode: auth.mode, branch: headRef, notes, agentOutput };
+      return {
+        status: 'no_changes',
+        authMode: auth.mode,
+        branch: headRef,
+        notes,
+        agentOutput,
+        usage,
+      };
     }
 
     // Commit the fix BEFORE running checks so check-command working-tree
@@ -333,6 +343,7 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
           notes,
           testOutput,
           agentOutput,
+          usage,
         };
       }
     }
@@ -361,6 +372,7 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
       notes,
       testOutput,
       agentOutput,
+      usage,
     };
   } finally {
     // Belt and braces: the remote was already scrubbed right after clone,
@@ -442,7 +454,13 @@ export async function processFixMessage(msg: FixQueueMessage): Promise<void> {
       author: msg.author,
       attemptId,
     });
-    await finishFixAttempt(attemptId, outcome.status, outcome.commit);
+    await finishFixAttempt(
+      attemptId,
+      outcome.status,
+      outcome.commit,
+      undefined,
+      outcome.usage ?? undefined,
+    );
     console.log(`turbodiff: fix ${outcome.status} for ${label} (attempt ${attemptId})`);
     // A fix push invalidates prior verification evidence: re-verify factory
     // PRs so the report (and the auto-merge gate) reflects the fixed code.
