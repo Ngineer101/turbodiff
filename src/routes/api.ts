@@ -452,13 +452,21 @@ async function authorizedAutomation(c: Context<ApiEnv>): Promise<AutomationRow |
 async function requireRepoPush(
   c: Context<ApiEnv>,
   repo: { owner: string; name: string },
+  canPush: typeof userCanPushToRepo,
 ): Promise<Response | null> {
-  if (await userCanPushToRepo(c.get('user'), repo.owner, repo.name)) return null;
+  if (await canPush(c.get('user'), repo.owner, repo.name)) return null;
   return c.json({ error: 'push access to the repository is required for this action' }, 403);
 }
 
-export function createApiRoutes() {
+export interface ApiRouteDependencies {
+  authenticate?: typeof requireUser;
+  canPushToRepo?: typeof userCanPushToRepo;
+}
+
+export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   const app = new Hono<ApiEnv>();
+  const authenticate = dependencies.authenticate ?? requireUser;
+  const canPushToRepo = dependencies.canPushToRepo ?? userCanPushToRepo;
 
   // CSRF gate for the cookie-authed data plane: browsers attach Origin to
   // every POST (same-origin and cross-site alike), so a mismatched Origin is
@@ -478,7 +486,7 @@ export function createApiRoutes() {
   });
 
   app.use('*', async (c, next) => {
-    const user = await requireUser(c);
+    const user = await authenticate(c);
     if (!user) return c.json({ error: 'unauthorized' }, 401);
     c.set('user', user);
     await next();
@@ -1019,7 +1027,7 @@ export function createApiRoutes() {
     // The fix run pushes commits to the PR branch with a write-scoped token
     // and executes the repo's check command — dispatching it requires the
     // same push permission GitHub would demand to push those commits.
-    const denied = await requireRepoPush(c, repo);
+    const denied = await requireRepoPush(c, repo, canPushToRepo);
     if (denied) return denied;
     const claimed = await dispatchOpenCockpitComments(feature.id);
     if (claimed.length === 0) {
@@ -1142,7 +1150,7 @@ export function createApiRoutes() {
       return c.json({ error: 'unknown feature' }, 404);
     }
     if (!feature.pr_number) return c.json({ error: 'no pull request yet' }, 409);
-    const denied = await requireRepoPush(c, repo);
+    const denied = await requireRepoPush(c, repo, canPushToRepo);
     if (denied) return denied;
     const appToken = await installationToken(repo.installation_id);
     const mergeability = await checkMergeability(
@@ -1209,7 +1217,7 @@ export function createApiRoutes() {
     if (!feature.pr_number) return c.json({ error: 'no pull request yet' }, 409);
     // Same bar as Merge: closing PRs and deleting branches via the App-token
     // fallback must not exceed what GitHub lets the caller do directly.
-    const denied = await requireRepoPush(c, repo);
+    const denied = await requireRepoPush(c, repo, canPushToRepo);
     if (denied) return denied;
     const appToken = await installationToken(repo.installation_id);
     const userToken = c.get('user').session.ghToken;
@@ -2021,7 +2029,7 @@ export function createApiRoutes() {
   app.patch('/repos/:id', async (c) => {
     const repo = await authorizedRepo(c);
     if (!repo) return c.json({ error: 'unknown repository' }, 404);
-    const denied = await requireRepoPush(c, repo);
+    const denied = await requireRepoPush(c, repo, canPushToRepo);
     if (denied) return denied;
     const body = await c.req
       .json<{
@@ -2054,7 +2062,7 @@ export function createApiRoutes() {
   app.put('/repos/:id/agents/:agentId', async (c) => {
     const repo = await authorizedRepo(c);
     if (!repo) return c.json({ error: 'unknown repository' }, 404);
-    const denied = await requireRepoPush(c, repo);
+    const denied = await requireRepoPush(c, repo, canPushToRepo);
     if (denied) return denied;
     const agentId = Number(c.req.param('agentId'));
     const agent = Number.isInteger(agentId) ? await getAgentById(agentId) : null;
@@ -2072,7 +2080,7 @@ export function createApiRoutes() {
   app.put('/repos/:id/skills/:skillId', async (c) => {
     const repo = await authorizedRepo(c);
     if (!repo) return c.json({ error: 'unknown repository' }, 404);
-    const denied = await requireRepoPush(c, repo);
+    const denied = await requireRepoPush(c, repo, canPushToRepo);
     if (denied) return denied;
     const skillId = Number(c.req.param('skillId'));
     const skill = Number.isInteger(skillId) ? await getSkillById(skillId) : null;
