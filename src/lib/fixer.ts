@@ -247,8 +247,14 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
   if (!clone.success) {
     throw new Error(`git clone failed: ${scrub(clone.stderr).slice(0, 500)}`);
   }
+  // The clone URL (token included) lands in .git/config — strip it before
+  // anything else runs in the checkout. Both the agent and the repo's own
+  // check command execute untrusted repo content with network egress, so the
+  // token must not be readable from disk during either; the push below
+  // supplies it via env to an explicit-URL command instead.
   await sandbox.exec(
-    `git -C ${CLONE_DIR} config user.name "turbodiff[bot]" && ` +
+    `git -C ${CLONE_DIR} remote set-url origin "https://github.com/${headRepo}.git" && ` +
+      `git -C ${CLONE_DIR} config user.name "turbodiff[bot]" && ` +
       `git -C ${CLONE_DIR} config user.email "turbodiff[bot]@users.noreply.github.com"`,
   );
 
@@ -331,10 +337,11 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
       }
     }
 
-    const push = await sandbox.exec(`git -C ${CLONE_DIR} push origin HEAD:"$FIX_BRANCH"`, {
-      env: gitEnv,
-      timeout: 2 * 60_000,
-    });
+    const push = await sandbox.exec(
+      `git -C ${CLONE_DIR} push ` +
+        `"https://x-access-token:$GIT_TOKEN@github.com/${headRepo}.git" HEAD:"$FIX_BRANCH"`,
+      { env: gitEnv, timeout: 2 * 60_000 },
+    );
     if (!push.success) {
       throw new Error(`git push failed: ${scrub(push.stderr).slice(0, 500)}`);
     }
@@ -356,8 +363,9 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
       agentOutput,
     };
   } finally {
-    // Scrub the token-embedded remote URL so an idle sandbox (sleepAfter
-    // keeps it warm) never holds a usable credential after this run ends.
+    // Belt and braces: the remote was already scrubbed right after clone,
+    // but an idle sandbox (sleepAfter keeps it warm) must never hold a
+    // usable credential, so re-assert it on every exit path.
     await sandbox.exec(
       `git -C ${CLONE_DIR} remote set-url origin "https://github.com/${headRepo}.git"`,
     );

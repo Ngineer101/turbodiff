@@ -212,6 +212,25 @@ export async function fetchUserInstallationIds(token: string): Promise<number[]>
   return data.installations.map((i) => i.id);
 }
 
+// The caller's own permission on one repository: GET /repos/:owner/:repo with
+// a user token includes a `permissions` block for the authenticated user.
+// Push (write) is the bar for factory write actions — the same bar GitHub
+// itself applies to merging PRs and pushing branches.
+export async function fetchUserCanPush(
+  token: string,
+  owner: string,
+  repo: string,
+): Promise<boolean> {
+  const data = await userApi<{
+    permissions?: { admin?: boolean; maintain?: boolean; push?: boolean };
+  }>(token, `/repos/${owner}/${repo}`);
+  return (
+    data.permissions?.push === true ||
+    data.permissions?.maintain === true ||
+    data.permissions?.admin === true
+  );
+}
+
 // Acknowledge a comment-triggered review with an emoji reaction (👀 while
 // dispatching). Requires the App's Issues permission to be read & write.
 export async function reactToIssueComment(

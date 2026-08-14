@@ -51,6 +51,26 @@ const startedAt = Date.now();
 const app = new Hono();
 const reviewer = createAgentRouter(PrReviewer);
 
+// Baseline security headers. Every HTML page — the cockpit shell above all —
+// refuses framing: the Merge/Abandon buttons are session-authed clickjacking
+// targets, and cookie SameSite rules do not gate framing. Script/style
+// sources stay unrestricted (the shell uses inline styles and Google Fonts);
+// frame-ancestors is the load-bearing directive here. nosniff goes on every
+// response so uploaded artifacts are never content-sniffed into something
+// executable.
+app.use('*', async (c, next) => {
+  await next();
+  c.res.headers.set('x-content-type-options', 'nosniff');
+  if (c.res.headers.get('content-type')?.includes('text/html')) {
+    c.res.headers.set(
+      'content-security-policy',
+      "frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
+    );
+    c.res.headers.set('x-frame-options', 'DENY');
+    c.res.headers.set('referrer-policy', 'same-origin');
+  }
+});
+
 app.get('/healthz', async (c) => {
   try {
     await env.DB.prepare('SELECT 1').run();

@@ -2,7 +2,13 @@
 import { useDelivery, useMcpConnection, useModel, useTool, type AgentProps } from '@flue/runtime';
 import { getConnection, resolveConnectionAuth, type ConnectionSnapshot } from '../lib/db.ts';
 import { DEFAULT_MODEL } from '../lib/personas.ts';
-import { fetchFile, fetchPr, fetchReviewThreads, makePostReview } from '../tools/github.ts';
+import {
+  makeFetchFile,
+  makeFetchPr,
+  makeFetchReviewThreads,
+  makePostReview,
+  type RepoPin,
+} from '../tools/github.ts';
 
 // Turbodiff's one generic reviewer: every configured agent (built-in persona
 // or user-created) runs through this function. One instance per agent × PR
@@ -28,18 +34,33 @@ function parseConnections(raw: string | undefined): ConnectionSnapshot[] {
   }
 }
 
-function deliveryConfig(): { agentName: string; model: string; connections: ConnectionSnapshot[] } {
+// The dispatched PR ("owner/name#123" attribute) — pins every GitHub tool to
+// that one repository, so a prompt-injected model can't point them elsewhere
+// in the installation.
+function parsePin(raw: string | undefined): RepoPin {
+  const match = raw?.match(/^([\w.-]+)\/([\w.-]+)#\d+$/);
+  return match ? { owner: match[1], repo: match[2] } : null;
+}
+
+function deliveryConfig(): {
+  agentName: string;
+  model: string;
+  connections: ConnectionSnapshot[];
+  pin: RepoPin;
+} {
   const delivery = useDelivery();
   if (delivery.kind === 'signal' && delivery.type === 'review.request' && delivery.attributes) {
     return {
       agentName: delivery.attributes.agent_name || 'Code Review',
       model: delivery.attributes.model || DEFAULT_MODEL,
       connections: parseConnections(delivery.attributes.connections),
+      pin: parsePin(delivery.attributes.pull_request),
     };
   }
   // Pre-multi-agent conversations and manual test prompts arrive as plain
-  // user messages; run them as the default reviewer.
-  return { agentName: 'Code Review', model: DEFAULT_MODEL, connections: [] };
+  // user messages; run them as the default reviewer. No dispatch attributes
+  // to pin from — this path is operator-only (REVIEW_SECRET on /internal).
+  return { agentName: 'Code Review', model: DEFAULT_MODEL, connections: [], pin: null };
 }
 
 // Step 0 finding (@flue/runtime 2.0.3's node_modules/.../types-*.d.mts):
@@ -76,12 +97,12 @@ export function PrReviewer(props: AgentProps) {
   // pi-ai bump adds adaptive thinking.
   useModel(cfg.model, { thinkingLevel: 'off' });
 
-  useTool(fetchPr);
-  useTool(fetchFile);
-  useTool(fetchReviewThreads);
+  useTool(makeFetchPr(cfg.pin));
+  useTool(makeFetchFile(cfg.pin));
+  useTool(makeFetchReviewThreads(cfg.pin));
   // post_review closes over the instance id so completing the D1 review row
   // can never hit another agent's concurrent review of the same PR.
-  useTool(makePostReview(props.id));
+  useTool(makePostReview(props.id, cfg.pin));
 
   // The agent's configured external MCP servers (e.g. an Executor catalog).
   // Tokens stay sealed in D1: the auth resolver decrypts per request, so

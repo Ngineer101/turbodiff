@@ -96,7 +96,7 @@ import {
   type TaskRepoStatusRow,
 } from '../lib/db.ts';
 import { computeNextRunAt } from '../lib/automation-schedule.ts';
-import { requireUser, type AuthedUser } from '../lib/auth.ts';
+import { requireUser, userCanPushToRepo, type AuthedUser } from '../lib/auth.ts';
 import { certificateUrl } from '../lib/certificate.ts';
 import { syncInstallationRepos } from '../lib/repo-sync.ts';
 import { approvePlan } from '../lib/planner.ts';
@@ -442,8 +442,41 @@ async function authorizedAutomation(c: Context<ApiEnv>): Promise<AutomationRow |
   return automation;
 }
 
+// Push (write) permission on the repo, verified against GitHub with the
+// caller's own token. Installation membership (the read gate on every route)
+// is deliberately weaker: GitHub reports an org installation to read-only
+// members too, and the write routes below act with the App installation
+// token — which carries the App's permissions, not the caller's. Anything
+// that writes to the repo or changes how code reaches it re-checks the
+// caller's real GitHub permission first. Null when allowed; the 403 to
+// return otherwise.
+async function requireRepoPush(
+  c: Context<ApiEnv>,
+  repo: { owner: string; name: string },
+): Promise<Response | null> {
+  if (await userCanPushToRepo(c.get('user'), repo.owner, repo.name)) return null;
+  return c.json({ error: 'push access to the repository is required for this action' }, 403);
+}
+
 export function createApiRoutes() {
   const app = new Hono<ApiEnv>();
+
+  // CSRF gate for the cookie-authed data plane: browsers attach Origin to
+  // every POST (same-origin and cross-site alike), so a mismatched Origin is
+  // a forged cross-site request regardless of cookie SameSite behavior —
+  // this must not silently regress if the cookie config ever changes.
+  // Requests without an Origin header pass: a non-browser client sends the
+  // cookie only if it already holds it, which is not CSRF.
+  const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+  app.use('*', async (c, next) => {
+    if (!SAFE_METHODS.has(c.req.method)) {
+      const origin = c.req.header('origin');
+      if (origin && origin !== new URL(c.req.url).origin) {
+        return c.json({ error: 'cross-origin request rejected' }, 403);
+      }
+    }
+    await next();
+  });
 
   app.use('*', async (c, next) => {
     const user = await requireUser(c);
@@ -982,6 +1015,11 @@ export function createApiRoutes() {
     if (!repo.auto_fix) {
       return c.json({ error: 'enable auto-fix for this repo before submitting comments' }, 409);
     }
+    // The fix run pushes commits to the PR branch with a write-scoped token
+    // and executes the repo's check command — dispatching it requires the
+    // same push permission GitHub would demand to push those commits.
+    const denied = await requireRepoPush(c, repo);
+    if (denied) return denied;
     const claimed = await dispatchOpenCockpitComments(feature.id);
     if (claimed.length === 0) {
       return c.json({ error: 'no pending comments to submit' }, 400);
@@ -1040,6 +1078,12 @@ export function createApiRoutes() {
   const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 
   app.post('/uploads', async (c) => {
+    // Signed-in is not enough: any GitHub account authenticates even with
+    // zero installations. Attachments exist to feed planning runs, so
+    // require at least one installation before accepting bytes into R2.
+    if (c.get('user').installationIds.length === 0) {
+      return c.json({ error: 'install the GitHub App before uploading attachments' }, 403);
+    }
     const body = await c.req.parseBody();
     const file = body.file;
     if (!(file instanceof File))
@@ -1082,7 +1126,9 @@ export function createApiRoutes() {
   });
 
   // Human-initiated merge from the cockpit. Deliberately does not reuse the
-  // auto-merge gates: a signed-in repo admin clicking Merge IS the authority.
+  // auto-merge gates: a signed-in user with verified push permission clicking
+  // Merge IS the authority (requireRepoPush — the App-token fallback below
+  // must never hand merge rights to someone GitHub wouldn't let push).
   // Merged with the clicking user's own OAuth token when possible so GitHub
   // attributes the merge to them, not turbodiff[bot]; falls back to the App
   // installation token when the user token can't merge (missing push
@@ -1095,10 +1141,18 @@ export function createApiRoutes() {
       return c.json({ error: 'unknown feature' }, 404);
     }
     if (!feature.pr_number) return c.json({ error: 'no pull request yet' }, 409);
+    const denied = await requireRepoPush(c, repo);
+    if (denied) return denied;
     const appToken = await installationToken(repo.installation_id);
-    const mergeability = await checkMergeability(appToken, repo.owner, repo.name, feature.pr_number, {
-      retryOnUnknown: true,
-    });
+    const mergeability = await checkMergeability(
+      appToken,
+      repo.owner,
+      repo.name,
+      feature.pr_number,
+      {
+        retryOnUnknown: true,
+      },
+    );
     if (mergeability.hasConflict) {
       if (repo.auto_resolve_conflicts === 1) {
         const msg: ConflictResolveQueueMessage = {
@@ -1110,7 +1164,10 @@ export function createApiRoutes() {
         return c.json({ ok: true, conflict: true, resolving: true });
       }
       return c.json(
-        { error: 'merge blocked — this PR has a merge conflict with the base branch', conflict: true },
+        {
+          error: 'merge blocked — this PR has a merge conflict with the base branch',
+          conflict: true,
+        },
         409,
       );
     }
@@ -1149,6 +1206,10 @@ export function createApiRoutes() {
       return c.json({ error: 'unknown feature' }, 404);
     }
     if (!feature.pr_number) return c.json({ error: 'no pull request yet' }, 409);
+    // Same bar as Merge: closing PRs and deleting branches via the App-token
+    // fallback must not exceed what GitHub lets the caller do directly.
+    const denied = await requireRepoPush(c, repo);
+    if (denied) return denied;
     const appToken = await installationToken(repo.installation_id);
     const userToken = c.get('user').session.ghToken;
     const closePath = `/repos/${repo.owner}/${repo.name}/pulls/${feature.pr_number}`;
@@ -1180,7 +1241,10 @@ export function createApiRoutes() {
         if (!userToken) {
           console.warn(`turbodiff: branch delete failed for feature ${id}:`, err);
         } else {
-          console.warn(`turbodiff: user-token branch delete failed for feature ${id}, retrying as app:`, err);
+          console.warn(
+            `turbodiff: user-token branch delete failed for feature ${id}, retrying as app:`,
+            err,
+          );
           try {
             await gh(appToken, deletePath, { method: 'DELETE' });
             branchDeleted = true;
@@ -1948,10 +2012,16 @@ export function createApiRoutes() {
     });
   });
 
-  // One PATCH for every repo toggle plus the check command.
+  // One PATCH for every repo toggle plus the check command. These flip the
+  // repo's security posture (blocking reviews, auto-fix, auto-merge) and
+  // check_command is shell that later runs in the fix sandbox — so beyond
+  // installation membership this demands verified push permission, the same
+  // bar as the merge these toggles can automate.
   app.patch('/repos/:id', async (c) => {
     const repo = await authorizedRepo(c);
     if (!repo) return c.json({ error: 'unknown repository' }, 404);
+    const denied = await requireRepoPush(c, repo);
+    if (denied) return denied;
     const body = await c.req
       .json<{
         enabled?: boolean;
@@ -1983,6 +2053,8 @@ export function createApiRoutes() {
   app.put('/repos/:id/agents/:agentId', async (c) => {
     const repo = await authorizedRepo(c);
     if (!repo) return c.json({ error: 'unknown repository' }, 404);
+    const denied = await requireRepoPush(c, repo);
+    if (denied) return denied;
     const agentId = Number(c.req.param('agentId'));
     const agent = Number.isInteger(agentId) ? await getAgentById(agentId) : null;
     if (!agent || agent.installation_id !== repo.installation_id) {
@@ -1999,6 +2071,8 @@ export function createApiRoutes() {
   app.put('/repos/:id/skills/:skillId', async (c) => {
     const repo = await authorizedRepo(c);
     if (!repo) return c.json({ error: 'unknown repository' }, 404);
+    const denied = await requireRepoPush(c, repo);
+    if (denied) return denied;
     const skillId = Number(c.req.param('skillId'));
     const skill = Number.isInteger(skillId) ? await getSkillById(skillId) : null;
     if (!skill || skill.installation_id !== repo.installation_id) {
