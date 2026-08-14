@@ -58,7 +58,7 @@ export function Placard({
   return (
     <div
       className={cn(
-        'flex items-center gap-2.5 rounded-md border border-line bg-surface px-3 py-1.5',
+        'flex items-center gap-2.5',
         'font-mono text-[10px] font-semibold tracking-[0.18em] text-ink-dim uppercase',
         className,
       )}
@@ -206,7 +206,7 @@ export function TelemetryStrip({
   return (
     <div
       className={cn(
-        'flex flex-wrap items-center gap-x-6 gap-y-1.5 rounded-md border border-line bg-surface px-3.5 py-2 font-mono text-[10.5px] tracking-[0.08em] text-mute tabular-nums',
+        'flex flex-wrap items-center gap-x-6 gap-y-1.5 font-mono text-[10.5px] tracking-[0.08em] text-mute tabular-nums',
         className,
       )}
       {...props}

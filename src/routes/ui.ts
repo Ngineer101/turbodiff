@@ -31,7 +31,7 @@ const SHELL = `<!doctype html>
 			rel="stylesheet"
 		/>
 		<link rel="stylesheet" href="/app/app.css" />
-		<style>html { background: #15171c; }</style>
+		<style>html { background: #0f1318; }</style>
 	</head>
 	<body>
 		<div id="root"></div>

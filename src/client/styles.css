@@ -8,15 +8,18 @@
   --font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
-  --color-bg: #15171c;
-  --color-surface: #191b21;
-  --color-surface-2: #1e2127;
-  --color-raised: #23262d;
-  --color-line: #2b2f37;
-  --color-line-2: #3a4049;
-  --color-ink: #e8eaee;
-  --color-ink-dim: #c2c7cf;
-  --color-mute: #8b919c;
+  /* Console blue-black ground (the Control Room direction): every neutral
+     leans toward blue so lamps and phosphor read like light on glass, not
+     stickers on gray. */
+  --color-bg: #0f1318;
+  --color-surface: #141a21;
+  --color-surface-2: #182029;
+  --color-raised: #1e2833;
+  --color-line: #233140;
+  --color-line-2: #344a61;
+  --color-ink: #e2e9f0;
+  --color-ink-dim: #bcc8d4;
+  --color-mute: #8595a4;
   --color-accent: #3fb950;
   --color-accent-bright: #56d364;
   --color-accent-ink: #04140a;

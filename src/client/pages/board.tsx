@@ -412,7 +412,7 @@ function TaskCard({ task }: { task: ApiPlan }) {
   });
   return (
     <Card className="animate-rise p-3 transition-colors hover:border-accent/30">
-      <div className="flex items-baseline justify-between gap-2 border-b border-line pb-1.5">
+      <div className="flex items-baseline justify-between gap-2">
         <Serial n={task.id} />
         <span className="flex items-center gap-2">
           {done ? <Stamp tone="ok">MERGED</Stamp> : null}
