@@ -49,7 +49,13 @@ export function AgentRunLog({ runs }: { runs: ApiAgentRun[] }) {
             <AccordionTrigger
               aside={<span className="text-xs text-mute">{ago(r.created_at)}</span>}
             >
-              {r.success ? '✅' : '❌'} {KIND_LABEL[r.kind]}
+              <span
+                className={r.success ? 'font-mono text-accent-bright' : 'font-mono text-danger'}
+                aria-label={r.success ? 'succeeded' : 'failed'}
+              >
+                {r.success ? '✓' : '✗'}
+              </span>{' '}
+              {KIND_LABEL[r.kind]}
             </AccordionTrigger>
             <AccordionContent>
               <AgentRunEntry run={r} open={open.includes(String(r.id))} />

@@ -1,10 +1,52 @@
 import type { ApiPlan } from '../../shared/api-types.ts';
+import type { StageState } from '../components/identity.tsx';
 import { sentence } from './format.ts';
 import { GENERATION_STOPPED } from './queries.ts';
 
 // One task-state vocabulary for board cards and the task detail page.
 
 export type TaskTone = 'running' | 'on' | 'red' | 'warn' | 'neutral';
+
+// The PLAN → BUILD → VERIFY → SHIP stage lights, aggregated across the
+// task's repos. A summary visual, deliberately coarser than taskState's
+// label — precise wording stays on the pill, position on the line lives
+// here.
+export function taskStages(p: ApiPlan): { label: string; state: StageState }[] {
+  const plan: StageState =
+    p.status === 'failed'
+      ? 'failed'
+      : p.status === 'awaiting_answers' || p.status === 'plan_ready'
+        ? 'attention'
+        : p.status === 'approved'
+          ? 'done'
+          : 'live';
+
+  let build: StageState = 'idle';
+  let verify: StageState = 'idle';
+  let ship: StageState = 'idle';
+  if (p.status === 'approved' && p.repos.length > 0) {
+    const stopped = p.repos.some((r) => GENERATION_STOPPED.has(r.feature_status ?? ''));
+    const allBuilt = p.repos.every((r) => r.pr_number || r.feature_status === 'merged');
+    build = stopped ? 'failed' : allBuilt ? 'done' : 'live';
+
+    if (build === 'done') {
+      const allMerged = p.repos.every((r) => r.feature_status === 'merged');
+      const anyRunning = p.repos.some((r) => r.verification?.status === 'running');
+      const anyFailed = p.repos.some((r) => r.verification?.status === 'failed');
+      const allProven = p.repos.every(
+        (r) => r.feature_status === 'merged' || r.verification?.status === 'passed',
+      );
+      verify = anyRunning ? 'live' : anyFailed ? 'attention' : allProven ? 'done' : 'idle';
+      ship = allMerged ? 'done' : verify === 'done' ? 'attention' : 'idle';
+    }
+  }
+  return [
+    { label: 'Plan', state: plan },
+    { label: 'Build', state: build },
+    { label: 'Verify', state: verify },
+    { label: 'Ship', state: ship },
+  ];
+}
 
 export function taskColumn(p: ApiPlan): 'in_progress' | 'done' {
   return p.repos.length > 0 && p.repos.every((r) => r.feature_status === 'merged')

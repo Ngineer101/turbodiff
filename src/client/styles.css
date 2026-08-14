@@ -22,6 +22,9 @@
   --color-accent-ink: #04140a;
   --color-danger: #f85149;
   --color-warn: #d29922;
+  /* Control-room amber: the "working / attention" lamp hue. Brighter than
+     --color-warn so a lit lamp reads across the room; warn stays for text. */
+  --color-hold: #e3b341;
 
   /* Syntax-highlight hues (rendered markdown only). The UI chrome stays
      phosphor-green; code gets a real multi-hue palette so tokens are
@@ -133,6 +136,65 @@
   .animate-rise {
     animation: none;
   }
+}
+
+/* --- B+A identity: Control Room signals + Job Ticket artifacts --- */
+
+/* Rubber-stamp status word (Job Ticket): rotated, double-bordered mono, with
+   a worn-ink noise mask so it reads as stamped rather than printed. Color
+   comes from the caller (text + border share currentColor). */
+.stamp {
+  display: inline-block;
+  transform: rotate(-8deg);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  border: 2px solid currentColor;
+  border-radius: 4px;
+  padding: 0 0.5em;
+  opacity: 0.85;
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='40'%3E%3Cfilter id='r'%3E%3CfeTurbulence baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.5 0.5'/%3E%3C/filter%3E%3Crect width='120' height='40' filter='url(%23r)'/%3E%3C/svg%3E");
+  mask-size: cover;
+}
+
+/* Indicator lamp glow (Control Room). The dot itself is sized/tinted by the
+   Lamp component; these carry the tone-matched glow. */
+.lamp-glow-go {
+  box-shadow: 0 0 9px 2px color-mix(in srgb, var(--color-accent-bright) 45%, transparent);
+}
+.lamp-glow-hold {
+  box-shadow: 0 0 9px 2px color-mix(in srgb, var(--color-hold) 40%, transparent);
+}
+.lamp-glow-abort {
+  box-shadow: 0 0 9px 2px color-mix(in srgb, var(--color-danger) 40%, transparent);
+}
+
+/* Guarded control (Job Ticket meets launch console): the amber safety collar
+   over the merge button. */
+.guarded::before {
+  content: '';
+  position: absolute;
+  inset: -5px -5px auto -5px;
+  height: 5px;
+  border-radius: 3px 3px 0 0;
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--color-hold),
+    var(--color-hold) 5px,
+    var(--color-bg) 5px,
+    var(--color-bg) 10px
+  );
+}
+
+/* Certificate strip hatching: the paper object a merged feature earns. */
+.cert-hatch {
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--color-surface),
+    var(--color-surface) 6px,
+    var(--color-surface-2) 6px,
+    var(--color-surface-2) 7px
+  );
 }
 
 /* @pierre/diffs core CSS is injected at runtime rescoped from :host to

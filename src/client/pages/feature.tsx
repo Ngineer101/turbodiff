@@ -18,6 +18,7 @@ import { cn } from '../lib/utils.ts';
 import { AgentRunLog } from '../components/agent-run-log.tsx';
 import { ConfirmButton } from '../components/confirm-button.tsx';
 import { ensureDiffStyles } from '../components/diff-styles.ts';
+import { CertStrip, Lamp, Serial, Stamp, type LampTone } from '../components/identity.tsx';
 import { FILE_STATUS_DOT, FileTree } from '../components/file-tree.tsx';
 import { Markdown } from '../components/markdown.tsx';
 import { Muted, PageTitle, SectionHeading } from '../components/section.tsx';
@@ -53,10 +54,85 @@ interface CommentMeta {
   composer?: boolean;
 }
 
-const VERDICT_BADGE: Record<string, string> = { pass: '✅', fail: '❌', skip: '⚪' };
-
 function onApiError(err: unknown) {
   toast.error(err instanceof ApiError ? err.message : 'Request failed');
+}
+
+// Criterion verdicts in the proof ledger: mono glyphs, not emoji — the
+// ledger is a document, and its marks should typeset like one.
+function VerdictMark({ verdict }: { verdict: string | null }) {
+  if (verdict === 'pass') return <span className="font-mono text-accent-bright">✓</span>;
+  if (verdict === 'fail') return <span className="font-mono text-danger">✗</span>;
+  if (verdict === 'skip') return <span className="font-mono text-mute">—</span>;
+  return <span className="font-mono text-mute">○</span>;
+}
+
+// The cockpit's go/no-go board: one station per gate a factory PR passes
+// through. Every verdict is also text, so the lamps are reinforcement, not
+// the only signal.
+type Station = { label: string; verdict: string; tone: LampTone; pulse?: boolean };
+
+function stationsFor(data: ApiFeatureDetail): Station[] {
+  const v = data.verification;
+  const lastReview = data.reviews.at(-1);
+  const blocking =
+    lastReview?.state === 'CHANGES_REQUESTED' ||
+    Boolean(lastReview?.body.startsWith('**Verdict: REQUEST_CHANGES**'));
+  const merged = data.pr?.state === 'merged';
+  const conflict = data.pr?.mergeable_state === 'dirty';
+
+  const build: Station = { label: 'Build', verdict: 'GO', tone: 'go' };
+  const review: Station =
+    data.reviews.length === 0
+      ? { label: 'Review', verdict: 'POLLING', tone: 'hold', pulse: true }
+      : blocking
+        ? { label: 'Review', verdict: 'NO-GO', tone: 'abort' }
+        : { label: 'Review', verdict: 'GO', tone: 'go' };
+  const verify: Station = !v
+    ? { label: 'Verify', verdict: 'QUEUED', tone: 'off' }
+    : v.status === 'passed'
+      ? { label: 'Verify', verdict: 'GO', tone: 'go' }
+      : v.status === 'running'
+        ? { label: 'Verify', verdict: 'POLLING', tone: 'hold', pulse: true }
+        : { label: 'Verify', verdict: `${v.failed} UNMET`, tone: 'abort' };
+  const ship: Station = merged
+    ? { label: 'Ship', verdict: 'MERGED', tone: 'go' }
+    : conflict
+      ? { label: 'Ship', verdict: 'CONFLICT', tone: 'abort' }
+      : review.tone === 'go' && verify.tone === 'go'
+        ? { label: 'Ship', verdict: 'READY', tone: 'hold' }
+        : { label: 'Ship', verdict: 'HOLD', tone: 'off' };
+  return [build, review, verify, ship];
+}
+
+function GoNoGoBoard({ data }: { data: ApiFeatureDetail }) {
+  const stations = stationsFor(data);
+  return (
+    <div className="grid grid-cols-4 gap-2">
+      {stations.map((s) => (
+        <div
+          key={s.label}
+          className="rounded-md border border-line bg-surface-2 px-2 py-2.5 text-center"
+        >
+          <Lamp tone={s.tone} pulse={s.pulse} className="mx-auto mb-1.5 block" />
+          <div className="font-mono text-[8.5px] font-medium tracking-[0.14em] text-mute uppercase">
+            {s.label}
+          </div>
+          <div
+            className={cn(
+              'font-mono text-[10.5px] font-semibold tracking-[0.1em]',
+              s.tone === 'go' && 'text-accent-bright',
+              s.tone === 'hold' && 'text-hold',
+              s.tone === 'abort' && 'text-danger',
+              s.tone === 'off' && 'text-mute',
+            )}
+          >
+            {s.verdict}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function CommentFixStatePill({ comment }: { comment: ApiCockpitComment }) {
@@ -385,9 +461,7 @@ export default function FeaturePage() {
       ),
     onSuccess: (result) => {
       toast.success(
-        result.resolving
-          ? 'Merge conflict detected — auto-resolving…'
-          : 'Pull request merged',
+        result.resolving ? 'Merge conflict detected — auto-resolving…' : 'Pull request merged',
       );
       refresh();
     },
@@ -395,9 +469,7 @@ export default function FeaturePage() {
   });
   const abandon = useMutation({
     mutationFn: () =>
-      api.post<{ ok: boolean; branchDeleted?: boolean }>(
-        `/api/factory/features/${id}/abandon`,
-      ),
+      api.post<{ ok: boolean; branchDeleted?: boolean }>(`/api/factory/features/${id}/abandon`),
     onSuccess: (result) => {
       toast.success(
         result.branchDeleted === false
@@ -469,7 +541,6 @@ export default function FeaturePage() {
   }
 
   const prState = data.pr.state;
-  const v = data.verification;
   const totalAdditions = data.files.reduce((n, f) => n + f.additions, 0);
   const totalDeletions = data.files.reduce((n, f) => n + f.deletions, 0);
 
@@ -484,26 +555,15 @@ export default function FeaturePage() {
 
   return (
     <div className="animate-rise">
-      <h1 className="text-base leading-snug font-medium break-words sm:text-xl">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <Serial n={data.feature.id} />
+        {prState === 'merged' ? <Stamp tone="ok">MERGED</Stamp> : null}
+        {prState === 'closed' ? <Stamp tone="red">ABANDONED</Stamp> : null}
+      </div>
+      <h1 className="mt-1.5 text-base leading-snug font-medium break-words sm:text-xl">
         {data.feature.title}
       </h1>
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <Pill tone={prState === 'merged' ? 'on' : prState === 'open' ? 'running' : 'red'}>
-          {sentence(prState)}
-        </Pill>
-        {data.pr.mergeable_state === 'dirty' ? <Pill tone="red">Merge conflict</Pill> : null}
-        {v ? (
-          <Pill tone={v.status === 'passed' ? 'on' : v.status === 'running' ? 'running' : 'red'}>
-            Verify: {v.status}
-            {v.status === 'passed'
-              ? ` (${v.total}/${v.total})`
-              : v.status === 'failed'
-                ? ` (${v.failed} unmet)`
-                : ''}
-          </Pill>
-        ) : null}
-      </div>
-      <p className="mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-mute sm:text-[0.85rem]">
+      <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-mute sm:text-[0.85rem]">
         <span className="truncate font-mono">{data.repo}</span>
         <span>·</span>
         <a
@@ -521,21 +581,25 @@ export default function FeaturePage() {
           <span className="text-danger">−{data.pr.deletions}</span>
         </span>
       </p>
+      <div className="mt-4 max-w-xl">
+        <GoNoGoBoard data={data} />
+      </div>
 
-      {/* One action row: merging is the primary CTA, submitting review
-          comments the secondary one beside it. */}
+      {/* One action row: merging is the primary CTA — a guarded control that
+          reads as armed only when the board is green — with submit-comments
+          beside it. */}
       {prState === 'open' || pendingCount > 0 || batchRunning ? (
-        <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:items-center">
           {prState === 'open' ? (
             <ConfirmButton
-              className="w-full sm:w-auto"
+              className="guarded relative w-full font-mono text-[11px] font-bold tracking-[0.18em] uppercase sm:w-auto"
               title="Merge pull request?"
               description={`This merges PR #${data.feature.pr_number} into ${data.repo} on GitHub.`}
               confirmLabel="Merge"
               onConfirm={() => merge.mutate()}
               busy={merge.isPending}
             >
-              Merge pull request
+              Merge
             </ConfirmButton>
           ) : null}
           {prState === 'open' ? (
@@ -565,6 +629,23 @@ export default function FeaturePage() {
             </Button>
           ) : null}
         </div>
+      ) : null}
+
+      {/* The paper the work earns: sealed once the PR merges. */}
+      {data.certificate_url ? (
+        <a
+          href={data.certificate_url}
+          target="_blank"
+          rel="noopener"
+          className="mt-4 block max-w-xl hover:opacity-90"
+        >
+          <CertStrip sealed={prState === 'merged'}>
+            BUILD CERTIFICATE №{String(data.feature.id).padStart(4, '0')} —{' '}
+            {prState === 'merged'
+              ? 'sealed · view →'
+              : 'issues when this PR is verified and merged'}
+          </CertStrip>
+        </a>
       ) : null}
 
       <div
@@ -642,9 +723,9 @@ export default function FeaturePage() {
                   <AccordionItem value="criteria">
                     <AccordionTrigger
                       aside={
-                        <span className="text-xs text-mute tabular-nums">
+                        <span className="font-mono text-xs tracking-[0.1em] text-mute uppercase tabular-nums">
                           {data.criteria.filter((c) => c.verdict === 'pass').length}/
-                          {data.criteria.length} passed
+                          {data.criteria.length} proven
                         </span>
                       }
                     >
@@ -656,7 +737,7 @@ export default function FeaturePage() {
                           {data.criteria.map((crit, i) => (
                             <tr key={i}>
                               <Td className={cn('w-6', i === 0 && 'border-t-0')}>
-                                {VERDICT_BADGE[crit.verdict ?? ''] ?? '⚪'}
+                                <VerdictMark verdict={crit.verdict} />
                               </Td>
                               <Td className={cn(i === 0 && 'border-t-0')}>
                                 {crit.text}
