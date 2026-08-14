@@ -82,10 +82,18 @@ export type ReviewDispatcher = (
   opts?: { riskTier?: string; modelOverride?: string },
 ) => Promise<boolean>;
 
+export interface WebhookRouteDependencies {
+  computeRisk?: typeof computeRiskTier;
+}
+
 // A Hono sub-app; the caller supplies dispatch so this module doesn't need to
 // know about the agent router.
-export function createWebhookRoutes(dispatch: ReviewDispatcher) {
+export function createWebhookRoutes(
+  dispatch: ReviewDispatcher,
+  dependencies: WebhookRouteDependencies = {},
+) {
   const app = new Hono();
+  const computeRisk = dependencies.computeRisk ?? computeRiskTier;
 
   app.post('/github', async (c) => {
     const rawBody = await c.req.arrayBuffer();
@@ -94,7 +102,7 @@ export function createWebhookRoutes(dispatch: ReviewDispatcher) {
 
     const event = c.req.header('x-github-event') ?? '';
     const payload = JSON.parse(new TextDecoder().decode(rawBody));
-    const result = await handleEvent(event, payload, dispatch);
+    const result = await handleEvent(event, payload, dispatch, computeRisk);
     return c.json(result.body, result.status ?? 200);
   });
 
@@ -105,6 +113,7 @@ async function handleEvent(
   event: string,
   payload: unknown,
   dispatch: ReviewDispatcher,
+  computeRisk: typeof computeRiskTier,
 ): Promise<HandlerResult> {
   switch (event) {
     case 'installation':
@@ -112,7 +121,7 @@ async function handleEvent(
     case 'installation_repositories':
       return handleInstallationRepositories(payload as InstallationEvent);
     case 'pull_request':
-      return handlePullRequest(payload as PullRequestEvent, dispatch);
+      return handlePullRequest(payload as PullRequestEvent, dispatch, computeRisk);
     case 'pull_request_review':
       return handlePullRequestReview(payload as PullRequestReviewEvent);
     case 'repository': {
@@ -170,6 +179,7 @@ const PUSH_DEBOUNCE_MINUTES = 10;
 async function handlePullRequest(
   p: PullRequestEvent,
   dispatch: ReviewDispatcher,
+  computeRisk: typeof computeRiskTier,
 ): Promise<HandlerResult> {
   // Closed factory PRs feed the board's Done column: merged -> 'merged',
   // closed-unmerged -> 'pr_closed'. GitHub fires this for every merge path
@@ -224,7 +234,7 @@ async function handlePullRequest(
   // open to 'full' — a tiering hiccup must widen review, never skip it.
   let tier: RiskTier = 'full';
   try {
-    tier = await computeRiskTier(repo.installation_id, repo.owner, repo.name, p.number);
+    tier = await computeRisk(repo.installation_id, repo.owner, repo.name, p.number);
   } catch (err) {
     console.warn(
       `turbodiff: risk tier computation failed for ${p.repository.full_name}#${p.number}, defaulting to full:`,
