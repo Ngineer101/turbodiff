@@ -3,6 +3,7 @@ import { env, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from '
 import { NonRetryableError } from 'cloudflare:workflows';
 import { gh } from '../tools/github.ts';
 import { persistAgentLog } from './agent-runs.ts';
+import { claudeCliResultText, parseClaudeCliUsage, type CliUsage } from './cli-usage.ts';
 import {
   finishAutomationRun,
   getAutomationById,
@@ -192,7 +193,7 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
       const agentRan = await step.do(
         'run coding agent',
         { retries: { limit: 1, delay: '5 minutes' }, timeout: '23 minutes' },
-        async (): Promise<{ changed: boolean }> => {
+        async (): Promise<{ changed: boolean; usage: CliUsage | null }> => {
           const auth = resolveRunnerAuth();
           const scrub = (s: string) =>
             Object.values(auth.vars).reduce((acc, v) => acc.replaceAll(v, '***'), s);
@@ -205,7 +206,7 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
           }
           await sandbox.writeFile(specFile(ctx.runId), automationPrompt(ctx));
           const agent = await sandbox.exec(
-            `claude -p --dangerously-skip-permissions --output-format text < ${specFile(ctx.runId)}`,
+            `claude -p --dangerously-skip-permissions --output-format json < ${specFile(ctx.runId)}`,
             {
               cwd: WORK,
               timeout: AGENT_TIMEOUT_MS,
@@ -218,9 +219,11 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
               },
             },
           );
+          const usage = parseClaudeCliUsage(agent.stdout);
+          const resultText = claudeCliResultText(agent.stdout);
           await persistAgentLog(
             'automation',
-            scrub(`${agent.stdout}\n${agent.stderr}`.trim()),
+            scrub(`${resultText}\n${agent.stderr}`.trim()),
             agent.success,
             { automationRunId: ctx.runId },
           );
@@ -228,17 +231,24 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
             // Scrubbed: this message persists to automation_runs.error and
             // renders in the dashboard for every installation member.
             throw new Error(
-              `automation agent exited ${agent.exitCode}: ${scrub(`${agent.stdout}\n${agent.stderr}`.trim()).slice(-1_000)}`,
+              `automation agent exited ${agent.exitCode}: ${scrub(`${resultText}\n${agent.stderr}`.trim()).slice(-1_000)}`,
             );
           }
           const status = await sandbox.exec(`git -C ${WORK} status --porcelain`);
-          return { changed: Boolean(status.stdout.trim()) };
+          return { changed: Boolean(status.stdout.trim()), usage };
         },
       );
 
       if (!agentRan.changed) {
         await step.do('record no_changes', QUICK, async () => {
-          await finishAutomationRun(ctx.runId, 'no_changes');
+          await finishAutomationRun(
+            ctx.runId,
+            'no_changes',
+            undefined,
+            undefined,
+            undefined,
+            agentRan.usage ?? undefined,
+          );
         });
         return 'no_changes';
       }
@@ -277,6 +287,7 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
               undefined,
               undefined,
               checks.output,
+              agentRan.usage ?? undefined,
             );
           });
           return 'checks_failed';
@@ -326,7 +337,14 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
       );
 
       await step.do('record pr_opened', QUICK, async () => {
-        await finishAutomationRun(ctx.runId, 'pr_opened', prNumber, commitSha);
+        await finishAutomationRun(
+          ctx.runId,
+          'pr_opened',
+          prNumber,
+          commitSha,
+          undefined,
+          agentRan.usage ?? undefined,
+        );
       });
 
       await step.do(

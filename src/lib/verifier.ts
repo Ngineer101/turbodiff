@@ -1,6 +1,7 @@
 import { collectFile, getSandbox, type Sandbox } from '@cloudflare/sandbox';
 import { env } from 'cloudflare:workers';
 import { gh } from '../tools/github.ts';
+import { claudeCliResultText, parseClaudeCliUsage, type CliUsage } from './cli-usage.ts';
 import {
   createVerification,
   finishVerification,
@@ -177,6 +178,7 @@ export async function runVerification(featureId: number): Promise<void> {
       demo: outcome.demo
         ? JSON.stringify({ video: outcome.demo.key, caption: outcome.demo.caption })
         : undefined,
+      usage: outcome.usage ?? undefined,
     });
     console.log(`turbodiff: verification ${outcome.status} for ${label}`);
   } catch (err) {
@@ -190,7 +192,13 @@ async function verify(
   feature: FeatureRow,
   repo: RepositoryRow,
   criteria: string[],
-): Promise<{ status: string; results: CriterionResult[]; summary?: string; demo?: DemoInfo }> {
+): Promise<{
+  status: string;
+  results: CriterionResult[];
+  summary?: string;
+  demo?: DemoInfo;
+  usage: CliUsage | null;
+}> {
   const token = await installationToken(repo.installation_id);
   const auth = resolveRunnerAuth();
   // Verifier sandboxes never push: single-repo, contents READ-ONLY token.
@@ -237,7 +245,7 @@ async function verify(
 
     await sandbox.writeFile(`${OUT}/task.md`, verifyPrompt(feature, repo, criteria));
     const agent = await sandbox.exec(
-      `claude -p --dangerously-skip-permissions --output-format text < ${OUT}/task.md`,
+      `claude -p --dangerously-skip-permissions --output-format json < ${OUT}/task.md`,
       {
         cwd: WORK,
         timeout: AGENT_TIMEOUT_MS,
@@ -250,15 +258,14 @@ async function verify(
         },
       },
     );
-    await persistAgentLog(
-      'verify',
-      scrub(`${agent.stdout}\n${agent.stderr}`.trim()),
-      agent.success,
-      { featureId: feature.id },
-    );
+    const usage = parseClaudeCliUsage(agent.stdout);
+    const resultText = claudeCliResultText(agent.stdout);
+    await persistAgentLog('verify', scrub(`${resultText}\n${agent.stderr}`.trim()), agent.success, {
+      featureId: feature.id,
+    });
     if (!agent.success) {
       throw new Error(
-        `verifier agent exited ${agent.exitCode}: ${scrub(`${agent.stdout}\n${agent.stderr}`).trim().slice(-1_000)}`,
+        `verifier agent exited ${agent.exitCode}: ${scrub(`${resultText}\n${agent.stderr}`).trim().slice(-1_000)}`,
       );
     }
 
@@ -316,7 +323,7 @@ async function verify(
           .join('\n\n'),
       });
     }
-    return { status: failed.length > 0 ? 'failed' : 'passed', results, summary, demo };
+    return { status: failed.length > 0 ? 'failed' : 'passed', results, summary, demo, usage };
   } finally {
     // The working copy's origin is the local cache path (no credentials);
     // drop this feature's dirs to bound the warm container's disk.

@@ -1,8 +1,8 @@
 import { useSuspenseQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
+import { FeatureUsageAccordion } from '../components/feature-usage-accordion.tsx';
 import { fmtDuration, fmtTokens, fmtUsd, monthLabel } from '../lib/format.ts';
 import { meQuery, usageQuery } from '../lib/queries.ts';
-import { ReviewsTable } from '../components/reviews-table.tsx';
 import { EmptyState, Muted, PageTitle, SectionHeading } from '../components/section.tsx';
 import { StatTile } from '../components/stat-tile.tsx';
 import { Pill } from '../components/ui/pill.tsx';
@@ -11,7 +11,7 @@ import { Table, Td, Th } from '../components/ui/table.tsx';
 export function UsagePage() {
   const { data } = useSuspenseQuery(usageQuery);
   const { data: me } = useSuspenseQuery(meQuery);
-  const maxMonthCost = Math.max(...data.months.map((m) => m.cost_usd), 0);
+  const maxMonthCost = Math.max(...data.months.map((m) => m.review_cost_usd), 0);
 
   return (
     <>
@@ -20,8 +20,8 @@ export function UsagePage() {
       <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile
           index={0}
-          label="Cost this month"
-          value={fmtUsd(data.stats.month_cost_usd)}
+          label="Pipeline cost this month"
+          value={fmtUsd(data.stats.month_pipeline_cost_usd)}
           sub={monthLabel(data.month)}
         />
         <StatTile
@@ -55,7 +55,7 @@ export function UsagePage() {
         />
       </div>
 
-      <SectionHeading>Monthly cost</SectionHeading>
+      <SectionHeading aside={<Muted>Review cost only</Muted>}>Review cost by month</SectionHeading>
       {data.months.length === 0 ? (
         <EmptyState>No reviews yet — costs will accumulate here per calendar month.</EmptyState>
       ) : (
@@ -77,11 +77,11 @@ export function UsagePage() {
                   <span
                     className="block h-3.5 min-w-0.5 rounded-r bg-accent/80"
                     style={{
-                      width: `${maxMonthCost > 0 ? Math.max(1, Math.round((m.cost_usd / maxMonthCost) * 100)) : 1}%`,
+                      width: `${maxMonthCost > 0 ? Math.max(1, Math.round((m.review_cost_usd / maxMonthCost) * 100)) : 1}%`,
                     }}
                   />
                 </Td>
-                <Td numeric>{fmtUsd(m.cost_usd)}</Td>
+                <Td numeric>{fmtUsd(m.review_cost_usd)}</Td>
                 <Td numeric>{m.reviews}</Td>
                 <Td numeric>{fmtTokens(m.total_tokens)}</Td>
               </tr>
@@ -92,7 +92,13 @@ export function UsagePage() {
 
       {data.agent_usage.length > 0 ? (
         <>
-          <SectionHeading aside={<Muted>{monthLabel(data.month)}</Muted>}>
+          <SectionHeading
+            aside={
+              <>
+                <Muted>Review cost</Muted> <Muted>{monthLabel(data.month)}</Muted>
+              </>
+            }
+          >
             Cost by agent
           </SectionHeading>
           <Table>
@@ -116,15 +122,42 @@ export function UsagePage() {
         </>
       ) : null}
 
-      <SectionHeading>Recent reviews</SectionHeading>
-      {data.recent_reviews.length === 0 ? (
+      <SectionHeading>Features shipped</SectionHeading>
+      {data.features.length === 0 ? (
         <EmptyState>
-          No reviews yet — factory-generated pull requests are reviewed automatically and show up
-          here.
+          No features shipped yet — approved plans show up here once generation starts.
         </EmptyState>
       ) : (
-        <ReviewsTable reviews={data.recent_reviews} />
+        <FeatureUsageAccordion features={data.features} />
       )}
+
+      {data.automation_usage.length > 0 ? (
+        <>
+          <SectionHeading aside={<Muted>{monthLabel(data.month)}</Muted>}>
+            Automation activity
+          </SectionHeading>
+          <Table>
+            <thead>
+              <tr>
+                <Th>Automation</Th>
+                <Th>Repo</Th>
+                <Th numeric>Runs</Th>
+                <Th numeric>Cost</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.automation_usage.map((a) => (
+                <tr key={a.automation_id}>
+                  <Td>{a.name}</Td>
+                  <Td className="font-mono">{a.repo}</Td>
+                  <Td numeric>{a.runs}</Td>
+                  <Td numeric>{a.cost_usd > 0 ? fmtUsd(a.cost_usd) : <Muted>—</Muted>}</Td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        </>
+      ) : null}
 
       <SectionHeading
         aside={

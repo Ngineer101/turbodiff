@@ -20,6 +20,7 @@ import {
   listReposForPlan,
   tryRecordAutomationRun,
   tryRecordFixAttempt,
+  tryRecordReview,
   updatePlan,
 } from './db.ts';
 
@@ -116,6 +117,66 @@ describe('fix attempt invariants', () => {
       .first<{ status: string; error: string }>();
     expect(old).toMatchObject({ status: 'failed' });
     expect(old?.error).toContain('stale');
+  });
+});
+
+describe('review dispatch invariants', () => {
+  it('admits exactly one concurrent claim for the same agent instance', async () => {
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        tryRecordReview(101, 1001, 9, 'opened', 'review', 'review--acme--api--9'),
+      ),
+    );
+    expect(results.filter((id) => id !== null)).toHaveLength(1);
+
+    const count = await testEnv.DB.prepare(
+      `SELECT COUNT(*) AS count FROM reviews WHERE agent_instance_id = 'review--acme--api--9'`,
+    ).first<{ count: number }>();
+    expect(count?.count).toBe(1);
+  });
+
+  it('fails a stale running claim before admitting its replacement', async () => {
+    const stale = await tryRecordReview(101, 1001, 10, 'opened', 'review', 'review--acme--api--10');
+    await testEnv.DB.prepare(
+      `UPDATE reviews SET created_at = datetime('now', '-21 minutes') WHERE id = ?1`,
+    )
+      .bind(stale)
+      .run();
+
+    // A running claim younger than 20 minutes blocks a second insert outright.
+    const blocked = await tryRecordReview(
+      101,
+      1001,
+      11,
+      'opened',
+      'review',
+      'review--acme--api--11',
+    );
+    expect(blocked).not.toBeNull();
+    const blockedAgain = await tryRecordReview(
+      101,
+      1001,
+      11,
+      'opened',
+      'review',
+      'review--acme--api--11',
+    );
+    expect(blockedAgain).toBeNull();
+
+    const replacement = await tryRecordReview(
+      101,
+      1001,
+      10,
+      'synchronize',
+      'review',
+      'review--acme--api--10',
+    );
+    expect(replacement).not.toBeNull();
+    expect(replacement).not.toBe(stale);
+    const old = await testEnv.DB.prepare('SELECT status FROM reviews WHERE id = ?1')
+      .bind(stale)
+      .first<{ status: string }>();
+    expect(old).toMatchObject({ status: 'failed' });
   });
 });
 

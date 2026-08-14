@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import type { CliUsage } from './cli-usage.ts';
 import { openJson, openToken, sealJson } from './crypto.ts';
 import { fetchClientCredentialsToken, refreshOAuthToken } from './mcp-oauth.ts';
 import { BUILTIN_PERSONAS, DEFAULT_AGENT_SLUG, DEFAULT_MODEL } from './personas.ts';
@@ -219,6 +220,12 @@ export interface VerificationRow {
   demo: string | null; // JSON {"video": r2Key, "caption": string}
   error: string | null;
   created_at: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  cost_usd: number;
+  model: string | null;
 }
 
 export interface CockpitCommentRow {
@@ -457,10 +464,20 @@ export async function createVerification(featureId: number): Promise<number> {
 export async function finishVerification(
   id: number,
   status: string,
-  fields: { results?: string; summary?: string; error?: string; demo?: string } = {},
+  fields: {
+    results?: string;
+    summary?: string;
+    error?: string;
+    demo?: string;
+    usage?: CliUsage;
+  } = {},
 ): Promise<void> {
   await env.DB.prepare(
-    'UPDATE verifications SET status = ?2, results = ?3, summary = ?4, error = ?5, demo = ?6 WHERE id = ?1',
+    `UPDATE verifications SET
+		 status = ?2, results = ?3, summary = ?4, error = ?5, demo = ?6,
+		 input_tokens = ?7, output_tokens = ?8, cache_read_tokens = ?9, cache_write_tokens = ?10,
+		 cost_usd = ?11, model = ?12
+		 WHERE id = ?1`,
   )
     .bind(
       id,
@@ -469,6 +486,12 @@ export async function finishVerification(
       fields.summary ?? null,
       fields.error ?? null,
       fields.demo ?? null,
+      fields.usage?.inputTokens ?? 0,
+      fields.usage?.outputTokens ?? 0,
+      fields.usage?.cacheReadTokens ?? 0,
+      fields.usage?.cacheWriteTokens ?? 0,
+      fields.usage?.costUsd ?? 0,
+      fields.usage?.model ?? null,
     )
     .run();
 }
@@ -649,6 +672,12 @@ export interface FeatureRow {
   author_id: number | null;
   coauthor_login: string | null; // plan creator when different from author
   coauthor_id: number | null;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  cost_usd: number;
+  model: string | null;
 }
 
 export async function createFeature(
@@ -796,6 +825,10 @@ export async function updateFeature(
     error?: string;
     // 'now' stamps the start of a generation attempt (strand detection).
     runStartedAt?: 'now';
+    // The generation agent's usage — one CLI run per attempt, so this
+    // overwrites rather than accumulates (COALESCE keeps a status-only update
+    // from zeroing out a previously recorded cost).
+    usage?: CliUsage;
   },
 ): Promise<void> {
   await env.DB.prepare(
@@ -804,7 +837,13 @@ export async function updateFeature(
 		 branch = COALESCE(?3, branch),
 		 pr_number = COALESCE(?4, pr_number),
 		 error = COALESCE(?5, error),
-		 run_started_at = CASE WHEN ?6 THEN datetime('now') ELSE run_started_at END
+		 run_started_at = CASE WHEN ?6 THEN datetime('now') ELSE run_started_at END,
+		 input_tokens = COALESCE(?7, input_tokens),
+		 output_tokens = COALESCE(?8, output_tokens),
+		 cache_read_tokens = COALESCE(?9, cache_read_tokens),
+		 cache_write_tokens = COALESCE(?10, cache_write_tokens),
+		 cost_usd = COALESCE(?11, cost_usd),
+		 model = COALESCE(?12, model)
 		 WHERE id = ?1`,
   )
     .bind(
@@ -814,6 +853,12 @@ export async function updateFeature(
       fields.prNumber ?? null,
       fields.error ?? null,
       fields.runStartedAt === 'now' ? 1 : 0,
+      fields.usage?.inputTokens ?? null,
+      fields.usage?.outputTokens ?? null,
+      fields.usage?.cacheReadTokens ?? null,
+      fields.usage?.cacheWriteTokens ?? null,
+      fields.usage?.costUsd ?? null,
+      fields.usage?.model ?? null,
     )
     .run();
 }
@@ -1053,15 +1098,42 @@ export async function finishFixAttempt(
   status: string,
   commitSha?: string,
   error?: string,
+  usage?: CliUsage,
 ): Promise<void> {
   await env.DB.prepare(
-    'UPDATE fix_attempts SET status = ?2, commit_sha = ?3, error = ?4 WHERE id = ?1',
+    `UPDATE fix_attempts SET
+		 status = ?2, commit_sha = ?3, error = ?4,
+		 input_tokens = ?5, output_tokens = ?6, cache_read_tokens = ?7, cache_write_tokens = ?8,
+		 cost_usd = ?9, model = ?10
+		 WHERE id = ?1`,
   )
-    .bind(id, status, commitSha ?? null, error ?? null)
+    .bind(
+      id,
+      status,
+      commitSha ?? null,
+      error ?? null,
+      usage?.inputTokens ?? 0,
+      usage?.outputTokens ?? 0,
+      usage?.cacheReadTokens ?? 0,
+      usage?.cacheWriteTokens ?? 0,
+      usage?.costUsd ?? 0,
+      usage?.model ?? null,
+    )
     .run();
 }
 
-export async function recordReview(
+// Claims the (agent, repo, PR) instance for a new dispatch. agent_instance_id
+// is deterministic per (agent, repo, PR) and intentionally reused across
+// re-reviews (see dispatchReviewAgent), so two concurrent/redelivered
+// dispatches for the same instance must never both insert a 'running' row —
+// every completion/usage write resolves "the row to update" by instance id +
+// status='running', so a duplicate row causes writes to land on the wrong
+// dispatch. Mirrors tryRecordFixAttempt / tryRecordAutomationRun: sweep stale
+// rows, then insert atomically guarded by NOT EXISTS. Returns null when
+// another dispatch for this exact instance is already in flight. The
+// 20-minute threshold matches STALL_AFTER_MS in routes/api.ts, which
+// separately drives the 'stalled' UI label — keep both in sync if changed.
+export async function tryRecordReview(
   repositoryId: number,
   installationId: number,
   prNumber: number,
@@ -1069,13 +1141,25 @@ export async function recordReview(
   agentSlug: string,
   agentInstanceId: string,
   riskTier: string | null = null,
-): Promise<void> {
+): Promise<number | null> {
   await env.DB.prepare(
+    `UPDATE reviews SET status = 'failed', completed_at = datetime('now')
+		 WHERE agent_instance_id = ?1 AND status = 'running'
+		 AND created_at < datetime('now', '-20 minutes')`,
+  )
+    .bind(agentInstanceId)
+    .run();
+  const row = await env.DB.prepare(
     `INSERT INTO reviews (repository_id, installation_id, pr_number, trigger_event, status, agent_slug, agent_instance_id, risk_tier)
-		 VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7)`,
+		 SELECT ?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7
+		 WHERE NOT EXISTS (
+		   SELECT 1 FROM reviews WHERE agent_instance_id = ?6 AND status = 'running'
+		 )
+		 RETURNING id`,
   )
     .bind(repositoryId, installationId, prNumber, trigger, agentSlug, agentInstanceId, riskTier)
-    .run();
+    .first<{ id: number }>();
+  return row?.id ?? null;
 }
 
 // Called by the post_review tool once the agent has published to GitHub.
@@ -2007,6 +2091,219 @@ export async function reviewCountLastDay(installationId: number): Promise<number
   return row?.n ?? 0;
 }
 
+// --- Usage page (Phase 3 redesign): features-shipped accordion + pipeline-wide cost ---
+
+export interface FeatureUsageRow {
+  id: number;
+  repository_id: number;
+  repo_owner: string;
+  repo_name: string;
+  title: string;
+  status: string;
+  pr_number: number | null;
+  created_at: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  cost_usd: number;
+  model: string | null;
+}
+
+// Features across the caller's installations, newest first, with the
+// feature's own generation usage — the accordion's top-level rows. Legacy
+// reviews with no matching feature (pre-factory or human-opened PRs) simply
+// have nothing to attach to and never surface here.
+export async function listRecentFeaturesForUsage(
+  installationIds: number[],
+  limit = 20,
+): Promise<FeatureUsageRow[]> {
+  if (installationIds.length === 0) return [];
+  const placeholders = installationIds.map((_, i) => `?${i + 2}`).join(', ');
+  const res = await env.DB.prepare(
+    `SELECT f.id, f.repository_id, repo.owner AS repo_owner, repo.name AS repo_name,
+		        f.title, f.status, f.pr_number, f.created_at,
+		        f.input_tokens, f.output_tokens, f.cache_read_tokens, f.cache_write_tokens,
+		        f.cost_usd, f.model
+		 FROM features f
+		 JOIN repositories repo ON repo.id = f.repository_id
+		 WHERE repo.installation_id IN (${placeholders})
+		 ORDER BY f.id DESC
+		 LIMIT ?1`,
+  )
+    .bind(limit, ...installationIds)
+    .all<FeatureUsageRow>();
+  return res.results;
+}
+
+// Reviews/fix attempts belonging to any of the given (repository, PR) pairs.
+// D1/SQLite has no clean tuple-IN, so this over-fetches by repo id and PR
+// number separately; the caller groups results down to the exact pairs. The
+// candidate set is bounded by listRecentFeaturesForUsage's limit, so the
+// over-fetch is cheap.
+export async function listReviewsForRepoPrs(
+  pairs: { repositoryId: number; prNumber: number }[],
+): Promise<ReviewActivityRow[]> {
+  if (pairs.length === 0) return [];
+  const repoIds = [...new Set(pairs.map((p) => p.repositoryId))];
+  const prNumbers = [...new Set(pairs.map((p) => p.prNumber))];
+  const repoPlaceholders = repoIds.map((_, i) => `?${i + 1}`).join(', ');
+  const prPlaceholders = prNumbers.map((_, i) => `?${repoIds.length + i + 1}`).join(', ');
+  const res = await env.DB.prepare(
+    `SELECT r.*, repo.owner AS repo_owner, repo.name AS repo_name
+		 FROM reviews r
+		 LEFT JOIN repositories repo ON repo.id = r.repository_id
+		 WHERE r.repository_id IN (${repoPlaceholders}) AND r.pr_number IN (${prPlaceholders})
+		 ORDER BY r.created_at ASC`,
+  )
+    .bind(...repoIds, ...prNumbers)
+    .all<ReviewActivityRow>();
+  return res.results;
+}
+
+export interface FixAttemptRow {
+  id: number;
+  repository_id: number;
+  pr_number: number;
+  trigger: string;
+  status: string;
+  commit_sha: string | null;
+  error: string | null;
+  created_at: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  cost_usd: number;
+  model: string | null;
+}
+
+export async function listFixAttemptsForRepoPrs(
+  pairs: { repositoryId: number; prNumber: number }[],
+): Promise<FixAttemptRow[]> {
+  if (pairs.length === 0) return [];
+  const repoIds = [...new Set(pairs.map((p) => p.repositoryId))];
+  const prNumbers = [...new Set(pairs.map((p) => p.prNumber))];
+  const repoPlaceholders = repoIds.map((_, i) => `?${i + 1}`).join(', ');
+  const prPlaceholders = prNumbers.map((_, i) => `?${repoIds.length + i + 1}`).join(', ');
+  const res = await env.DB.prepare(
+    `SELECT id, repository_id, pr_number, "trigger", status, commit_sha, error, created_at,
+		        input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, model
+		 FROM fix_attempts
+		 WHERE repository_id IN (${repoPlaceholders}) AND pr_number IN (${prPlaceholders})
+		 ORDER BY created_at ASC`,
+  )
+    .bind(...repoIds, ...prNumbers)
+    .all<FixAttemptRow>();
+  return res.results;
+}
+
+export async function listVerificationsForFeatures(
+  featureIds: number[],
+): Promise<VerificationRow[]> {
+  if (featureIds.length === 0) return [];
+  const placeholders = featureIds.map((_, i) => `?${i + 1}`).join(', ');
+  const res = await env.DB.prepare(
+    `SELECT * FROM verifications WHERE feature_id IN (${placeholders}) ORDER BY created_at ASC`,
+  )
+    .bind(...featureIds)
+    .all<VerificationRow>();
+  return res.results;
+}
+
+export interface AutomationUsageRow {
+  automation_id: number;
+  name: string;
+  repo_owner: string;
+  repo_name: string;
+  runs: number;
+  cost_usd: number;
+}
+
+// Per-automation cost for one 'YYYY-MM' month, costliest first — only
+// automations that actually fired that month appear (mirrors
+// agentUsageForMonth's grouping).
+export async function automationUsageForMonth(
+  installationIds: number[],
+  month: string,
+): Promise<AutomationUsageRow[]> {
+  if (installationIds.length === 0) return [];
+  const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+  const res = await env.DB.prepare(
+    `SELECT a.id AS automation_id, a.name, repo.owner AS repo_owner, repo.name AS repo_name,
+		        COUNT(ar.id) AS runs, COALESCE(SUM(ar.cost_usd), 0) AS cost_usd
+		 FROM automations a
+		 JOIN repositories repo ON repo.id = a.repository_id
+		 JOIN automation_runs ar
+		   ON ar.automation_id = a.id AND strftime('%Y-%m', ar.created_at) = ?${installationIds.length + 1}
+		 WHERE repo.installation_id IN (${placeholders})
+		 GROUP BY a.id
+		 ORDER BY cost_usd DESC`,
+  )
+    .bind(...installationIds, month)
+    .all<AutomationUsageRow>();
+  return res.results;
+}
+
+// Pipeline-wide cost for one 'YYYY-MM' month: review + generation + fix +
+// verification + automation, each a small single-purpose query (matching
+// dashboardStats/monthlyUsage/repoUsageForMonth's style) rather than one
+// UNION, summed here.
+export async function pipelineCostForMonth(
+  installationIds: number[],
+  month: string,
+): Promise<number> {
+  if (installationIds.length === 0) return 0;
+  const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+  const monthParam = `?${installationIds.length + 1}`;
+  const bind = (stmt: D1PreparedStatement) => stmt.bind(...installationIds, month);
+  const [reviews, generation, fixes, verifications, automations] = await Promise.all([
+    bind(
+      env.DB.prepare(
+        `SELECT COALESCE(SUM(cost_usd), 0) AS cost FROM reviews
+			 WHERE installation_id IN (${placeholders}) AND strftime('%Y-%m', created_at) = ${monthParam}`,
+      ),
+    ).first<{ cost: number }>(),
+    bind(
+      env.DB.prepare(
+        `SELECT COALESCE(SUM(f.cost_usd), 0) AS cost FROM features f
+			 JOIN repositories repo ON repo.id = f.repository_id
+			 WHERE repo.installation_id IN (${placeholders}) AND strftime('%Y-%m', f.created_at) = ${monthParam}`,
+      ),
+    ).first<{ cost: number }>(),
+    bind(
+      env.DB.prepare(
+        `SELECT COALESCE(SUM(fa.cost_usd), 0) AS cost FROM fix_attempts fa
+			 JOIN repositories repo ON repo.id = fa.repository_id
+			 WHERE repo.installation_id IN (${placeholders}) AND strftime('%Y-%m', fa.created_at) = ${monthParam}`,
+      ),
+    ).first<{ cost: number }>(),
+    bind(
+      env.DB.prepare(
+        `SELECT COALESCE(SUM(v.cost_usd), 0) AS cost FROM verifications v
+			 JOIN features f ON f.id = v.feature_id
+			 JOIN repositories repo ON repo.id = f.repository_id
+			 WHERE repo.installation_id IN (${placeholders}) AND strftime('%Y-%m', v.created_at) = ${monthParam}`,
+      ),
+    ).first<{ cost: number }>(),
+    bind(
+      env.DB.prepare(
+        `SELECT COALESCE(SUM(ar.cost_usd), 0) AS cost FROM automation_runs ar
+			 JOIN automations a ON a.id = ar.automation_id
+			 JOIN repositories repo ON repo.id = a.repository_id
+			 WHERE repo.installation_id IN (${placeholders}) AND strftime('%Y-%m', ar.created_at) = ${monthParam}`,
+      ),
+    ).first<{ cost: number }>(),
+  ]);
+  return (
+    (reviews?.cost ?? 0) +
+    (generation?.cost ?? 0) +
+    (fixes?.cost ?? 0) +
+    (verifications?.cost ?? 0) +
+    (automations?.cost ?? 0)
+  );
+}
+
 // --- durable user OAuth credentials (PR-opener attribution) ---
 
 export interface UserTokenRow {
@@ -2125,6 +2422,12 @@ export interface AutomationRunRow {
   commit_sha: string | null;
   error: string | null;
   created_at: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  cost_usd: number;
+  model: string | null;
 }
 
 export interface AutomationFields {
@@ -2291,11 +2594,28 @@ export async function finishAutomationRun(
   prNumber?: number,
   commitSha?: string,
   error?: string,
+  usage?: CliUsage,
 ): Promise<void> {
   await env.DB.prepare(
-    `UPDATE automation_runs SET status = ?2, pr_number = ?3, commit_sha = ?4, error = ?5 WHERE id = ?1`,
+    `UPDATE automation_runs SET
+		 status = ?2, pr_number = ?3, commit_sha = ?4, error = ?5,
+		 input_tokens = ?6, output_tokens = ?7, cache_read_tokens = ?8, cache_write_tokens = ?9,
+		 cost_usd = ?10, model = ?11
+		 WHERE id = ?1`,
   )
-    .bind(runId, status, prNumber ?? null, commitSha ?? null, error ?? null)
+    .bind(
+      runId,
+      status,
+      prNumber ?? null,
+      commitSha ?? null,
+      error ?? null,
+      usage?.inputTokens ?? 0,
+      usage?.outputTokens ?? 0,
+      usage?.cacheReadTokens ?? 0,
+      usage?.cacheWriteTokens ?? 0,
+      usage?.costUsd ?? 0,
+      usage?.model ?? null,
+    )
     .run();
 }
 
@@ -2343,6 +2663,12 @@ export async function getAutomationRunDetail(runId: number): Promise<AutomationR
       commit_sha: row.commit_sha,
       error: row.error,
       created_at: row.created_at,
+      input_tokens: row.input_tokens,
+      output_tokens: row.output_tokens,
+      cache_read_tokens: row.cache_read_tokens,
+      cache_write_tokens: row.cache_write_tokens,
+      cost_usd: row.cost_usd,
+      model: row.model,
     },
     automation: {
       id: row.automation_id,

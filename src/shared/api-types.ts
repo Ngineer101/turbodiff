@@ -23,18 +23,51 @@ export interface ApiReview {
   created_at: string; // D1 UTC 'YYYY-MM-DD HH:MM:SS'
 }
 
+// One session (generation, review, fix, or verify run) inside a shipped
+// feature's usage accordion.
+export interface ApiFeatureUsageSession {
+  kind: 'generate' | 'review' | 'fix' | 'verify';
+  label: string; // agent slug for review, trigger for fix, etc.
+  status: string;
+  cost_usd: number;
+  total_tokens: number;
+  duration_s: number | null;
+  created_at: string;
+  url: string | null; // review_url / PR url / certificate url
+}
+
+// A shipped feature and every session (generation, reviews, fix attempts,
+// verifications) that belongs to it — the usage page's "Features shipped"
+// accordion. Legacy reviews with no matching feature never surface here.
+export interface ApiFeatureUsage {
+  id: number;
+  title: string;
+  repo: string | null;
+  status: string; // features.status
+  pr_number: number | null;
+  pr_url: string | null;
+  created_at: string;
+  total_cost_usd: number;
+  total_tokens: number;
+  sessions: ApiFeatureUsageSession[];
+}
+
 // Usage page payload (the pre-board dashboard metrics).
 export interface ApiUsage {
   month: string; // 'YYYY-MM'
   stats: {
     month_reviews: number;
-    month_cost_usd: number;
+    // Review-stage cost only, same value as before this field was renamed.
+    month_review_cost_usd: number;
+    // Review + generation + fix + verification + automation for the month.
+    month_pipeline_cost_usd: number;
     month_tokens: number;
     avg_duration_s: number | null;
     avg_findings: number | null;
     running: number;
   };
-  months: { month: string; reviews: number; total_tokens: number; cost_usd: number }[];
+  // Review-only cost by month — this table stays scoped to review-stage cost.
+  months: { month: string; reviews: number; total_tokens: number; review_cost_usd: number }[];
   agent_usage: { agent_slug: string | null; reviews: number; cost_usd: number }[];
   repo_count: number;
   enabled_count: number;
@@ -47,7 +80,14 @@ export interface ApiUsage {
     reviews: number;
     cost_usd: number;
   }[];
-  recent_reviews: ApiReview[];
+  features: ApiFeatureUsage[];
+  automation_usage: {
+    automation_id: number;
+    name: string;
+    repo: string;
+    runs: number;
+    cost_usd: number;
+  }[];
 }
 
 export interface ApiReviewsPage {
