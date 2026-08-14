@@ -2004,6 +2004,10 @@ export async function dashboardStats(installationIds: number[]): Promise<Dashboa
   };
   if (installationIds.length === 0) return empty;
   const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+  // `running` counts only dispatches younger than the 20-minute stall window
+  // (STALL_AFTER_MS in routes/api.ts): a review row flips out of 'running'
+  // solely when its agent posts, so a run that dies mid-flight would
+  // otherwise pin the dashboard's active count forever.
   const row = await env.DB.prepare(
     `SELECT
 			COALESCE(SUM(strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')), 0) AS month_reviews,
@@ -2016,7 +2020,8 @@ export async function dashboardStats(installationIds: number[]): Promise<Dashboa
 			AVG(CASE WHEN status = 'completed' AND findings_count IS NOT NULL
 				AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
 				THEN findings_count END) AS avg_findings,
-			COALESCE(SUM(status = 'running'), 0) AS running
+			COALESCE(SUM(status = 'running'
+				AND created_at > datetime('now', '-20 minutes')), 0) AS running
 		 FROM reviews
 		 WHERE installation_id IN (${placeholders})`,
   )
