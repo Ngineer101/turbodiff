@@ -74,7 +74,7 @@ function Chip({
       aria-pressed={on}
       onClick={onClick}
       className={cn(
-        'inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs whitespace-nowrap transition-colors',
+        'inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs whitespace-nowrap transition-colors max-sm:px-3.5 max-sm:py-2',
         on
           ? 'border-accent/40 bg-accent/10 text-accent-bright'
           : 'border-line-2/70 text-mute hover:border-line-2 hover:text-ink-dim',

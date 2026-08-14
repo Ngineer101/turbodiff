@@ -14,10 +14,12 @@ export const buttonVariants = cva(
         danger: 'border border-danger/40 bg-transparent text-danger hover:bg-danger/10',
         ghost: 'text-mute hover:bg-raised hover:text-ink',
       },
+      // Mobile floors: every button reaches a comfortable thumb target on
+      // touch widths without changing the compact desktop density.
       size: {
-        default: 'px-4 py-1.5 text-[0.85rem]',
-        sm: 'px-2.5 py-1 text-xs',
-        icon: 'size-8',
+        default: 'px-4 py-1.5 text-[0.85rem] max-sm:min-h-11',
+        sm: 'px-2.5 py-1 text-xs max-sm:min-h-10 max-sm:px-3.5',
+        icon: 'size-8 max-sm:size-11',
       },
     },
     defaultVariants: { variant: 'default', size: 'default' },

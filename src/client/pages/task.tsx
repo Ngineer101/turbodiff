@@ -7,10 +7,11 @@ import type { ApiPlan } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
 import { ago } from '../lib/format.ts';
 import { GENERATION_STOPPED, taskQuery } from '../lib/queries.ts';
-import { taskState } from '../lib/task-state.ts';
+import { taskColumn, taskStages, taskState } from '../lib/task-state.ts';
 import { cn } from '../lib/utils.ts';
 import { AgentRunLog } from '../components/agent-run-log.tsx';
 import { ConfirmButton } from '../components/confirm-button.tsx';
+import { Serial, StageLights, Stamp } from '../components/identity.tsx';
 import { Markdown } from '../components/markdown.tsx';
 import {
   Accordion,
@@ -138,9 +139,16 @@ export function TaskPage() {
       >
         <ArrowLeft className="size-3.5" aria-hidden /> Board
       </Link>
-      <h1 className="mt-2 text-base leading-snug font-medium break-words sm:text-xl">
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <Serial n={task.id} />
+        {taskColumn(task) === 'done' ? <Stamp tone="ok">MERGED</Stamp> : null}
+      </div>
+      <h1 className="mt-1.5 text-base leading-snug font-medium break-words sm:text-xl">
         {task.title}
       </h1>
+      {taskColumn(task) === 'done' ? null : (
+        <StageLights stages={taskStages(task)} className="mt-3 max-w-sm" />
+      )}
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <Pill tone={state.tone}>{state.label}</Pill>
         {task.repos
@@ -262,7 +270,7 @@ export function TaskPage() {
                       <button
                         type="button"
                         aria-label="Remove comment"
-                        className="cursor-pointer p-0.5 text-mute hover:text-danger"
+                        className="cursor-pointer p-0.5 text-mute hover:text-danger max-sm:p-2"
                         onClick={() => setComments((prev) => prev.filter((_, j) => j !== i))}
                       >
                         <X className="size-3.5" aria-hidden />
@@ -321,11 +329,12 @@ export function TaskPage() {
           {task.repos.map((r) => {
             const abandoned = r.feature_status === 'abandoned';
             const stopped = !r.pr_number && GENERATION_STOPPED.has(r.feature_status ?? '');
-            const tone = stopped || abandoned
-              ? 'red'
-              : r.feature_status === 'merged' || r.pr_number
-                ? 'on'
-                : 'running';
+            const tone =
+              stopped || abandoned
+                ? 'red'
+                : r.feature_status === 'merged' || r.pr_number
+                  ? 'on'
+                  : 'running';
             const label = stopped
               ? 'Generation stopped'
               : abandoned

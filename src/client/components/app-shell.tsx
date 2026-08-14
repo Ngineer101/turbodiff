@@ -1,25 +1,21 @@
 import { Link, useRouterState } from '@tanstack/react-router';
-import {
-  BarChart2,
-  Bot,
-  LayoutDashboard,
-  LogOut,
-  Plug,
-  Repeat,
-  Settings,
-  Sparkles,
-} from 'lucide-react';
+import { LogOut } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { cn } from '../lib/utils.ts';
+import { Lamp } from './identity.tsx';
 
+// Control-room nav: every destination is a station with an indicator lamp —
+// lit where you are, dark elsewhere. No icon set; the placard type IS the
+// iconography.
+// `short` fits the mobile bottom bar's seven slots without truncation.
 const NAV = [
-  { to: '/', label: 'Board', icon: LayoutDashboard, exact: true },
-  { to: '/agents', label: 'Agents', icon: Bot },
-  { to: '/skills', label: 'Skills', icon: Sparkles },
-  { to: '/automations', label: 'Automations', icon: Repeat },
-  { to: '/integrations', label: 'Integrations', icon: Plug },
-  { to: '/usage', label: 'Usage', icon: BarChart2 },
-  { to: '/settings', label: 'Settings', icon: Settings },
+  { to: '/', label: 'Board', short: 'Board', exact: true },
+  { to: '/agents', label: 'Agents', short: 'Agents' },
+  { to: '/skills', label: 'Skills', short: 'Skills' },
+  { to: '/automations', label: 'Automations', short: 'Autos' },
+  { to: '/integrations', label: 'Integrations', short: 'MCP' },
+  { to: '/usage', label: 'Usage', short: 'Usage' },
+  { to: '/settings', label: 'Settings', short: 'Config' },
 ] as const;
 
 function Logo() {
@@ -43,8 +39,8 @@ function isActive(pathname: string, to: string, exact?: boolean): boolean {
 function SidebarNav() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   return (
-    <nav aria-label="Main" className="flex flex-col gap-1">
-      {NAV.map(({ to, label, icon: Icon, ...item }) => {
+    <nav aria-label="Main" className="flex flex-col gap-0.5">
+      {NAV.map(({ to, label, ...item }) => {
         const active = isActive(pathname, to, 'exact' in item && item.exact);
         return (
           <Link
@@ -52,13 +48,13 @@ function SidebarNav() {
             to={to}
             aria-current={active ? 'page' : undefined}
             className={cn(
-              'flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[0.85rem] transition-colors',
+              'flex items-center gap-2.5 rounded-md border-l-2 px-3 py-[7px] font-mono text-[11px] tracking-[0.14em] uppercase transition-colors',
               active
-                ? 'bg-raised text-accent-bright'
-                : 'text-mute hover:bg-raised/60 hover:text-ink',
+                ? 'border-accent-bright bg-surface text-ink'
+                : 'border-transparent text-mute hover:bg-surface/60 hover:text-ink-dim',
             )}
           >
-            <Icon className="size-4 shrink-0" aria-hidden />
+            <Lamp tone={active ? 'go' : 'off'} />
             {label}
           </Link>
         );
@@ -79,26 +75,21 @@ function BottomTabs() {
       {/* flex, not a fixed column count, so adding a destination can never
           wrap the bar onto a second row */}
       <div className="flex">
-        {NAV.map(({ to, label, icon: Icon, ...item }) => {
+        {NAV.map(({ to, label, short, ...item }) => {
           const active = isActive(pathname, to, 'exact' in item && item.exact);
           return (
             <Link
               key={to}
               to={to}
+              aria-label={label}
               aria-current={active ? 'page' : undefined}
               className={cn(
-                'flex min-w-0 flex-1 flex-col items-center gap-1 py-2 text-[10px] tracking-wide transition-colors active:scale-95',
+                'flex min-w-0 flex-1 flex-col items-center gap-1.5 py-2.5 font-mono text-[9px] tracking-[0.08em] uppercase transition-colors active:scale-95',
                 active ? 'text-accent-bright' : 'text-mute',
               )}
             >
-              <Icon
-                className={cn(
-                  'size-5 shrink-0',
-                  active && 'drop-shadow-[0_0_6px_rgba(86,211,100,0.4)]',
-                )}
-                aria-hidden
-              />
-              <span className="max-w-full truncate px-0.5">{label}</span>
+              <Lamp tone={active ? 'go' : 'off'} className="size-2.5" />
+              <span className="max-w-full truncate px-0.5">{short}</span>
             </Link>
           );
         })}

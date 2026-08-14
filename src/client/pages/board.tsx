@@ -18,9 +18,17 @@ import type { ApiBoard, ApiPlan, ApiTodo } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
 import { ago, fmtUsd } from '../lib/format.ts';
 import { boardQuery } from '../lib/queries.ts';
-import { taskColumn, taskState } from '../lib/task-state.ts';
+import { taskColumn, taskStages, taskState } from '../lib/task-state.ts';
 import { cn } from '../lib/utils.ts';
 import { ConfirmButton } from '../components/confirm-button.tsx';
+import {
+  Placard,
+  Serial,
+  StageLights,
+  Stamp,
+  TelemetryStrip,
+  type LampTone,
+} from '../components/identity.tsx';
 import { Muted, PageTitle } from '../components/section.tsx';
 import { Button } from '../components/ui/button.tsx';
 import { Card } from '../components/ui/card.tsx';
@@ -206,7 +214,7 @@ function StartDialog({
                     <button
                       type="button"
                       aria-label={`Remove ${f.name}`}
-                      className="cursor-pointer rounded-full p-0.5 text-mute hover:text-danger"
+                      className="cursor-pointer rounded-full p-0.5 text-mute hover:text-danger max-sm:p-2"
                       onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))}
                     >
                       <X className="size-3" aria-hidden />
@@ -265,7 +273,7 @@ function RepoPickerPopover({ todo, board }: { todo: ApiTodo; board: ApiBoard }) 
         <button
           type="button"
           className={cn(
-            'inline-flex cursor-pointer items-center gap-1 rounded-full border border-dashed border-line-2 px-2 py-0.5 text-xs text-mute transition-colors hover:border-accent/40 hover:text-accent-bright',
+            'inline-flex cursor-pointer items-center gap-1 rounded-full border border-dashed border-line-2 px-2 py-0.5 text-xs text-mute transition-colors hover:border-accent/40 hover:text-accent-bright max-sm:px-3 max-sm:py-1.5',
           )}
         >
           <Plus className="size-3" aria-hidden />
@@ -304,7 +312,7 @@ function RepoPickerPopover({ todo, board }: { todo: ApiTodo; board: ApiBoard }) 
                   disabled={disabled}
                   onClick={() => toggle(r.id)}
                   className={cn(
-                    'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+                    'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-40 max-sm:py-2.5',
                     selected ? 'text-accent-bright' : 'text-ink-dim hover:bg-raised/70',
                   )}
                 >
@@ -393,6 +401,7 @@ function TodoCard({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
 function TaskCard({ task }: { task: ApiPlan }) {
   const queryClient = useQueryClient();
   const state = taskState(task);
+  const done = taskColumn(task) === 'done';
   const archive = useMutation({
     mutationFn: () => api.post(`/api/tasks/${task.id}/archive`, { archived: true }),
     onSuccess: () => {
@@ -403,47 +412,56 @@ function TaskCard({ task }: { task: ApiPlan }) {
   });
   return (
     <Card className="animate-rise p-3 transition-colors hover:border-accent/30">
-      <div className="flex items-start justify-between gap-2">
-        <Link
-          to="/tasks/$taskId"
-          params={{ taskId: String(task.id) }}
-          className="min-w-0 text-[0.85rem] font-medium break-words hover:text-accent-bright"
-        >
-          {task.title}
-        </Link>
-        <ConfirmButton
-          variant="ghost"
-          size="icon"
-          className="size-6 shrink-0 text-mute"
-          title="Archive this task?"
-          description="Started tasks are never deleted — archiving hides it from the board. The plan, PR, and history stay."
-          confirmLabel="Archive"
-          onConfirm={() => archive.mutate()}
-          busy={archive.isPending}
-          aria-label={`Archive task ${task.title}`}
-        >
-          <Archive className="size-3.5" aria-hidden />
-        </ConfirmButton>
+      <div className="flex items-baseline justify-between gap-2">
+        <Serial n={task.id} />
+        <span className="flex items-center gap-2">
+          {done ? <Stamp tone="ok">MERGED</Stamp> : null}
+          <ConfirmButton
+            variant="ghost"
+            size="icon"
+            className="size-6 shrink-0 text-mute"
+            title="Archive this task?"
+            description="Started tasks are never deleted — archiving hides it from the board. The plan, PR, and history stay."
+            confirmLabel="Archive"
+            onConfirm={() => archive.mutate()}
+            busy={archive.isPending}
+            aria-label={`Archive task ${task.title}`}
+          >
+            <Archive className="size-3.5" aria-hidden />
+          </ConfirmButton>
+        </span>
       </div>
-      <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
-        <Pill tone={state.tone}>{state.label}</Pill>
-        {task.repos
-          .filter((r) => r.verification && r.feature_status !== 'merged')
-          .map((r) => (
-            <Pill
-              key={r.repository_id}
-              tone={
-                r.verification!.status === 'passed'
-                  ? 'on'
-                  : r.verification!.status === 'running'
-                    ? 'running'
-                    : 'red'
-              }
-            >
-              {r.owner}/{r.name} Verify: {r.verification!.status}
-            </Pill>
-          ))}
-      </div>
+      <Link
+        to="/tasks/$taskId"
+        params={{ taskId: String(task.id) }}
+        className="mt-2 block min-w-0 text-[0.85rem] font-medium break-words hover:text-accent-bright"
+      >
+        {task.title}
+      </Link>
+      {done ? null : (
+        <>
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+            <Pill tone={state.tone}>{state.label}</Pill>
+            {task.repos
+              .filter((r) => r.verification && r.feature_status !== 'merged')
+              .map((r) => (
+                <Pill
+                  key={r.repository_id}
+                  tone={
+                    r.verification!.status === 'passed'
+                      ? 'on'
+                      : r.verification!.status === 'running'
+                        ? 'running'
+                        : 'red'
+                  }
+                >
+                  {r.owner}/{r.name} Verify: {r.verification!.status}
+                </Pill>
+              ))}
+          </div>
+          <StageLights stages={taskStages(task)} className="mt-2" />
+        </>
+      )}
       <div className="mt-2 flex flex-wrap items-center justify-between gap-x-2 text-xs text-mute">
         <span className="min-w-0 truncate font-mono">
           {task.repos.map((r) => `${r.owner}/${r.name}`).join(', ')}
@@ -456,19 +474,25 @@ function TaskCard({ task }: { task: ApiPlan }) {
 
 function Column({
   title,
+  lamp,
+  pulse,
   count,
   children,
   empty,
 }: {
   title: string;
+  lamp: LampTone;
+  pulse?: boolean;
   count: number;
   children: ReactNode;
   empty: string;
 }) {
   return (
     <section className="min-w-0">
-      <h2 className="mb-2.5 font-mono text-xs font-medium tracking-[0.14em] text-mute uppercase">
-        {title} <span className="ml-1 text-mute/60">{count}</span>
+      <h2 className="mb-2.5">
+        <Placard lamp={lamp} pulse={pulse} aside={count}>
+          {title}
+        </Placard>
       </h2>
       <div className="flex flex-col gap-2.5">
         {count === 0 ? (
@@ -509,7 +533,7 @@ function RepoFilter({
   };
   const optionClasses = (selected: boolean) =>
     cn(
-      'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors',
+      'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors max-sm:py-2.5',
       selected ? 'text-accent-bright' : 'text-ink-dim hover:bg-raised/70',
     );
   return (
@@ -603,9 +627,15 @@ export function BoardPage() {
   const [filter, setFilter] = useState<ColumnKey | 'all'>('all');
   const [repoId, setRepoId] = useState<number | null>(null);
 
-  // Distinct repos across every card, with how many cards each matches.
+  // Every factory-enabled repo plus any repo referenced by a card (covers
+  // repos disabled after their cards were made), with how many cards each
+  // matches. Seeding from data.repos — not just the cards — keeps the filter
+  // visible whenever the user actually has multiple repos, even if only one
+  // has cards right now; picking a quiet repo shows the honest empty state.
   const filterRepos = useMemo(() => {
     const seen = new Map<number, FilterRepo>();
+    for (const r of data.repos)
+      seen.set(r.id, { id: r.id, owner: r.owner, name: r.name, count: 0 });
     const bump = (id: number, owner: string, name: string) => {
       const cur = seen.get(id) ?? { id, owner, name, count: 0 };
       cur.count += 1;
@@ -644,6 +674,7 @@ export function BoardPage() {
         <Column
           key="todo"
           title="To do"
+          lamp="off"
           count={todos.length}
           empty={repoFilter !== null ? filteredEmpty : 'The backlog is empty — add todos above.'}
         >
@@ -659,6 +690,8 @@ export function BoardPage() {
         <Column
           key="in_progress"
           title="In progress"
+          lamp={inProgress.length > 0 ? 'hold' : 'off'}
+          pulse={data.stats.running > 0}
           count={inProgress.length}
           empty={repoFilter !== null ? filteredEmpty : 'Start a todo to put the agents to work.'}
         >
@@ -674,6 +707,7 @@ export function BoardPage() {
         <Column
           key="done"
           title="Done"
+          lamp={done.length > 0 ? 'go' : 'off'}
           count={done.length}
           empty={repoFilter !== null ? filteredEmpty : 'Merged tasks land here.'}
         >
@@ -687,18 +721,15 @@ export function BoardPage() {
 
   return (
     <>
-      <PageTitle
-        aside={
-          <Muted>
-            {fmtUsd(data.stats.month_cost_usd)} this month
-            {data.stats.running > 0 ? (
-              <span className="text-accent-bright"> · {data.stats.running} running</span>
-            ) : null}
-          </Muted>
-        }
-      >
-        Board
-      </PageTitle>
+      <PageTitle>Board</PageTitle>
+      <TelemetryStrip
+        className="mt-3"
+        running={data.stats.running}
+        items={[
+          { label: 'Active runs', value: data.stats.running },
+          { label: 'Month', value: fmtUsd(data.stats.month_cost_usd) },
+        ]}
+      />
 
       <div className="mt-5 flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 flex-1 lg:max-w-xl">
@@ -729,7 +760,7 @@ export function BoardPage() {
             aria-selected={filter === key}
             onClick={() => setFilter(key)}
             className={cn(
-              'cursor-pointer rounded-full px-3.5 py-1.5 text-xs whitespace-nowrap transition-colors',
+              'cursor-pointer rounded-full px-4 py-2 text-xs whitespace-nowrap transition-colors',
               filter === key
                 ? 'bg-accent/15 font-medium text-accent-bright'
                 : 'bg-raised/60 text-mute hover:text-ink',

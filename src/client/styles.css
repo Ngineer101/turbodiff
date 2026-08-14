@@ -8,20 +8,26 @@
   --font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
-  --color-bg: #15171c;
-  --color-surface: #191b21;
-  --color-surface-2: #1e2127;
-  --color-raised: #23262d;
-  --color-line: #2b2f37;
-  --color-line-2: #3a4049;
-  --color-ink: #e8eaee;
-  --color-ink-dim: #c2c7cf;
-  --color-mute: #8b919c;
+  /* Console blue-black ground (the Control Room direction): every neutral
+     leans toward blue so lamps and phosphor read like light on glass, not
+     stickers on gray. */
+  --color-bg: #0f1318;
+  --color-surface: #141a21;
+  --color-surface-2: #182029;
+  --color-raised: #1e2833;
+  --color-line: #233140;
+  --color-line-2: #344a61;
+  --color-ink: #e2e9f0;
+  --color-ink-dim: #bcc8d4;
+  --color-mute: #8595a4;
   --color-accent: #3fb950;
   --color-accent-bright: #56d364;
   --color-accent-ink: #04140a;
   --color-danger: #f85149;
   --color-warn: #d29922;
+  /* Control-room amber: the "working / attention" lamp hue. Brighter than
+     --color-warn so a lit lamp reads across the room; warn stays for text. */
+  --color-hold: #e3b341;
 
   /* Syntax-highlight hues (rendered markdown only). The UI chrome stays
      phosphor-green; code gets a real multi-hue palette so tokens are
@@ -133,6 +139,115 @@
   .animate-rise {
     animation: none;
   }
+}
+
+/* --- B+A identity: Control Room signals + Job Ticket artifacts --- */
+
+/* Rubber-stamp status word (Job Ticket): rotated, double-bordered mono, with
+   a worn-ink noise mask so it reads as stamped rather than printed. Color
+   comes from the caller (text + border share currentColor). */
+.stamp {
+  display: inline-block;
+  transform: rotate(-8deg);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  border: 2px solid currentColor;
+  border-radius: 4px;
+  padding: 0 0.5em;
+  opacity: 0.85;
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='40'%3E%3Cfilter id='r'%3E%3CfeTurbulence baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.5 0.5'/%3E%3C/filter%3E%3Crect width='120' height='40' filter='url(%23r)'/%3E%3C/svg%3E");
+  mask-size: cover;
+}
+
+/* Indicator lamp glow (Control Room). The dot itself is sized/tinted by the
+   Lamp component; these carry the tone-matched glow. */
+.lamp-glow-go {
+  box-shadow: 0 0 9px 2px color-mix(in srgb, var(--color-accent-bright) 45%, transparent);
+}
+.lamp-glow-hold {
+  box-shadow: 0 0 9px 2px color-mix(in srgb, var(--color-hold) 40%, transparent);
+}
+.lamp-glow-abort {
+  box-shadow: 0 0 9px 2px color-mix(in srgb, var(--color-danger) 40%, transparent);
+}
+
+/* Guarded control (launch-console merge): a hazard band along the button's
+   own top edge — clipped by the button's radius so it reads as part of the
+   control, not a sticker floating above it. */
+.guarded {
+  overflow: hidden;
+}
+.guarded::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 4px;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(4, 20, 10, 0.65),
+    rgba(4, 20, 10, 0.65) 4px,
+    var(--color-hold) 4px,
+    var(--color-hold) 8px
+  );
+}
+
+/* The merge ceremony: the stamp slams down (oversized and light, then a
+   hard settle into the .stamp resting pose) and the certificate seal pops
+   in once the stamp has landed. Applied only when the merge happens while
+   the user is watching — see the cockpit's justMerged transition guard. */
+@keyframes stamp-slam {
+  0% {
+    opacity: 0;
+    transform: rotate(-16deg) scale(2.4);
+  }
+  55% {
+    opacity: 1;
+    transform: rotate(-7deg) scale(0.92);
+  }
+  75% {
+    transform: rotate(-8.5deg) scale(1.06);
+  }
+  100% {
+    opacity: 0.85;
+    transform: rotate(-8deg) scale(1);
+  }
+}
+.stamp-ceremony {
+  animation: stamp-slam 0.5s cubic-bezier(0.34, 1.3, 0.5, 1) both;
+}
+
+@keyframes seal-pop {
+  0% {
+    transform: scale(0);
+  }
+  70% {
+    transform: scale(1.3);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.seal-ceremony {
+  animation: seal-pop 0.35s 0.45s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stamp-ceremony,
+  .seal-ceremony {
+    animation: none;
+  }
+}
+
+/* Certificate strip hatching: the paper object a merged feature earns. */
+.cert-hatch {
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--color-surface),
+    var(--color-surface) 6px,
+    var(--color-surface-2) 6px,
+    var(--color-surface-2) 7px
+  );
 }
 
 /* @pierre/diffs core CSS is injected at runtime rescoped from :host to
