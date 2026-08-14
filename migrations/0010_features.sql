@@ -8,7 +8,7 @@ CREATE TABLE features (
 	spec TEXT NOT NULL,
 	branch TEXT,
 	pr_number INTEGER,
-	status TEXT NOT NULL DEFAULT 'queued', -- queued | generating | pr_opened | no_changes | failed
+	status TEXT NOT NULL DEFAULT 'queued', -- queued | generating | pr_opened | no_changes | failed | merged | pr_closed | abandoned
 	error TEXT,
 	created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

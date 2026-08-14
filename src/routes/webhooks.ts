@@ -178,6 +178,12 @@ async function handlePullRequest(
     const repo = await getRepoById(p.repository.id);
     const feature = repo ? await getFeatureByRepoPr(repo.id, p.number) : null;
     if (!feature) return { body: { ok: true, ignored: 'closed non-factory PR' } };
+    // The cockpit's abandon action closes the PR itself and sets 'abandoned'
+    // before this webhook delivery lands — don't let the generic 'pr_closed'
+    // clobber that more specific status.
+    if (feature.status === 'abandoned') {
+      return { body: { ok: true, feature: feature.id, ignored: 'already abandoned' } };
+    }
     await updateFeature(feature.id, { status: p.pull_request.merged ? 'merged' : 'pr_closed' });
     return {
       body: {

@@ -42,7 +42,10 @@ export function taskState(p: ApiPlan): { label: string; tone: TaskTone; hint: st
       const total = p.repos.length;
       const merged = p.repos.filter((r) => r.feature_status === 'merged').length;
       const stopped = p.repos.filter((r) => GENERATION_STOPPED.has(r.feature_status ?? ''));
-      const open = p.repos.filter((r) => r.pr_number && r.feature_status !== 'merged').length;
+      const abandoned = p.repos.filter((r) => r.feature_status === 'abandoned');
+      const open = p.repos.filter(
+        (r) => r.pr_number && r.feature_status !== 'merged' && r.feature_status !== 'abandoned',
+      ).length;
       if (total > 0 && merged === total) {
         return { label: 'Merged', tone: 'on', hint: 'Pull request merged.' };
       }
@@ -51,6 +54,13 @@ export function taskState(p: ApiPlan): { label: string; tone: TaskTone; hint: st
           label: `Generation stopped (${stopped.length})`,
           tone: 'red',
           hint: stopped[0].feature_error ?? 'Generation stopped',
+        };
+      }
+      if (abandoned.length > 0 && merged === 0 && open === 0) {
+        return {
+          label: `Abandoned (${abandoned.length})`,
+          tone: 'red',
+          hint: 'Pull request closed without merging.',
         };
       }
       if (merged > 0) {
