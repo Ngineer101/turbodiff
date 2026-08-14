@@ -814,7 +814,7 @@ export default function FeaturePage() {
                       aria-pressed={diffStyle === style}
                       onClick={() => setDiffStyle(style)}
                       className={cn(
-                        'cursor-pointer px-2.5 py-1 text-xs transition-colors',
+                        'cursor-pointer px-2.5 py-1 text-xs transition-colors max-sm:px-3.5 max-sm:py-2',
                         diffStyle === style
                           ? 'bg-raised text-accent-bright'
                           : 'text-mute hover:text-ink',

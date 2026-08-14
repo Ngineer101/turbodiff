@@ -214,7 +214,7 @@ function StartDialog({
                     <button
                       type="button"
                       aria-label={`Remove ${f.name}`}
-                      className="cursor-pointer rounded-full p-0.5 text-mute hover:text-danger"
+                      className="cursor-pointer rounded-full p-0.5 text-mute hover:text-danger max-sm:p-2"
                       onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))}
                     >
                       <X className="size-3" aria-hidden />
@@ -273,7 +273,7 @@ function RepoPickerPopover({ todo, board }: { todo: ApiTodo; board: ApiBoard }) 
         <button
           type="button"
           className={cn(
-            'inline-flex cursor-pointer items-center gap-1 rounded-full border border-dashed border-line-2 px-2 py-0.5 text-xs text-mute transition-colors hover:border-accent/40 hover:text-accent-bright',
+            'inline-flex cursor-pointer items-center gap-1 rounded-full border border-dashed border-line-2 px-2 py-0.5 text-xs text-mute transition-colors hover:border-accent/40 hover:text-accent-bright max-sm:px-3 max-sm:py-1.5',
           )}
         >
           <Plus className="size-3" aria-hidden />
@@ -312,7 +312,7 @@ function RepoPickerPopover({ todo, board }: { todo: ApiTodo; board: ApiBoard }) 
                   disabled={disabled}
                   onClick={() => toggle(r.id)}
                   className={cn(
-                    'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+                    'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-40 max-sm:py-2.5',
                     selected ? 'text-accent-bright' : 'text-ink-dim hover:bg-raised/70',
                   )}
                 >
@@ -533,7 +533,7 @@ function RepoFilter({
   };
   const optionClasses = (selected: boolean) =>
     cn(
-      'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors',
+      'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors max-sm:py-2.5',
       selected ? 'text-accent-bright' : 'text-ink-dim hover:bg-raised/70',
     );
   return (
@@ -754,7 +754,7 @@ export function BoardPage() {
             aria-selected={filter === key}
             onClick={() => setFilter(key)}
             className={cn(
-              'cursor-pointer rounded-full px-3.5 py-1.5 text-xs whitespace-nowrap transition-colors',
+              'cursor-pointer rounded-full px-4 py-2 text-xs whitespace-nowrap transition-colors',
               filter === key
                 ? 'bg-accent/15 font-medium text-accent-bright'
                 : 'bg-raised/60 text-mute hover:text-ink',

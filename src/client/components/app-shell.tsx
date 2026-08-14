@@ -7,14 +7,15 @@ import { Lamp } from './identity.tsx';
 // Control-room nav: every destination is a station with an indicator lamp —
 // lit where you are, dark elsewhere. No icon set; the placard type IS the
 // iconography.
+// `short` fits the mobile bottom bar's seven slots without truncation.
 const NAV = [
-  { to: '/', label: 'Board', exact: true },
-  { to: '/agents', label: 'Agents' },
-  { to: '/skills', label: 'Skills' },
-  { to: '/automations', label: 'Automations' },
-  { to: '/integrations', label: 'Integrations' },
-  { to: '/usage', label: 'Usage' },
-  { to: '/settings', label: 'Settings' },
+  { to: '/', label: 'Board', short: 'Board', exact: true },
+  { to: '/agents', label: 'Agents', short: 'Agents' },
+  { to: '/skills', label: 'Skills', short: 'Skills' },
+  { to: '/automations', label: 'Automations', short: 'Autos' },
+  { to: '/integrations', label: 'Integrations', short: 'MCP' },
+  { to: '/usage', label: 'Usage', short: 'Usage' },
+  { to: '/settings', label: 'Settings', short: 'Config' },
 ] as const;
 
 function Logo() {
@@ -74,12 +75,13 @@ function BottomTabs() {
       {/* flex, not a fixed column count, so adding a destination can never
           wrap the bar onto a second row */}
       <div className="flex">
-        {NAV.map(({ to, label, ...item }) => {
+        {NAV.map(({ to, label, short, ...item }) => {
           const active = isActive(pathname, to, 'exact' in item && item.exact);
           return (
             <Link
               key={to}
               to={to}
+              aria-label={label}
               aria-current={active ? 'page' : undefined}
               className={cn(
                 'flex min-w-0 flex-1 flex-col items-center gap-1.5 py-2.5 font-mono text-[9px] tracking-[0.08em] uppercase transition-colors active:scale-95',
@@ -87,7 +89,7 @@ function BottomTabs() {
               )}
             >
               <Lamp tone={active ? 'go' : 'off'} className="size-2.5" />
-              <span className="max-w-full truncate px-0.5">{label}</span>
+              <span className="max-w-full truncate px-0.5">{short}</span>
             </Link>
           );
         })}

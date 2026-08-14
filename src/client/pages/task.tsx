@@ -270,7 +270,7 @@ export function TaskPage() {
                       <button
                         type="button"
                         aria-label="Remove comment"
-                        className="cursor-pointer p-0.5 text-mute hover:text-danger"
+                        className="cursor-pointer p-0.5 text-mute hover:text-danger max-sm:p-2"
                         onClick={() => setComments((prev) => prev.filter((_, j) => j !== i))}
                       >
                         <X className="size-3.5" aria-hidden />
