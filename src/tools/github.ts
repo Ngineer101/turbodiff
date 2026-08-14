@@ -7,6 +7,26 @@ import { installationToken } from '../lib/github-app.ts';
 
 export type PostReviewTool = ReturnType<typeof makePostReview>;
 
+// The repository a review dispatch is scoped to. The model supplies
+// owner/repo as tool arguments, and tokenFor resolves a full installation
+// token — so without this pin a prompt-injected agent could read files from
+// (or post reviews to) any other repo in the same installation. Null only on
+// the operator-driven plain-message path (REVIEW_SECRET-authed /internal),
+// which has no dispatch attributes to pin from.
+export type RepoPin = { owner: string; repo: string } | null;
+
+function assertPinned(pin: RepoPin, owner: string, repo: string): void {
+  if (!pin) return;
+  if (
+    owner.toLowerCase() !== pin.owner.toLowerCase() ||
+    repo.toLowerCase() !== pin.repo.toLowerCase()
+  ) {
+    throw new Error(
+      `this review is scoped to ${pin.owner}/${pin.repo} — refusing to access ${owner}/${repo}`,
+    );
+  }
+}
+
 const API = 'https://api.github.com';
 const MAX_DIFF_CHARS = 300_000;
 const MAX_FILE_CHARS = 60_000;
@@ -99,76 +119,82 @@ function filterDiffNoise(diff: string): string {
     .join('');
 }
 
-export const fetchPr = defineTool({
-  name: 'fetch_pr',
-  description:
-    'Fetch a pull request: its title, description, author, branch info, and the full unified diff. ' +
-    'Call this first to see what the PR changes. Large diffs are truncated with a marker; noise ' +
-    'files (lockfiles, minified assets, source maps, generated code) are omitted and replaced ' +
-    'with per-file markers.',
-  input: v.object({
-    owner: v.string(),
-    repo: v.string(),
-    number: v.number(),
-  }),
-  async run({ data }) {
-    interface PrMeta {
-      title: string;
-      body: string | null;
-      user: { login: string } | null;
-      base: { ref: string };
-      head: { ref: string; sha: string };
-      draft: boolean;
-      changed_files: number;
-      additions: number;
-      deletions: number;
-    }
-    const token = await tokenFor(data.owner, data.repo);
-    const base = `/repos/${data.owner}/${data.repo}/pulls/${data.number}`;
-    const [meta, diff] = await Promise.all([
-      gh(token, base).then((r) => r.json() as Promise<PrMeta>),
-      gh(token, base, { accept: 'application/vnd.github.v3.diff' }).then((r) => r.text()),
-    ]);
-    return {
-      output: {
-        title: meta.title,
-        body: meta.body ?? '',
-        author: meta.user?.login ?? 'unknown',
-        baseRef: meta.base.ref,
-        headRef: meta.head.ref,
-        headSha: meta.head.sha,
-        draft: meta.draft,
-        changedFiles: meta.changed_files,
-        additions: meta.additions,
-        deletions: meta.deletions,
-        diff: truncate(filterDiffNoise(diff), MAX_DIFF_CHARS, 'diff'),
-      },
-    };
-  },
-});
+// Per-render factories (like makePostReview): each dispatch pins its tools
+// to the PR's own repository.
+export const makeFetchPr = (pin: RepoPin) =>
+  defineTool({
+    name: 'fetch_pr',
+    description:
+      'Fetch a pull request: its title, description, author, branch info, and the full unified diff. ' +
+      'Call this first to see what the PR changes. Large diffs are truncated with a marker; noise ' +
+      'files (lockfiles, minified assets, source maps, generated code) are omitted and replaced ' +
+      'with per-file markers.',
+    input: v.object({
+      owner: v.string(),
+      repo: v.string(),
+      number: v.number(),
+    }),
+    async run({ data }) {
+      assertPinned(pin, data.owner, data.repo);
+      interface PrMeta {
+        title: string;
+        body: string | null;
+        user: { login: string } | null;
+        base: { ref: string };
+        head: { ref: string; sha: string };
+        draft: boolean;
+        changed_files: number;
+        additions: number;
+        deletions: number;
+      }
+      const token = await tokenFor(data.owner, data.repo);
+      const base = `/repos/${data.owner}/${data.repo}/pulls/${data.number}`;
+      const [meta, diff] = await Promise.all([
+        gh(token, base).then((r) => r.json() as Promise<PrMeta>),
+        gh(token, base, { accept: 'application/vnd.github.v3.diff' }).then((r) => r.text()),
+      ]);
+      return {
+        output: {
+          title: meta.title,
+          body: meta.body ?? '',
+          author: meta.user?.login ?? 'unknown',
+          baseRef: meta.base.ref,
+          headRef: meta.head.ref,
+          headSha: meta.head.sha,
+          draft: meta.draft,
+          changedFiles: meta.changed_files,
+          additions: meta.additions,
+          deletions: meta.deletions,
+          diff: truncate(filterDiffNoise(diff), MAX_DIFF_CHARS, 'diff'),
+        },
+      };
+    },
+  });
 
-export const fetchFile = defineTool({
-  name: 'fetch_file',
-  description:
-    'Fetch the full contents of one file from the repository at a given ref (branch or commit SHA). ' +
-    'Use this when the diff alone lacks context — e.g. to see the whole function or module a hunk touches. ' +
-    'Use the PR headSha to read the changed version, or the base branch name for the original.',
-  input: v.object({
-    owner: v.string(),
-    repo: v.string(),
-    path: v.string(),
-    ref: v.string(),
-  }),
-  async run({ data }) {
-    const token = await tokenFor(data.owner, data.repo);
-    const res = await gh(
-      token,
-      `/repos/${data.owner}/${data.repo}/contents/${data.path}?ref=${encodeURIComponent(data.ref)}`,
-      { accept: 'application/vnd.github.raw+json' },
-    );
-    return { output: truncate(await res.text(), MAX_FILE_CHARS, `file ${data.path}`) };
-  },
-});
+export const makeFetchFile = (pin: RepoPin) =>
+  defineTool({
+    name: 'fetch_file',
+    description:
+      'Fetch the full contents of one file from the repository at a given ref (branch or commit SHA). ' +
+      'Use this when the diff alone lacks context — e.g. to see the whole function or module a hunk touches. ' +
+      'Use the PR headSha to read the changed version, or the base branch name for the original.',
+    input: v.object({
+      owner: v.string(),
+      repo: v.string(),
+      path: v.string(),
+      ref: v.string(),
+    }),
+    async run({ data }) {
+      assertPinned(pin, data.owner, data.repo);
+      const token = await tokenFor(data.owner, data.repo);
+      const res = await gh(
+        token,
+        `/repos/${data.owner}/${data.repo}/contents/${data.path}?ref=${encodeURIComponent(data.ref)}`,
+        { accept: 'application/vnd.github.raw+json' },
+      );
+      return { output: truncate(await res.text(), MAX_FILE_CHARS, `file ${data.path}`) };
+    },
+  });
 
 // GraphQL is the only API surface that exposes review-thread resolution
 // state, which the re-review rules depend on.
@@ -243,51 +269,53 @@ interface ThreadsQueryResult {
 
 const MAX_THREAD_BODY_CHARS = 2_000;
 
-export const fetchReviewThreads = defineTool({
-  name: 'fetch_review_threads',
-  description:
-    'Fetch the existing reviews and inline comment threads on a pull request, including each ' +
-    "thread's resolution state and any replies. Call this on a re-review to reconcile your " +
-    'earlier findings with what happened since: which threads were resolved, and how the ' +
-    'author responded.',
-  input: v.object({
-    owner: v.string(),
-    repo: v.string(),
-    number: v.number(),
-  }),
-  async run({ data }) {
-    const token = await tokenFor(data.owner, data.repo);
-    const result = await ghGraphql<ThreadsQueryResult>(token, THREADS_QUERY, {
-      owner: data.owner,
-      repo: data.repo,
-      number: data.number,
-    });
-    const pr = result.repository?.pullRequest;
-    if (!pr) throw new Error(`pull request ${data.owner}/${data.repo}#${data.number} not found`);
-    const clip = (text: string) => truncate(text, MAX_THREAD_BODY_CHARS, 'comment');
-    return {
-      output: {
-        reviews: pr.reviews.nodes.map((r) => ({
-          author: r.author?.login ?? 'unknown',
-          state: r.state,
-          submittedAt: r.submittedAt,
-          body: clip(r.body),
-        })),
-        threads: pr.reviewThreads.nodes.map((t) => ({
-          path: t.path,
-          line: t.line,
-          resolved: t.isResolved,
-          outdated: t.isOutdated,
-          comments: t.comments.nodes.map((c) => ({
-            author: c.author?.login ?? 'unknown',
-            createdAt: c.createdAt,
-            body: clip(c.body),
+export const makeFetchReviewThreads = (pin: RepoPin) =>
+  defineTool({
+    name: 'fetch_review_threads',
+    description:
+      'Fetch the existing reviews and inline comment threads on a pull request, including each ' +
+      "thread's resolution state and any replies. Call this on a re-review to reconcile your " +
+      'earlier findings with what happened since: which threads were resolved, and how the ' +
+      'author responded.',
+    input: v.object({
+      owner: v.string(),
+      repo: v.string(),
+      number: v.number(),
+    }),
+    async run({ data }) {
+      assertPinned(pin, data.owner, data.repo);
+      const token = await tokenFor(data.owner, data.repo);
+      const result = await ghGraphql<ThreadsQueryResult>(token, THREADS_QUERY, {
+        owner: data.owner,
+        repo: data.repo,
+        number: data.number,
+      });
+      const pr = result.repository?.pullRequest;
+      if (!pr) throw new Error(`pull request ${data.owner}/${data.repo}#${data.number} not found`);
+      const clip = (text: string) => truncate(text, MAX_THREAD_BODY_CHARS, 'comment');
+      return {
+        output: {
+          reviews: pr.reviews.nodes.map((r) => ({
+            author: r.author?.login ?? 'unknown',
+            state: r.state,
+            submittedAt: r.submittedAt,
+            body: clip(r.body),
           })),
-        })),
-      },
-    };
-  },
-});
+          threads: pr.reviewThreads.nodes.map((t) => ({
+            path: t.path,
+            line: t.line,
+            resolved: t.isResolved,
+            outdated: t.isOutdated,
+            comments: t.comments.nodes.map((c) => ({
+              author: c.author?.login ?? 'unknown',
+              createdAt: c.createdAt,
+              body: clip(c.body),
+            })),
+          })),
+        },
+      };
+    },
+  });
 
 const findingSchema = v.object({
   path: v.pipe(v.string(), v.minLength(1)),
@@ -325,7 +353,7 @@ function findingsAsMarkdown(findings: v.InferOutput<typeof findingSchema>[]): st
 // A per-render factory rather than a shared definition: the tool closes over
 // the agent instance id so completing the D1 review row targets exactly the
 // dispatch that ran it — concurrent agents on the same PR never collide.
-export const makePostReview = (agentInstanceId: string) =>
+export const makePostReview = (agentInstanceId: string, pin: RepoPin = null) =>
   defineTool({
     name: 'post_review',
     description:
@@ -343,6 +371,7 @@ export const makePostReview = (agentInstanceId: string) =>
       findings: v.optional(v.array(findingSchema), []),
     }),
     async run({ data }) {
+      assertPinned(pin, data.owner, data.repo);
       const row = await getRepoByFullName(data.owner, data.repo);
       if (!row) {
         throw new Error(

@@ -225,8 +225,10 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
             { automationRunId: ctx.runId },
           );
           if (!agent.success) {
+            // Scrubbed: this message persists to automation_runs.error and
+            // renders in the dashboard for every installation member.
             throw new Error(
-              `automation agent exited ${agent.exitCode}: ${`${agent.stdout}\n${agent.stderr}`.trim().slice(-1_000)}`,
+              `automation agent exited ${agent.exitCode}: ${scrub(`${agent.stdout}\n${agent.stderr}`.trim()).slice(-1_000)}`,
             );
           }
           const status = await sandbox.exec(`git -C ${WORK} status --porcelain`);

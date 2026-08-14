@@ -68,7 +68,9 @@ ${files.map((f) => `- ${f}`).join('\n')}
 // fix-attempt cap, resolve the conflict, and record the attempt. Never
 // throws — a failed run is recorded and reported on the PR, not retried, so
 // a broken run can't spend tokens again on redelivery.
-export async function processResolveConflictMessage(msg: ConflictResolveQueueMessage): Promise<void> {
+export async function processResolveConflictMessage(
+  msg: ConflictResolveQueueMessage,
+): Promise<void> {
   const repo = await getRepoById(msg.repoId);
   if (!repo || !repo.enabled || repo.auto_resolve_conflicts !== 1) {
     console.log(
@@ -115,7 +117,9 @@ export async function processResolveConflictMessage(msg: ConflictResolveQueueMes
   try {
     const outcome = await runConflictResolve(repo, msg.prNumber, mergeability.baseRef, attemptId);
     await finishFixAttempt(attemptId, outcome.status, outcome.commit);
-    console.log(`turbodiff: conflict resolution ${outcome.status} for ${label} (attempt ${attemptId})`);
+    console.log(
+      `turbodiff: conflict resolution ${outcome.status} for ${label} (attempt ${attemptId})`,
+    );
     // A conflict-resolution push invalidates prior verification evidence,
     // same as a fix push: re-verify so the report and the auto-merge gate
     // reflect the merged code.
@@ -154,12 +158,13 @@ async function runConflictResolve(
     { sleepAfter: '20m' },
   );
 
-  const gitEnv = { GIT_TOKEN: gitToken, FIX_BRANCH: headRef };
+  const gitEnv = { GIT_TOKEN: gitToken, FIX_BRANCH: headRef, BASE_REF: baseRef };
   const pushMerge = async (): Promise<string> => {
-    const push = await sandbox.exec(`git -C ${CLONE_DIR} push origin HEAD:"$FIX_BRANCH"`, {
-      env: gitEnv,
-      timeout: 2 * 60_000,
-    });
+    const push = await sandbox.exec(
+      `git -C ${CLONE_DIR} push ` +
+        `"https://x-access-token:$GIT_TOKEN@github.com/${headRepo}.git" HEAD:"$FIX_BRANCH"`,
+      { env: gitEnv, timeout: 2 * 60_000 },
+    );
     if (!push.success) {
       throw new Error(`git push failed: ${scrub(push.stderr).slice(0, 500)}`);
     }
@@ -174,21 +179,35 @@ async function runConflictResolve(
   if (!clone.success) {
     throw new Error(`git clone failed: ${scrub(clone.stderr).slice(0, 500)}`);
   }
+  // The clone URL (token included) lands in .git/config — strip it before
+  // anything else runs in the checkout. The resolution agent and the repo's
+  // check command both execute untrusted repo content with network egress,
+  // so the token must not be readable from disk during either; fetch and
+  // push below supply it via env to explicit-URL commands instead (git
+  // anonymizes those URLs in FETCH_HEAD and merge messages).
   await sandbox.exec(
-    `git -C ${CLONE_DIR} config user.name "turbodiff[bot]" && ` +
+    `git -C ${CLONE_DIR} remote set-url origin "https://github.com/${headRepo}.git" && ` +
+      `git -C ${CLONE_DIR} config user.name "turbodiff[bot]" && ` +
       `git -C ${CLONE_DIR} config user.email "turbodiff[bot]@users.noreply.github.com"`,
   );
 
   try {
-    const fetchBase = await sandbox.exec(`git -C ${CLONE_DIR} fetch origin "${baseRef}" --depth 50`, {
-      env: gitEnv,
-      timeout: 3 * 60_000,
-    });
+    // Explicit refspec into refs/remotes/origin so `merge origin/<base>`
+    // resolves regardless of the single-branch clone's configured refspec.
+    const fetchBase = await sandbox.exec(
+      `git -C ${CLONE_DIR} fetch --depth 50 ` +
+        `"https://x-access-token:$GIT_TOKEN@github.com/${headRepo}.git" ` +
+        `"+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"`,
+      { env: gitEnv, timeout: 3 * 60_000 },
+    );
     if (!fetchBase.success) {
       throw new Error(`git fetch of base branch failed: ${scrub(fetchBase.stderr).slice(0, 500)}`);
     }
 
-    const merge = await sandbox.exec(`git -C ${CLONE_DIR} merge "origin/${baseRef}" --no-edit`, {
+    // Ref name via env, not interpolation — ref names may legally contain
+    // characters the shell would evaluate inside double quotes.
+    const merge = await sandbox.exec(`git -C ${CLONE_DIR} merge "origin/$BASE_REF" --no-edit`, {
+      env: { BASE_REF: baseRef },
       timeout: 60_000,
     });
 
@@ -200,12 +219,16 @@ async function runConflictResolve(
       return { status: 'fixed', commit };
     }
 
-    const conflicted = (await sandbox.exec(`git -C ${CLONE_DIR} diff --name-only --diff-filter=U`)).stdout
+    const conflicted = (
+      await sandbox.exec(`git -C ${CLONE_DIR} diff --name-only --diff-filter=U`)
+    ).stdout
       .split('\n')
       .map((l) => l.trim())
       .filter(Boolean);
     if (conflicted.length === 0) {
-      throw new Error(`git merge failed with no conflicted files: ${scrub(merge.stderr).slice(0, 500)}`);
+      throw new Error(
+        `git merge failed with no conflicted files: ${scrub(merge.stderr).slice(0, 500)}`,
+      );
     }
 
     await sandbox.writeFile(
@@ -236,9 +259,13 @@ async function runConflictResolve(
       },
     );
     const fullOutput = scrub(`${agent.stdout}\n${agent.stderr}`.trim());
-    await persistAgentLog('resolve_conflict', fullOutput, agent.success, { fixAttemptId: attemptId });
+    await persistAgentLog('resolve_conflict', fullOutput, agent.success, {
+      fixAttemptId: attemptId,
+    });
     if (!agent.success) {
-      throw new Error(`conflict resolution agent exited ${agent.exitCode}: ${fullOutput.slice(-1_000)}`);
+      throw new Error(
+        `conflict resolution agent exited ${agent.exitCode}: ${fullOutput.slice(-1_000)}`,
+      );
     }
 
     const stillConflicted = (
@@ -259,7 +286,10 @@ async function runConflictResolve(
     }
 
     if (repo.check_command) {
-      const tests = await sandbox.exec(repo.check_command, { cwd: CLONE_DIR, timeout: TEST_TIMEOUT_MS });
+      const tests = await sandbox.exec(repo.check_command, {
+        cwd: CLONE_DIR,
+        timeout: TEST_TIMEOUT_MS,
+      });
       if (!tests.success) {
         return { status: 'tests_failed' };
       }
@@ -269,9 +299,12 @@ async function runConflictResolve(
     await postConflictResolvedComment(token, repo.owner, repo.name, prNumber, commit.slice(0, 8));
     return { status: 'fixed', commit };
   } finally {
-    // Scrub the token-embedded remote URL so an idle sandbox (sleepAfter
-    // keeps it warm) never holds a usable credential after this run ends.
-    await sandbox.exec(`git -C ${CLONE_DIR} remote set-url origin "https://github.com/${headRepo}.git"`);
+    // Belt and braces: the remote was already scrubbed right after clone,
+    // but an idle sandbox (sleepAfter keeps it warm) must never hold a
+    // usable credential, so re-assert it on every exit path.
+    await sandbox.exec(
+      `git -C ${CLONE_DIR} remote set-url origin "https://github.com/${headRepo}.git"`,
+    );
   }
 }
 

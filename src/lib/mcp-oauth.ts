@@ -42,6 +42,25 @@ async function fetchJson(url: string): Promise<Record<string, unknown> | null> {
   }
 }
 
+// Discovered URLs come from the MCP server's own metadata — attacker-
+// influenced if that server is malicious or later compromised. They become a
+// browser redirect target (authorization endpoint) and the POST target for
+// the auth code + client secret (token endpoint), so require https; plain
+// http only for local development targets, mirroring validConnectionUrl in
+// the API layer.
+function assertSecureUrl(raw: string, label: string): void {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`discovered ${label} is not a valid URL`);
+  }
+  const localDev = url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname);
+  if (url.protocol !== 'https:' && !localDev) {
+    throw new Error(`discovered ${label} must be an https:// URL, got: ${url.protocol}`);
+  }
+}
+
 export async function discoverOAuthEndpoints(mcpServerUrl: string): Promise<OAuthEndpoints> {
   const origin = new URL(mcpServerUrl).origin;
 
@@ -53,6 +72,7 @@ export async function discoverOAuthEndpoints(mcpServerUrl: string): Promise<OAut
   const servers = resource?.authorization_servers;
   const authServer =
     Array.isArray(servers) && typeof servers[0] === 'string' ? (servers[0] as string) : origin;
+  assertSecureUrl(authServer, 'authorization server');
 
   // RFC 8414, falling back to OpenID Connect discovery for authorization
   // servers that only publish that document.
@@ -66,10 +86,13 @@ export async function discoverOAuthEndpoints(mcpServerUrl: string): Promise<OAut
       `could not discover OAuth endpoints for ${authServer} (no oauth-authorization-server or openid-configuration metadata)`,
     );
   }
+  assertSecureUrl(authorizationEndpoint, 'authorization endpoint');
+  assertSecureUrl(tokenEndpoint, 'token endpoint');
   const registrationEndpoint =
     typeof metadata?.registration_endpoint === 'string'
       ? metadata.registration_endpoint
       : undefined;
+  if (registrationEndpoint) assertSecureUrl(registrationEndpoint, 'registration endpoint');
   return { authorizationEndpoint, tokenEndpoint, registrationEndpoint };
 }
 

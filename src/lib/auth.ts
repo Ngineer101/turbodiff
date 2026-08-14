@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import type { Context } from 'hono';
 import { auth, type AuthUser } from './better-auth.ts';
-import { fetchUserInstallationIds } from './github-app.ts';
+import { fetchUserCanPush, fetchUserInstallationIds } from './github-app.ts';
 
 // Request-time authorization on top of better-auth sessions. The session
 // (who you are) is durable and only ends by explicit sign-out or 30-day
@@ -14,6 +14,9 @@ import { fetchUserInstallationIds } from './github-app.ts';
 export type AuthedUser = {
   session: { userId: number; login: string; ghToken: string };
   installationIds: number[];
+  // Local DEV_FAKE_INSTALLATIONS session — no GitHub token to verify repo
+  // permissions with, so permission checks pass by construction.
+  devFake?: boolean;
 };
 
 // Per-isolate caches. Entries are tiny (a token string / a handful of ids);
@@ -64,6 +67,38 @@ async function installationIds(userId: string, ghToken: string): Promise<number[
   return null;
 }
 
+// Whether GitHub says this user can push to the repo, checked with the
+// user's own token (GET /repos/:owner/:repo reports the caller's
+// permissions). Installation membership alone is NOT write permission —
+// GitHub lists an org installation for members with read-only access to any
+// covered repo — so routes that write to a repo or change its factory
+// posture must pass this too. Fail-closed: no token or a failed GitHub call
+// denies. These checks guard explicit clicks, not the 5s polling reads, so
+// a rare rate-limit blip surfaces as a retryable 403 rather than becoming a
+// lingering grant.
+const REPO_PERM_TTL_MS = 5 * 60_000;
+const repoPermCache = new Map<string, { push: boolean; fetchedAt: number }>();
+
+export async function userCanPushToRepo(
+  user: AuthedUser,
+  owner: string,
+  name: string,
+): Promise<boolean> {
+  if (user.devFake) return true;
+  const { userId, ghToken } = user.session;
+  if (!ghToken) return false;
+  const key = `${userId}:${owner}/${name}`;
+  const cached = repoPermCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < REPO_PERM_TTL_MS) return cached.push;
+  try {
+    const push = await fetchUserCanPush(ghToken, owner, name);
+    repoPermCache.set(key, { push, fetchedAt: Date.now() });
+    return push;
+  } catch {
+    return false;
+  }
+}
+
 export async function requireUser(c: Context): Promise<AuthedUser | null> {
   // Local-only escape hatch for developing the signed-in UI without GitHub
   // OAuth: DEV_FAKE_INSTALLATIONS="1001,1002" in .dev.vars signs you in as
@@ -78,6 +113,7 @@ export async function requireUser(c: Context): Promise<AuthedUser | null> {
         .split(',')
         .map(Number)
         .filter((n) => Number.isInteger(n)),
+      devFake: true,
     };
   }
   const found = await auth().api.getSession({ headers: c.req.raw.headers });

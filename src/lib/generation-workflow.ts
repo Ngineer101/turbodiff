@@ -277,8 +277,10 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
             { featureId },
           );
           if (!agent.success) {
+            // Scrubbed: this message persists to features.error and renders
+            // in the dashboard for every installation member.
             throw new Error(
-              `generation agent exited ${agent.exitCode}: ${`${agent.stdout}\n${agent.stderr}`.trim().slice(-1_000)}`,
+              `generation agent exited ${agent.exitCode}: ${scrub(`${agent.stdout}\n${agent.stderr}`.trim()).slice(-1_000)}`,
             );
           }
           const status = await sandbox.exec(`git -C ${WORK} status --porcelain`);
