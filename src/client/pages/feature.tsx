@@ -387,6 +387,19 @@ export default function FeaturePage() {
     void queryClient.invalidateQueries({ queryKey: ['feature', id] });
   };
 
+  // The merge ceremony plays only when the PR flips to merged while this
+  // page is open (a click on Merge, or auto-merge landing mid-poll) — a
+  // page that loads already-merged shows the stamp and seal at rest.
+  const prevPrState = useRef(data.pr?.state);
+  const [justMerged, setJustMerged] = useState(false);
+  useEffect(() => {
+    const state = data.pr?.state;
+    if (prevPrState.current && prevPrState.current !== 'merged' && state === 'merged') {
+      setJustMerged(true);
+    }
+    prevPrState.current = state;
+  }, [data.pr?.state]);
+
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   // Side-by-side needs width; unified is the sane default on narrow screens.
   const [diffStyle, setDiffStyleState] = useState<'split' | 'unified'>(() => {
@@ -557,7 +570,11 @@ export default function FeaturePage() {
     <div className="animate-rise">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <Serial n={data.feature.id} />
-        {prState === 'merged' ? <Stamp tone="ok">MERGED</Stamp> : null}
+        {prState === 'merged' ? (
+          <Stamp tone="ok" className={justMerged ? 'stamp-ceremony' : undefined}>
+            MERGED
+          </Stamp>
+        ) : null}
         {prState === 'closed' ? <Stamp tone="red">ABANDONED</Stamp> : null}
       </div>
       <h1 className="mt-1.5 text-base leading-snug font-medium break-words sm:text-xl">
@@ -639,7 +656,7 @@ export default function FeaturePage() {
           rel="noopener"
           className="mt-4 block max-w-xl hover:opacity-90"
         >
-          <CertStrip sealed={prState === 'merged'}>
+          <CertStrip sealed={prState === 'merged'} ceremony={justMerged}>
             BUILD CERTIFICATE №{String(data.feature.id).padStart(4, '0')} —{' '}
             {prState === 'merged'
               ? 'sealed · view →'

@@ -230,12 +230,16 @@ export function TelemetryStrip({
 }
 
 // CertStrip: the sealed paper object a merged, verified feature earns.
+// `ceremony` plays the seal-pop entrance — set it only on a live
+// transition to sealed, never on an already-sealed page load.
 export function CertStrip({
   sealed,
+  ceremony = false,
   children,
   className,
 }: {
   sealed: boolean;
+  ceremony?: boolean;
   children: ReactNode;
   className?: string;
 }) {
@@ -252,6 +256,7 @@ export function CertStrip({
         className={cn(
           'grid size-5 shrink-0 place-items-center rounded-full border text-[10px]',
           sealed ? 'border-accent-bright text-accent-bright' : 'border-line-2 text-mute',
+          ceremony && sealed && 'seal-ceremony',
         )}
       >
         {sealed ? '✓' : '…'}
