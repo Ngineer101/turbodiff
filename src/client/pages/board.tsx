@@ -258,8 +258,31 @@ function RepoPickerPopover({ todo, board }: { todo: ApiTodo; board: ApiBoard }) 
   const selectedIds = todo.repos.map((r) => r.id);
   const setRepos = useMutation({
     mutationFn: (ids: number[]) => api.post(`/api/todos/${todo.id}/repos`, { repository_ids: ids }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['board'] }),
-    onError: onApiError,
+    onMutate: async (ids) => {
+      await queryClient.cancelQueries({ queryKey: ['board'] });
+      const prev = queryClient.getQueryData<ApiBoard>(['board']);
+      if (prev) {
+        queryClient.setQueryData<ApiBoard>(['board'], {
+          ...prev,
+          todos: prev.todos.map((t) =>
+            t.id === todo.id
+              ? {
+                  ...t,
+                  repos: prev.repos
+                    .filter((r) => ids.includes(r.id))
+                    .map((r) => ({ id: r.id, owner: r.owner, name: r.name })),
+                }
+              : t,
+          ),
+        });
+      }
+      return { prev };
+    },
+    onError: (err, _ids, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(['board'], ctx.prev);
+      onApiError(err);
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['board'] }),
   });
   const toggle = (id: number) => {
     const selected = selectedIds.includes(id);
@@ -302,7 +325,7 @@ function RepoPickerPopover({ todo, board }: { todo: ApiTodo; board: ApiBoard }) 
           ) : (
             filtered.map((r) => {
               const selected = selectedIds.includes(r.id);
-              const disabled = setRepos.isPending || (!selected && selectedIds.length >= 3);
+              const disabled = !selected && selectedIds.length >= 3;
               return (
                 <button
                   key={r.id}
