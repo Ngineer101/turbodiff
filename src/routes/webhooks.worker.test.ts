@@ -11,7 +11,7 @@ import {
   createFeature,
   ensureBuiltinAgents,
   getFeature,
-  recordReview,
+  tryRecordReview,
   updateFeature,
   type AgentRow,
   type RepositoryRow,
@@ -179,7 +179,7 @@ describe('factory PR webhook decisions', () => {
     const calls: { agent: AgentRow; repo: RepositoryRow; trigger: string }[] = [];
     const dispatch: ReviewDispatcher = async (agent, repo, prNumber, _url, trigger, options) => {
       calls.push({ agent, repo, trigger });
-      await recordReview(
+      await tryRecordReview(
         repo.id,
         repo.installation_id,
         prNumber,
