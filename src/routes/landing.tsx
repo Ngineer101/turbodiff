@@ -494,6 +494,9 @@ function Landing() {
           content="Turbodiff is an open-source software factory whose own commit history is the pitch: features planned, built, reviewed and verified by the factory itself, with screenshot proof for every acceptance criterion. Anyone can generate code. We ship proof."
         />
         <link rel="icon" type="image/png" href="/logo-small.png" />
+        <link rel="manifest" href="/manifest.webmanifest" />
+        <link rel="apple-touch-icon" href="/logo.png" />
+        <meta name="theme-color" content="#3fb950" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
         <link
