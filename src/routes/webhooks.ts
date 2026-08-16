@@ -68,6 +68,12 @@ interface PullRequestReviewEvent {
   repository: { id: number; full_name: string };
 }
 
+interface WorkflowRunEvent {
+  action: string;
+  workflow_run: { id: number; conclusion: string | null; pull_requests: { number: number }[] };
+  repository: { id: number; full_name: string };
+}
+
 interface HandlerResult {
   body: Record<string, unknown>;
   status?: 401 | 502;
@@ -124,6 +130,8 @@ async function handleEvent(
       return handlePullRequest(payload as PullRequestEvent, dispatch, computeRisk);
     case 'pull_request_review':
       return handlePullRequestReview(payload as PullRequestReviewEvent);
+    case 'workflow_run':
+      return handleWorkflowRun(payload as WorkflowRunEvent);
     case 'repository': {
       // Keep owner/name current when a repo is renamed or transferred.
       const p = payload as { action: string; repository: WebhookRepoRef };
@@ -322,6 +330,53 @@ async function handlePullRequestReview(p: PullRequestReviewEvent): Promise<Handl
     trigger: 'blocking_review',
   });
   return { body: { ok: true, fix_enqueued: `${p.repository.full_name}#${p.pull_request.number}` } };
+}
+
+// The CI-failure auto-fix trigger: a failed GitHub Actions run on a PR
+// turbodiff itself opened and still manages enqueues a fix run, the same way
+// a blocking bot review does. Scoped to factory PRs still in 'pr_opened'
+// status only — never a human contributor's branch. The workflow_run
+// payload's mini PR refs carry no state/draft flag, so this uses the cached
+// feature status (set 'pr_opened' on generation, flipped to
+// 'merged'/'pr_closed' by the pull_request 'closed' handler above) instead of
+// an extra API round trip. The consumer re-validates everything; this
+// handler just gates cheaply before enqueueing.
+async function handleWorkflowRun(p: WorkflowRunEvent): Promise<HandlerResult> {
+  if (p.action !== 'completed') return { body: { ok: true, ignored: p.action } };
+  if (p.workflow_run.conclusion !== 'failure') {
+    return { body: { ok: true, ignored: `conclusion ${p.workflow_run.conclusion}` } };
+  }
+  const prNumber = p.workflow_run.pull_requests[0]?.number;
+  if (!prNumber) return { body: { ok: true, skipped: 'no associated pull request' } };
+
+  const repo = await getRepoById(p.repository.id);
+  if (!repo) return { body: { ok: true, skipped: 'repo not tracked' } };
+  if (!repo.enabled || !repo.auto_fix) {
+    return { body: { ok: true, skipped: 'auto-fix disabled for repo' } };
+  }
+  const installation = await getInstallation(repo.installation_id);
+  if (!installation || installation.suspended) {
+    return { body: { ok: true, skipped: 'installation missing or suspended' } };
+  }
+
+  const feature = await getFeatureByRepoPr(repo.id, prNumber);
+  if (!feature || feature.status !== 'pr_opened') {
+    return { body: { ok: true, skipped: 'not an open factory PR' } };
+  }
+
+  const attempts = await countFixAttempts(repo.id, prNumber);
+  if (attempts >= FIX_MAX_ATTEMPTS) {
+    return { body: { ok: true, skipped: `fix cap reached (${attempts})` } };
+  }
+
+  await env.FACTORY_QUEUE.send({
+    kind: 'fix',
+    repoId: repo.id,
+    prNumber,
+    trigger: 'ci_failure',
+    workflowRunId: p.workflow_run.id,
+  });
+  return { body: { ok: true, fix_enqueued: `${p.repository.full_name}#${prNumber}` } };
 }
 
 // Agent-runs left under the installation's daily cap.
