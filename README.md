@@ -148,6 +148,8 @@ GitHub App and deploy:
    npx wrangler secret put FIXER_ANTHROPIC_API_KEY  # gateway mode, with FIXER_ANTHROPIC_BASE_URL var
    # Only if agents use authenticated external MCP connections:
    npx wrangler secret put TOKEN_ENCRYPTION_KEY     # openssl rand -hex 32
+   # Only if you use org member invites (Settings > Members on an org installation):
+   npx wrangler secret put RESEND_API_KEY           # from resend.com; pair with RESEND_FROM_ADDRESS var
    ```
 
 7. **Custom domain** (optional) — add it to the Worker, set `PUBLIC_BASE_URL`

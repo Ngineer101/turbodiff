@@ -21,6 +21,7 @@ import {
 } from '../lib/db.ts';
 import { FIX_MAX_ATTEMPTS } from '../lib/fixer.ts';
 import { verifyWebhookSignature } from '../lib/github-app.ts';
+import { ensureOrganizationForInstallation, ensureOwnerMember } from '../lib/permissions.ts';
 import { agentsForTier, computeRiskTier, tierModelOverride, type RiskTier } from '../lib/risk.ts';
 
 // GitHub App webhook receiver. Two jobs:
@@ -48,6 +49,9 @@ interface InstallationEvent {
   repositories?: WebhookRepoRef[];
   repositories_added?: WebhookRepoRef[];
   repositories_removed?: WebhookRepoRef[];
+  // Present on the initial `installation` delivery (not on
+  // installation_repositories) — the GitHub user who installed the app.
+  sender?: { id: number; login: string };
 }
 
 interface PullRequestEvent {
@@ -145,6 +149,18 @@ async function handleInstallation(p: InstallationEvent): Promise<HandlerResult> 
       await upsertInstallation(p.installation.id, p.installation.account);
       await addRepositories(p.installation.id, p.repositories ?? []);
       await ensureBuiltinAgents(p.installation.id);
+      // Teams & orgs (migrations/0031_organizations.sql): Organization-type
+      // installations get a linked better-auth organization, with the
+      // installer recorded as its owner — the natural provisioning point,
+      // since this delivery already carries both the installation and the
+      // installer's identity (sender).
+      if (p.installation.account.type === 'Organization') {
+        const orgId = await ensureOrganizationForInstallation(
+          p.installation.id,
+          p.installation.account.login,
+        );
+        if (p.sender) await ensureOwnerMember(orgId, p.sender.id);
+      }
       return { body: { ok: true, installed: p.installation.account.login } };
     case 'deleted':
       await deleteInstallation(p.installation.id);
@@ -162,6 +178,14 @@ async function handleInstallationRepositories(p: InstallationEvent): Promise<Han
   // Repo selection changed in GitHub's UI — make sure the installation row
   // exists (e.g. if the original `installation created` delivery was missed).
   await upsertInstallation(p.installation.id, p.installation.account);
+  // Same self-heal for the organization row: if the `installation created`
+  // delivery was missed, this is the next chance to provision it (no sender
+  // on this event, so no owner to assign — that stays pending until an
+  // existing owner/admin adds one, or the installer signs in and a future
+  // `installation` delivery catches them).
+  if (p.installation.account.type === 'Organization') {
+    await ensureOrganizationForInstallation(p.installation.id, p.installation.account.login);
+  }
   await addRepositories(p.installation.id, p.repositories_added ?? []);
   await removeRepositories((p.repositories_removed ?? []).map((r) => r.id));
   return {

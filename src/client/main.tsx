@@ -26,6 +26,7 @@ import {
   featureQuery,
   integrationsQuery,
   meQuery,
+  orgMembersQuery,
   queryClient,
   settingsQuery,
   skillQuery,
@@ -42,6 +43,7 @@ import { AutomationRunPage } from './pages/automation-run.tsx';
 import { AutomationsPage } from './pages/automations.tsx';
 import { BoardPage } from './pages/board.tsx';
 import { IntegrationsPage } from './pages/integrations.tsx';
+import { MembersPage } from './pages/members.tsx';
 import { SettingsPage } from './pages/settings.tsx';
 import { SkillEditPage } from './pages/skill-edit.tsx';
 import { SkillNewPage } from './pages/skill-new.tsx';
@@ -186,6 +188,14 @@ const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
+const membersRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/settings/members/$installationId',
+  loader: ({ params }) =>
+    queryClient.ensureQueryData(orgMembersQuery(Number(params.installationId))),
+  component: MembersPage,
+});
+
 const automationsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/automations',
@@ -227,6 +237,7 @@ const routeTree = rootRoute.addChildren([
   skillNewRoute,
   skillEditRoute,
   settingsRoute,
+  membersRoute,
   automationsRoute,
   automationNewRoute,
   automationEditRoute,

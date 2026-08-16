@@ -35,6 +35,9 @@
     // URL slug of your GitHub App (github.com/apps/<slug>) — used for
     // install/manage links in the settings UI.
     "GITHUB_APP_SLUG": "turbodiff",
+    // "From" address for organization invite emails, sent via Resend
+    // (RESEND_API_KEY secret) — must be on a domain verified with Resend.
+    "RESEND_FROM_ADDRESS": "Turbodiff <noreply@turbodiff.dev>",
     // Max auto-triggered reviews per installation per rolling 24h.
     "REVIEW_DAILY_LIMIT": "50",
     // Optional gateway model id used instead of each agent's configured

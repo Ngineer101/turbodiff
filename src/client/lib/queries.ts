@@ -11,6 +11,7 @@ import type {
   ApiFeatureDetail,
   ApiIntegrations,
   ApiMe,
+  ApiOrgMembers,
   ApiPlan,
   ApiSettings,
   ApiSkillDetail,
@@ -133,6 +134,12 @@ export const settingsQuery = queryOptions({
   queryKey: ['settings'],
   queryFn: () => api.get<ApiSettings>('/api/settings'),
 });
+
+export const orgMembersQuery = (installationId: number) =>
+  queryOptions({
+    queryKey: ['org-members', installationId],
+    queryFn: () => api.get<ApiOrgMembers>(`/api/organizations/${installationId}/members`),
+  });
 
 export const integrationsQuery = queryOptions({
   queryKey: ['integrations'],

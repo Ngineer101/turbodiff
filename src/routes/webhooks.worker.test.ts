@@ -89,7 +89,11 @@ beforeEach(async () => {
     'plan_repositories',
     'plans',
     'repositories',
+    'member',
+    'invitation',
+    'organization',
     'installations',
+    'user',
   ];
   await testEnv.DB.batch(tables.map((table) => testEnv.DB.prepare(`DELETE FROM "${table}"`)));
 });
@@ -148,6 +152,81 @@ describe('GitHub webhook authentication and mirroring', () => {
       'SELECT suspended FROM installations WHERE id = 1001',
     ).first<{ suspended: number }>();
     expect(installation?.suspended).toBe(1);
+  });
+
+  it('provisions a linked organization and records the installer as owner', async () => {
+    // The installer already has a better-auth user row (they signed in to
+    // reach the settings page before installing the app on GitHub).
+    await testEnv.DB.prepare(
+      `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt", login, "githubId")
+			 VALUES ('u1', 'octocat', 'octocat@example.test', 1, '2026-01-01T00:00:00.000Z',
+			         '2026-01-01T00:00:00.000Z', 'octocat', 3001)`,
+    ).run();
+
+    const created = {
+      action: 'created',
+      installation: {
+        id: 1001,
+        account: { login: 'acme', id: 2001, type: 'Organization' },
+      },
+      sender: { id: 3001, login: 'octocat' },
+      repositories: [{ id: 101, name: 'api', full_name: 'acme/api' }],
+    };
+    expect((await postWebhook(webhookApp(), 'installation', created)).status).toBe(200);
+
+    const org = await testEnv.DB.prepare(
+      'SELECT id, name, "installationId" AS installation_id FROM "organization"',
+    ).first<{ id: string; name: string; installation_id: number }>();
+    expect(org).toMatchObject({ name: 'acme', installation_id: 1001 });
+
+    const member = await testEnv.DB.prepare(
+      'SELECT role FROM "member" WHERE "organizationId" = ?1 AND "userId" = ?2',
+    )
+      .bind(org?.id, 'u1')
+      .first<{ role: string }>();
+    expect(member?.role).toBe('owner');
+  });
+
+  it('does not provision an organization for a personal (User-type) installation', async () => {
+    const created = {
+      action: 'created',
+      installation: {
+        id: 1002,
+        account: { login: 'octocat', id: 4001, type: 'User' },
+      },
+      sender: { id: 4001, login: 'octocat' },
+      repositories: [],
+    };
+    expect((await postWebhook(webhookApp(), 'installation', created)).status).toBe(200);
+
+    const org = await testEnv.DB.prepare(
+      'SELECT COUNT(*) AS n FROM "organization" WHERE "installationId" = 1002',
+    ).first<{ n: number }>();
+    expect(org?.n).toBe(0);
+  });
+
+  it('provisions the organization without an owner when the installer has never signed in', async () => {
+    const created = {
+      action: 'created',
+      installation: {
+        id: 1001,
+        account: { login: 'acme', id: 2001, type: 'Organization' },
+      },
+      sender: { id: 9999, login: 'never-signed-in' },
+      repositories: [],
+    };
+    expect((await postWebhook(webhookApp(), 'installation', created)).status).toBe(200);
+
+    const org = await testEnv.DB.prepare(
+      'SELECT id FROM "organization" WHERE "installationId" = 1001',
+    ).first<{ id: string }>();
+    expect(org).toBeTruthy();
+    const memberCount = await testEnv.DB.prepare(
+      'SELECT COUNT(*) AS n FROM "member" WHERE "organizationId" = ?1',
+    )
+      .bind(org?.id)
+      .first<{ n: number }>();
+    expect(memberCount?.n).toBe(0);
   });
 });
 
