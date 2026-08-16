@@ -15,6 +15,7 @@ import { persistAgentLog } from './agent-runs.ts';
 import { resolveRunnerAuth } from './fixer.ts';
 import { installationToken, sandboxGitToken } from './github-app.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
+import { notifyPlanUsers } from './push.ts';
 
 // Phase 3 of the software factory (docs/software-factory-design.md): the
 // planning front half. A planning agent clones the repo (read-only), analyzes
@@ -397,11 +398,21 @@ export async function runPlanAnalyze(planId: number): Promise<void> {
         plan: planMd,
         acceptance: JSON.stringify(acceptance),
       });
+      await notifyPlanUsers(planId, {
+        title: plan.title,
+        body: 'Turbodiff finished a plan — ready for your review.',
+        url: `${env.PUBLIC_BASE_URL}/tasks/${planId}`,
+      });
     } else {
       await updatePlan(planId, {
         status: 'awaiting_answers',
         analysis,
         questions: JSON.stringify(questions),
+      });
+      await notifyPlanUsers(planId, {
+        title: plan.title,
+        body: 'Turbodiff has questions before it can plan this.',
+        url: `${env.PUBLIC_BASE_URL}/tasks/${planId}`,
       });
     }
     console.log(`turbodiff: plan ${planId} analyzed for ${full} (${questions.length} questions)`);
@@ -480,6 +491,11 @@ export async function runPlanRefine(planId: number): Promise<void> {
       acceptance: JSON.stringify(acceptance),
       // Consumed — a later answers-driven refine must not replay it.
       feedback: '[]',
+    });
+    await notifyPlanUsers(planId, {
+      title: plan.title,
+      body: 'Turbodiff finished a plan — ready for your review.',
+      url: `${env.PUBLIC_BASE_URL}/tasks/${planId}`,
     });
     console.log(`turbodiff: plan ${planId} refined for ${full}`);
   } catch (err) {

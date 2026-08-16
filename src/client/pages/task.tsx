@@ -1,12 +1,13 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
-import { ArrowLeft, MessageSquarePlus, Paperclip, X } from 'lucide-react';
+import { ArrowLeft, Bell, MessageSquarePlus, Paperclip, X } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { ApiPlan } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
 import { ago } from '../lib/format.ts';
-import { GENERATION_STOPPED, taskQuery } from '../lib/queries.ts';
+import { pushSupported, subscribeToPush } from '../lib/push.ts';
+import { GENERATION_STOPPED, meQuery, taskQuery } from '../lib/queries.ts';
 import { taskColumn, taskStages, taskState } from '../lib/task-state.ts';
 import { cn } from '../lib/utils.ts';
 import { AgentRunLog } from '../components/agent-run-log.tsx';
@@ -27,6 +28,65 @@ import { Pill } from '../components/ui/pill.tsx';
 
 function onApiError(err: unknown) {
   toast.error(err instanceof ApiError ? err.message : 'Request failed');
+}
+
+// Set once regardless of the answer — "contextual" means timing (the first
+// task that hits a human-blocking state while open), not "ask every task".
+const PUSH_PROMPTED_KEY = 'turbodiff:push-prompted';
+
+// An explicit button rather than firing Notification.requestPermission() on
+// render: most browsers only honor that prompt from a direct user gesture,
+// and an unprompted auto-call either silently no-ops or burns the user's one
+// shot at the permission dialog before they understand why it's asking.
+function NotificationsBanner({ vapidPublicKey }: { vapidPublicKey: string }) {
+  const [dismissed, setDismissed] = useState(() => localStorage.getItem(PUSH_PROMPTED_KEY) === '1');
+  const [enabling, setEnabling] = useState(false);
+  if (
+    dismissed ||
+    !pushSupported() ||
+    typeof Notification === 'undefined' ||
+    Notification.permission !== 'default'
+  ) {
+    return null;
+  }
+  const dismiss = () => {
+    localStorage.setItem(PUSH_PROMPTED_KEY, '1');
+    setDismissed(true);
+  };
+  const enable = async () => {
+    setEnabling(true);
+    try {
+      const granted = await subscribeToPush(vapidPublicKey);
+      if (granted) toast.success('Notifications enabled');
+      else toast.error('Notification permission was not granted');
+    } catch (err) {
+      onApiError(err);
+    } finally {
+      setEnabling(false);
+      dismiss();
+    }
+  };
+  return (
+    <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line/60 bg-raised/30 p-3">
+      <p className="flex items-center gap-2 text-[0.85rem] text-mute">
+        <Bell className="size-3.5 shrink-0" aria-hidden />
+        Get notified here when Turbodiff needs your input on this task.
+      </p>
+      <div className="flex shrink-0 items-center gap-1">
+        <Button size="sm" onClick={enable} loading={enabling}>
+          Enable notifications
+        </Button>
+        <button
+          type="button"
+          aria-label="Dismiss"
+          className="cursor-pointer p-1.5 text-mute hover:text-ink"
+          onClick={dismiss}
+        >
+          <X className="size-3.5" aria-hidden />
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function AnswersForm({ task, onDone }: { task: ApiPlan; onDone: () => void }) {
@@ -54,6 +114,7 @@ export function TaskPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { data: task } = useSuspenseQuery(taskQuery(id));
+  const { data: me } = useSuspenseQuery(meQuery);
   const state = taskState(task);
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['task', id] });
@@ -190,6 +251,10 @@ export function TaskPage() {
         </div>
       ) : null}
       {state.hint ? <p className="mt-1 text-xs text-mute/70">{state.hint}</p> : null}
+
+      {task.status === 'awaiting_answers' || task.status === 'plan_ready' ? (
+        <NotificationsBanner vapidPublicKey={me.vapid_public_key} />
+      ) : null}
 
       {task.status === 'failed' ? (
         <div className="mt-4">

@@ -9,5 +9,7 @@ declare namespace Cloudflare {
     GITHUB_WEBHOOK_SECRET: string;
     REVIEW_SECRET: string;
     SESSION_SECRET: string;
+    VAPID_PRIVATE_KEY: string;
+    VAPID_SUBJECT: string; // e.g. "mailto:ops@turbodiff.dev"
   }
 }
