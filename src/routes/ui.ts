@@ -24,6 +24,9 @@ const SHELL = `<!doctype html>
 		<title>Turbodiff</title>
 		<meta name="color-scheme" content="dark" />
 		<link rel="icon" type="image/png" href="/logo-small.png" />
+		<link rel="manifest" href="/manifest.webmanifest" />
+		<link rel="apple-touch-icon" href="/logo.png" />
+		<meta name="theme-color" content="#3fb950" />
 		<link rel="preconnect" href="https://fonts.googleapis.com" />
 		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 		<link
