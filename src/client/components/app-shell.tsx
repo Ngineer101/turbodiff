@@ -1,21 +1,30 @@
 import { Link, useRouterState } from '@tanstack/react-router';
-import { LogOut } from 'lucide-react';
+import {
+  BarChart2,
+  Bot,
+  LayoutDashboard,
+  LogOut,
+  Plug,
+  Repeat,
+  Settings,
+  Sparkles,
+} from 'lucide-react';
 import type { ReactNode } from 'react';
 import { cn } from '../lib/utils.ts';
 import { Lamp } from './identity.tsx';
 
 // Control-room nav: every destination is a station with an indicator lamp —
-// lit where you are, dark elsewhere. No icon set; the placard type IS the
-// iconography.
+// lit where you are, dark elsewhere. The sidebar leans on that lamp; the
+// mobile bottom bar additionally needs a distinct icon per station.
 // `short` fits the mobile bottom bar's seven slots without truncation.
 const NAV = [
-  { to: '/', label: 'Board', short: 'Board', exact: true },
-  { to: '/agents', label: 'Agents', short: 'Agents' },
-  { to: '/skills', label: 'Skills', short: 'Skills' },
-  { to: '/automations', label: 'Automations', short: 'Autos' },
-  { to: '/integrations', label: 'Integrations', short: 'MCP' },
-  { to: '/usage', label: 'Usage', short: 'Usage' },
-  { to: '/settings', label: 'Settings', short: 'Config' },
+  { to: '/', label: 'Board', short: 'Board', exact: true, icon: LayoutDashboard },
+  { to: '/agents', label: 'Agents', short: 'Agents', icon: Bot },
+  { to: '/skills', label: 'Skills', short: 'Skills', icon: Sparkles },
+  { to: '/automations', label: 'Automations', short: 'Autos', icon: Repeat },
+  { to: '/integrations', label: 'Integrations', short: 'MCP', icon: Plug },
+  { to: '/usage', label: 'Usage', short: 'Usage', icon: BarChart2 },
+  { to: '/settings', label: 'Settings', short: 'Config', icon: Settings },
 ] as const;
 
 function Logo() {
@@ -75,7 +84,7 @@ function BottomTabs() {
       {/* flex, not a fixed column count, so adding a destination can never
           wrap the bar onto a second row */}
       <div className="flex">
-        {NAV.map(({ to, label, short, ...item }) => {
+        {NAV.map(({ to, label, short, icon: Icon, ...item }) => {
           const active = isActive(pathname, to, 'exact' in item && item.exact);
           return (
             <Link
@@ -88,7 +97,7 @@ function BottomTabs() {
                 active ? 'text-accent-bright' : 'text-mute',
               )}
             >
-              <Lamp tone={active ? 'go' : 'off'} className="size-2.5" />
+              <Icon className="size-3.5" aria-hidden />
               <span className="max-w-full truncate px-0.5">{short}</span>
             </Link>
           );
