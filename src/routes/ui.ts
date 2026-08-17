@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { Hono, type Context } from 'hono';
 import { deleteCookie } from 'hono/cookie';
 import { auth } from '../lib/better-auth.ts';
+import { renderAuthPage } from './auth-page.tsx';
 import { renderLanding } from './landing.tsx';
 
 // Signed-in UI: a TanStack Router SPA (src/client, built into public/app by
@@ -55,7 +56,15 @@ async function hasSession(c: Context): Promise<boolean> {
 export function createUiRoutes() {
   const app = new Hono();
 
+  // Method chooser: GitHub OAuth or email/password (sign in / create
+  // account). The forms post JSON to better-auth's /api/auth/sign-in/email
+  // and /api/auth/sign-up/email from a small inline script.
   app.get('/auth/login', async (c) => {
+    if (await hasSession(c)) return c.redirect('/');
+    return c.html(renderAuthPage());
+  });
+
+  app.get('/auth/login/github', async (c) => {
     // Server-initiated better-auth social sign-in. The returned headers carry
     // the state cookie the OAuth callback validates — they must reach the
     // browser along with the redirect.
@@ -67,6 +76,35 @@ export function createUiRoutes() {
     const res = c.redirect(response.url);
     for (const cookie of headers.getSetCookie()) res.headers.append('set-cookie', cookie);
     return res;
+  });
+
+  // Link a GitHub account onto the signed-in (password) user — the
+  // onboarding "Connect GitHub" button. Same OAuth callback as sign-in; the
+  // state cookie marks it as a link request, and better-auth attaches the
+  // github account row to this user instead of creating one.
+  app.get('/auth/connect/github', async (c) => {
+    if (!(await hasSession(c))) return c.redirect('/auth/login');
+    // Where to land after the link completes; path-only so the redirect
+    // can't leave the app.
+    const next = c.req.query('next') ?? '';
+    const callbackURL = next.startsWith('/') && !next.startsWith('//') ? next : '/onboarding';
+    try {
+      const { headers, response } = await auth().api.linkSocialAccount({
+        body: {
+          provider: 'github',
+          callbackURL,
+          errorCallbackURL: '/onboarding?error=link_failed',
+        },
+        headers: c.req.raw.headers,
+        returnHeaders: true,
+      });
+      if (!response.url) return c.text('connect failed — start again at /onboarding', 502);
+      const res = c.redirect(response.url);
+      for (const cookie of headers.getSetCookie()) res.headers.append('set-cookie', cookie);
+      return res;
+    } catch {
+      return c.redirect('/onboarding?error=link_failed');
+    }
   });
 
   // GitHub still redirects to the App-registered /auth/callback; hand the
@@ -111,6 +149,7 @@ export function createUiRoutes() {
     '/agents',
     '/agents/*',
     '/settings',
+    '/onboarding',
   ]) {
     app.get(path, async (c) => {
       if (!(await hasSession(c))) return c.redirect('/auth/login');

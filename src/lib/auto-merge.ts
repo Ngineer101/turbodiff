@@ -59,11 +59,21 @@ export async function maybeAutoMerge(repo: RepositoryRow, prNumber: number): Pro
     });
     if (mergeability.hasConflict) {
       if (repo.auto_resolve_conflicts === 1) {
-        const msg: ConflictResolveQueueMessage = { kind: 'resolve_conflict', repoId: repo.id, prNumber };
+        const msg: ConflictResolveQueueMessage = {
+          kind: 'resolve_conflict',
+          repoId: repo.id,
+          prNumber,
+        };
         await env.FACTORY_QUEUE.send(msg);
         console.log(`turbodiff: conflict detected on ${label}, resolution enqueued`);
       } else {
-        await postConflictCommentIfAbsent(token, repo.owner, repo.name, prNumber, mergeability.baseRef);
+        await postConflictCommentIfAbsent(
+          token,
+          repo.owner,
+          repo.name,
+          prNumber,
+          mergeability.baseRef,
+        );
         console.log(`turbodiff: auto-merge declined for ${label} (merge conflict)`);
       }
       return;

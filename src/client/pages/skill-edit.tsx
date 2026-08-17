@@ -13,7 +13,7 @@ function onApiError(err: unknown) {
 }
 
 export function SkillEditPage() {
-  const { skillId } = useParams({ from: '/skills/$skillId/edit' });
+  const { skillId } = useParams({ from: '/shell/skills/$skillId/edit' });
   const id = Number(skillId);
   const navigate = useNavigate();
   const queryClient = useQueryClient();

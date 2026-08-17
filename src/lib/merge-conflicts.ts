@@ -35,7 +35,9 @@ export async function checkMergeability(
   opts?: { retryOnUnknown?: boolean },
 ): Promise<PrMergeability> {
   const fetchPr = () =>
-    gh(token, `/repos/${owner}/${repo}/pulls/${prNumber}`).then((r) => r.json() as Promise<PrPayload>);
+    gh(token, `/repos/${owner}/${repo}/pulls/${prNumber}`).then(
+      (r) => r.json() as Promise<PrPayload>,
+    );
   let pr = await fetchPr();
   if (pr.mergeable_state === 'unknown' && opts?.retryOnUnknown) {
     await new Promise((resolve) => setTimeout(resolve, 1_500));

@@ -18,6 +18,8 @@ const testEnv = env as TestEnv;
 const acmeUser: AuthedUser = {
   session: { userId: 3001, login: 'octocat', ghToken: 'test-user-token' },
   installationIds: [1001],
+  githubConnected: true,
+  name: 'octocat',
 };
 
 function apiApp(dependencies: ApiRouteDependencies = {}) {

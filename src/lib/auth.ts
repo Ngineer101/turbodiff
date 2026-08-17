@@ -12,8 +12,17 @@ import { fetchUserCanPush, fetchUserInstallationIds } from './github-app.ts';
 // polling signed users out on every rate-limit blip.
 
 export type AuthedUser = {
+  // GitHub identity. For a password sign-up that hasn't linked GitHub yet,
+  // userId is 0 and login/ghToken are empty — installationIds is [] so every
+  // repo-scoped query answers empty and every push check fails closed; the
+  // attribution paths that read userId/login all sit behind an installation
+  // check a GitHub-less user can't pass.
   session: { userId: number; login: string; ghToken: string };
   installationIds: number[];
+  githubConnected: boolean;
+  // Display identity for the shell — the GitHub login when connected, the
+  // sign-up name otherwise.
+  name: string;
   // Local DEV_FAKE_INSTALLATIONS session — no GitHub token to verify repo
   // permissions with, so permission checks pass by construction.
   devFake?: boolean;
@@ -113,18 +122,33 @@ export async function requireUser(c: Context): Promise<AuthedUser | null> {
         .split(',')
         .map(Number)
         .filter((n) => Number.isInteger(n)),
+      githubConnected: true,
+      name: 'dev',
       devFake: true,
     };
   }
   const found = await auth().api.getSession({ headers: c.req.raw.headers });
   if (!found) return null;
   const user = found.user as AuthUser;
-  // Pre-better-auth rows can't exist (the tables shipped together), so a
-  // user without GitHub identity fields is malformed — treat as signed out.
-  if (!user.login || typeof user.githubId !== 'number') return null;
+  // Email/password sign-up that hasn't linked a GitHub account yet: a valid
+  // session with no GitHub reach — empty installations, everything
+  // repo-scoped answers empty, push checks fail closed.
+  if (!user.login || typeof user.githubId !== 'number') {
+    return {
+      session: { userId: 0, login: '', ghToken: '' },
+      installationIds: [],
+      githubConnected: false,
+      name: user.name || user.email,
+    };
+  }
 
   const ghToken = await githubToken(user.id);
   const ids = await installationIds(user.id, ghToken);
   if (ids === null) return null;
-  return { session: { userId: user.githubId, login: user.login, ghToken }, installationIds: ids };
+  return {
+    session: { userId: user.githubId, login: user.login, ghToken },
+    installationIds: ids,
+    githubConnected: true,
+    name: user.login,
+  };
 }

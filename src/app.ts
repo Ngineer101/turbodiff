@@ -31,6 +31,7 @@ import { runFix, sandboxSmoke, type FixAuthMode } from './lib/fixer.ts';
 import { approvePlan } from './lib/planner.ts';
 import { registerReviewMetering } from './lib/metering.ts';
 import { createApiRoutes } from './routes/api.ts';
+import { handleEmailSignUp } from './routes/auth-email.ts';
 import { createUiRoutes } from './routes/ui.ts';
 import { createWebhookRoutes } from './routes/webhooks.ts';
 
@@ -201,6 +202,12 @@ app.route('/webhooks', createWebhookRoutes(dispatchReviewAgent));
 // better-auth.ts). Nothing in the app updates users; GitHub is the source
 // of truth via overrideUserInfoOnSignIn.
 app.on(['GET', 'POST'], '/api/auth/update-user', (c) => c.json({ error: 'not found' }, 404));
+
+// Email/password sign-up goes through an allowlist rebuild of the body —
+// login/githubId would otherwise be accepted as client input (see
+// handleEmailSignUp).
+app.post('/api/auth/sign-up/email', handleEmailSignUp);
+
 app.on(['GET', 'POST'], '/api/auth/*', (c) => auth().handler(c.req.raw));
 
 // SPA data plane (session cookie auth, JSON in/out).
