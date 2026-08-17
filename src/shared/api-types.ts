@@ -323,6 +323,7 @@ export interface ApiSettings {
 export interface ApiMe {
   login: string;
   github_app_slug: string;
+  vapid_public_key: string;
 }
 
 export interface ApiError {

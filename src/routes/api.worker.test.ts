@@ -63,6 +63,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   const tables = [
+    'push_subscriptions',
     'todo_repositories',
     'todos',
     'repo_agents',
@@ -205,5 +206,77 @@ describe('authenticated tenant isolation', () => {
       enabled: number;
     }>();
     expect(repo?.enabled).toBe(0);
+  });
+});
+
+describe('push subscriptions', () => {
+  it('includes a VAPID public key string on /me', async () => {
+    const response = await authenticatedApi().request('https://turbodiff.test/api/me');
+    expect(response.status).toBe(200);
+    const me = (await response.json()) as { vapid_public_key: string };
+    expect(typeof me.vapid_public_key).toBe('string');
+  });
+
+  it('upserts a subscription row for the signed-in user', async () => {
+    const response = await authenticatedApi().request('https://turbodiff.test/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        endpoint: 'https://push.example/abc',
+        keys: { p256dh: 'p256dh-key', auth: 'auth-key' },
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    const row = await testEnv.DB.prepare(
+      'SELECT user_github_id, p256dh, auth FROM push_subscriptions WHERE endpoint = ?1',
+    )
+      .bind('https://push.example/abc')
+      .first<{ user_github_id: number; p256dh: string; auth: string }>();
+    expect(row).toEqual({ user_github_id: 3001, p256dh: 'p256dh-key', auth: 'auth-key' });
+  });
+
+  it('rejects an incomplete subscription body', async () => {
+    const response = await authenticatedApi().request('https://turbodiff.test/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ endpoint: 'https://push.example/abc', keys: { p256dh: '' } }),
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it('deletes only the calling user’s subscription by endpoint', async () => {
+    await testEnv.DB.prepare(
+      `INSERT INTO push_subscriptions (user_github_id, endpoint, p256dh, auth)
+			 VALUES (3001, 'https://push.example/mine', 'p', 'a'),
+			        (4001, 'https://push.example/theirs', 'p', 'a')`,
+    ).run();
+
+    const foreign = await authenticatedApi().request(
+      'https://turbodiff.test/api/push/unsubscribe',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ endpoint: 'https://push.example/theirs' }),
+      },
+    );
+    expect(foreign.status).toBe(200);
+    expect(
+      await testEnv.DB.prepare('SELECT id FROM push_subscriptions WHERE endpoint = ?1')
+        .bind('https://push.example/theirs')
+        .first(),
+    ).not.toBeNull();
+
+    const owned = await authenticatedApi().request('https://turbodiff.test/api/push/unsubscribe', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ endpoint: 'https://push.example/mine' }),
+    });
+    expect(owned.status).toBe(200);
+    expect(
+      await testEnv.DB.prepare('SELECT id FROM push_subscriptions WHERE endpoint = ?1')
+        .bind('https://push.example/mine')
+        .first(),
+    ).toBeNull();
   });
 });

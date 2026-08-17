@@ -46,6 +46,12 @@
     // Pair with the FIXER_ANTHROPIC_API_KEY secret. Empty disables gateway mode;
     // the CLAUDE_CODE_OAUTH_TOKEN secret enables subscription mode instead.
     "FIXER_ANTHROPIC_BASE_URL": "",
+    // Web Push (docs/... none yet): the VAPID public key sent to browsers for
+    // pushManager.subscribe(). Its private counterpart is the VAPID_PRIVATE_KEY
+    // secret (wrangler secret put) — never put the private key here. Generate
+    // an ECDSA P-256 VAPID keypair once and set both, plus the VAPID_SUBJECT
+    // secret (a "mailto:" contact address push services may use to reach you).
+    "VAPID_PUBLIC_KEY": "",
   },
   // Fixer/codegen sandbox (docs/software-factory-design.md): each fix run
   // executes Claude Code inside an isolated container. Local dev needs Docker.
