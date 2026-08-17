@@ -14,7 +14,12 @@ import {
   type SkillRow,
 } from './db.ts';
 import { resolveRunnerAuth } from './fixer.ts';
-import { installationToken, sandboxGitToken } from './github-app.ts';
+import {
+  authorizesWorkflowFiles,
+  describePushFailure,
+  installationToken,
+  sandboxGitToken,
+} from './github-app.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
 import { skillMarkdown } from './skill-files.ts';
 import { mintUserToken } from './user-tokens.ts';
@@ -137,6 +142,9 @@ type RunContext = {
   acceptance: boolean;
   tier: 'trivial' | 'standard';
   skills: SkillRow[];
+  // The approved spec mentions .github/workflows — the push token may carry
+  // the App's workflows permission (see sandboxGitToken).
+  workflows: boolean;
 };
 
 const QUICK = {
@@ -190,6 +198,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
             acceptance: feature.acceptance !== null,
             tier: feature.tier === 'trivial' ? 'trivial' : 'standard',
             skills,
+            workflows: authorizesWorkflowFiles(feature.spec),
           };
         },
       );
@@ -360,7 +369,9 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
       }
 
       await step.do('push branch', QUICK, async () => {
-        const gitToken = await sandboxGitToken(ctx.installationId, ctx.name, 'write');
+        const gitToken = await sandboxGitToken(ctx.installationId, ctx.name, 'write', {
+          workflows: ctx.workflows,
+        });
         const sandbox = sandboxFor(ctx);
         const push = await sandbox.exec(
           `git -C ${WORK} push "https://x-access-token:$GIT_TOKEN@github.com/${full}.git" HEAD:"$GEN_BRANCH"`,
@@ -368,7 +379,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
         );
         if (!push.success) {
           throw new Error(
-            `git push failed: ${push.stderr.replaceAll(gitToken, '***').slice(0, 500)}`,
+            describePushFailure(push.stderr.replaceAll(gitToken, '***').slice(0, 500)),
           );
         }
       });

@@ -14,7 +14,12 @@ import {
 } from './db.ts';
 import { resolveRunnerAuth } from './fixer.ts';
 import { NPM_CACHE_ENV } from './generation-workflow.ts';
-import { installationToken, sandboxGitToken } from './github-app.ts';
+import {
+  authorizesWorkflowFiles,
+  describePushFailure,
+  installationToken,
+  sandboxGitToken,
+} from './github-app.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
 import { skillMarkdown } from './skill-files.ts';
 
@@ -99,6 +104,9 @@ type RunContext = {
   checkCommand: string | null;
   automationName: string;
   prompt: string;
+  // The user-authored prompt mentions .github/workflows — the push token may
+  // carry the App's workflows permission (see sandboxGitToken).
+  workflows: boolean;
 };
 
 const QUICK = {
@@ -143,6 +151,7 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
             checkCommand: repo.check_command,
             automationName: automation.name,
             prompt: automation.prompt,
+            workflows: authorizesWorkflowFiles(automation.prompt),
           };
         },
       );
@@ -295,7 +304,9 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
       }
 
       await step.do('push branch', QUICK, async () => {
-        const gitToken = await sandboxGitToken(ctx.installationId, ctx.name, 'write');
+        const gitToken = await sandboxGitToken(ctx.installationId, ctx.name, 'write', {
+          workflows: ctx.workflows,
+        });
         const sandbox = sandboxFor(ctx);
         const push = await sandbox.exec(
           `git -C ${WORK} push "https://x-access-token:$GIT_TOKEN@github.com/${full}.git" HEAD:"$AUTOMATION_BRANCH"`,
@@ -303,7 +314,7 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
         );
         if (!push.success) {
           throw new Error(
-            `git push failed: ${push.stderr.replaceAll(gitToken, '***').slice(0, 500)}`,
+            describePushFailure(push.stderr.replaceAll(gitToken, '***').slice(0, 500)),
           );
         }
       });

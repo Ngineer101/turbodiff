@@ -15,7 +15,7 @@ import {
   listEnabledSkillsForRepo,
   tryRecordFixAttempt,
 } from './db.ts';
-import { installationToken, sandboxGitToken } from './github-app.ts';
+import { describePushFailure, installationToken, sandboxGitToken } from './github-app.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
 import { skillMarkdown } from './skill-files.ts';
 
@@ -152,6 +152,36 @@ export async function fetchPrHead(
   return { headRef: pr.head.ref, headRepo };
 }
 
+// Whether the PR's changed files already include a GitHub Actions workflow
+// file. Fix and conflict-resolve runs operate on an existing, human-visible
+// PR — if that PR touches .github/workflows/, its push token needs the App's
+// workflows permission (see sandboxGitToken), and granting it doesn't widen
+// what the PR can already do. Bounded pagination: a factory PR with >1000
+// changed files is not a thing we optimize for; beyond the cap we assume no.
+export async function prTouchesWorkflowFiles(
+  token: string,
+  owner: string,
+  repo: string,
+  prNumber: number,
+): Promise<boolean> {
+  for (let page = 1; page <= 10; page++) {
+    const files = (await (
+      await gh(token, `/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=100&page=${page}`)
+    ).json()) as { filename: string; previous_filename?: string }[];
+    if (
+      files.some(
+        (f) =>
+          f.filename.startsWith('.github/workflows/') ||
+          f.previous_filename?.startsWith('.github/workflows/'),
+      )
+    ) {
+      return true;
+    }
+    if (files.length < 100) break;
+  }
+  return false;
+}
+
 // Latest CHANGES_REQUESTED bot review (turbodiff's blocking review) folded into
 // a markdown work order: review body + inline comments with their locations.
 async function latestBlockingFindings(
@@ -244,9 +274,12 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
   const token = await installationToken(params.installationId);
   const auth = resolveRunnerAuth(params.authMode);
   // Any surfaced output must never leak a token. The sandbox only ever sees
-  // gitToken — scoped to this one repository with contents access only — so a
+  // gitToken — scoped to this one repository with contents access only (plus
+  // workflows when the PR already touches .github/workflows/) — so a
   // prompt-injected agent run cannot touch other repos or App permissions.
-  const gitToken = await sandboxGitToken(params.installationId, repo, 'write');
+  const gitToken = await sandboxGitToken(params.installationId, repo, 'write', {
+    workflows: await prTouchesWorkflowFiles(token, owner, repo, prNumber),
+  });
   const scrub = (s: string) => s.replaceAll(token, '***').replaceAll(gitToken, '***');
 
   const findings =
@@ -386,7 +419,7 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
       { env: gitEnv, timeout: 2 * 60_000 },
     );
     if (!push.success) {
-      throw new Error(`git push failed: ${scrub(push.stderr).slice(0, 500)}`);
+      throw new Error(describePushFailure(scrub(push.stderr).slice(0, 500)));
     }
     const commit = (await sandbox.exec(`git -C ${CLONE_DIR} rev-parse HEAD`)).stdout.trim();
 
