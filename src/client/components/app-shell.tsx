@@ -11,11 +11,10 @@ import {
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { cn } from '../lib/utils.ts';
-import { Lamp } from './identity.tsx';
 
-// Control-room nav: every destination is a station with an indicator lamp —
-// lit where you are, dark elsewhere. The sidebar leans on that lamp; the
-// mobile bottom bar additionally needs a distinct icon per station.
+// Control-room nav: every destination is a station with a distinct icon,
+// lit where you are, dark elsewhere. Both the sidebar and the mobile bottom
+// bar render that icon per station.
 // `short` fits the mobile bottom bar's seven slots without truncation.
 const NAV = [
   { to: '/', label: 'Board', short: 'Board', exact: true, icon: LayoutDashboard },
@@ -49,7 +48,7 @@ function SidebarNav() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   return (
     <nav aria-label="Main" className="flex flex-col gap-0.5">
-      {NAV.map(({ to, label, ...item }) => {
+      {NAV.map(({ to, label, icon: Icon, ...item }) => {
         const active = isActive(pathname, to, 'exact' in item && item.exact);
         return (
           <Link
@@ -63,7 +62,7 @@ function SidebarNav() {
                 : 'border-transparent text-mute hover:bg-surface/60 hover:text-ink-dim',
             )}
           >
-            <Lamp tone={active ? 'go' : 'off'} />
+            <Icon className="size-3.5" aria-hidden />
             {label}
           </Link>
         );
