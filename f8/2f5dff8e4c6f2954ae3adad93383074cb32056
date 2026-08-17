@@ -1,0 +1,84 @@
+src/lib/auth.ts
+  s_5e8e3cbda176a6::t_d213f4a0725074 125-126,133-143,148-153
+  s_5e8e3cbda176a6::t_9a29001d6412f0 15-19,22-25
+src/client/main.tsx
+  s_5e8e3cbda176a6::t_53cde88b9d1fe0 45
+  s_5e8e3cbda176a6::t_843353005b3220 54,57
+  s_5e8e3cbda176a6::t_36c2bac3634298 232-250
+  s_5e8e3cbda176a6::t_99eac93b400df7 105-107,109-113,115-120
+  s_5e8e3cbda176a6::t_a29c78f9386751 108
+  s_5e8e3cbda176a6::t_4b81a86aade3b0 127,134,141,150,157,164,170,177,184,190,197,204,211,218,225
+src/routes/api.ts
+  s_5e8e3cbda176a6::t_d45ed818ad6f46 623,625-627
+src/lib/better-auth.ts
+  s_5e8e3cbda176a6::t_eab8f81a42c95c 138-139,142-143
+  s_5e8e3cbda176a6::t_7c2773303d0bc9 11-18,31-37
+  s_5e8e3cbda176a6::t_0f033fdf4d3616 99,102
+  s_5e8e3cbda176a6::t_006c6aa4a5066d 19-30
+  s_5e8e3cbda176a6::t_0bad2f57cc34d5 79-86,88-98,100-101,103-105
+src/client/components/app-shell.tsx
+  s_5e8e3cbda176a6::t_5628a35e7da1df 13
+  s_5e8e3cbda176a6::t_d63046a29bf73e 111,114-116
+  s_5e8e3cbda176a6::t_61bbbf3d6838c3 133,145,150,162-172
+src/client/pages/automation-edit.tsx
+  s_5e8e3cbda176a6::t_60e8a2469e7e36 57
+src/routes/auth-email.ts
+  s_5e8e3cbda176a6::t_9a6d0e80d663e4 1-23
+src/shared/api-types.ts
+  s_5e8e3cbda176a6::t_8dce0a1bb761e7 324-328
+src/routes/auth-page.tsx
+  s_5e8e3cbda176a6::t_94a0945f181e2a 169
+  s_5e8e3cbda176a6::t_a64af64c3309db 1-168,170-258
+src/client/pages/task.tsx
+  s_5e8e3cbda176a6::t_60e8a2469e7e36 52
+src/client/pages/onboarding.tsx
+  s_5e8e3cbda176a6::t_0a37b76556816d 86-87
+  s_5e8e3cbda176a6::t_4e48736acc65f3 2,8-16
+  s_5e8e3cbda176a6::t_16db7387c6ca39 68,82
+  s_5e8e3cbda176a6::t_d3898962cdc6d5 1,3-7,17-67,69-81,83-85,88-102
+src/lib/merge-conflicts.ts
+  s_5e8e3cbda176a6::t_1e65f2de04ac11 38-40
+src/app.ts
+  s_5e8e3cbda176a6::t_f3b335082787c4 206-209
+  s_5e8e3cbda176a6::t_dac790a57242f6 34
+  s_5e8e3cbda176a6::t_f00150b9b97093 205,210
+src/client/pages/agent-edit.tsx
+  s_5e8e3cbda176a6::t_60e8a2469e7e36 17
+src/client/pages/skill-edit.tsx
+  s_5e8e3cbda176a6::t_60e8a2469e7e36 16
+src/client/pages/automation-run.tsx
+  s_5e8e3cbda176a6::t_60e8a2469e7e36 20
+src/client/pages/feature.tsx
+  s_5e8e3cbda176a6::t_60e8a2469e7e36 382
+src/routes/auth-email.worker.test.ts
+  s_5e8e3cbda176a6::t_8c8c552dfaf2e8 1-18,20-21,23-39,41-64
+  s_5e8e3cbda176a6::t_36026390183050 19,22
+  s_5e8e3cbda176a6::t_ac7d5a2e23c303 40
+src/routes/api.worker.test.ts
+  s_5e8e3cbda176a6::t_7f3f59361e7680 21-22
+wrangler.test.jsonc
+  s_5e8e3cbda176a6::t_2f15e353ff4045 6-10
+src/lib/auto-merge.ts
+  s_5e8e3cbda176a6::t_1e65f2de04ac11 62-66,70-76
+src/routes/ui.ts
+  s_5e8e3cbda176a6::t_3056789d8b319e 59-61,63-67,81-108
+  s_5e8e3cbda176a6::t_bee19eb7951722 5
+  s_5e8e3cbda176a6::t_8148cc6f9158ec 152
+  s_5e8e3cbda176a6::t_b1415080ded849 109
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "f82f5dff8e4c6f2954ae3adad93383074cb32056",
+  "prompts": {},
+  "sessions": {
+    "s_5e8e3cbda176a6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0142a9ab-8159-5b71-8767-7c4b6f4585ff",
+        "model": "claude-fable-5"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
