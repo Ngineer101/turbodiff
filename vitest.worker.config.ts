@@ -20,10 +20,6 @@ export default defineConfig({
           REVIEW_DAILY_LIMIT: '50',
           TRIVIAL_MODEL: '',
         },
-        // Webhook handlers enqueue fix runs onto FACTORY_QUEUE; a producer-only
-        // binding (no consumer) lets tests assert on the enqueue decision
-        // without a worker actually processing the message.
-        queueProducers: ['FACTORY_QUEUE'],
       },
     }),
   ],

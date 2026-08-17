@@ -8,6 +8,7 @@ import { claudeCliResultText, parseClaudeCliUsage, type CliUsage } from './cli-u
 import {
   finishFixAttempt,
   getFeatureByRepoPr,
+  getInstallation,
   getRepoById,
   hasRunningFixAttempt,
   linkCommentsToFixAttempt,
@@ -60,7 +61,7 @@ export interface FixParams {
 // Human-readable label for the thing a fix run is addressing, used in the
 // commit message and PR comment so a CI-triggered fix doesn't read like a
 // review-triggered one.
-function fixLabel(trigger?: string): string {
+export function fixLabel(trigger?: string): string {
   switch (trigger) {
     case 'ci_failure':
       return 'failing CI checks';
@@ -439,17 +440,35 @@ export interface FixQueueMessage {
   workflowRunId?: number;
 }
 
+export interface FixProcessorDependencies {
+  runFix?: typeof runFix;
+}
+
 // Queue consumer body: re-validate against current state (the toggle may have
 // flipped since enqueue), enforce the iteration cap, run the fix, and record
 // the attempt. Never throws — a fix failure is recorded, not retried, so a
 // broken run can't spend tokens again on redelivery.
-export async function processFixMessage(msg: FixQueueMessage): Promise<void> {
+export async function processFixMessage(
+  msg: FixQueueMessage,
+  dependencies: FixProcessorDependencies = {},
+): Promise<void> {
+  const executeFix = dependencies.runFix ?? runFix;
   const repo = await getRepoById(msg.repoId);
   if (!repo || !repo.enabled || !repo.auto_fix) {
     console.log(`turbodiff: fix skipped for repo ${msg.repoId}#${msg.prNumber} (auto-fix off)`);
     return;
   }
   const label = `${repo.owner}/${repo.name}#${msg.prNumber}`;
+  const installation = await getInstallation(repo.installation_id);
+  if (!installation || installation.suspended) {
+    console.log(`turbodiff: fix skipped for ${label} (installation missing or suspended)`);
+    return;
+  }
+  const feature = await getFeatureByRepoPr(repo.id, msg.prNumber);
+  if (!feature || feature.status !== 'pr_opened') {
+    console.log(`turbodiff: fix skipped for ${label} (not an open factory PR)`);
+    return;
+  }
 
   // The cap check, the running-attempt check, and the attempt insert are one
   // atomic statement — two concurrent deliveries for the same PR can't both
@@ -479,7 +498,7 @@ export async function processFixMessage(msg: FixQueueMessage): Promise<void> {
     await linkCommentsToFixAttempt(msg.commentIds, attemptId);
   }
   try {
-    const outcome = await runFix({
+    const outcome = await executeFix({
       owner: repo.owner,
       repo: repo.name,
       prNumber: msg.prNumber,

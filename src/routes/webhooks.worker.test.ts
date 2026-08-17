@@ -19,7 +19,11 @@ import {
   type RepositoryRow,
 } from '../lib/db.ts';
 import { FIX_MAX_ATTEMPTS } from '../lib/fixer.ts';
-import { createWebhookRoutes, type ReviewDispatcher } from './webhooks.ts';
+import {
+  createWebhookRoutes,
+  type ReviewDispatcher,
+  type WebhookRouteDependencies,
+} from './webhooks.ts';
 
 type TestEnv = Cloudflare.Env & {
   TEST_MIGRATIONS: D1Migration[];
@@ -27,9 +31,15 @@ type TestEnv = Cloudflare.Env & {
 };
 const testEnv = env as TestEnv;
 
-function webhookApp(dispatch: ReviewDispatcher = async () => true) {
+function webhookApp(
+  dispatch: ReviewDispatcher = async () => true,
+  dependencies: WebhookRouteDependencies = {},
+) {
   const app = new Hono();
-  app.route('/webhooks', createWebhookRoutes(dispatch, { computeRisk: async () => 'full' }));
+  app.route(
+    '/webhooks',
+    createWebhookRoutes(dispatch, { computeRisk: async () => 'full', ...dependencies }),
+  );
   return app;
 }
 
@@ -271,11 +281,23 @@ describe('CI failure auto-fix', () => {
   it('enqueues a fix for a failed CI run on an open factory PR', async () => {
     await seedRepo({ autoFix: true });
     await openFactoryPr(42);
+    const enqueueFix = vi.fn<NonNullable<WebhookRouteDependencies['enqueueFix']>>(async () => {});
 
-    const response = await postWebhook(webhookApp(), 'workflow_run', workflowRunPayload({}));
+    const response = await postWebhook(
+      webhookApp(undefined, { enqueueFix }),
+      'workflow_run',
+      workflowRunPayload({}),
+    );
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ fix_enqueued: 'acme/api#42' });
+    expect(enqueueFix).toHaveBeenCalledExactlyOnceWith({
+      kind: 'fix',
+      repoId: 101,
+      prNumber: 42,
+      trigger: 'ci_failure',
+      workflowRunId: 9001,
+    });
   });
 
   it('ignores a run that did not conclude in failure', async () => {
