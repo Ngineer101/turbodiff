@@ -119,9 +119,10 @@ GitHub App and deploy:
      (`openssl rand -hex 32`).
    - **Repository permissions**: Contents (read & write — the fix and
      generation agents push branches), Pull requests (read & write), Issues
-     (read & write, for comment reactions and factory reports).
+     (read & write, for comment reactions and factory reports), Actions
+     (read — CI-failure auto-fix reads workflow run status and job logs).
    - **Subscribe to events**: Pull request, Pull request review, Issue comment,
-     Repository.
+     Repository, Workflow run.
    - **Callback URL**: `https://<your-worker>/auth/callback`; note the OAuth
      client id and generate a client secret.
    - Generate a **private key** and convert it to PKCS#8 (WebCrypto can't read
@@ -132,6 +133,10 @@ GitHub App and deploy:
      ```
 
    - Set `GITHUB_APP_SLUG` in [wrangler.jsonc](wrangler.jsonc).
+   - Existing installations: accept the new Actions permission and Workflow
+     run event subscription in GitHub's UI to start receiving `workflow_run`
+     deliveries — this is a one-time manual step per installation, not
+     something a code deploy alone covers.
 
 6. **Secrets** — locally in `.dev.vars`; in production:
 
