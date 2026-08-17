@@ -1,4 +1,0 @@
-interface:
-  display_name: 'High-Value Tests'
-  short_description: 'Design tests that catch meaningful regressions'
-  default_prompt: 'Use $write-high-value-tests to design or review a test suite that catches real product failures.'
