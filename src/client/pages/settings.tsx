@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import {
+  Bell,
   Clapperboard,
   GitCompare,
   GitMerge,
@@ -8,11 +9,12 @@ import {
   Search,
   Wrench,
 } from 'lucide-react';
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import type { ApiRepoSettings, ApiSettings } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
-import { settingsQuery } from '../lib/queries.ts';
+import { pushSupported, subscribeToPush, unsubscribeFromPush } from '../lib/push.ts';
+import { meQuery, settingsQuery } from '../lib/queries.ts';
 import { EmptyState, Muted, PageTitle, SectionHeading } from '../components/section.tsx';
 import { Button } from '../components/ui/button.tsx';
 import { Card } from '../components/ui/card.tsx';
@@ -295,6 +297,73 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
   );
 }
 
+// User-scoped, unlike ApiSettings (installation/repo scoped) — local
+// component state read from the browser's own subscription/permission,
+// since the browser's permission prompt can't be re-shown once answered;
+// this switch is the only way to revoke.
+function NotificationsSettings() {
+  const { data: me } = useSuspenseQuery(meQuery);
+  const [enabled, setEnabled] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!pushSupported()) {
+      setLoading(false);
+      return;
+    }
+    navigator.serviceWorker.ready
+      .then((r) => r.pushManager.getSubscription())
+      .then((sub) => setEnabled(Notification.permission === 'granted' && sub !== null))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const toggle = useMutation({
+    mutationFn: async (next: boolean) => {
+      if (!next) {
+        await unsubscribeFromPush();
+        return { next, ok: true };
+      }
+      return { next, ok: await subscribeToPush(me.vapid_public_key) };
+    },
+    onSuccess: ({ next, ok }) => {
+      if (!ok) {
+        toast.error('Notification permission was not granted');
+        return;
+      }
+      setEnabled(next);
+      toast.success(next ? 'Notifications enabled' : 'Notifications disabled');
+    },
+    onError: onApiError,
+  });
+
+  if (!pushSupported()) return null;
+
+  return (
+    <>
+      <SectionHeading>Notifications</SectionHeading>
+      <Card className="mt-2">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[0.85rem] font-medium">Push notifications</p>
+            <p className="mt-0.5 text-xs text-mute">
+              Get notified on this device when Turbodiff needs your input on a task.
+            </p>
+          </div>
+          <label className="flex shrink-0 cursor-pointer items-center gap-2 text-xs text-mute">
+            <Bell className="size-3.5" aria-hidden />
+            <Switch
+              checked={enabled}
+              disabled={loading || toggle.isPending}
+              onCheckedChange={(next) => toggle.mutate(next)}
+              aria-label="Push notifications"
+            />
+          </label>
+        </div>
+      </Card>
+    </>
+  );
+}
+
 export function SettingsPage() {
   const { data } = useSuspenseQuery(settingsQuery);
   const [query, setQuery] = useState('');
@@ -325,6 +394,10 @@ export function SettingsPage() {
       >
         Settings
       </PageTitle>
+
+      <div className="mt-6">
+        <NotificationsSettings />
+      </div>
 
       {repoCount > 5 ? (
         <div className="relative mt-5 sm:max-w-sm">

@@ -15,13 +15,17 @@ import {
   createPlan,
   createPlanForTodo,
   createTodo,
+  deletePushSubscriptionByEndpoint,
+  deletePushSubscriptionById,
   dispatchOpenCockpitComments,
   finishFixAttempt,
+  listPushSubscriptionsForUser,
   listReposForPlan,
   tryRecordAutomationRun,
   tryRecordFixAttempt,
   tryRecordReview,
   updatePlan,
+  upsertPushSubscription,
 } from './db.ts';
 
 type TestEnv = Cloudflare.Env & { TEST_MIGRATIONS: D1Migration[] };
@@ -46,6 +50,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   const tables = [
+    'push_subscriptions',
     'agent_runs',
     'cockpit_comments',
     'verifications',
@@ -298,5 +303,56 @@ describe('paid-work idempotency', () => {
         .bind(planId)
         .run(),
     ).rejects.toThrow(/UNIQUE constraint failed/);
+  });
+});
+
+describe('push subscriptions', () => {
+  it('upserts on the endpoint, repointing an existing row to a new user', async () => {
+    await upsertPushSubscription(3001, {
+      endpoint: 'https://push.example/a',
+      p256dh: 'p1',
+      auth: 'a1',
+    });
+    await upsertPushSubscription(4001, {
+      endpoint: 'https://push.example/a',
+      p256dh: 'p2',
+      auth: 'a2',
+    });
+
+    const rows = await listPushSubscriptionsForUser(4001);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      user_github_id: 4001,
+      endpoint: 'https://push.example/a',
+      p256dh: 'p2',
+      auth: 'a2',
+    });
+    expect(await listPushSubscriptionsForUser(3001)).toHaveLength(0);
+  });
+
+  it('scopes deleteByEndpoint to the calling user', async () => {
+    await upsertPushSubscription(3001, {
+      endpoint: 'https://push.example/mine',
+      p256dh: 'p',
+      auth: 'a',
+    });
+
+    await deletePushSubscriptionByEndpoint(4001, 'https://push.example/mine');
+    expect(await listPushSubscriptionsForUser(3001)).toHaveLength(1);
+
+    await deletePushSubscriptionByEndpoint(3001, 'https://push.example/mine');
+    expect(await listPushSubscriptionsForUser(3001)).toHaveLength(0);
+  });
+
+  it('deletes an expired subscription by id regardless of owner', async () => {
+    await upsertPushSubscription(3001, {
+      endpoint: 'https://push.example/x',
+      p256dh: 'p',
+      auth: 'a',
+    });
+    const [row] = await listPushSubscriptionsForUser(3001);
+
+    await deletePushSubscriptionById(row.id);
+    expect(await listPushSubscriptionsForUser(3001)).toHaveLength(0);
   });
 });

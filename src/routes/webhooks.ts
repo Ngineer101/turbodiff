@@ -19,7 +19,7 @@ import {
   type AgentRow,
   type RepositoryRow,
 } from '../lib/db.ts';
-import { FIX_MAX_ATTEMPTS } from '../lib/fixer.ts';
+import { FIX_MAX_ATTEMPTS, type FixQueueMessage } from '../lib/fixer.ts';
 import { verifyWebhookSignature } from '../lib/github-app.ts';
 import { agentsForTier, computeRiskTier, tierModelOverride, type RiskTier } from '../lib/risk.ts';
 
@@ -68,6 +68,12 @@ interface PullRequestReviewEvent {
   repository: { id: number; full_name: string };
 }
 
+interface WorkflowRunEvent {
+  action: string;
+  workflow_run: { id: number; conclusion: string | null; pull_requests: { number: number }[] };
+  repository: { id: number; full_name: string };
+}
+
 interface HandlerResult {
   body: Record<string, unknown>;
   status?: 401 | 502;
@@ -82,8 +88,11 @@ export type ReviewDispatcher = (
   opts?: { riskTier?: string; modelOverride?: string },
 ) => Promise<boolean>;
 
+export type FixEnqueuer = (message: FixQueueMessage) => Promise<void>;
+
 export interface WebhookRouteDependencies {
   computeRisk?: typeof computeRiskTier;
+  enqueueFix?: FixEnqueuer;
 }
 
 // A Hono sub-app; the caller supplies dispatch so this module doesn't need to
@@ -94,6 +103,11 @@ export function createWebhookRoutes(
 ) {
   const app = new Hono();
   const computeRisk = dependencies.computeRisk ?? computeRiskTier;
+  const enqueueFix: FixEnqueuer =
+    dependencies.enqueueFix ??
+    (async (message: FixQueueMessage) => {
+      await env.FACTORY_QUEUE.send(message);
+    });
 
   app.post('/github', async (c) => {
     const rawBody = await c.req.arrayBuffer();
@@ -102,7 +116,7 @@ export function createWebhookRoutes(
 
     const event = c.req.header('x-github-event') ?? '';
     const payload = JSON.parse(new TextDecoder().decode(rawBody));
-    const result = await handleEvent(event, payload, dispatch, computeRisk);
+    const result = await handleEvent(event, payload, dispatch, computeRisk, enqueueFix);
     return c.json(result.body, result.status ?? 200);
   });
 
@@ -114,6 +128,7 @@ async function handleEvent(
   payload: unknown,
   dispatch: ReviewDispatcher,
   computeRisk: typeof computeRiskTier,
+  enqueueFix: FixEnqueuer,
 ): Promise<HandlerResult> {
   switch (event) {
     case 'installation':
@@ -123,7 +138,9 @@ async function handleEvent(
     case 'pull_request':
       return handlePullRequest(payload as PullRequestEvent, dispatch, computeRisk);
     case 'pull_request_review':
-      return handlePullRequestReview(payload as PullRequestReviewEvent);
+      return handlePullRequestReview(payload as PullRequestReviewEvent, enqueueFix);
+    case 'workflow_run':
+      return handleWorkflowRun(payload as WorkflowRunEvent, enqueueFix);
     case 'repository': {
       // Keep owner/name current when a repo is renamed or transferred.
       const p = payload as { action: string; repository: WebhookRepoRef };
@@ -288,7 +305,10 @@ async function handlePullRequest(
 // the app's own review back to it, so the author check is what closes the
 // loop deliberately rather than accidentally. The consumer re-validates
 // everything; this handler just gates cheaply before enqueueing.
-async function handlePullRequestReview(p: PullRequestReviewEvent): Promise<HandlerResult> {
+async function handlePullRequestReview(
+  p: PullRequestReviewEvent,
+  enqueueFix: FixEnqueuer,
+): Promise<HandlerResult> {
   if (p.action !== 'submitted') return { body: { ok: true, ignored: p.action } };
   if (p.review.state !== 'changes_requested') {
     return { body: { ok: true, ignored: `review state ${p.review.state}` } };
@@ -315,13 +335,63 @@ async function handlePullRequestReview(p: PullRequestReviewEvent): Promise<Handl
     return { body: { ok: true, skipped: `fix cap reached (${attempts})` } };
   }
 
-  await env.FACTORY_QUEUE.send({
+  await enqueueFix({
     kind: 'fix',
     repoId: repo.id,
     prNumber: p.pull_request.number,
     trigger: 'blocking_review',
   });
   return { body: { ok: true, fix_enqueued: `${p.repository.full_name}#${p.pull_request.number}` } };
+}
+
+// The CI-failure auto-fix trigger: a failed GitHub Actions run on a PR
+// turbodiff itself opened and still manages enqueues a fix run, the same way
+// a blocking bot review does. Scoped to factory PRs still in 'pr_opened'
+// status only — never a human contributor's branch. The workflow_run
+// payload's mini PR refs carry no state/draft flag, so this uses the cached
+// feature status (set 'pr_opened' on generation, flipped to
+// 'merged'/'pr_closed' by the pull_request 'closed' handler above) instead of
+// an extra API round trip. The consumer re-validates everything; this
+// handler just gates cheaply before enqueueing.
+async function handleWorkflowRun(
+  p: WorkflowRunEvent,
+  enqueueFix: FixEnqueuer,
+): Promise<HandlerResult> {
+  if (p.action !== 'completed') return { body: { ok: true, ignored: p.action } };
+  if (p.workflow_run.conclusion !== 'failure') {
+    return { body: { ok: true, ignored: `conclusion ${p.workflow_run.conclusion}` } };
+  }
+  const prNumber = p.workflow_run.pull_requests[0]?.number;
+  if (!prNumber) return { body: { ok: true, skipped: 'no associated pull request' } };
+
+  const repo = await getRepoById(p.repository.id);
+  if (!repo) return { body: { ok: true, skipped: 'repo not tracked' } };
+  if (!repo.enabled || !repo.auto_fix) {
+    return { body: { ok: true, skipped: 'auto-fix disabled for repo' } };
+  }
+  const installation = await getInstallation(repo.installation_id);
+  if (!installation || installation.suspended) {
+    return { body: { ok: true, skipped: 'installation missing or suspended' } };
+  }
+
+  const feature = await getFeatureByRepoPr(repo.id, prNumber);
+  if (!feature || feature.status !== 'pr_opened') {
+    return { body: { ok: true, skipped: 'not an open factory PR' } };
+  }
+
+  const attempts = await countFixAttempts(repo.id, prNumber);
+  if (attempts >= FIX_MAX_ATTEMPTS) {
+    return { body: { ok: true, skipped: `fix cap reached (${attempts})` } };
+  }
+
+  await enqueueFix({
+    kind: 'fix',
+    repoId: repo.id,
+    prNumber,
+    trigger: 'ci_failure',
+    workflowRunId: p.workflow_run.id,
+  });
+  return { body: { ok: true, fix_enqueued: `${p.repository.full_name}#${prNumber}` } };
 }
 
 // Agent-runs left under the installation's daily cap.

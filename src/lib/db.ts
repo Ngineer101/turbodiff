@@ -1093,6 +1093,61 @@ export async function updatePlan(
     .run();
 }
 
+// --- push subscriptions (Web Push, src/lib/push.ts) ---
+
+export interface PushSubscriptionRow {
+  id: number;
+  user_github_id: number;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  created_at: string;
+}
+
+// A device re-subscribing (possibly under a different signed-in user, e.g. a
+// shared machine) must repoint the row rather than fail — endpoint is the
+// natural key, not (user, endpoint).
+export async function upsertPushSubscription(
+  userGithubId: number,
+  sub: { endpoint: string; p256dh: string; auth: string },
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO push_subscriptions (user_github_id, endpoint, p256dh, auth)
+		 VALUES (?1, ?2, ?3, ?4)
+		 ON CONFLICT(endpoint) DO UPDATE SET
+		   user_github_id = excluded.user_github_id,
+		   p256dh = excluded.p256dh,
+		   auth = excluded.auth`,
+  )
+    .bind(userGithubId, sub.endpoint, sub.p256dh, sub.auth)
+    .run();
+}
+
+// Scoped to the calling user so one user can't delete another's subscription
+// by guessing an endpoint.
+export async function deletePushSubscriptionByEndpoint(
+  userGithubId: number,
+  endpoint: string,
+): Promise<void> {
+  await env.DB.prepare('DELETE FROM push_subscriptions WHERE user_github_id = ?1 AND endpoint = ?2')
+    .bind(userGithubId, endpoint)
+    .run();
+}
+
+export async function listPushSubscriptionsForUser(
+  userGithubId: number,
+): Promise<PushSubscriptionRow[]> {
+  const res = await env.DB.prepare('SELECT * FROM push_subscriptions WHERE user_github_id = ?1')
+    .bind(userGithubId)
+    .all<PushSubscriptionRow>();
+  return res.results;
+}
+
+// Used by the send path to prune expired endpoints (410/404 responses).
+export async function deletePushSubscriptionById(id: number): Promise<void> {
+  await env.DB.prepare('DELETE FROM push_subscriptions WHERE id = ?1').bind(id).run();
+}
+
 export async function finishFixAttempt(
   id: number,
   status: string,

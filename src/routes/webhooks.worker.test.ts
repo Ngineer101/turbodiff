@@ -10,13 +10,20 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vite-plus/test'
 import {
   createFeature,
   ensureBuiltinAgents,
+  finishFixAttempt,
   getFeature,
+  tryRecordFixAttempt,
   tryRecordReview,
   updateFeature,
   type AgentRow,
   type RepositoryRow,
 } from '../lib/db.ts';
-import { createWebhookRoutes, type ReviewDispatcher } from './webhooks.ts';
+import { FIX_MAX_ATTEMPTS } from '../lib/fixer.ts';
+import {
+  createWebhookRoutes,
+  type ReviewDispatcher,
+  type WebhookRouteDependencies,
+} from './webhooks.ts';
 
 type TestEnv = Cloudflare.Env & {
   TEST_MIGRATIONS: D1Migration[];
@@ -24,9 +31,15 @@ type TestEnv = Cloudflare.Env & {
 };
 const testEnv = env as TestEnv;
 
-function webhookApp(dispatch: ReviewDispatcher = async () => true) {
+function webhookApp(
+  dispatch: ReviewDispatcher = async () => true,
+  dependencies: WebhookRouteDependencies = {},
+) {
   const app = new Hono();
-  app.route('/webhooks', createWebhookRoutes(dispatch, { computeRisk: async () => 'full' }));
+  app.route(
+    '/webhooks',
+    createWebhookRoutes(dispatch, { computeRisk: async () => 'full', ...dependencies }),
+  );
   return app;
 }
 
@@ -61,16 +74,16 @@ async function postWebhook(
   });
 }
 
-async function seedRepo(): Promise<void> {
+async function seedRepo(opts: { autoFix?: boolean } = {}): Promise<void> {
   await testEnv.DB.batch([
     testEnv.DB.prepare(
       `INSERT INTO installations (id, account_login, account_id, account_type)
 		 VALUES (1001, 'acme', 2001, 'Organization')`,
     ),
     testEnv.DB.prepare(
-      `INSERT INTO repositories (id, installation_id, owner, name, review_on_push)
-		 VALUES (101, 1001, 'acme', 'api', 1)`,
-    ),
+      `INSERT INTO repositories (id, installation_id, owner, name, review_on_push, auto_fix)
+		 VALUES (101, 1001, 'acme', 'api', 1, ?1)`,
+    ).bind(opts.autoFix ? 1 : 0),
   ]);
 }
 
@@ -81,6 +94,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   const tables = [
     'agent_runs',
+    'fix_attempts',
     'reviews',
     'repo_agents',
     'agents',
@@ -238,5 +252,120 @@ describe('factory PR webhook decisions', () => {
     });
     expect(await abandonedResponse.json()).toMatchObject({ ignored: 'already abandoned' });
     expect((await getFeature(featureId))?.status).toBe('abandoned');
+  });
+});
+
+describe('CI failure auto-fix', () => {
+  function workflowRunPayload(overrides: {
+    action?: string;
+    conclusion?: string | null;
+    prNumbers?: number[];
+  }) {
+    return {
+      action: overrides.action ?? 'completed',
+      workflow_run: {
+        id: 9001,
+        conclusion: overrides.conclusion ?? 'failure',
+        pull_requests: (overrides.prNumbers ?? [42]).map((number) => ({ number })),
+      },
+      repository: { id: 101, full_name: 'acme/api' },
+    };
+  }
+
+  async function openFactoryPr(prNumber: number): Promise<number> {
+    const featureId = await createFeature(101, 'Factory feature', 'Implementation spec');
+    await updateFeature(featureId, { status: 'pr_opened', prNumber });
+    return featureId;
+  }
+
+  it('enqueues a fix for a failed CI run on an open factory PR', async () => {
+    await seedRepo({ autoFix: true });
+    await openFactoryPr(42);
+    const enqueueFix = vi.fn<NonNullable<WebhookRouteDependencies['enqueueFix']>>(async () => {});
+
+    const response = await postWebhook(
+      webhookApp(undefined, { enqueueFix }),
+      'workflow_run',
+      workflowRunPayload({}),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ fix_enqueued: 'acme/api#42' });
+    expect(enqueueFix).toHaveBeenCalledExactlyOnceWith({
+      kind: 'fix',
+      repoId: 101,
+      prNumber: 42,
+      trigger: 'ci_failure',
+      workflowRunId: 9001,
+    });
+  });
+
+  it('ignores a run that did not conclude in failure', async () => {
+    await seedRepo({ autoFix: true });
+    await openFactoryPr(42);
+
+    const response = await postWebhook(
+      webhookApp(),
+      'workflow_run',
+      workflowRunPayload({ conclusion: 'success' }),
+    );
+
+    expect(await response.json()).toMatchObject({ ignored: 'conclusion success' });
+  });
+
+  it('skips when auto-fix is disabled for the repo', async () => {
+    await seedRepo({ autoFix: false });
+    await openFactoryPr(42);
+
+    const response = await postWebhook(webhookApp(), 'workflow_run', workflowRunPayload({}));
+
+    expect(await response.json()).toMatchObject({ skipped: 'auto-fix disabled for repo' });
+  });
+
+  it('skips when there is no matching open factory PR', async () => {
+    await seedRepo({ autoFix: true });
+    // No feature at all for this PR.
+    const noFeatureResponse = await postWebhook(
+      webhookApp(),
+      'workflow_run',
+      workflowRunPayload({}),
+    );
+    expect(await noFeatureResponse.json()).toMatchObject({ skipped: 'not an open factory PR' });
+
+    // Feature exists but is no longer open.
+    const featureId = await openFactoryPr(42);
+    await updateFeature(featureId, { status: 'merged' });
+    const mergedResponse = await postWebhook(webhookApp(), 'workflow_run', workflowRunPayload({}));
+    expect(await mergedResponse.json()).toMatchObject({ skipped: 'not an open factory PR' });
+  });
+
+  it('skips once the fix attempt cap is reached', async () => {
+    await seedRepo({ autoFix: true });
+    await openFactoryPr(42);
+    for (let i = 0; i < FIX_MAX_ATTEMPTS; i++) {
+      // Each attempt must be finished (leave 'running') before the next is
+      // recorded — tryRecordFixAttempt's single-flight guard blocks a new
+      // attempt while one is still running for the same PR.
+      const attemptId = await tryRecordFixAttempt(101, 42, 'blocking_review', FIX_MAX_ATTEMPTS);
+      await finishFixAttempt(attemptId!, 'failed');
+    }
+
+    const response = await postWebhook(webhookApp(), 'workflow_run', workflowRunPayload({}));
+
+    expect(await response.json()).toMatchObject({
+      skipped: `fix cap reached (${FIX_MAX_ATTEMPTS})`,
+    });
+  });
+
+  it('skips a run with no associated pull request', async () => {
+    await seedRepo({ autoFix: true });
+
+    const response = await postWebhook(
+      webhookApp(),
+      'workflow_run',
+      workflowRunPayload({ prNumbers: [] }),
+    );
+
+    expect(await response.json()).toMatchObject({ skipped: 'no associated pull request' });
   });
 });

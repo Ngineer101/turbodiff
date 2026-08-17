@@ -3,10 +3,12 @@ import { env } from 'cloudflare:workers';
 import { gh } from '../tools/github.ts';
 import { persistAgentLog } from './agent-runs.ts';
 import { gitAuthorEnv } from './attribution.ts';
+import { ciFailureFindings } from './ci-findings.ts';
 import { claudeCliResultText, parseClaudeCliUsage, type CliUsage } from './cli-usage.ts';
 import {
   finishFixAttempt,
   getFeatureByRepoPr,
+  getInstallation,
   getRepoById,
   hasRunningFixAttempt,
   linkCommentsToFixAttempt,
@@ -45,6 +47,29 @@ export interface FixParams {
   // The fix_attempts row this run belongs to, for the full agent log. Absent
   // on the operator-only POST /internal/fix path, which has no such row.
   attemptId?: number;
+  // What triggered this run (e.g. 'blocking_review', 'ci_failure',
+  // 'verification_failed') — used only to pick trigger-appropriate commit/
+  // comment copy (see fixLabel below).
+  trigger?: string;
+  // Set only for the `ci_failure` trigger; runFix uses it to fetch the failed
+  // jobs' logs lazily instead of a supplied `findings` string — mirrors how
+  // `latestBlockingFindings` is used when `findings` is absent for the review
+  // trigger.
+  workflowRunId?: number;
+}
+
+// Human-readable label for the thing a fix run is addressing, used in the
+// commit message and PR comment so a CI-triggered fix doesn't read like a
+// review-triggered one.
+export function fixLabel(trigger?: string): string {
+  switch (trigger) {
+    case 'ci_failure':
+      return 'failing CI checks';
+    case 'verification_failed':
+      return 'unmet acceptance criteria';
+    default:
+      return 'review findings';
+  }
 }
 
 export interface FixOutcome {
@@ -225,9 +250,16 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
   const scrub = (s: string) => s.replaceAll(token, '***').replaceAll(gitToken, '***');
 
   const findings =
-    params.findings?.trim() || (await latestBlockingFindings(token, owner, repo, prNumber));
+    params.findings?.trim() ||
+    (params.workflowRunId !== undefined
+      ? await ciFailureFindings(token, owner, repo, params.workflowRunId)
+      : await latestBlockingFindings(token, owner, repo, prNumber));
   if (!findings) {
-    throw new Error('no findings supplied and no blocking bot review found on the PR');
+    throw new Error(
+      params.workflowRunId !== undefined
+        ? `workflow run ${params.workflowRunId} has no failed jobs with retrievable logs`
+        : 'no findings supplied and no blocking bot review found on the PR',
+    );
   }
   const { headRef, headRepo } = await fetchPrHead(token, owner, repo, prNumber);
 
@@ -321,7 +353,7 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
     // commit. Local until checks pass and we push.
     const committed = await sandbox.exec(
       `git -C ${CLONE_DIR} add -A && ` +
-        `git -C ${CLONE_DIR} commit -m "Address review findings on #${prNumber} (turbodiff fix agent)"`,
+        `git -C ${CLONE_DIR} commit -m "Address ${fixLabel(params.trigger)} on #${prNumber} (turbodiff fix agent)"`,
       { env: gitAuthorEnv(params.author), timeout: 60_000 },
     );
     if (!committed.success) {
@@ -401,19 +433,42 @@ export interface FixQueueMessage {
   // recorded so the cockpit can show per-comment outcome badges. Absent for
   // the blocking_review trigger, which has no comments to link.
   commentIds?: number[];
+  // Set only for the `ci_failure` trigger; runFix uses it to fetch the failed
+  // jobs' logs lazily instead of a supplied `findings` string — mirrors how
+  // `latestBlockingFindings` is used when `findings` is absent for the review
+  // trigger.
+  workflowRunId?: number;
+}
+
+export interface FixProcessorDependencies {
+  runFix?: typeof runFix;
 }
 
 // Queue consumer body: re-validate against current state (the toggle may have
 // flipped since enqueue), enforce the iteration cap, run the fix, and record
 // the attempt. Never throws — a fix failure is recorded, not retried, so a
 // broken run can't spend tokens again on redelivery.
-export async function processFixMessage(msg: FixQueueMessage): Promise<void> {
+export async function processFixMessage(
+  msg: FixQueueMessage,
+  dependencies: FixProcessorDependencies = {},
+): Promise<void> {
+  const executeFix = dependencies.runFix ?? runFix;
   const repo = await getRepoById(msg.repoId);
   if (!repo || !repo.enabled || !repo.auto_fix) {
     console.log(`turbodiff: fix skipped for repo ${msg.repoId}#${msg.prNumber} (auto-fix off)`);
     return;
   }
   const label = `${repo.owner}/${repo.name}#${msg.prNumber}`;
+  const installation = await getInstallation(repo.installation_id);
+  if (!installation || installation.suspended) {
+    console.log(`turbodiff: fix skipped for ${label} (installation missing or suspended)`);
+    return;
+  }
+  const feature = await getFeatureByRepoPr(repo.id, msg.prNumber);
+  if (!feature || feature.status !== 'pr_opened') {
+    console.log(`turbodiff: fix skipped for ${label} (not an open factory PR)`);
+    return;
+  }
 
   // The cap check, the running-attempt check, and the attempt insert are one
   // atomic statement — two concurrent deliveries for the same PR can't both
@@ -443,7 +498,7 @@ export async function processFixMessage(msg: FixQueueMessage): Promise<void> {
     await linkCommentsToFixAttempt(msg.commentIds, attemptId);
   }
   try {
-    const outcome = await runFix({
+    const outcome = await executeFix({
       owner: repo.owner,
       repo: repo.name,
       prNumber: msg.prNumber,
@@ -453,6 +508,8 @@ export async function processFixMessage(msg: FixQueueMessage): Promise<void> {
       testCommand: repo.check_command ?? undefined,
       author: msg.author,
       attemptId,
+      trigger: msg.trigger,
+      workflowRunId: msg.workflowRunId,
     });
     await finishFixAttempt(
       attemptId,
@@ -508,7 +565,7 @@ async function postFixComment(
 ): Promise<void> {
   const lines = result.changed
     ? [
-        `🔧 Turbodiff fix agent pushed ${result.commit} addressing the blocking review findings.`,
+        `🔧 Turbodiff fix agent pushed ${result.commit} addressing the ${fixLabel(params.trigger)}.`,
         result.tested ? 'Tests passed before pushing.' : undefined,
       ]
     : ['🔧 Turbodiff fix agent ran but made no code changes.'];

@@ -16,6 +16,7 @@ import {
   deleteAgent,
   deleteAutomation,
   deleteConnection,
+  deletePushSubscriptionByEndpoint,
   deleteSkill,
   deleteTodo,
   dispatchOpenCockpitComments,
@@ -87,6 +88,7 @@ import {
   updateFeature,
   updatePlan,
   updateSkill,
+  upsertPushSubscription,
   type AgentRow,
   type AgentRunRow,
   type AutomationFields,
@@ -623,7 +625,32 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     return c.json<ApiMe>({
       login: c.get('user').session.login,
       github_app_slug: env.GITHUB_APP_SLUG,
+      vapid_public_key: env.VAPID_PUBLIC_KEY,
     });
+  });
+
+  // Web Push subscription (src/lib/push.ts). Body shape matches
+  // PushSubscription.toJSON() natively — no client-side reshaping needed.
+  app.post('/push/subscribe', async (c) => {
+    const body = await c.req
+      .json<{ endpoint?: string; keys?: { p256dh?: string; auth?: string } }>()
+      .catch(() => null);
+    const endpoint = body?.endpoint?.trim() ?? '';
+    const p256dh = body?.keys?.p256dh?.trim() ?? '';
+    const auth = body?.keys?.auth?.trim() ?? '';
+    if (!endpoint || !p256dh || !auth) {
+      return c.json({ error: 'body must be {"endpoint", "keys": {"p256dh", "auth"}}' }, 400);
+    }
+    await upsertPushSubscription(c.get('user').session.userId, { endpoint, p256dh, auth });
+    return c.json({ ok: true });
+  });
+
+  app.post('/push/unsubscribe', async (c) => {
+    const body = await c.req.json<{ endpoint?: string }>().catch(() => null);
+    const endpoint = body?.endpoint?.trim() ?? '';
+    if (!endpoint) return c.json({ error: 'body must be {"endpoint"}' }, 400);
+    await deletePushSubscriptionByEndpoint(c.get('user').session.userId, endpoint);
+    return c.json({ ok: true });
   });
 
   // Usage page: headline metrics, monthly cost, per-repo/agent cost, and the
