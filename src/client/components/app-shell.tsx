@@ -56,7 +56,7 @@ function SidebarNav() {
             to={to}
             aria-current={active ? 'page' : undefined}
             className={cn(
-              'flex items-center gap-2.5 rounded-md border-l-2 px-3 py-[7px] font-mono text-[11px] tracking-[0.14em] uppercase transition-colors',
+              'flex items-center gap-2.5 border-l-2 px-3 py-[7px] font-mono text-[11px] tracking-[0.14em] uppercase transition-colors',
               active
                 ? 'border-accent-bright bg-surface text-ink'
                 : 'border-transparent text-mute hover:bg-surface/60 hover:text-ink-dim',
