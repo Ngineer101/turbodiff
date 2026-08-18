@@ -14,7 +14,12 @@ import {
   type SkillRow,
 } from './db.ts';
 import { resolveRunnerAuth } from './fixer.ts';
-import { installationToken, sandboxGitToken } from './github-app.ts';
+import {
+  authorizesWorkflowFiles,
+  describePushFailure,
+  installationToken,
+  sandboxGitToken,
+} from './github-app.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
 import { skillMarkdown } from './skill-files.ts';
 import { mintUserToken } from './user-tokens.ts';
@@ -110,11 +115,13 @@ ${ctx.spec}
 }
 
 function sandboxFor(repo: { owner: string; name: string }): Sandbox {
-  return getSandbox(
-    env.Sandbox as unknown as DurableObjectNamespace<Sandbox>,
-    `gen--${repo.owner}--${repo.name}`.toLowerCase(),
-    { sleepAfter: '45m' },
-  ) as unknown as Sandbox;
+  // SAFETY: the Sandbox binding's class_name in wrangler.jsonc is the SDK's
+  // Sandbox Durable Object; the generated Env only types it as a bare
+  // DurableObjectNamespace, so the instance type is restated here.
+  const namespace = env.Sandbox as DurableObjectNamespace<Sandbox>;
+  return getSandbox(namespace, `gen--${repo.owner}--${repo.name}`.toLowerCase(), {
+    sleepAfter: '45m',
+  });
 }
 
 // Serializable context threaded between steps (a type alias, not an
@@ -137,6 +144,9 @@ type RunContext = {
   acceptance: boolean;
   tier: 'trivial' | 'standard';
   skills: SkillRow[];
+  // The approved spec mentions .github/workflows — the push token may carry
+  // the App's workflows permission (see sandboxGitToken).
+  workflows: boolean;
 };
 
 const QUICK = {
@@ -167,6 +177,8 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
             return null;
           }
           const token = await installationToken(repo.installation_id);
+          // SAFETY: GitHub's get-repository endpoint always includes
+          // default_branch in its success response.
           const info = (await (await gh(token, `/repos/${repo.owner}/${repo.name}`)).json()) as {
             default_branch: string;
           };
@@ -190,6 +202,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
             acceptance: feature.acceptance !== null,
             tier: feature.tier === 'trivial' ? 'trivial' : 'standard',
             skills,
+            workflows: authorizesWorkflowFiles(feature.spec),
           };
         },
       );
@@ -360,7 +373,9 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
       }
 
       await step.do('push branch', QUICK, async () => {
-        const gitToken = await sandboxGitToken(ctx.installationId, ctx.name, 'write');
+        const gitToken = await sandboxGitToken(ctx.installationId, ctx.name, 'write', {
+          workflows: ctx.workflows,
+        });
         const sandbox = sandboxFor(ctx);
         const push = await sandbox.exec(
           `git -C ${WORK} push "https://x-access-token:$GIT_TOKEN@github.com/${full}.git" HEAD:"$GEN_BRANCH"`,
@@ -368,7 +383,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
         );
         if (!push.success) {
           throw new Error(
-            `git push failed: ${push.stderr.replaceAll(gitToken, '***').slice(0, 500)}`,
+            describePushFailure(push.stderr.replaceAll(gitToken, '***').slice(0, 500)),
           );
         }
       });
@@ -387,6 +402,8 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
           .then((f) => f.content.split('## Implementation notes')[1]?.trim())
           .catch(() => undefined);
         const createPr = async (authToken: string) =>
+          // SAFETY: GitHub's create-pull-request endpoint returns the created
+          // PR object, which always carries its number.
           (await (
             await gh(authToken, `/repos/${full}/pulls`, {
               method: 'POST',

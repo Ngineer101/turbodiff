@@ -12,8 +12,14 @@ import {
   tryRecordFixAttempt,
   type RepositoryRow,
 } from './db.ts';
-import { FIX_MAX_ATTEMPTS, fetchPrHead, postHandoffComment, resolveRunnerAuth } from './fixer.ts';
-import { installationToken, sandboxGitToken } from './github-app.ts';
+import {
+  FIX_MAX_ATTEMPTS,
+  fetchPrHead,
+  postHandoffComment,
+  prTouchesWorkflowFiles,
+  resolveRunnerAuth,
+} from './fixer.ts';
+import { describePushFailure, installationToken, sandboxGitToken } from './github-app.ts';
 import { checkMergeability, postConflictResolvedComment } from './merge-conflicts.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
 import { skillMarkdown } from './skill-files.ts';
@@ -147,13 +153,23 @@ async function runConflictResolve(
   const auth = resolveRunnerAuth();
   // Any surfaced output must never leak a token — same scrub discipline as
   // the fixer's sandbox output.
-  const gitToken = await sandboxGitToken(repo.installation_id, repo.name, 'write');
+  // A conflicted workflow file resolves to new blob content, which GitHub
+  // only accepts with the workflows permission — granted here iff the PR
+  // already touches .github/workflows/.
+  const gitToken = await sandboxGitToken(repo.installation_id, repo.name, 'write', {
+    workflows: await prTouchesWorkflowFiles(token, repo.owner, repo.name, prNumber),
+  });
   const scrub = (s: string) => s.replaceAll(token, '***').replaceAll(gitToken, '***');
 
   const { headRef, headRepo } = await fetchPrHead(token, repo.owner, repo.name, prNumber);
 
+  // SAFETY: wrangler's generated Env types the Sandbox binding as an unbranded
+  // DurableObjectNamespace (it cannot see into @cloudflare/sandbox), but
+  // wrangler.jsonc binds it to that package's Sandbox class — the namespace
+  // getSandbox requires.
+  const sandboxNamespace = env.Sandbox as DurableObjectNamespace<Sandbox>;
   const sandbox = getSandbox(
-    env.Sandbox as unknown as DurableObjectNamespace<Sandbox>,
+    sandboxNamespace,
     `resolve-conflict--${repo.owner}--${repo.name}--${prNumber}`.toLowerCase(),
     { sleepAfter: '20m' },
   );
@@ -166,7 +182,7 @@ async function runConflictResolve(
       { env: gitEnv, timeout: 2 * 60_000 },
     );
     if (!push.success) {
-      throw new Error(`git push failed: ${scrub(push.stderr).slice(0, 500)}`);
+      throw new Error(describePushFailure(scrub(push.stderr).slice(0, 500)));
     }
     return (await sandbox.exec(`git -C ${CLONE_DIR} rev-parse HEAD`)).stdout.trim();
   };

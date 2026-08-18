@@ -14,8 +14,12 @@ import { Pill } from '../components/ui/pill.tsx';
 
 const ROLES: ApiRole[] = ['member', 'admin', 'owner'];
 
-function onApiError(err: unknown) {
+function onApiError<T>(err: T) {
   toast.error(err instanceof ApiError ? err.message : 'Request failed');
+}
+
+function isApiRole(value: string): value is ApiRole {
+  return ROLES.some((role) => role === value);
 }
 
 function roleTone(role: ApiRole): 'on' | 'neutral' {
@@ -63,7 +67,9 @@ function MemberRow({
           <>
             <Select
               value={member.role}
-              onChange={(e) => updateRole.mutate(e.target.value as ApiRole)}
+              onChange={(e) => {
+                if (isApiRole(e.target.value)) updateRole.mutate(e.target.value);
+              }}
               disabled={updateRole.isPending}
               aria-label={`Role for ${member.login ?? member.email}`}
               className="w-auto py-1 text-xs sm:py-1 sm:text-xs"
@@ -139,7 +145,9 @@ function InviteForm({ installationId }: { installationId: number }) {
         />
         <Select
           value={role}
-          onChange={(e) => setRole(e.target.value as ApiRole)}
+          onChange={(e) => {
+            if (isApiRole(e.target.value)) setRole(e.target.value);
+          }}
           aria-label="Role to invite as"
           className="w-auto"
         >

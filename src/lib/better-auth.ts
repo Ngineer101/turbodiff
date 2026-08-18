@@ -93,6 +93,9 @@ function createAuth() {
           },
         },
         sendInvitationEmail: async (data) => {
+          // SAFETY: better-auth's static user type erases the additionalFields
+          // (login, githubId) configured on the user schema below; every user
+          // row is written with them via the GitHub OAuth profile mapping.
           const inviter = data.inviter.user as AuthUser;
           await sendInvitationEmail({
             to: data.email,

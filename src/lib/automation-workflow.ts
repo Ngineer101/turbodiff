@@ -9,12 +9,19 @@ import {
   getAutomationById,
   getRepoById,
   listEnabledSkillsForRepo,
+  listRepoConnections,
   tryRecordAutomationRun,
   type AutomationRow,
 } from './db.ts';
+import { buildSandboxMcpConfig } from './mcp-proxy.ts';
 import { resolveRunnerAuth } from './fixer.ts';
 import { NPM_CACHE_ENV } from './generation-workflow.ts';
-import { installationToken, sandboxGitToken } from './github-app.ts';
+import {
+  authorizesWorkflowFiles,
+  describePushFailure,
+  installationToken,
+  sandboxGitToken,
+} from './github-app.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
 import { skillMarkdown } from './skill-files.ts';
 
@@ -34,6 +41,7 @@ const CACHE_DIR = '/workspace/repo-cache';
 const workDir = (runId: number) => `/workspace/automation-${runId}`;
 const specFile = (runId: number) => `/workspace/automation-spec-${runId}.md`;
 const prFile = (runId: number) => `/workspace/automation-pr-${runId}.md`;
+const mcpFile = (runId: number) => `/workspace/automation-mcp-${runId}.json`;
 const AGENT_TIMEOUT_MS = 20 * 60_000;
 const CHECK_TIMEOUT_MS = 12 * 60_000;
 
@@ -78,11 +86,13 @@ ${ctx.prompt}
 }
 
 function sandboxFor(repo: { owner: string; name: string }): Sandbox {
-  return getSandbox(
-    env.Sandbox as unknown as DurableObjectNamespace<Sandbox>,
-    `automation--${repo.owner}--${repo.name}`.toLowerCase(),
-    { sleepAfter: '45m' },
-  ) as unknown as Sandbox;
+  // SAFETY: the Sandbox binding's class_name in wrangler.jsonc is the SDK's
+  // Sandbox Durable Object; the generated Env only types it as a bare
+  // DurableObjectNamespace, so the instance type is restated here.
+  const namespace = env.Sandbox as DurableObjectNamespace<Sandbox>;
+  return getSandbox(namespace, `automation--${repo.owner}--${repo.name}`.toLowerCase(), {
+    sleepAfter: '45m',
+  });
 }
 
 // Serializable context threaded between steps (a type alias, not an
@@ -99,6 +109,9 @@ type RunContext = {
   checkCommand: string | null;
   automationName: string;
   prompt: string;
+  // The user-authored prompt mentions .github/workflows — the push token may
+  // carry the App's workflows permission (see sandboxGitToken).
+  workflows: boolean;
 };
 
 const QUICK = {
@@ -126,6 +139,8 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
           const repo = await getRepoById(automation.repository_id);
           if (!repo || !repo.enabled) return null;
           const token = await installationToken(repo.installation_id);
+          // SAFETY: GitHub's get-repository endpoint always includes
+          // default_branch in its success response.
           const info = (await (await gh(token, `/repos/${repo.owner}/${repo.name}`)).json()) as {
             default_branch: string;
           };
@@ -143,6 +158,7 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
             checkCommand: repo.check_command,
             automationName: automation.name,
             prompt: automation.prompt,
+            workflows: authorizesWorkflowFiles(automation.prompt),
           };
         },
       );
@@ -195,8 +211,6 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
         { retries: { limit: 1, delay: '5 minutes' }, timeout: '23 minutes' },
         async (): Promise<{ changed: boolean; usage: CliUsage | null }> => {
           const auth = resolveRunnerAuth();
-          const scrub = (s: string) =>
-            Object.values(auth.vars).reduce((acc, v) => acc.replaceAll(v, '***'), s);
           const sandbox = sandboxFor(ctx);
           const skills = await listEnabledSkillsForRepo(ctx.repositoryId);
           for (const skill of skills) {
@@ -204,9 +218,21 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
             await sandbox.exec(`mkdir -p ${dir}`);
             await sandbox.writeFile(`${dir}/SKILL.md`, skillMarkdown(skill));
           }
+          // Mount the repo's MCP connections through the Worker's relay:
+          // the sandbox only ever holds run-scoped grants, never connection
+          // credentials (see lib/mcp-proxy.ts).
+          const connections = await listRepoConnections(ctx.repositoryId, 'automations');
+          const mcp = await buildSandboxMcpConfig(connections, ctx.repositoryId);
+          let mcpFlags = '';
+          if (mcp) {
+            await sandbox.writeFile(mcpFile(ctx.runId), mcp.configJson);
+            mcpFlags = ` --mcp-config ${mcpFile(ctx.runId)} --strict-mcp-config`;
+          }
+          const scrubValues = [...Object.values(auth.vars), ...(mcp?.secrets ?? [])];
+          const scrub = (s: string) => scrubValues.reduce((acc, v) => acc.replaceAll(v, '***'), s);
           await sandbox.writeFile(specFile(ctx.runId), automationPrompt(ctx));
           const agent = await sandbox.exec(
-            `claude -p --dangerously-skip-permissions --output-format json < ${specFile(ctx.runId)}`,
+            `claude -p --dangerously-skip-permissions${mcpFlags} --output-format json < ${specFile(ctx.runId)}`,
             {
               cwd: WORK,
               timeout: AGENT_TIMEOUT_MS,
@@ -295,7 +321,9 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
       }
 
       await step.do('push branch', QUICK, async () => {
-        const gitToken = await sandboxGitToken(ctx.installationId, ctx.name, 'write');
+        const gitToken = await sandboxGitToken(ctx.installationId, ctx.name, 'write', {
+          workflows: ctx.workflows,
+        });
         const sandbox = sandboxFor(ctx);
         const push = await sandbox.exec(
           `git -C ${WORK} push "https://x-access-token:$GIT_TOKEN@github.com/${full}.git" HEAD:"$AUTOMATION_BRANCH"`,
@@ -303,7 +331,7 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
         );
         if (!push.success) {
           throw new Error(
-            `git push failed: ${push.stderr.replaceAll(gitToken, '***').slice(0, 500)}`,
+            describePushFailure(push.stderr.replaceAll(gitToken, '***').slice(0, 500)),
           );
         }
       });
@@ -319,6 +347,8 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
             .then((f) => f.content.trim() || undefined)
             .catch(() => undefined);
           const token = await installationToken(ctx.installationId);
+          // SAFETY: GitHub's create-pull-request endpoint returns the created
+          // PR object, which always carries its number.
           const pr = (await (
             await gh(token, `/repos/${full}/pulls`, {
               method: 'POST',
@@ -352,7 +382,9 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
         { retries: { limit: 1, delay: '10 seconds' }, timeout: '2 minutes' },
         async () => {
           await sandboxFor(ctx)
-            .exec(`rm -rf ${WORK} ${specFile(ctx.runId)} ${prFile(ctx.runId)}`)
+            .exec(
+              `rm -rf ${WORK} ${specFile(ctx.runId)} ${prFile(ctx.runId)} ${mcpFile(ctx.runId)}`,
+            )
             .catch(() => {});
         },
       );

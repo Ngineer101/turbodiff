@@ -1,5 +1,12 @@
 'use agent';
-import { useDelivery, useMcpConnection, useModel, useTool, type AgentProps } from '@flue/runtime';
+import {
+  useDelivery,
+  useMcpConnection,
+  useModel,
+  useTool,
+  type AgentProps,
+  type McpConnectionDefinition,
+} from '@flue/runtime';
 import { getConnection, resolveConnectionAuth, type ConnectionSnapshot } from '../lib/db.ts';
 import { DEFAULT_MODEL } from '../lib/personas.ts';
 import {
@@ -42,12 +49,7 @@ function parsePin(raw: string | undefined): RepoPin {
   return match ? { owner: match[1], repo: match[2] } : null;
 }
 
-function deliveryConfig(): {
-  agentName: string;
-  model: string;
-  connections: ConnectionSnapshot[];
-  pin: RepoPin;
-} {
+function deliveryConfig() {
   const delivery = useDelivery();
   if (delivery.kind === 'signal' && delivery.type === 'review.request' && delivery.attributes) {
     return {
@@ -108,13 +110,14 @@ export function PrReviewer(props: AgentProps) {
   // Tokens stay sealed in D1: the auth resolver decrypts per request, so
   // they never enter model context or conversation storage.
   for (const conn of cfg.connections) {
-    useMcpConnection({
+    const definition: McpConnectionDefinition = {
       name: conn.name,
       url: conn.url,
-      ...(conn.tools ? { tools: conn.tools } : {}),
       optional: conn.optional,
-      ...(conn.hasAuth ? { auth: () => resolveMountAuth(conn.id) } : {}),
-    });
+    };
+    if (conn.tools) definition.tools = conn.tools;
+    if (conn.hasAuth) definition.auth = () => resolveMountAuth(conn.id);
+    useMcpConnection(definition);
   }
 
   return `You are Turbodiff, a precise code-review agent, running as the "${cfg.agentName}" reviewer. You are given a GitHub pull request reference (owner, repo, number) and must review it, then post the review to GitHub.

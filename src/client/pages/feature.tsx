@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { useParams } from '@tanstack/react-router';
-import { PatchDiff, type DiffLineAnnotation } from '@pierre/diffs/react';
+import { PatchDiff, type DiffLineAnnotation, type SelectedLineRange } from '@pierre/diffs/react';
 import {
   ChevronDown,
   ChevronRight,
@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { ApiCockpitComment, ApiFeatureDetail } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
+import { useDictation } from '../lib/dictation.ts';
 import { sentence } from '../lib/format.ts';
 import { featureQuery, FIX_TERMINAL, GENERATION_STOPPED } from '../lib/queries.ts';
 import { cn } from '../lib/utils.ts';
@@ -21,6 +22,7 @@ import { ensureDiffStyles } from '../components/diff-styles.ts';
 import { CertStrip, Lamp, Serial, Stamp, type LampTone } from '../components/identity.tsx';
 import { FILE_STATUS_DOT, FileTree } from '../components/file-tree.tsx';
 import { Markdown } from '../components/markdown.tsx';
+import { MicButton } from '../components/mic-button.tsx';
 import { Muted, PageTitle, SectionHeading } from '../components/section.tsx';
 import {
   Accordion,
@@ -54,7 +56,7 @@ interface CommentMeta {
   composer?: boolean;
 }
 
-function onApiError(err: unknown) {
+function onApiError<T>(err: T) {
   toast.error(err instanceof ApiError ? err.message : 'Request failed');
 }
 
@@ -168,6 +170,9 @@ function Composer({
   onCancel: () => void;
 }) {
   const [body, setBody] = useState('');
+  const dictation = useDictation((text) =>
+    setBody((prev) => (prev.trim() ? `${prev}\n\n${text}` : text)),
+  );
   const submit = useMutation({
     mutationFn: () =>
       api.post(`/api/factory/features/${featureId}/comments`, {
@@ -191,11 +196,19 @@ function Composer({
       <Textarea
         autoFocus
         className="min-h-20"
-        value={body}
+        value={
+          dictation.recording
+            ? body.trim()
+              ? `${body}\n\n${dictation.interim}`
+              : dictation.interim
+            : body
+        }
         onChange={(e) => setBody(e.target.value)}
+        disabled={dictation.recording}
         placeholder="What should change here?"
       />
       <div className="mt-2 flex gap-2">
+        <MicButton dictation={dictation} />
         <Button
           size="sm"
           onClick={() => body.trim() && submit.mutate()}
@@ -204,7 +217,14 @@ function Composer({
         >
           {submit.isPending ? 'Adding…' : 'Add comment'}
         </Button>
-        <Button size="sm" variant="secondary" onClick={onCancel}>
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() => {
+            dictation.stop();
+            onCancel();
+          }}
+        >
           Cancel
         </Button>
       </div>
@@ -230,7 +250,7 @@ function FileDiff({
     const list: DiffLineAnnotation<CommentMeta>[] = data.comments
       .filter((c) => c.path === file.filename)
       .map((c) => ({
-        side: (c.side === 'deletions' ? 'deletions' : 'additions') as 'additions' | 'deletions',
+        side: c.side === 'deletions' ? 'deletions' : 'additions',
         lineNumber: c.line,
         metadata: { comment: c },
       }));
@@ -245,16 +265,13 @@ function FileDiff({
   }, [data.comments, file.filename, selection]);
 
   const onSelectionEnd = useCallback(
-    (range: unknown) => {
-      const r = range as { start: number; end: number; side?: string; endSide?: string } | null;
-      if (!r || !Number.isFinite(r.start) || !Number.isFinite(r.end)) return;
+    (range: SelectedLineRange | null) => {
+      if (!range || !Number.isFinite(range.start) || !Number.isFinite(range.end)) return;
       setSelection({
         file: file.filename,
-        startLine: Math.min(r.start, r.end),
-        endLine: Math.max(r.start, r.end),
-        side: ((r.endSide ?? r.side) === 'deletions' ? 'deletions' : 'additions') as
-          | 'additions'
-          | 'deletions',
+        startLine: Math.min(range.start, range.end),
+        endLine: Math.max(range.start, range.end),
+        side: (range.endSide ?? range.side) === 'deletions' ? 'deletions' : 'additions',
       });
     },
     [file.filename],

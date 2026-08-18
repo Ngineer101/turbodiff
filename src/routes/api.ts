@@ -16,6 +16,7 @@ import {
   deleteAgent,
   deleteAutomation,
   deleteConnection,
+  deletePushSubscriptionByEndpoint,
   deleteSkill,
   deleteTodo,
   dispatchOpenCockpitComments,
@@ -38,7 +39,6 @@ import {
   getPlanByFeatureId,
   getRepoById,
   latestVerificationForFeature,
-  listAgentConnections,
   listAgentRunsForAutomationRun,
   listAgentRunsForFeature,
   listAgentRunsForPlan,
@@ -46,7 +46,7 @@ import {
   listAutomationRuns,
   listAutomationsForInstallations,
   listCockpitComments,
-  listConnectionLinks,
+  listRepoConnectionLinks,
   listConnections,
   listFixAttemptsForRepoPrs,
   listInstallationsWithRepos,
@@ -69,7 +69,7 @@ import {
   resolveAgentEnabled,
   resolveConnectionAuth,
   resolveSkillEnabled,
-  setAgentConnectionLink,
+  setRepoConnectionLink,
   setPlanArchived,
   setRepoAgentEnabled,
   setRepoAutoFix,
@@ -89,6 +89,7 @@ import {
   updateFeature,
   updatePlan,
   updateSkill,
+  upsertPushSubscription,
   type AgentRow,
   type AgentRunRow,
   type AutomationFields,
@@ -136,6 +137,15 @@ import {
   unpackState,
 } from '../lib/mcp-oauth.ts';
 import { DEFAULT_MODEL, RESERVED_AGENT_SLUGS } from '../lib/personas.ts';
+import {
+  isBoolean,
+  isJsonArray,
+  isJsonObject,
+  isNumber,
+  isString,
+  type JsonObject,
+  type JsonValue,
+} from '../shared/json.ts';
 import type {
   ApiAgentDetail,
   ApiAgentRun,
@@ -334,6 +344,8 @@ function verificationSummary(
   let total = 0;
   let failed = 0;
   try {
+    // SAFETY: verifications.results is written only by the verify pipeline as a
+    // serialized {index, verdict, note}[]; anything unparsable lands in catch.
     const results = JSON.parse(resultsJson ?? '[]') as { verdict: string }[];
     total = results.length;
     failed = results.filter((r) => r.verdict === 'fail').length;
@@ -348,19 +360,20 @@ function serializeAgentRun(r: AgentRunRow): ApiAgentRun {
 }
 
 type CockpitFixStatus = NonNullable<ApiCockpitComment['fix_status']>;
-const COCKPIT_FIX_STATUSES = new Set<CockpitFixStatus>([
+const COCKPIT_FIX_STATUSES = new Set<string>([
   'running',
   'fixed',
   'no_changes',
   'tests_failed',
   'failed',
-]);
+] satisfies CockpitFixStatus[]);
+
+function isCockpitFixStatus<T extends string>(value: T): value is T & CockpitFixStatus {
+  return COCKPIT_FIX_STATUSES.has(value);
+}
 
 function serializeCockpitComment(r: CockpitCommentRow): ApiCockpitComment {
-  const fixStatus: CockpitFixStatus | null =
-    r.fix_status && COCKPIT_FIX_STATUSES.has(r.fix_status as CockpitFixStatus)
-      ? (r.fix_status as CockpitFixStatus)
-      : null;
+  const fixStatus = r.fix_status && isCockpitFixStatus(r.fix_status) ? r.fix_status : null;
   return {
     id: r.id,
     path: r.path,
@@ -375,19 +388,25 @@ function serializeCockpitComment(r: CockpitCommentRow): ApiCockpitComment {
 }
 
 function serializeTask(p: PlanWithRepo, repoStatuses: TaskRepoStatusRow[]): ApiPlan {
+  // SAFETY: plans.questions is written only by the planner (planner.ts) as a
+  // serialized question array matching ApiPlanQuestion.
+  const questions = p.questions ? (JSON.parse(p.questions) as ApiPlanQuestion[]) : [];
+  // SAFETY: plans.acceptance is written only by the planner as a serialized string[].
+  const acceptance = p.acceptance ? (JSON.parse(p.acceptance) as string[]) : [];
+  // SAFETY: plans.attachments is written only by POST /todos/:id/start as a
+  // serialized {key, name, content_type}[] — name is the only field read back.
+  const attachments = p.attachments ? (JSON.parse(p.attachments) as { name: string }[]) : [];
   return {
     id: p.id,
     title: p.title,
     status: p.status,
     error: p.error,
     created_at: p.created_at,
-    questions: p.questions ? (JSON.parse(p.questions) as ApiPlanQuestion[]) : [],
-    acceptance: p.acceptance ? (JSON.parse(p.acceptance) as string[]) : [],
+    questions,
+    acceptance,
     plan: p.plan,
     archived: p.archived === 1,
-    attachments: (p.attachments ? (JSON.parse(p.attachments) as { name: string }[]) : []).map(
-      (a) => ({ name: a.name }),
-    ),
+    attachments: attachments.map((a) => ({ name: a.name })),
     repos: repoStatuses
       .filter((r) => r.plan_id === p.id)
       .map((r) => ({
@@ -415,8 +434,11 @@ interface AgentFormValues {
   model: string;
 }
 
-function readAgentPayload(body: Record<string, unknown>): AgentFormValues {
-  const get = (k: string) => (typeof body[k] === 'string' ? (body[k] as string).trim() : '');
+function readAgentPayload(body: JsonObject): AgentFormValues {
+  const get = (k: string) => {
+    const v = body[k];
+    return isString(v) ? v.trim() : '';
+  };
   return {
     name: get('name'),
     slug: get('slug').toLowerCase(),
@@ -444,8 +466,11 @@ interface SkillFormValues {
   instructions: string;
 }
 
-function readSkillPayload(body: Record<string, unknown>): SkillFormValues {
-  const get = (k: string) => (typeof body[k] === 'string' ? (body[k] as string).trim() : '');
+function readSkillPayload(body: JsonObject): SkillFormValues {
+  const get = (k: string) => {
+    const v = body[k];
+    return isString(v) ? v.trim() : '';
+  };
   return {
     name: get('name'),
     slug: get('slug').toLowerCase(),
@@ -465,8 +490,11 @@ function validateSkill(v: SkillFormValues, checkSlug: boolean): string | null {
 const TIME_OF_DAY_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const SCHEDULE_KINDS = new Set(['hourly', 'daily', 'weekly']);
 
-function readAutomationPayload(body: Record<string, unknown>): AutomationFields {
-  const get = (k: string) => (typeof body[k] === 'string' ? (body[k] as string).trim() : '');
+function readAutomationPayload(body: JsonObject): AutomationFields {
+  const get = (k: string) => {
+    const v = body[k];
+    return isString(v) ? v.trim() : '';
+  };
   const timeOfDay = get('time_of_day');
   const dayOfWeek = body.day_of_week;
   return {
@@ -474,7 +502,7 @@ function readAutomationPayload(body: Record<string, unknown>): AutomationFields 
     prompt: get('prompt'),
     schedule_kind: get('schedule_kind'),
     time_of_day: timeOfDay || null,
-    day_of_week: typeof dayOfWeek === 'number' && Number.isInteger(dayOfWeek) ? dayOfWeek : null,
+    day_of_week: isNumber(dayOfWeek) && Number.isInteger(dayOfWeek) ? dayOfWeek : null,
   };
 }
 
@@ -508,6 +536,8 @@ function serializeAutomation(
     id: a.id,
     name: a.name,
     repository: { id: repo.id, owner: repo.owner, name: repo.name },
+    // SAFETY: automations.schedule_kind passes validateAutomation's SCHEDULE_KINDS
+    // ('hourly' | 'daily' | 'weekly') membership check before every insert/update.
     schedule_kind: a.schedule_kind as ApiAutomationSummary['schedule_kind'],
     time_of_day: a.time_of_day,
     day_of_week: a.day_of_week,
@@ -671,7 +701,32 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     return c.json<ApiMe>({
       login: c.get('user').session.login,
       github_app_slug: env.GITHUB_APP_SLUG,
+      vapid_public_key: env.VAPID_PUBLIC_KEY,
     });
+  });
+
+  // Web Push subscription (src/lib/push.ts). Body shape matches
+  // PushSubscription.toJSON() natively — no client-side reshaping needed.
+  app.post('/push/subscribe', async (c) => {
+    const body = await c.req
+      .json<{ endpoint?: string; keys?: { p256dh?: string; auth?: string } }>()
+      .catch(() => null);
+    const endpoint = body?.endpoint?.trim() ?? '';
+    const p256dh = body?.keys?.p256dh?.trim() ?? '';
+    const auth = body?.keys?.auth?.trim() ?? '';
+    if (!endpoint || !p256dh || !auth) {
+      return c.json({ error: 'body must be {"endpoint", "keys": {"p256dh", "auth"}}' }, 400);
+    }
+    await upsertPushSubscription(c.get('user').session.userId, { endpoint, p256dh, auth });
+    return c.json({ ok: true });
+  });
+
+  app.post('/push/unsubscribe', async (c) => {
+    const body = await c.req.json<{ endpoint?: string }>().catch(() => null);
+    const endpoint = body?.endpoint?.trim() ?? '';
+    if (!endpoint) return c.json({ error: 'body must be {"endpoint"}' }, 400);
+    await deletePushSubscriptionByEndpoint(c.get('user').session.userId, endpoint);
+    return c.json({ ok: true });
   });
 
   // Usage page: headline metrics, monthly cost, per-repo/agent cost, and the
@@ -922,7 +977,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       .json<{
         title?: string;
         requirements?: string;
-        attachments?: Record<string, unknown>[];
+        attachments?: JsonObject[];
       }>()
       .catch(() => null);
     const title = body?.title?.trim() || todo.title;
@@ -932,10 +987,10 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     }
     const rawAtts = Array.isArray(body?.attachments) ? body.attachments : [];
     const attachments = rawAtts
-      .map((a: Record<string, unknown>) => ({
-        key: typeof a.key === 'string' ? a.key : '',
-        name: typeof a.name === 'string' ? a.name.slice(-120) : 'attachment',
-        content_type: typeof a.content_type === 'string' ? a.content_type : '',
+      .map((a) => ({
+        key: isString(a.key) ? a.key : '',
+        name: isString(a.name) ? a.name.slice(-120) : 'attachment',
+        content_type: isString(a.content_type) ? a.content_type : '',
       }))
       .filter((a) => a.key.startsWith('plan-uploads/'))
       .slice(0, 5);
@@ -978,10 +1033,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const plan = await authorizedPlan(c);
     if (!plan) return c.json({ error: 'unknown task' }, 404);
     const body = await c.req.json<{ archived?: boolean }>().catch(() => null);
-    if (typeof body?.archived !== 'boolean') {
+    const archived = body?.archived;
+    if (!isBoolean(archived)) {
       return c.json({ error: 'body must be {"archived": true|false}' }, 400);
     }
-    await setPlanArchived(plan.id, body.archived);
+    await setPlanArchived(plan.id, archived);
     return c.json({ ok: true });
   });
 
@@ -991,15 +1047,15 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (plan.status !== 'awaiting_answers') {
       return c.json({ error: `plan is ${plan.status}, not awaiting answers` }, 409);
     }
-    const body = await c.req.json<{ answers?: unknown }>().catch(() => null);
-    if (!Array.isArray(body?.answers)) {
+    const body = await c.req.json<{ answers?: JsonValue }>().catch(() => null);
+    const given = body?.answers;
+    if (!isJsonArray(given)) {
       return c.json({ error: 'body must be {"answers": ["...", ...]}' }, 400);
     }
-    const given = body.answers as unknown[];
     const questions: ApiPlanQuestion[] = plan.questions ? JSON.parse(plan.questions) : [];
     const answers = questions.map((_, i) => {
       const v = given[i];
-      return typeof v === 'string' ? v : v == null ? '' : JSON.stringify(v);
+      return isString(v) ? v : v == null ? '' : JSON.stringify(v);
     });
     await updatePlan(plan.id, { status: 'refining', answers: JSON.stringify(answers) });
     await env.FACTORY_QUEUE.send({ kind: 'plan_refine', planId: plan.id });
@@ -1103,33 +1159,30 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     ]);
     const ghBase = `/repos/${repo.owner}/${repo.name}`;
     const [prMeta, prFiles, prReviews] = await Promise.all([
-      gh(token, `${ghBase}/pulls/${feature.pr_number}`).then(
-        (r) =>
-          r.json() as Promise<{
-            state: string;
-            merged: boolean;
-            html_url: string;
+      gh(token, `${ghBase}/pulls/${feature.pr_number}`).then((r) =>
+        r.json<{
+          state: string;
+          merged: boolean;
+          html_url: string;
+          additions: number;
+          deletions: number;
+          changed_files: number;
+          mergeable_state: string | null;
+        }>(),
+      ),
+      gh(token, `${ghBase}/pulls/${feature.pr_number}/files?per_page=100`).then((r) =>
+        r.json<
+          {
+            filename: string;
+            status: string;
             additions: number;
             deletions: number;
-            changed_files: number;
-            mergeable_state: string | null;
-          }>,
+            patch?: string;
+          }[]
+        >(),
       ),
-      gh(token, `${ghBase}/pulls/${feature.pr_number}/files?per_page=100`).then(
-        (r) =>
-          r.json() as Promise<
-            {
-              filename: string;
-              status: string;
-              additions: number;
-              deletions: number;
-              patch?: string;
-            }[]
-          >,
-      ),
-      gh(token, `${ghBase}/pulls/${feature.pr_number}/reviews?per_page=100`).then(
-        (r) =>
-          r.json() as Promise<{ state: string; body: string; user: { login: string } | null }[]>,
+      gh(token, `${ghBase}/pulls/${feature.pr_number}/reviews?per_page=100`).then((r) =>
+        r.json<{ state: string; body: string; user: { login: string } | null }[]>(),
       ),
     ]);
 
@@ -1163,6 +1216,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     base.comments = cockpitComments.map(serializeCockpitComment);
     base.plan = plan?.plan ?? null;
 
+    // SAFETY: verifications.demo is written only by the verify pipeline as a
+    // serialized {video, caption} object.
     const demo = verification?.demo
       ? (JSON.parse(verification.demo) as { video?: string; caption?: string })
       : null;
@@ -1211,9 +1266,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const payload = await c.req
       .json<{ path?: string; line?: number; side?: string; body?: string }>()
       .catch(() => null);
+    const line = payload?.line;
     if (
       !payload?.path ||
-      !Number.isInteger(payload.line) ||
+      !isNumber(line) ||
+      !Number.isInteger(line) ||
       !payload.body?.trim() ||
       !feature.pr_number
     ) {
@@ -1223,7 +1280,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const commentId = await createCockpitComment(
       feature.id,
       payload.path,
-      payload.line as number,
+      line,
       payload.side === 'deletions' ? 'deletions' : 'additions',
       payload.body.trim(),
       session.login,
@@ -1331,6 +1388,49 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     return c.json({ ok: true, key, name: file.name.slice(-120), content_type: file.type });
   });
 
+  // Speech-to-text for dictation into requirement/feedback/comment fields.
+  // Transient: the recording is transcribed and discarded, never written to
+  // R2 (contrast with /uploads, which persists planning attachments).
+  const TRANSCRIBE_MAX_BYTES = 15 * 1024 * 1024;
+
+  app.post('/transcribe', async (c) => {
+    // Same cost-control gate as /uploads: dictation is only reachable from
+    // screens that already require an installation (todo start, plan
+    // feedback, feature comments), so this only blocks the zero-installation
+    // edge case from spending Workers AI inference.
+    if (c.get('user').installationIds.length === 0) {
+      return c.json({ error: 'install the GitHub App before using dictation' }, 403);
+    }
+    const body = await c.req.parseBody();
+    const file = body.audio;
+    if (!(file instanceof File)) {
+      return c.json({ error: 'multipart "audio" field is required' }, 400);
+    }
+    if (!file.type.startsWith('audio/')) {
+      return c.json({ error: 'only audio recordings are supported' }, 400);
+    }
+    if (file.size > TRANSCRIBE_MAX_BYTES) {
+      return c.json({ error: 'recording exceeds 15MB' }, 400);
+    }
+    if (file.size === 0) return c.json({ ok: true, text: '' });
+
+    // Same byte->base64 idiom as src/lib/github-app.ts's base64url() — a
+    // fromCharCode loop instead of a spread, so it doesn't blow the call
+    // stack on a multi-MB buffer.
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let bin = '';
+    for (const b of bytes) bin += String.fromCharCode(b);
+    const audio = btoa(bin);
+
+    try {
+      const result = await env.AI.run('@cf/openai/whisper-large-v3-turbo', { audio });
+      return c.json({ ok: true, text: (result.text ?? '').trim() });
+    } catch (err) {
+      console.error('turbodiff: transcription failed:', err);
+      return c.json({ error: 'transcription failed' }, 502);
+    }
+  });
+
   // Batched plan-review feedback: snippet-anchored comments collected in the
   // UI, submitted once, and consumed by a revise (plan_refine) run.
   app.post('/factory/plans/:id/feedback', async (c) => {
@@ -1345,8 +1445,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const raw = Array.isArray(body?.comments) ? body.comments : [];
     const comments = raw
       .map((f) => ({
-        snippet: typeof f.snippet === 'string' ? f.snippet.trim().slice(0, 300) : '',
-        comment: typeof f.comment === 'string' ? f.comment.trim().slice(0, 1000) : '',
+        snippet: isString(f.snippet) ? f.snippet.trim().slice(0, 300) : '',
+        comment: isString(f.comment) ? f.comment.trim().slice(0, 1000) : '',
       }))
       .filter((f) => f.comment)
       .slice(0, 20);
@@ -1525,7 +1625,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (capableIds.length === 0) {
       return c.json({ error: "'settings' capability required for this action" }, 403);
     }
-    const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+    const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
     const values = readAgentPayload(body);
     let error = validateAgent(values, true);
@@ -1543,7 +1643,6 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.get('/agents/:id', async (c) => {
     const agent = await authorizedAgent(c);
     if (!agent) return c.json({ error: 'unknown agent' }, 404);
-    const connections = await listAgentConnections(agent.id);
     return c.json<ApiAgentDetail>({
       agent: {
         id: agent.id,
@@ -1555,17 +1654,6 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         instructions: agent.instructions,
         installation_id: agent.installation_id,
       },
-      connections: connections.map((conn) => {
-        const snap = connectionSnapshot(conn);
-        return {
-          id: conn.id,
-          name: conn.name,
-          url: conn.url,
-          tools: snap.tools ?? null,
-          has_auth: conn.auth_type !== 'none',
-        };
-      }),
-      encryption_configured: encryptionConfigured(),
       default_model: DEFAULT_MODEL,
     });
   });
@@ -1575,7 +1663,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (!agent) return c.json({ error: 'unknown agent' }, 404);
     const deniedCapability = await requireCapability(c, agent.installation_id, 'settings');
     if (deniedCapability) return deniedCapability;
-    const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+    const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
     const values = { ...readAgentPayload(body), slug: agent.slug };
     const error = validateAgent(values, false);
@@ -1635,7 +1723,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (capableIds.length === 0) {
       return c.json({ error: "'settings' capability required for this action" }, 403);
     }
-    const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+    const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
     const values = readSkillPayload(body);
     let error = validateSkill(values, true);
@@ -1670,7 +1758,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (!skill) return c.json({ error: 'unknown skill' }, 404);
     const deniedCapability = await requireCapability(c, skill.installation_id, 'settings');
     if (deniedCapability) return deniedCapability;
-    const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+    const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
     const values = readSkillPayload(body);
     const error = validateSkill(values, true);
@@ -1733,7 +1821,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
 
   app.post('/automations', async (c) => {
     const { installationIds } = c.get('user');
-    const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+    const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
     const values = readAutomationPayload(body);
     const error = validateAutomation(values);
@@ -1747,6 +1835,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (deniedCapability) return deniedCapability;
     const nextRunAt = computeNextRunAt(
       {
+        // SAFETY: validateAutomation returned null above, so schedule_kind passed
+        // the SCHEDULE_KINDS ('hourly' | 'daily' | 'weekly') membership check.
         kind: values.schedule_kind as 'hourly' | 'daily' | 'weekly',
         timeOfDay: values.time_of_day,
         dayOfWeek: values.day_of_week,
@@ -1779,7 +1869,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       repoForCapability &&
       (await requireCapability(c, repoForCapability.installation_id, 'settings'));
     if (deniedCapability) return deniedCapability;
-    const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+    const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
     const values = readAutomationPayload(body);
     const error = validateAutomation(values);
@@ -1794,6 +1884,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const nextRunAt = scheduleChanged
       ? computeNextRunAt(
           {
+            // SAFETY: validateAutomation returned null above, so schedule_kind passed
+            // the SCHEDULE_KINDS ('hourly' | 'daily' | 'weekly') membership check.
             kind: values.schedule_kind as 'hourly' | 'daily' | 'weekly',
             timeOfDay: values.time_of_day,
             dayOfWeek: values.day_of_week,
@@ -1835,6 +1927,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       automation: { id: automation.id, name: automation.name },
       runs: runs.map((r) => ({
         id: r.id,
+        // SAFETY: automation_runs.status only ever holds running | pr_opened |
+        // no_changes | checks_failed | failed (migration 0028, finishAutomationRun).
         status: r.status as ApiAutomationRunSummary['status'],
         pr_number: r.pr_number,
         error: r.error,
@@ -1855,6 +1949,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     return c.json<ApiAutomationRunDetail>({
       run: {
         id: detail.run.id,
+        // SAFETY: automation_runs.status only ever holds running | pr_opened |
+        // no_changes | checks_failed | failed (migration 0028, finishAutomationRun).
         status: detail.run.status as ApiAutomationRunSummary['status'],
         pr_number: detail.run.pr_number,
         error: detail.run.error,
@@ -1885,12 +1981,10 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
 
   app.get('/integrations', async (c) => {
     const { installationIds } = c.get('user');
-    await Promise.all(installationIds.map((id) => ensureBuiltinAgents(id)));
-    const [groups, agents, connections, links] = await Promise.all([
+    const [groups, connections, links] = await Promise.all([
       listInstallationsWithRepos(installationIds),
-      listAgents(installationIds),
       listConnections(installationIds),
-      listConnectionLinks(installationIds),
+      listRepoConnectionLinks(installationIds),
     ]);
     return c.json<ApiIntegrations>({
       encryption_configured: encryptionConfigured(),
@@ -1898,14 +1992,18 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         id: installation.id,
         account_login: installation.account_login,
       })),
-      agents: agents.map((a) => ({
-        id: a.id,
-        slug: a.slug,
-        name: a.name,
-        description: a.description,
-        model: a.model,
-        is_builtin: a.is_builtin === 1,
-      })),
+      // A connection may only attach to repos of its own installation — the
+      // client filters on installation_id.
+      repos: groups.flatMap(({ repos }) =>
+        repos
+          .filter((r) => r.enabled === 1)
+          .map((r) => ({
+            id: r.id,
+            installation_id: r.installation_id,
+            owner: r.owner,
+            name: r.name,
+          })),
+      ),
       connections: connections.map((conn) => {
         const snap = connectionSnapshot(conn);
         return {
@@ -1918,7 +2016,13 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
           has_auth: conn.auth_type !== 'none',
           auth_type: conn.auth_type,
           oauth_status: oauthStatus(conn),
-          agent_ids: links.filter((l) => l.connection_id === conn.id).map((l) => l.agent_id),
+          repo_links: links
+            .filter((l) => l.connection_id === conn.id)
+            .map((l) => ({
+              repository_id: l.repository_id,
+              reviews: l.reviews === 1,
+              automations: l.automations === 1,
+            })),
         };
       }),
     });
@@ -1928,9 +2032,12 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
 
   app.post('/integrations', async (c) => {
     const { installationIds } = c.get('user');
-    const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+    const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
-    const get = (k: string) => (typeof body[k] === 'string' ? (body[k] as string).trim() : '');
+    const get = (k: string) => {
+      const v = body[k];
+      return isString(v) ? v.trim() : '';
+    };
     const installationId = Number(body.installation_id ?? installationIds[0]);
     const name = get('name').toLowerCase();
     const kind = get('kind') === 'api' ? 'api' : 'mcp';
@@ -2175,37 +2282,52 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       return c.redirect('/integrations?oauth=error&reason=exchange_failed');
     }
 
-    await updateConnectionAuth(conn.id, {
+    const authUpdate: Parameters<typeof updateConnectionAuth>[1] = {
       authConfigCiphertext: await sealJson<OAuthConfigCache>({
         ...cache,
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
         scope: tokens.scope,
       }),
-      ...(tokens.expiresAt ? { oauthTokenExpiresAt: tokens.expiresAt } : {}),
       oauthNeedsReauth: false,
-    });
+    };
+    if (tokens.expiresAt) authUpdate.oauthTokenExpiresAt = tokens.expiresAt;
+    await updateConnectionAuth(conn.id, authUpdate);
     return c.redirect(`/integrations?oauth=connected&name=${encodeURIComponent(conn.name)}`);
   });
 
-  // Attach/detach an MCP integration to an agent.
-  app.put('/integrations/:id/agents/:agentId', async (c) => {
+  // Attach/detach an MCP integration to a repository.
+  app.put('/integrations/:id/repos/:repoId', async (c) => {
     const conn = await authorizedConnection(c);
     if (!conn) return c.json({ error: 'unknown integration' }, 404);
     const deniedCapability = await requireCapability(c, conn.installation_id, 'settings');
     if (deniedCapability) return deniedCapability;
-    if (conn.kind !== 'mcp')
-      return c.json({ error: 'only MCP integrations attach to agents' }, 400);
-    const agentId = Number(c.req.param('agentId'));
-    const agent = Number.isInteger(agentId) ? await getAgentById(agentId) : null;
-    if (!agent || agent.installation_id !== conn.installation_id) {
-      return c.json({ error: 'unknown agent' }, 404);
+    if (conn.kind !== 'mcp') return c.json({ error: 'only MCP integrations attach to repos' }, 400);
+    const repoId = Number(c.req.param('repoId'));
+    const repo = Number.isInteger(repoId) ? await getRepoById(repoId) : null;
+    if (!repo || repo.installation_id !== conn.installation_id) {
+      return c.json({ error: 'unknown repository' }, 404);
     }
-    const body = await c.req.json<{ attached?: boolean }>().catch(() => null);
-    if (typeof body?.attached !== 'boolean') {
-      return c.json({ error: 'body must be {"attached": true|false}' }, 400);
+    const body = await c.req
+      .json<{ attached?: boolean; reviews?: boolean; automations?: boolean }>()
+      .catch(() => null);
+    const attached = body?.attached;
+    if (!isBoolean(attached)) {
+      return c.json({ error: 'body must be {"attached": true|false, ...}' }, 400);
     }
-    await setAgentConnectionLink(agent.id, conn.id, body.attached);
+    const reviews = body?.reviews;
+    const automations = body?.automations;
+    if (
+      (reviews !== undefined && !isBoolean(reviews)) ||
+      (automations !== undefined && !isBoolean(automations))
+    ) {
+      return c.json({ error: '"reviews" and "automations" must be booleans when present' }, 400);
+    }
+    await setRepoConnectionLink(repo.id, conn.id, {
+      attached,
+      reviews: reviews ?? true,
+      automations: automations ?? true,
+    });
     return c.json({ ok: true });
   });
 
@@ -2287,9 +2409,13 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   // src/lib/permissions.ts for why the 'member'/'invitation' resources keep
   // better-auth's own action vocabulary instead of app-specific verbs.
 
-  function orgApiErrorResponse(c: Context<ApiEnv>, err: unknown): Response {
+  function orgApiErrorResponse<T>(c: Context<ApiEnv>, err: T): Response {
     if (!(err instanceof APIError)) throw err;
-    const message = (err.body as { message?: string } | undefined)?.message ?? err.message;
+    const body = err.body;
+    const message =
+      body !== undefined && isJsonObject(body) && isString(body.message)
+        ? body.message
+        : err.message;
     switch (err.statusCode) {
       case 401:
         return c.json({ error: message }, 401);
@@ -2360,6 +2486,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       return c.json<ApiInvitation>({
         id: invitation.id,
         email: invitation.email,
+        // SAFETY: this endpoint rejected any role outside
+        // owner/admin/member above, before calling better-auth.
         role: invitation.role as ApiRole,
         status: invitation.status,
         expires_at: invitation.expiresAt ? new Date(invitation.expiresAt).toISOString() : null,
@@ -2431,18 +2559,16 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       }>()
       .catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
-    if (typeof body.enabled === 'boolean') await setRepoEnabled(repo.id, body.enabled);
-    if (typeof body.review_on_push === 'boolean')
-      await setRepoReviewOnPush(repo.id, body.review_on_push);
-    if (typeof body.blocking_reviews === 'boolean')
+    if (isBoolean(body.enabled)) await setRepoEnabled(repo.id, body.enabled);
+    if (isBoolean(body.review_on_push)) await setRepoReviewOnPush(repo.id, body.review_on_push);
+    if (isBoolean(body.blocking_reviews))
       await setRepoBlockingReviews(repo.id, body.blocking_reviews);
-    if (typeof body.auto_fix === 'boolean') await setRepoAutoFix(repo.id, body.auto_fix);
-    if (typeof body.auto_merge === 'boolean') await setRepoAutoMerge(repo.id, body.auto_merge);
-    if (typeof body.auto_resolve_conflicts === 'boolean')
+    if (isBoolean(body.auto_fix)) await setRepoAutoFix(repo.id, body.auto_fix);
+    if (isBoolean(body.auto_merge)) await setRepoAutoMerge(repo.id, body.auto_merge);
+    if (isBoolean(body.auto_resolve_conflicts))
       await setRepoAutoResolveConflicts(repo.id, body.auto_resolve_conflicts);
-    if (typeof body.demo_videos === 'boolean') await setRepoDemoVideos(repo.id, body.demo_videos);
-    if (typeof body.check_command === 'string')
-      await setRepoCheckCommand(repo.id, body.check_command);
+    if (isBoolean(body.demo_videos)) await setRepoDemoVideos(repo.id, body.demo_videos);
+    if (isString(body.check_command)) await setRepoCheckCommand(repo.id, body.check_command);
     return c.json({ ok: true });
   });
 
@@ -2459,10 +2585,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       return c.json({ error: 'unknown agent' }, 404);
     }
     const body = await c.req.json<{ enabled?: boolean }>().catch(() => null);
-    if (typeof body?.enabled !== 'boolean') {
+    const enabled = body?.enabled;
+    if (!isBoolean(enabled)) {
       return c.json({ error: 'body must be {"enabled": true|false}' }, 400);
     }
-    await setRepoAgentEnabled(repo.id, agent.id, body.enabled);
+    await setRepoAgentEnabled(repo.id, agent.id, enabled);
     return c.json({ ok: true });
   });
 
@@ -2479,10 +2606,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       return c.json({ error: 'unknown skill' }, 404);
     }
     const body = await c.req.json<{ enabled?: boolean }>().catch(() => null);
-    if (typeof body?.enabled !== 'boolean') {
+    const enabled = body?.enabled;
+    if (!isBoolean(enabled)) {
       return c.json({ error: 'body must be {"enabled": true|false}' }, 400);
     }
-    await setRepoSkillEnabled(repo.id, skill.id, body.enabled);
+    await setRepoSkillEnabled(repo.id, skill.id, enabled);
     return c.json({ ok: true });
   });
 

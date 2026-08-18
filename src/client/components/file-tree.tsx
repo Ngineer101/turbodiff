@@ -54,7 +54,14 @@ function buildTree(files: TreeFile[]): DirNode {
   return root;
 }
 
-export const FILE_STATUS_DOT: Record<string, string> = {
+// Named owner contract for the status→dot-class map: statuses come off the
+// GitHub diff as open strings (it emits more than the four we color), so
+// unknown values intentionally miss and fall through to the caller's default.
+interface FileStatusDotClasses {
+  readonly [status: string]: string;
+}
+
+export const FILE_STATUS_DOT: FileStatusDotClasses = {
   added: 'bg-accent-bright',
   removed: 'bg-danger',
   modified: 'bg-warn',

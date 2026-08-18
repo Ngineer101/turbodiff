@@ -46,7 +46,9 @@ const SHELL = `<!doctype html>
 // within the cache window). Installation-level authorization happens per
 // request in the API layer.
 async function hasSession(c: Context): Promise<boolean> {
-  const fake = (env as { DEV_FAKE_INSTALLATIONS?: string }).DEV_FAKE_INSTALLATIONS;
+  // SAFETY: DEV_FAKE_INSTALLATIONS comes from .dev.vars only, so `wrangler
+  // types` omits it from Env wherever .dev.vars is absent (CI, production).
+  const fake = (env as Env & { DEV_FAKE_INSTALLATIONS?: string }).DEV_FAKE_INSTALLATIONS;
   const host = new URL(c.req.url).hostname;
   if (fake && (host === 'localhost' || host === '127.0.0.1')) return true;
   return (await auth().api.getSession({ headers: c.req.raw.headers })) !== null;

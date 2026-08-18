@@ -827,7 +827,7 @@ export async function approvePlanFeatures(
 		 WHERE id = ?1 AND status = 'approving'`,
     ).bind(planId),
   ]);
-  const claimed = (results[0].results as { id: number }[] | undefined)?.length;
+  const claimed = results[0].results.length;
   if (!claimed) return null;
   const rows = await env.DB.prepare(
     `SELECT f.id FROM features f
@@ -1138,6 +1138,61 @@ export async function updatePlan(
       fields.feedback ?? null,
     )
     .run();
+}
+
+// --- push subscriptions (Web Push, src/lib/push.ts) ---
+
+export interface PushSubscriptionRow {
+  id: number;
+  user_github_id: number;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  created_at: string;
+}
+
+// A device re-subscribing (possibly under a different signed-in user, e.g. a
+// shared machine) must repoint the row rather than fail — endpoint is the
+// natural key, not (user, endpoint).
+export async function upsertPushSubscription(
+  userGithubId: number,
+  sub: { endpoint: string; p256dh: string; auth: string },
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO push_subscriptions (user_github_id, endpoint, p256dh, auth)
+		 VALUES (?1, ?2, ?3, ?4)
+		 ON CONFLICT(endpoint) DO UPDATE SET
+		   user_github_id = excluded.user_github_id,
+		   p256dh = excluded.p256dh,
+		   auth = excluded.auth`,
+  )
+    .bind(userGithubId, sub.endpoint, sub.p256dh, sub.auth)
+    .run();
+}
+
+// Scoped to the calling user so one user can't delete another's subscription
+// by guessing an endpoint.
+export async function deletePushSubscriptionByEndpoint(
+  userGithubId: number,
+  endpoint: string,
+): Promise<void> {
+  await env.DB.prepare('DELETE FROM push_subscriptions WHERE user_github_id = ?1 AND endpoint = ?2')
+    .bind(userGithubId, endpoint)
+    .run();
+}
+
+export async function listPushSubscriptionsForUser(
+  userGithubId: number,
+): Promise<PushSubscriptionRow[]> {
+  const res = await env.DB.prepare('SELECT * FROM push_subscriptions WHERE user_github_id = ?1')
+    .bind(userGithubId)
+    .all<PushSubscriptionRow>();
+  return res.results;
+}
+
+// Used by the send path to prune expired endpoints (410/404 responses).
+export async function deletePushSubscriptionById(id: number): Promise<void> {
+  await env.DB.prepare('DELETE FROM push_subscriptions WHERE id = ?1').bind(id).run();
 }
 
 export async function finishFixAttempt(
@@ -1565,11 +1620,13 @@ export async function listEnabledSkillsForRepo(repositoryId: number): Promise<Sk
   return res.results;
 }
 
-// --- External MCP tool connections per agent (migration 0005) ---
+// --- External MCP tool connections per repository (migration 0032) ---
 
-// Installation-level integrations registry (kanban-era model): connections
-// are added once per installation on the integrations page; MCP-kind
-// connections are attached to agents via agent_connection_links.
+// Installation-level integrations registry: connections are added once per
+// installation on the integrations page; MCP-kind connections are attached to
+// repositories via repo_connections, and every action on an attached repo
+// (hosted PR reviews, sandbox automation runs) mounts them per its context
+// toggle.
 export interface ConnectionRow {
   id: number;
   installation_id: number;
@@ -1609,26 +1666,32 @@ export function connectionSnapshot(row: ConnectionRow): ConnectionSnapshot {
       // Malformed allowlist behaves as "all tools" rather than failing runs.
     }
   }
-  return {
+  const snapshot: ConnectionSnapshot = {
     id: row.id,
     name: row.name,
     url: row.url,
-    ...(tools ? { tools } : {}),
     hasAuth: row.auth_type !== 'none',
     authType: row.auth_type,
     optional: row.optional === 1,
   };
+  if (tools) snapshot.tools = tools;
+  return snapshot;
 }
 
-// MCP connections attached to one agent, via the registry links.
-export async function listAgentConnections(agentId: number): Promise<ConnectionRow[]> {
+// MCP connections attached to one repository and enabled for the given
+// mount context.
+export async function listRepoConnections(
+  repositoryId: number,
+  context: 'reviews' | 'automations',
+): Promise<ConnectionRow[]> {
+  const contextColumn = context === 'reviews' ? 'l.reviews' : 'l.automations';
   const res = await env.DB.prepare(
     `SELECT c.* FROM connections c
-		 JOIN agent_connection_links l ON l.connection_id = c.id
-		 WHERE l.agent_id = ?1 AND c.kind = 'mcp'
+		 JOIN repo_connections l ON l.connection_id = c.id
+		 WHERE l.repository_id = ?1 AND ${contextColumn} = 1 AND c.kind = 'mcp'
 		 ORDER BY c.name`,
   )
-    .bind(agentId)
+    .bind(repositoryId)
     .all<ConnectionRow>();
   return res.results;
 }
@@ -1680,14 +1743,16 @@ export async function createConnection(fields: {
 // field is optional and left unchanged when omitted (COALESCE), except
 // oauth_needs_reauth which is a boolean so `false` must still bind 0 rather
 // than be skipped.
+export interface ConnectionAuthUpdate {
+  authType?: string;
+  authConfigCiphertext?: string;
+  oauthTokenExpiresAt?: string;
+  oauthNeedsReauth?: boolean;
+}
+
 export async function updateConnectionAuth(
   id: number,
-  fields: {
-    authType?: string;
-    authConfigCiphertext?: string;
-    oauthTokenExpiresAt?: string;
-    oauthNeedsReauth?: boolean;
-  },
+  fields: ConnectionAuthUpdate,
 ): Promise<void> {
   await env.DB.prepare(
     `UPDATE connections SET
@@ -1708,48 +1773,53 @@ export async function updateConnectionAuth(
 }
 
 export async function deleteConnection(id: number): Promise<void> {
-  await env.DB.prepare('DELETE FROM agent_connection_links WHERE connection_id = ?1')
-    .bind(id)
-    .run();
+  await env.DB.prepare('DELETE FROM repo_connections WHERE connection_id = ?1').bind(id).run();
   await env.DB.prepare('DELETE FROM connections WHERE id = ?1').bind(id).run();
 }
 
-export interface AgentConnectionLink {
-  agent_id: number;
+export interface RepoConnectionLink {
+  repository_id: number;
   connection_id: number;
+  reviews: number;
+  automations: number;
 }
 
-export async function listConnectionLinks(
+export async function listRepoConnectionLinks(
   installationIds: number[],
-): Promise<AgentConnectionLink[]> {
+): Promise<RepoConnectionLink[]> {
   if (installationIds.length === 0) return [];
   const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
   const res = await env.DB.prepare(
-    `SELECT l.agent_id, l.connection_id FROM agent_connection_links l
+    `SELECT l.repository_id, l.connection_id, l.reviews, l.automations FROM repo_connections l
 		 JOIN connections c ON c.id = l.connection_id
 		 WHERE c.installation_id IN (${placeholders})`,
   )
     .bind(...installationIds)
-    .all<AgentConnectionLink>();
+    .all<RepoConnectionLink>();
   return res.results;
 }
 
-export async function setAgentConnectionLink(
-  agentId: number,
+// Attach/detach one connection on one repository. Attaching upserts so the
+// context toggles can be changed on an existing link with the same call.
+export async function setRepoConnectionLink(
+  repositoryId: number,
   connectionId: number,
-  attached: boolean,
+  link: { attached: boolean; reviews: boolean; automations: boolean },
 ): Promise<void> {
-  if (attached) {
+  if (link.attached) {
     await env.DB.prepare(
-      'INSERT OR IGNORE INTO agent_connection_links (agent_id, connection_id) VALUES (?1, ?2)',
+      `INSERT INTO repo_connections (repository_id, connection_id, reviews, automations)
+			 VALUES (?1, ?2, ?3, ?4)
+			 ON CONFLICT (repository_id, connection_id)
+			 DO UPDATE SET reviews = ?3, automations = ?4`,
     )
-      .bind(agentId, connectionId)
+      .bind(repositoryId, connectionId, link.reviews ? 1 : 0, link.automations ? 1 : 0)
       .run();
   } else {
     await env.DB.prepare(
-      'DELETE FROM agent_connection_links WHERE agent_id = ?1 AND connection_id = ?2',
+      'DELETE FROM repo_connections WHERE repository_id = ?1 AND connection_id = ?2',
     )
-      .bind(agentId, connectionId)
+      .bind(repositoryId, connectionId)
       .run();
   }
 }
@@ -1854,15 +1924,16 @@ export async function resolveConnectionAuth(conn: ConnectionRow): Promise<Resolv
           `turbodiff: connection ${conn.id}'s OAuth token could not be refreshed — reconnect it from the integrations page`,
         );
       }
-      await updateConnectionAuth(conn.id, {
+      const authUpdate: ConnectionAuthUpdate = {
         authConfigCiphertext: await sealJson<OAuthConfig>({
           ...config,
           accessToken: refreshed.accessToken,
           refreshToken: refreshed.refreshToken ?? config.refreshToken,
         }),
-        ...(refreshed.expiresAt ? { oauthTokenExpiresAt: refreshed.expiresAt } : {}),
         oauthNeedsReauth: false,
-      });
+      };
+      if (refreshed.expiresAt) authUpdate.oauthTokenExpiresAt = refreshed.expiresAt;
+      await updateConnectionAuth(conn.id, authUpdate);
       return { headerName: 'authorization', headerValue: `Bearer ${refreshed.accessToken}` };
     }
     case 'none':

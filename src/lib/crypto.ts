@@ -7,7 +7,10 @@ import { env } from 'cloudflare:workers';
 // are never rendered back to the UI or into model context.
 
 function keyBytes(): Uint8Array {
-  const hex = (env as { TOKEN_ENCRYPTION_KEY?: string }).TOKEN_ENCRYPTION_KEY;
+  // SAFETY: TOKEN_ENCRYPTION_KEY is a secret (wrangler secret put / .dev.vars),
+  // so `wrangler types` omits it from Env wherever .dev.vars is absent (CI);
+  // the format check below already handles it being unset.
+  const hex = (env as Env & { TOKEN_ENCRYPTION_KEY?: string }).TOKEN_ENCRYPTION_KEY;
   if (!hex || !/^[0-9a-fA-F]{64}$/.test(hex)) {
     throw new Error(
       'TOKEN_ENCRYPTION_KEY must be a 64-hex-char secret (openssl rand -hex 32); ' +
@@ -73,6 +76,8 @@ export async function sealJson<T>(value: T): Promise<string> {
 }
 
 export async function openJson<T>(sealed: string): Promise<T> {
+  // SAFETY: sealed blobs are only ever produced by sealJson<T> over the same
+  // caller-chosen T, so the decrypted JSON round-trips back to that shape.
   return JSON.parse(await openToken(sealed)) as T;
 }
 

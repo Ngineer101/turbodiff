@@ -63,6 +63,108 @@ Agent runs execute inside Cloudflare Containers (the sandbox) and can spend
 either your existing Claude subscription (`claude setup-token`) or API credits
 through your AI Gateway.
 
+## Architecture
+
+Everything runs in one Cloudflare Worker deployment: an HTTP layer (Hono)
+in front of Durable Objects for the long-lived pieces (the per-PR review
+agent, the sandbox container), Cloudflare Workflows for the multi-minute
+factory runs, a queue to decouple intake from execution, and D1/R2 for state
+and artifacts.
+
+```mermaid
+flowchart TB
+  subgraph external ["External"]
+    GH["GitHub<br/>App webhooks · REST API · pull requests"]
+    BROWSER["Browser<br/>React SPA"]
+    MCPS["External MCP servers"]
+    LLM["Anthropic API<br/>(subscription or AI Gateway)"]
+  end
+
+  subgraph worker ["Cloudflare Worker (Hono — src/app.ts)"]
+    WEBHOOKS["/webhooks<br/>HMAC-verified GitHub events"]
+    API["/api<br/>session-cookie JSON for the SPA"]
+    AUTHR["/api/auth<br/>better-auth · GitHub OAuth"]
+    SHELL["/ SPA shell · landing"]
+    ART["/artifacts · /b/:id<br/>signed capability URLs"]
+    PROXY["/mcp-proxy/:id<br/>sealed-grant MCP relay"]
+    CRON["cron (*/15)<br/>automation poll"]
+    CONSUMER["queue consumer<br/>(src/cloudflare.ts)"]
+  end
+
+  subgraph durable ["Durable Objects"]
+    REVIEWER["PrReviewer (Flue agent)<br/>one instance per PR"]
+    SANDBOX["Sandbox (container)<br/>runs Claude CLI"]
+  end
+
+  subgraph wf ["Cloudflare Workflows"]
+    GEN["Generation"]
+    VERIFY["Verification"]
+    FIX["Fix"]
+    CONFLICT["Conflict resolve"]
+    AUTO["Automation"]
+  end
+
+  subgraph storage ["State"]
+    D1[("D1<br/>installations · repos · reviews · features/plans<br/>connections · repo_connections · automations<br/>(secrets AES-GCM sealed)")]
+    R2[("R2<br/>screenshots · demo videos")]
+    Q[["Queue<br/>turbodiff-factory"]]
+  end
+
+  BROWSER --> SHELL & API & AUTHR
+  GH -->|"PR / push / installation events"| WEBHOOKS
+  WEBHOOKS -->|"review.request signal"| REVIEWER
+  WEBHOOKS -->|"auto-fix · conflict messages"| Q
+  API -->|"feature intake · plan approve<br/>automation CRUD"| Q
+  CRON -->|"due automations"| Q
+  Q --> CONSUMER
+  CONSUMER -->|"plan analyze/refine (inline)"| SANDBOX
+  CONSUMER -->|"creates instances"| wf
+  wf -->|"exec: clone · edit · check"| SANDBOX
+  SANDBOX -->|"git push · open PRs"| GH
+  SANDBOX -->|"Claude CLI"| LLM
+  SANDBOX -->|"JSON-RPC + sealed grant"| PROXY
+  PROXY -->|"inject decrypted credential"| MCPS
+  REVIEWER -->|"fetch PR · post review"| GH
+  REVIEWER --> LLM
+  REVIEWER -->|"streamable HTTP<br/>per-request auth resolver"| MCPS
+  VERIFY -->|"evidence"| R2
+  ART --> R2
+  worker <--> D1
+```
+
+### MCP connections (repo-scoped)
+
+MCP servers are registered once per installation on the integrations page and
+attached to **repositories** (`repo_connections`), with independent toggles
+for the two mount contexts: hosted PR reviews and sandbox automation runs.
+Credentials are sealed (AES-256-GCM) in D1 and never leave the Worker
+boundary. Hosted reviews mount connections directly — the agent's auth
+resolver decrypts per request. Sandbox runs can't be trusted with
+credentials (they execute repo-influenced code), so they get a relay instead:
+
+```mermaid
+sequenceDiagram
+  participant WF as Automation workflow
+  participant SB as Sandbox (Claude CLI)
+  participant PX as Worker /mcp-proxy/:id
+  participant D1
+  participant MCP as External MCP server
+
+  WF->>D1: listRepoConnections(repo, 'automations')
+  WF->>WF: mint sealed grant (AES-GCM, 1 h TTL,<br/>bound to connection + repo)
+  WF->>SB: write --mcp-config (proxy URL + grant — no credentials)
+  SB->>PX: JSON-RPC request (Bearer grant)
+  PX->>PX: verify grant · enforce tool allowlist on tools/call
+  PX->>D1: resolve + decrypt connection credential
+  PX->>MCP: forward request with real auth header
+  MCP-->>SB: response (streamed back through the proxy)
+```
+
+A prompt-injected repository can therefore at worst _use_ an attached
+connection for the lifetime of one run's grant — it can never read the
+credential itself, and calls outside the connection's tool allowlist are
+rejected at the proxy.
+
 ## Code map
 
 - [src/agents/pr-reviewer.ts](src/agents/pr-reviewer.ts) — the review agent.
@@ -119,9 +221,10 @@ GitHub App and deploy:
      (`openssl rand -hex 32`).
    - **Repository permissions**: Contents (read & write — the fix and
      generation agents push branches), Pull requests (read & write), Issues
-     (read & write, for comment reactions and factory reports).
+     (read & write, for comment reactions and factory reports), Actions
+     (read — CI-failure auto-fix reads workflow run status and job logs).
    - **Subscribe to events**: Pull request, Pull request review, Issue comment,
-     Repository.
+     Repository, Workflow run.
    - **Callback URL**: `https://<your-worker>/auth/callback`; note the OAuth
      client id and generate a client secret.
    - Generate a **private key** and convert it to PKCS#8 (WebCrypto can't read
@@ -132,6 +235,10 @@ GitHub App and deploy:
      ```
 
    - Set `GITHUB_APP_SLUG` in [wrangler.jsonc](wrangler.jsonc).
+   - Existing installations: accept the new Actions permission and Workflow
+     run event subscription in GitHub's UI to start receiving `workflow_run`
+     deliveries — this is a one-time manual step per installation, not
+     something a code deploy alone covers.
 
 6. **Secrets** — locally in `.dev.vars`; in production:
 
@@ -150,7 +257,30 @@ GitHub App and deploy:
    npx wrangler secret put TOKEN_ENCRYPTION_KEY     # openssl rand -hex 32
    # Only if you use org member invites (Settings > Members on an org installation):
    npx wrangler secret put RESEND_API_KEY           # from resend.com; pair with RESEND_FROM_ADDRESS var
+   # Only for Web Push notifications (see below):
+   npx wrangler secret put VAPID_PUBLIC_KEY
+   npx wrangler secret put VAPID_PRIVATE_KEY
+   npx wrangler secret put VAPID_SUBJECT            # mailto:you@example.com
    ```
+
+   **Web Push (optional).** The Settings page can enable browser push
+   notifications for factory tasks that need your input. Without the three
+   VAPID secrets the toggle shows as unavailable; everything else works.
+   Generate a keypair (ECDSA P-256, in the exact base64url encodings the
+   push library expects):
+
+   ```sh
+   node -e "const{subtle}=require('node:crypto').webcrypto;subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign','verify']).then(async kp=>{const raw=Buffer.from(await subtle.exportKey('raw',kp.publicKey));const jwk=await subtle.exportKey('jwk',kp.privateKey);console.log('VAPID_PUBLIC_KEY='+raw.toString('base64url'));console.log('VAPID_PRIVATE_KEY='+jwk.d)})"
+   ```
+
+   Set both halves from the same run — a mismatched pair fails only at send
+   time (silent 403s from the push service), not at subscribe time.
+   `VAPID_SUBJECT` is a `mailto:` address push services can use to contact
+   you. All three are secrets — including the public key, which isn't
+   confidential but must differ per deployment: subscriptions are pinned to
+   the key browsers subscribed with, so a key committed to the repo would
+   break push for every fork (and rotating it later invalidates existing
+   subscriptions until users re-toggle notifications).
 
 7. **Custom domain** (optional) — add it to the Worker, set `PUBLIC_BASE_URL`
    in [wrangler.jsonc](wrangler.jsonc), and update the GitHub App's webhook +
@@ -180,6 +310,14 @@ Every commit to `main` deploys automatically via
 `--remote`, then the Worker and sandbox container image are built and pushed.
 The workflow needs two repository secrets, `CLOUDFLARE_API_TOKEN` (Workers
 Scripts:Edit, D1:Edit, Containers:Edit) and `CLOUDFLARE_ACCOUNT_ID`.
+
+Pull requests from branches in this repository (not forks) also get a
+preview: [`preview.yml`](.github/workflows/preview.yml) uploads a Worker
+version via `wrangler versions upload` and comments the preview URL on the
+PR. The preview shares production's D1 database, queue, and sandbox
+container — it's for UI/API smoke-testing only, not for exercising
+webhook-triggered flows or destructive actions. The comment is updated on
+every push and marked closed when the PR closes.
 
 To deploy manually (Docker required):
 

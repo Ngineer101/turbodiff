@@ -17,7 +17,7 @@ export function noreplyEmail(user: GitIdentity): string {
 
 // Env vars for `git commit`. Empty when no human instructed the run — git
 // then falls back to the repo-config bot identity for the author too.
-export function gitAuthorEnv(user: GitIdentity | null | undefined): Record<string, string> {
+export function gitAuthorEnv(user: GitIdentity | null | undefined) {
   if (!user) return {};
   return { GIT_AUTHOR_NAME: user.login, GIT_AUTHOR_EMAIL: noreplyEmail(user) };
 }

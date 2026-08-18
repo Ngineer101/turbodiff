@@ -3,17 +3,19 @@ import { env } from 'cloudflare:workers';
 import { gh } from '../tools/github.ts';
 import { persistAgentLog } from './agent-runs.ts';
 import { gitAuthorEnv } from './attribution.ts';
+import { ciFailureFindings } from './ci-findings.ts';
 import { claudeCliResultText, parseClaudeCliUsage, type CliUsage } from './cli-usage.ts';
 import {
   finishFixAttempt,
   getFeatureByRepoPr,
+  getInstallation,
   getRepoById,
   hasRunningFixAttempt,
   linkCommentsToFixAttempt,
   listEnabledSkillsForRepo,
   tryRecordFixAttempt,
 } from './db.ts';
-import { installationToken, sandboxGitToken } from './github-app.ts';
+import { describePushFailure, installationToken, sandboxGitToken } from './github-app.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
 import { skillMarkdown } from './skill-files.ts';
 
@@ -45,6 +47,29 @@ export interface FixParams {
   // The fix_attempts row this run belongs to, for the full agent log. Absent
   // on the operator-only POST /internal/fix path, which has no such row.
   attemptId?: number;
+  // What triggered this run (e.g. 'blocking_review', 'ci_failure',
+  // 'verification_failed') — used only to pick trigger-appropriate commit/
+  // comment copy (see fixLabel below).
+  trigger?: string;
+  // Set only for the `ci_failure` trigger; runFix uses it to fetch the failed
+  // jobs' logs lazily instead of a supplied `findings` string — mirrors how
+  // `latestBlockingFindings` is used when `findings` is absent for the review
+  // trigger.
+  workflowRunId?: number;
+}
+
+// Human-readable label for the thing a fix run is addressing, used in the
+// commit message and PR comment so a CI-triggered fix doesn't read like a
+// review-triggered one.
+export function fixLabel(trigger?: string): string {
+  switch (trigger) {
+    case 'ci_failure':
+      return 'failing CI checks';
+    case 'verification_failed':
+      return 'unmet acceptance criteria';
+    default:
+      return 'review findings';
+  }
 }
 
 export interface FixOutcome {
@@ -110,12 +135,26 @@ export function resolveRunnerAuth(requested?: FixAuthMode): {
   return picked;
 }
 
+// The generated Env types the binding as a bare `DurableObjectNamespace` —
+// type generation cannot see which class wrangler.jsonc binds it to. This is
+// the single place that bridges that gap; every sandbox boot site (fixer,
+// planner, verifier) goes through it.
+export function sandboxNamespace(): DurableObjectNamespace<Sandbox> {
+  // SAFETY: wrangler.jsonc declares this Durable Object binding with
+  // class_name "Sandbox" (the @cloudflare/sandbox class), so its stubs are
+  // Sandbox instances.
+  return env.Sandbox as DurableObjectNamespace<Sandbox>;
+}
+
 export async function fetchPrHead(
   token: string,
   owner: string,
   repo: string,
   prNumber: number,
 ): Promise<{ headRef: string; headRepo: string }> {
+  // SAFETY: GitHub's GET /pulls/:number REST schema guarantees head.ref and
+  // base.repo.full_name; only head.repo is nullable (deleted fork), which the
+  // type reflects and the check below handles.
   const pr = (await (await gh(token, `/repos/${owner}/${repo}/pulls/${prNumber}`)).json()) as {
     head: { ref: string; repo: { full_name: string } | null };
     base: { repo: { full_name: string } };
@@ -127,6 +166,39 @@ export async function fetchPrHead(
   return { headRef: pr.head.ref, headRepo };
 }
 
+// Whether the PR's changed files already include a GitHub Actions workflow
+// file. Fix and conflict-resolve runs operate on an existing, human-visible
+// PR — if that PR touches .github/workflows/, its push token needs the App's
+// workflows permission (see sandboxGitToken), and granting it doesn't widen
+// what the PR can already do. Bounded pagination: a factory PR with >1000
+// changed files is not a thing we optimize for; beyond the cap we assume no.
+export async function prTouchesWorkflowFiles(
+  token: string,
+  owner: string,
+  repo: string,
+  prNumber: number,
+): Promise<boolean> {
+  for (let page = 1; page <= 10; page++) {
+    // SAFETY: GitHub's GET /pulls/:number/files REST schema returns an array
+    // of file entries with `filename` always present and `previous_filename`
+    // only on renames.
+    const files = (await (
+      await gh(token, `/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=100&page=${page}`)
+    ).json()) as { filename: string; previous_filename?: string }[];
+    if (
+      files.some(
+        (f) =>
+          f.filename.startsWith('.github/workflows/') ||
+          f.previous_filename?.startsWith('.github/workflows/'),
+      )
+    ) {
+      return true;
+    }
+    if (files.length < 100) break;
+  }
+  return false;
+}
+
 // Latest CHANGES_REQUESTED bot review (turbodiff's blocking review) folded into
 // a markdown work order: review body + inline comments with their locations.
 async function latestBlockingFindings(
@@ -135,6 +207,8 @@ async function latestBlockingFindings(
   repo: string,
   prNumber: number,
 ): Promise<string | null> {
+  // SAFETY: GitHub's GET /pulls/:number/reviews REST schema returns review
+  // objects with id/state/body always present and a nullable user.
   const reviews = (await (
     await gh(token, `/repos/${owner}/${repo}/pulls/${prNumber}/reviews?per_page=100`)
   ).json()) as {
@@ -155,6 +229,9 @@ async function latestBlockingFindings(
     .at(-1);
   if (!blocking) return null;
 
+  // SAFETY: GitHub's GET /pulls/:number/reviews/:id/comments REST schema
+  // returns review comment objects with path/body always present and nullable
+  // line/original_line.
   const comments = (await (
     await gh(
       token,
@@ -193,9 +270,7 @@ ${findings}
 // verifies the image, the DO binding, and exec plumbing without touching
 // GitHub or spending any model tokens.
 export async function sandboxSmoke(checkAuth = false): Promise<Record<string, string>> {
-  const sandbox = getSandbox(env.Sandbox as unknown as DurableObjectNamespace<Sandbox>, 'smoke', {
-    sleepAfter: '2m',
-  });
+  const sandbox = getSandbox(sandboxNamespace(), 'smoke', { sleepAfter: '2m' });
   const out: Record<string, string> = {};
   for (const cmd of ['git --version', 'node --version', 'claude --version']) {
     const res = await sandbox.exec(cmd, { timeout: 60_000 });
@@ -219,20 +294,30 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
   const token = await installationToken(params.installationId);
   const auth = resolveRunnerAuth(params.authMode);
   // Any surfaced output must never leak a token. The sandbox only ever sees
-  // gitToken — scoped to this one repository with contents access only — so a
+  // gitToken — scoped to this one repository with contents access only (plus
+  // workflows when the PR already touches .github/workflows/) — so a
   // prompt-injected agent run cannot touch other repos or App permissions.
-  const gitToken = await sandboxGitToken(params.installationId, repo, 'write');
+  const gitToken = await sandboxGitToken(params.installationId, repo, 'write', {
+    workflows: await prTouchesWorkflowFiles(token, owner, repo, prNumber),
+  });
   const scrub = (s: string) => s.replaceAll(token, '***').replaceAll(gitToken, '***');
 
   const findings =
-    params.findings?.trim() || (await latestBlockingFindings(token, owner, repo, prNumber));
+    params.findings?.trim() ||
+    (params.workflowRunId !== undefined
+      ? await ciFailureFindings(token, owner, repo, params.workflowRunId)
+      : await latestBlockingFindings(token, owner, repo, prNumber));
   if (!findings) {
-    throw new Error('no findings supplied and no blocking bot review found on the PR');
+    throw new Error(
+      params.workflowRunId !== undefined
+        ? `workflow run ${params.workflowRunId} has no failed jobs with retrievable logs`
+        : 'no findings supplied and no blocking bot review found on the PR',
+    );
   }
   const { headRef, headRepo } = await fetchPrHead(token, owner, repo, prNumber);
 
   const sandbox = getSandbox(
-    env.Sandbox as unknown as DurableObjectNamespace<Sandbox>,
+    sandboxNamespace(),
     `fix--${owner}--${repo}--${prNumber}`.toLowerCase(),
     { sleepAfter: '20m' },
   );
@@ -321,7 +406,7 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
     // commit. Local until checks pass and we push.
     const committed = await sandbox.exec(
       `git -C ${CLONE_DIR} add -A && ` +
-        `git -C ${CLONE_DIR} commit -m "Address review findings on #${prNumber} (turbodiff fix agent)"`,
+        `git -C ${CLONE_DIR} commit -m "Address ${fixLabel(params.trigger)} on #${prNumber} (turbodiff fix agent)"`,
       { env: gitAuthorEnv(params.author), timeout: 60_000 },
     );
     if (!committed.success) {
@@ -354,7 +439,7 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
       { env: gitEnv, timeout: 2 * 60_000 },
     );
     if (!push.success) {
-      throw new Error(`git push failed: ${scrub(push.stderr).slice(0, 500)}`);
+      throw new Error(describePushFailure(scrub(push.stderr).slice(0, 500)));
     }
     const commit = (await sandbox.exec(`git -C ${CLONE_DIR} rev-parse HEAD`)).stdout.trim();
 
@@ -401,19 +486,42 @@ export interface FixQueueMessage {
   // recorded so the cockpit can show per-comment outcome badges. Absent for
   // the blocking_review trigger, which has no comments to link.
   commentIds?: number[];
+  // Set only for the `ci_failure` trigger; runFix uses it to fetch the failed
+  // jobs' logs lazily instead of a supplied `findings` string — mirrors how
+  // `latestBlockingFindings` is used when `findings` is absent for the review
+  // trigger.
+  workflowRunId?: number;
+}
+
+export interface FixProcessorDependencies {
+  runFix?: typeof runFix;
 }
 
 // Queue consumer body: re-validate against current state (the toggle may have
 // flipped since enqueue), enforce the iteration cap, run the fix, and record
 // the attempt. Never throws — a fix failure is recorded, not retried, so a
 // broken run can't spend tokens again on redelivery.
-export async function processFixMessage(msg: FixQueueMessage): Promise<void> {
+export async function processFixMessage(
+  msg: FixQueueMessage,
+  dependencies: FixProcessorDependencies = {},
+): Promise<void> {
+  const executeFix = dependencies.runFix ?? runFix;
   const repo = await getRepoById(msg.repoId);
   if (!repo || !repo.enabled || !repo.auto_fix) {
     console.log(`turbodiff: fix skipped for repo ${msg.repoId}#${msg.prNumber} (auto-fix off)`);
     return;
   }
   const label = `${repo.owner}/${repo.name}#${msg.prNumber}`;
+  const installation = await getInstallation(repo.installation_id);
+  if (!installation || installation.suspended) {
+    console.log(`turbodiff: fix skipped for ${label} (installation missing or suspended)`);
+    return;
+  }
+  const feature = await getFeatureByRepoPr(repo.id, msg.prNumber);
+  if (!feature || feature.status !== 'pr_opened') {
+    console.log(`turbodiff: fix skipped for ${label} (not an open factory PR)`);
+    return;
+  }
 
   // The cap check, the running-attempt check, and the attempt insert are one
   // atomic statement — two concurrent deliveries for the same PR can't both
@@ -443,7 +551,7 @@ export async function processFixMessage(msg: FixQueueMessage): Promise<void> {
     await linkCommentsToFixAttempt(msg.commentIds, attemptId);
   }
   try {
-    const outcome = await runFix({
+    const outcome = await executeFix({
       owner: repo.owner,
       repo: repo.name,
       prNumber: msg.prNumber,
@@ -453,6 +561,8 @@ export async function processFixMessage(msg: FixQueueMessage): Promise<void> {
       testCommand: repo.check_command ?? undefined,
       author: msg.author,
       attemptId,
+      trigger: msg.trigger,
+      workflowRunId: msg.workflowRunId,
     });
     await finishFixAttempt(
       attemptId,
@@ -508,7 +618,7 @@ async function postFixComment(
 ): Promise<void> {
   const lines = result.changed
     ? [
-        `🔧 Turbodiff fix agent pushed ${result.commit} addressing the blocking review findings.`,
+        `🔧 Turbodiff fix agent pushed ${result.commit} addressing the ${fixLabel(params.trigger)}.`,
         result.tested ? 'Tests passed before pushing.' : undefined,
       ]
     : ['🔧 Turbodiff fix agent ran but made no code changes.'];
