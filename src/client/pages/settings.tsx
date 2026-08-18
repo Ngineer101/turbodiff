@@ -327,16 +327,21 @@ function NotificationsSettings() {
     },
     onSuccess: ({ next, ok }) => {
       if (!ok) {
-        toast.error('Notification permission was not granted');
+        toast.error('Notification permission was denied — allow it in your browser site settings');
         return;
       }
       setEnabled(next);
       toast.success(next ? 'Notifications enabled' : 'Notifications disabled');
     },
-    onError: onApiError,
+    // Push fails in browser-specific ways (no VAPID key, a rejecting push
+    // service, a dead service worker) — show what actually broke instead of
+    // a bare "Request failed".
+    onError: (err) =>
+      toast.error(err instanceof Error && err.message ? err.message : 'Could not enable push'),
   });
 
   if (!pushSupported()) return null;
+  const unconfigured = !me.vapid_public_key;
 
   return (
     <>
@@ -346,14 +351,21 @@ function NotificationsSettings() {
           <div className="min-w-0">
             <p className="text-[0.85rem] font-medium">Push notifications</p>
             <p className="mt-0.5 text-xs text-mute">
-              Get notified on this device when Turbodiff needs your input on a task.
+              {unconfigured
+                ? 'Unavailable — this deployment has no VAPID_PUBLIC_KEY set, so browsers cannot subscribe.'
+                : 'Get notified on this device when Turbodiff needs your input on a task.'}
             </p>
           </div>
-          <label className="flex shrink-0 cursor-pointer items-center gap-2 text-xs text-mute">
+          <label
+            className={cn(
+              'flex shrink-0 items-center gap-2 text-xs text-mute',
+              unconfigured ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
+            )}
+          >
             <Bell className="size-3.5" aria-hidden />
             <Switch
               checked={enabled}
-              disabled={loading || toggle.isPending}
+              disabled={loading || toggle.isPending || unconfigured}
               onCheckedChange={(next) => toggle.mutate(next)}
               aria-label="Push notifications"
             />

@@ -29,13 +29,17 @@ export function Field({
   label,
   hint,
   children,
+  className,
 }: {
   label: string;
   hint?: string;
   children: React.ReactNode;
+  // Callers laying fields out in a grid pass `mt-0` — the default top margin
+  // is for the stacked-form case.
+  className?: string;
 }) {
   return (
-    <label className="mt-4 block text-xs text-mute">
+    <label className={cn('mt-4 block text-xs text-mute', className)}>
       {label} {hint ? <span className="text-mute/70">({hint})</span> : null}
       <div className="mt-1">{children}</div>
     </label>

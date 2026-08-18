@@ -1849,8 +1849,12 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         id: installation.id,
         account_login: installation.account_login,
       })),
+      // Not deduped by slug (unlike GET /agents): every installation has its
+      // own agent rows, and a connection may only link to the rows belonging
+      // to its installation — the client filters on installation_id.
       agents: agents.map((a) => ({
         id: a.id,
+        installation_id: a.installation_id,
         slug: a.slug,
         name: a.name,
         description: a.description,

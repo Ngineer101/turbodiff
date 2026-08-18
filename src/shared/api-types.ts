@@ -363,10 +363,17 @@ export interface ApiIntegration {
   agent_ids: number[]; // agents this MCP connection is attached to
 }
 
+// Agent rows here are NOT deduped by slug the way /agents does it: an
+// integration belongs to one installation and only attaches to that
+// installation's own agent rows, so each row carries its installation.
+export interface ApiIntegrationAgent extends ApiAgentSummary {
+  installation_id: number;
+}
+
 export interface ApiIntegrations {
   encryption_configured: boolean;
   installations: { id: number; account_login: string }[];
-  agents: ApiAgentSummary[];
+  agents: ApiIntegrationAgent[];
   connections: ApiIntegration[];
 }
 

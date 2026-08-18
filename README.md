@@ -153,7 +153,30 @@ GitHub App and deploy:
    npx wrangler secret put FIXER_ANTHROPIC_API_KEY  # gateway mode, with FIXER_ANTHROPIC_BASE_URL var
    # Only if agents use authenticated external MCP connections:
    npx wrangler secret put TOKEN_ENCRYPTION_KEY     # openssl rand -hex 32
+   # Only for Web Push notifications (see below):
+   npx wrangler secret put VAPID_PUBLIC_KEY
+   npx wrangler secret put VAPID_PRIVATE_KEY
+   npx wrangler secret put VAPID_SUBJECT            # mailto:you@example.com
    ```
+
+   **Web Push (optional).** The Settings page can enable browser push
+   notifications for factory tasks that need your input. Without the three
+   VAPID secrets the toggle shows as unavailable; everything else works.
+   Generate a keypair (ECDSA P-256, in the exact base64url encodings the
+   push library expects):
+
+   ```sh
+   node -e "const{subtle}=require('node:crypto').webcrypto;subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign','verify']).then(async kp=>{const raw=Buffer.from(await subtle.exportKey('raw',kp.publicKey));const jwk=await subtle.exportKey('jwk',kp.privateKey);console.log('VAPID_PUBLIC_KEY='+raw.toString('base64url'));console.log('VAPID_PRIVATE_KEY='+jwk.d)})"
+   ```
+
+   Set both halves from the same run — a mismatched pair fails only at send
+   time (silent 403s from the push service), not at subscribe time.
+   `VAPID_SUBJECT` is a `mailto:` address push services can use to contact
+   you. All three are secrets — including the public key, which isn't
+   confidential but must differ per deployment: subscriptions are pinned to
+   the key browsers subscribed with, so a key committed to the repo would
+   break push for every fork (and rotating it later invalidates existing
+   subscriptions until users re-toggle notifications).
 
 7. **Custom domain** (optional) — add it to the Worker, set `PUBLIC_BASE_URL`
    in [wrangler.jsonc](wrangler.jsonc), and update the GitHub App's webhook +

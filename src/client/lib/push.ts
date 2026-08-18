@@ -23,17 +23,37 @@ export function urlBase64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
   return bytes;
 }
 
+// Every failure mode below used to collapse into a bare `false`, which the
+// settings toggle reported as "permission was not granted" no matter what
+// actually broke. Only the permission denial returns false now; everything
+// else throws with a message the toggle can show verbatim.
 export async function subscribeToPush(vapidPublicKey: string): Promise<boolean> {
-  if (!pushSupported()) return false;
+  if (!pushSupported()) throw new Error('This browser has no Push API support');
+  // An unset VAPID_PUBLIC_KEY var reaches the client as '', and subscribing
+  // with an empty applicationServerKey fails deep inside the browser with an
+  // opaque DOMException — name the real cause instead.
+  if (!vapidPublicKey) {
+    throw new Error('Push is not configured on this server (VAPID_PUBLIC_KEY is unset)');
+  }
   const permission = await Notification.requestPermission();
   if (permission !== 'granted') return false;
-  const registration =
-    (await navigator.serviceWorker.getRegistration()) ?? (await registerServiceWorker());
-  if (!registration) return false;
-  const subscription = await registration.pushManager.subscribe({
-    userVisibleOnly: true,
-    applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
-  });
+
+  // register() is idempotent; `ready` then waits for an *active* worker,
+  // which pushManager.subscribe() needs.
+  await registerServiceWorker();
+  const registration = await navigator.serviceWorker.ready;
+
+  let subscription: PushSubscription;
+  try {
+    subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+    });
+  } catch (err) {
+    throw new Error(
+      `The browser refused the push subscription: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
   await api.post('/api/push/subscribe', subscription.toJSON());
   return true;
 }
