@@ -18,6 +18,7 @@ import { type ConflictResolveQueueMessage } from './lib/conflict-resolver.ts';
 import { startFix, FixWorkflow } from './lib/fix-workflow.ts';
 import { type FixQueueMessage } from './lib/fixer.ts';
 import { startGeneration, type GenQueueMessage } from './lib/generation-workflow.ts';
+import { sweepFactoryPrConflicts } from './lib/merge-conflicts.ts';
 import { runPlanAnalyze, runPlanRefine, type PlanQueueMessage } from './lib/planner.ts';
 import { startVerification, VerificationWorkflow } from './lib/verification-workflow.ts';
 import { type VerifyQueueMessage } from './lib/verifier.ts';
@@ -89,5 +90,9 @@ export default {
   // schedule precision is bounded by the cron interval in wrangler.jsonc.
   async scheduled(): Promise<void> {
     await pollAutomations();
+    // Conflict sweep rides the same tick: base-branch pushes fire no event
+    // this app receives, so open factory PRs are re-checked here (see
+    // merge-conflicts.ts).
+    await sweepFactoryPrConflicts();
   },
 };

@@ -581,6 +581,11 @@ export async function tryRecordFixAttempt(
   prNumber: number,
   trigger: string,
   cap: number,
+  // When set, only attempts with this trigger count against the cap — so a
+  // PR that burned its fix attempts on review-driven fixes can still get
+  // conflict resolutions (and vice versa). The running-attempt guard stays
+  // global regardless: never two sandbox runs on one PR.
+  capTrigger?: string,
 ): Promise<number | null> {
   await env.DB.prepare(
     `UPDATE fix_attempts SET status = 'failed', error = 'stale: consumer killed before completion'
@@ -592,16 +597,36 @@ export async function tryRecordFixAttempt(
   const row = await env.DB.prepare(
     `INSERT INTO fix_attempts (repository_id, pr_number, "trigger")
 		 SELECT ?1, ?2, ?3
-		 WHERE (SELECT COUNT(*) FROM fix_attempts WHERE repository_id = ?1 AND pr_number = ?2) < ?4
+		 WHERE (SELECT COUNT(*) FROM fix_attempts
+		        WHERE repository_id = ?1 AND pr_number = ?2
+		          AND (?5 IS NULL OR "trigger" = ?5)) < ?4
 		   AND NOT EXISTS (
 		     SELECT 1 FROM fix_attempts
 		     WHERE repository_id = ?1 AND pr_number = ?2 AND status = 'running'
 		   )
 		 RETURNING id`,
   )
-    .bind(repositoryId, prNumber, trigger, cap)
+    .bind(repositoryId, prNumber, trigger, cap, capTrigger ?? null)
     .first<{ id: number }>();
   return row?.id ?? null;
+}
+
+// Open factory PRs on repos that opted into auto conflict resolution — the
+// scheduled sweep's work list (see merge-conflicts.ts).
+export async function listOpenFactoryPrConflictCandidates(): Promise<
+  { repo: RepositoryRow; prNumber: number }[]
+> {
+  const res = await env.DB.prepare(
+    `SELECT r.*, f.pr_number AS factory_pr_number
+		 FROM features f
+		 JOIN repositories r ON r.id = f.repository_id
+		 WHERE f.pr_number IS NOT NULL AND f.status = 'pr_opened'
+		   AND r.enabled = 1 AND r.auto_resolve_conflicts = 1`,
+  ).all<RepositoryRow & { factory_pr_number: number }>();
+  return res.results.map(({ factory_pr_number, ...repo }) => ({
+    repo,
+    prNumber: factory_pr_number,
+  }));
 }
 
 // --- agent run logs (full session transcripts; content in R2, pointer here) ---
@@ -1641,6 +1666,7 @@ export interface ConnectionRow {
   auth_config_ciphertext: string | null; // sealed JSON blob, shape depends on auth_type
   oauth_token_expires_at: string | null;
   oauth_needs_reauth: number;
+  oauth_has_refresh_token: number;
 }
 
 // The non-secret snapshot that rides the review.request signal so the agent
@@ -1740,14 +1766,14 @@ export async function createConnection(fields: {
 }
 
 // Persists rotated/registered OAuth or client-credentials material. Every
-// field is optional and left unchanged when omitted (COALESCE), except
-// oauth_needs_reauth which is a boolean so `false` must still bind 0 rather
-// than be skipped.
+// field is optional and left unchanged when omitted (COALESCE), except the
+// booleans, which must still bind 0 for `false` rather than be skipped.
 export interface ConnectionAuthUpdate {
   authType?: string;
   authConfigCiphertext?: string;
   oauthTokenExpiresAt?: string;
   oauthNeedsReauth?: boolean;
+  oauthHasRefreshToken?: boolean;
 }
 
 export async function updateConnectionAuth(
@@ -1759,7 +1785,8 @@ export async function updateConnectionAuth(
 		 auth_type = COALESCE(?2, auth_type),
 		 auth_config_ciphertext = COALESCE(?3, auth_config_ciphertext),
 		 oauth_token_expires_at = COALESCE(?4, oauth_token_expires_at),
-		 oauth_needs_reauth = COALESCE(?5, oauth_needs_reauth)
+		 oauth_needs_reauth = COALESCE(?5, oauth_needs_reauth),
+		 oauth_has_refresh_token = COALESCE(?6, oauth_has_refresh_token)
 		 WHERE id = ?1`,
   )
     .bind(
@@ -1768,6 +1795,7 @@ export async function updateConnectionAuth(
       fields.authConfigCiphertext ?? null,
       fields.oauthTokenExpiresAt ?? null,
       fields.oauthNeedsReauth === undefined ? null : fields.oauthNeedsReauth ? 1 : 0,
+      fields.oauthHasRefreshToken === undefined ? null : fields.oauthHasRefreshToken ? 1 : 0,
     )
     .run();
 }
@@ -1851,6 +1879,12 @@ interface OAuthConfig {
 
 // 60s safety margin so a token doesn't expire mid-request.
 const TOKEN_EXPIRY_MARGIN_MS = 60_000;
+// How long one resolver's refresh claim suppresses concurrent refreshes.
+// Must stay under TOKEN_EXPIRY_MARGIN_MS so losers' access tokens are still
+// live for the claim window.
+const REFRESH_CLAIM_MS = 45_000;
+// Fallback expiry when a token response omits expires_in.
+const DEFAULT_TOKEN_TTL_MS = 60 * 60_000;
 
 function stillFresh(expiresAt: string | null | undefined): boolean {
   return !!expiresAt && new Date(expiresAt).getTime() > Date.now() + TOKEN_EXPIRY_MARGIN_MS;
@@ -1907,10 +1941,39 @@ export async function resolveConnectionAuth(conn: ConnectionRow): Promise<Resolv
         return { headerName: 'authorization', headerValue: `Bearer ${config.accessToken}` };
       }
       if (!config.refreshToken) {
-        await updateConnectionAuth(conn.id, { oauthNeedsReauth: true });
+        await updateConnectionAuth(conn.id, {
+          oauthNeedsReauth: true,
+          oauthHasRefreshToken: false,
+        });
         throw new Error(
           `turbodiff: connection ${conn.id}'s OAuth token expired and has no refresh token — reconnect it from the integrations page`,
         );
+      }
+      // Single-flight the refresh: MCP servers rotate refresh tokens, and two
+      // concurrent refreshes with the same token get the loser an
+      // invalid_grant (reuse-detection servers revoke the whole grant). Claim
+      // by bumping the expiry a short window forward, conditioned on the value
+      // this request read — losers see the bump, count the token as fresh
+      // again, and keep using the current access token (we refresh
+      // TOKEN_EXPIRY_MARGIN_MS early, so it outlives the claim window).
+      const claimUntil = new Date(Date.now() + REFRESH_CLAIM_MS).toISOString();
+      const claim = await env.DB.prepare(
+        `UPDATE connections SET oauth_token_expires_at = ?2
+			 WHERE id = ?1 AND (oauth_token_expires_at = ?3 OR (oauth_token_expires_at IS NULL AND ?3 IS NULL))`,
+      )
+        .bind(conn.id, claimUntil, conn.oauth_token_expires_at)
+        .run();
+      if (claim.meta.changes === 0) {
+        // Another resolver holds the claim (or already finished). Re-read and
+        // serve whatever token is current.
+        const fresh = await getConnection(conn.id);
+        const freshConfig = fresh?.auth_config_ciphertext
+          ? await openJson<OAuthConfig>(fresh.auth_config_ciphertext)
+          : null;
+        if (freshConfig?.accessToken) {
+          return { headerName: 'authorization', headerValue: `Bearer ${freshConfig.accessToken}` };
+        }
+        throw new Error(`turbodiff: connection ${conn.id}'s OAuth refresh is in flight — retry`);
       }
       const refreshed = await refreshOAuthToken(
         config.tokenEndpoint,
@@ -1918,10 +1981,19 @@ export async function resolveConnectionAuth(conn: ConnectionRow): Promise<Resolv
         config.clientId,
         config.clientSecret,
       );
-      if (!refreshed) {
-        await updateConnectionAuth(conn.id, { oauthNeedsReauth: true });
+      if (!refreshed.ok) {
+        if (refreshed.invalidGrant) {
+          // Definitive: the refresh token is revoked. Only this flips the
+          // connection into needs_reauth.
+          await updateConnectionAuth(conn.id, { oauthNeedsReauth: true });
+          throw new Error(
+            `turbodiff: connection ${conn.id}'s OAuth refresh token was revoked (${refreshed.detail}) — reconnect it from the integrations page`,
+          );
+        }
+        // Transient (network blip, 5xx): fail this request only. The claim
+        // window lapses on its own and the next request retries the refresh.
         throw new Error(
-          `turbodiff: connection ${conn.id}'s OAuth token could not be refreshed — reconnect it from the integrations page`,
+          `turbodiff: connection ${conn.id}'s OAuth refresh failed (${refreshed.detail}) — will retry`,
         );
       }
       const authUpdate: ConnectionAuthUpdate = {
@@ -1931,8 +2003,13 @@ export async function resolveConnectionAuth(conn: ConnectionRow): Promise<Resolv
           refreshToken: refreshed.refreshToken ?? config.refreshToken,
         }),
         oauthNeedsReauth: false,
+        oauthHasRefreshToken: true,
+        // A refresh response without expires_in must still advance the expiry
+        // (COALESCE-based updates can never clear it), or every subsequent
+        // request re-enters the refresh path forever.
+        oauthTokenExpiresAt:
+          refreshed.expiresAt ?? new Date(Date.now() + DEFAULT_TOKEN_TTL_MS).toISOString(),
       };
-      if (refreshed.expiresAt) authUpdate.oauthTokenExpiresAt = refreshed.expiresAt;
       await updateConnectionAuth(conn.id, authUpdate);
       return { headerName: 'authorization', headerValue: `Bearer ${refreshed.accessToken}` };
     }
@@ -1942,14 +2019,22 @@ export async function resolveConnectionAuth(conn: ConnectionRow): Promise<Resolv
   }
 }
 
-// Cheap OAuth status for the integrations list — no decryption needed.
+// Cheap OAuth status for the integrations list — no decryption needed. A
+// lapsed access token with a stored refresh token is still 'connected': MCP
+// servers routinely issue 10-15 minute access tokens, and the resolver
+// refreshes silently on the next request. 'expired' is reserved for
+// connections that genuinely cannot recover without re-auth.
 export function oauthStatus(
   conn: ConnectionRow,
 ): 'not_connected' | 'connected' | 'expired' | 'needs_reauth' | null {
   if (conn.auth_type !== 'oauth') return null;
   if (conn.oauth_needs_reauth === 1) return 'needs_reauth';
   if (conn.auth_config_ciphertext === null) return 'not_connected';
-  if (conn.oauth_token_expires_at && new Date(conn.oauth_token_expires_at).getTime() < Date.now()) {
+  if (
+    conn.oauth_has_refresh_token !== 1 &&
+    conn.oauth_token_expires_at &&
+    new Date(conn.oauth_token_expires_at).getTime() < Date.now()
+  ) {
     return 'expired';
   }
   return 'connected';

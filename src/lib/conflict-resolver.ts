@@ -90,16 +90,26 @@ export async function processResolveConflictMessage(
   const mergeability = await checkMergeability(token, repo.owner, repo.name, msg.prNumber, {
     retryOnUnknown: true,
   });
+  if (mergeability.mergeableState === 'unknown') {
+    // GitHub still hasn't computed mergeability after the poll budget —
+    // throw so the workflow step's retry re-checks later, instead of
+    // misreading "unknown" as "no longer conflicted" and dropping the run.
+    throw new Error(`mergeability still unknown for ${label}`);
+  }
   if (!mergeability.hasConflict) {
     console.log(`turbodiff: conflict resolution skipped for ${label} (no longer conflicted)`);
     return;
   }
 
+  // Only conflict_resolve attempts count against this cap: a PR that burned
+  // its fix attempts in the review/verification fix loop is exactly the kind
+  // likely to sit conflicted, and must still be resolvable.
   const attemptId = await tryRecordFixAttempt(
     repo.id,
     msg.prNumber,
     'conflict_resolve',
     FIX_MAX_ATTEMPTS,
+    'conflict_resolve',
   );
   if (attemptId === null) {
     // A run already in flight for this PR is the single-flight guard doing
@@ -134,6 +144,19 @@ export async function processResolveConflictMessage(
       if (feature?.acceptance) {
         await env.FACTORY_QUEUE.send({ kind: 'verify', featureId: feature.id });
       }
+    }
+    // A discarded resolution must be visible on the PR — silently burning a
+    // cap slot looked like "conflicts never get resolved" from the outside.
+    if (outcome.status === 'tests_failed') {
+      await gh(token, `/repos/${repo.owner}/${repo.name}/issues/${msg.prNumber}/comments`, {
+        method: 'POST',
+        body: JSON.stringify({
+          body:
+            '⚠️ **Turbodiff resolved the merge conflict, but the repo check command failed** on ' +
+            'the merged result, so the resolution was not pushed. Fix the check (or resolve the ' +
+            'conflict manually) — the next detection cycle will retry.',
+        }),
+      }).catch(() => {});
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
