@@ -1,12 +1,12 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
-import { Link, useNavigate, useParams } from '@tanstack/react-router';
+import { useNavigate, useParams } from '@tanstack/react-router';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { api, ApiError } from '../lib/api.ts';
 import { agentQuery } from '../lib/queries.ts';
 import { AgentForm, type AgentFormValues } from '../components/agent-form.tsx';
 import { ConfirmButton } from '../components/confirm-button.tsx';
-import { Muted, PageTitle, SectionHeading } from '../components/section.tsx';
+import { PageTitle } from '../components/section.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 
 function onApiError<T>(err: T) {
@@ -75,23 +75,6 @@ export function AgentEditPage() {
           </ConfirmButton>
         </div>
       ) : null}
-      <SectionHeading aside={<Muted>MCP</Muted>}>Attached integrations</SectionHeading>
-      {data.connections.length === 0 ? (
-        <Muted className="block">None attached.</Muted>
-      ) : (
-        <div className="flex flex-wrap gap-1.5">
-          {data.connections.map((conn) => (
-            <Pill key={conn.id}>{conn.name}</Pill>
-          ))}
-        </div>
-      )}
-      <p className="mt-2 text-xs text-mute">
-        Connections are managed centrally on the{' '}
-        <Link to="/integrations" className="text-accent-bright hover:underline">
-          MCP &amp; integrations
-        </Link>{' '}
-        page — attach or detach this agent there.
-      </p>
     </>
   );
 }

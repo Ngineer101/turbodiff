@@ -62,7 +62,7 @@ beforeEach(async () => {
     'automations',
     'repo_agents',
     'repo_skills',
-    'agent_connection_links',
+    'repo_connections',
     'connections',
     'skills',
     'agents',

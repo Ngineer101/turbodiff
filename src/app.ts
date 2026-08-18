@@ -20,7 +20,7 @@ import {
   setRepoRunCommand,
   updateFeature,
   updatePlan,
-  listAgentConnections,
+  listRepoConnections,
   markReviewFailed,
   tryRecordReview,
   type AgentRow,
@@ -28,6 +28,7 @@ import {
 } from './lib/db.ts';
 import { auth } from './lib/better-auth.ts';
 import { runFix, sandboxSmoke, type FixAuthMode } from './lib/fixer.ts';
+import { handleMcpProxy } from './lib/mcp-proxy.ts';
 import { approvePlan } from './lib/planner.ts';
 import { registerReviewMetering } from './lib/metering.ts';
 import { isString } from './shared/json.ts';
@@ -154,9 +155,9 @@ export async function dispatchReviewAgent(
   );
   if (reviewId === null) return false;
 
-  // Snapshot the agent's external MCP connections (non-secret fields only;
+  // Snapshot the repo's external MCP connections (non-secret fields only;
   // tokens are resolved from D1 at request time by the agent's auth resolver).
-  const connections = (await listAgentConnections(agent.id)).map(connectionSnapshot);
+  const connections = (await listRepoConnections(repo.id, 'reviews')).map(connectionSnapshot);
   const baseAttributes = {
     agent_slug: agent.slug,
     agent_name: agent.name,
@@ -196,6 +197,10 @@ export async function dispatchReviewAgent(
 
 // GitHub App webhooks — authenticated by HMAC signature, not the bearer secret.
 app.route('/webhooks', createWebhookRoutes(dispatchReviewAgent));
+
+// MCP relay for sandbox runs — authenticated by a short-lived sealed grant
+// minted per run, not by session or bearer secret (see lib/mcp-proxy.ts).
+app.on(['GET', 'POST', 'DELETE'], '/mcp-proxy/:id', handleMcpProxy);
 
 // better-auth (sessions, OAuth callback, sign-out). Registered before the
 // /api data plane so it owns the /api/auth prefix.

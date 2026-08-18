@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import type {
   ApiConnectionTest,
   ApiIntegration,
-  ApiIntegrationAgent,
+  ApiIntegrationRepo,
 } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
 import { integrationsQuery } from '../lib/queries.ts';
@@ -19,9 +19,10 @@ import { Field, Input, Select } from '../components/ui/input.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 import { Table, Td, Th } from '../components/ui/table.tsx';
 
-// Central integrations registry: MCP servers (mountable as agent tools) and
+// Central integrations registry: MCP servers (mountable as run tools) and
 // bearer-auth APIs, added once per installation. MCP integrations attach to
-// review agents with the toggles on each card.
+// factory-enabled repos with the toggles on each card, with per-context
+// switches for reviews and automations.
 
 const AUTH_TYPES = ['none', 'bearer', 'api_key', 'client_credentials', 'oauth'] as const;
 type AuthType = (typeof AUTH_TYPES)[number];
@@ -132,13 +133,45 @@ function AuthPill({ conn }: { conn: ApiIntegration }) {
   }
 }
 
-function IntegrationCard({
-  conn,
-  agents,
+// One small secondary pill toggle for a per-context mount switch (Reviews /
+// Automations) on an attached repo.
+function ContextToggle({
+  label,
+  on,
+  repoLabel,
+  onToggle,
 }: {
-  conn: ApiIntegration;
-  agents: ApiIntegrationAgent[];
+  label: string;
+  on: boolean;
+  repoLabel: string;
+  onToggle: () => void;
 }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      title={`${on ? 'Disable' : 'Enable'} ${label.toLowerCase()} for ${repoLabel}`}
+      onClick={onToggle}
+      className={cn(
+        'cursor-pointer rounded-full border px-2 py-0.5 font-mono text-[10px] whitespace-nowrap transition-colors max-sm:px-3 max-sm:py-1.5',
+        on
+          ? 'border-accent/40 bg-accent/10 text-accent-bright'
+          : 'border-line-2/70 text-mute hover:border-line-2 hover:bg-raised hover:text-ink-dim',
+      )}
+    >
+      {label}
+    </button>
+  );
+}
+
+interface RepoLinkUpdate {
+  repoId: number;
+  attached: boolean;
+  reviews?: boolean;
+  automations?: boolean;
+}
+
+function IntegrationCard({ conn, repos }: { conn: ApiIntegration; repos: ApiIntegrationRepo[] }) {
   const queryClient = useQueryClient();
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['integrations'] });
@@ -158,16 +191,18 @@ function IntegrationCard({
     },
     onError: onApiError,
   });
-  const toggleAgent = useMutation({
-    mutationFn: ({ agentId, attached }: { agentId: number; attached: boolean }) =>
-      api.put(`/api/integrations/${conn.id}/agents/${agentId}`, { attached }),
+  const toggleRepo = useMutation({
+    mutationFn: ({ repoId, attached, reviews, automations }: RepoLinkUpdate) =>
+      api.put(`/api/integrations/${conn.id}/repos/${repoId}`, { attached, reviews, automations }),
     onSuccess: refresh,
     onError: onApiError,
   });
 
   const needsOAuthConnect =
     conn.kind === 'mcp' && conn.auth_type === 'oauth' && conn.oauth_status !== 'connected';
-  const attachedCount = agents.filter((a) => conn.agent_ids.includes(a.id)).length;
+  const attachedCount = repos.filter((r) =>
+    conn.repo_links.some((l) => l.repository_id === r.id),
+  ).length;
 
   return (
     <Card className="p-3.5 sm:p-4">
@@ -204,7 +239,7 @@ function IntegrationCard({
             variant="secondary"
             className="max-sm:flex-1"
             title="Remove this integration?"
-            description={`Agents lose access to "${conn.name}" on their next run. The stored credential is deleted.`}
+            description={`Attached repos lose access to "${conn.name}" on their next run. The stored credential is deleted.`}
             confirmLabel="Remove"
             onConfirm={() => remove.mutate()}
             busy={remove.isPending}
@@ -234,44 +269,77 @@ function IntegrationCard({
 
       {conn.auth_type === 'api_key' && conn.kind === 'mcp' ? (
         <p className="mt-2.5 text-xs text-mute/80">
-          Mounted into review agents only when the header name is exactly "Authorization" —
-          otherwise this credential is verified by Test but not used at review time (a @flue/runtime
-          limitation).
+          Mounted into reviews only when the header name is exactly "Authorization" — otherwise this
+          credential is verified by Test but not used at review time (a @flue/runtime limitation).
         </p>
       ) : null}
 
       {conn.kind === 'mcp' ? (
         <div className="mt-3 border-t border-line/70 pt-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <Placard>Attached agents</Placard>
+            <Placard>Attached repos</Placard>
             <span className="font-mono text-[10px] text-mute/70 tabular-nums">
-              {attachedCount}/{agents.length}
+              {attachedCount}/{repos.length}
             </span>
           </div>
-          {agents.length === 0 ? (
+          {repos.length === 0 ? (
             <Muted className="mt-2 block text-xs">
-              This installation has no agents yet — create one first.
+              This installation has no factory-enabled repos yet — enable one in settings first.
             </Muted>
           ) : (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {agents.map((a) => {
-                const attached = conn.agent_ids.includes(a.id);
+            <div className="mt-2 flex flex-col gap-1.5">
+              {repos.map((r) => {
+                const repoLabel = `${r.owner}/${r.name}`;
+                const link = conn.repo_links.find((l) => l.repository_id === r.id);
                 return (
-                  <button
-                    key={a.id}
-                    type="button"
-                    aria-pressed={attached}
-                    title={`${attached ? 'Detach from' : 'Attach to'} ${a.name}`}
-                    onClick={() => toggleAgent.mutate({ agentId: a.id, attached: !attached })}
-                    className={cn(
-                      'cursor-pointer rounded-full border px-2.5 py-1 font-mono text-xs whitespace-nowrap transition-colors max-sm:px-3.5 max-sm:py-2',
-                      attached
-                        ? 'border-accent/40 bg-accent/10 text-accent-bright'
-                        : 'border-line-2/70 text-mute hover:border-line-2 hover:bg-raised hover:text-ink-dim',
-                    )}
-                  >
-                    {a.slug}
-                  </button>
+                  <div key={r.id} className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      aria-pressed={link !== undefined}
+                      title={`${link ? 'Detach from' : 'Attach to'} ${repoLabel}`}
+                      onClick={() =>
+                        toggleRepo.mutate({ repoId: r.id, attached: link === undefined })
+                      }
+                      className={cn(
+                        'cursor-pointer rounded-full border px-2.5 py-1 font-mono text-xs whitespace-nowrap transition-colors max-sm:px-3.5 max-sm:py-2',
+                        link
+                          ? 'border-accent/40 bg-accent/10 text-accent-bright'
+                          : 'border-line-2/70 text-mute hover:border-line-2 hover:bg-raised hover:text-ink-dim',
+                      )}
+                    >
+                      {repoLabel}
+                    </button>
+                    {link ? (
+                      <>
+                        <ContextToggle
+                          label="Reviews"
+                          on={link.reviews}
+                          repoLabel={repoLabel}
+                          onToggle={() =>
+                            toggleRepo.mutate({
+                              repoId: r.id,
+                              attached: true,
+                              reviews: !link.reviews,
+                              automations: link.automations,
+                            })
+                          }
+                        />
+                        <ContextToggle
+                          label="Automations"
+                          on={link.automations}
+                          repoLabel={repoLabel}
+                          onToggle={() =>
+                            toggleRepo.mutate({
+                              repoId: r.id,
+                              attached: true,
+                              reviews: link.reviews,
+                              automations: !link.automations,
+                            })
+                          }
+                        />
+                      </>
+                    ) : null}
+                  </div>
                 );
               })}
             </div>
@@ -279,7 +347,7 @@ function IntegrationCard({
         </div>
       ) : (
         <p className="mt-3 border-t border-line/70 pt-3 text-xs text-mute">
-          Stored API credential — not mounted to agents (MCP integrations are).
+          Stored API credential — not mounted into runs (MCP integrations are).
         </p>
       )}
       {test ? <TestDialog name={conn.name} result={test} onClose={() => setTest(null)} /> : null}
@@ -422,7 +490,7 @@ function AddForm() {
             label="Type"
             value={form.kind}
             options={[
-              { value: 'mcp', label: 'MCP server', hint: 'mounts tools on agents' },
+              { value: 'mcp', label: 'MCP server', hint: 'mounts tools on repo runs' },
               { value: 'api', label: 'API', hint: 'stored-credential endpoint' },
             ]}
             onChange={(kind) =>
@@ -608,8 +676,8 @@ function AddForm() {
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line/70 pt-4">
           <Muted className="text-xs">
             {form.kind === 'mcp'
-              ? 'Attach it to agents on its card once added.'
-              : 'Stored for use by the API tools — not mounted to agents.'}
+              ? 'Attach it to repos on its card once added.'
+              : 'Stored for use by the API tools — not mounted into runs.'}
           </Muted>
           <Button type="submit" loading={add.isPending} className="max-sm:w-full">
             Add integration
@@ -647,14 +715,14 @@ export function IntegrationsPage() {
   const { data } = useSuspenseQuery(integrationsQuery);
   useOAuthCallbackToast();
 
-  // Connections and agents are both per-installation, and a connection may
-  // only attach to its own installation's agent rows — so group the list and
-  // hand each card just that installation's agents.
+  // Connections and repos are both per-installation, and a connection may
+  // only attach to its own installation's repos — so group the list and hand
+  // each card just that installation's factory-enabled repos.
   const groups = data.installations
     .map((inst) => ({
       installation: inst,
       connections: data.connections.filter((c) => c.installation_id === inst.id),
-      agents: data.agents.filter((a) => a.installation_id === inst.id),
+      repos: data.repos.filter((r) => r.installation_id === inst.id),
     }))
     .filter((g) => g.connections.length > 0);
   const multiInstall = data.installations.length > 1;
@@ -669,8 +737,8 @@ export function IntegrationsPage() {
         MCP &amp; integrations
       </PageTitle>
       <p className="mt-3 max-w-2xl text-[0.85rem] text-mute">
-        Connect MCP servers and APIs once, then attach MCP integrations to the agents that should
-        use their tools.
+        Connect MCP servers and APIs once, then attach MCP integrations to the repositories whose
+        reviews and automations should use their tools.
       </p>
       <Notes />
 
@@ -679,13 +747,13 @@ export function IntegrationsPage() {
         <EmptyState>No integrations yet — add one below.</EmptyState>
       ) : (
         <div className="flex flex-col gap-4">
-          {groups.map(({ installation, connections, agents }) => (
+          {groups.map(({ installation, connections, repos }) => (
             <section key={installation.id} className="flex flex-col gap-2">
               {multiInstall ? (
                 <Placard className="px-0.5">{installation.account_login}</Placard>
               ) : null}
               {connections.map((conn) => (
-                <IntegrationCard key={conn.id} conn={conn} agents={agents} />
+                <IntegrationCard key={conn.id} conn={conn} repos={repos} />
               ))}
             </section>
           ))}

@@ -258,18 +258,8 @@ export interface ApiAgentsList {
   agents: ApiAgentSummary[];
 }
 
-export interface ApiConnection {
-  id: number;
-  name: string;
-  url: string;
-  tools: string[] | null; // null = all tools
-  has_auth: boolean;
-}
-
 export interface ApiAgentDetail {
   agent: ApiAgentSummary & { instructions: string; installation_id: number };
-  connections: ApiConnection[];
-  encryption_configured: boolean;
   default_model: string;
 }
 
@@ -360,20 +350,30 @@ export interface ApiIntegration {
   has_auth: boolean;
   auth_type: string; // 'none' | 'bearer' | 'api_key' | 'client_credentials' | 'oauth'
   oauth_status: 'not_connected' | 'connected' | 'expired' | 'needs_reauth' | null;
-  agent_ids: number[]; // agents this MCP connection is attached to
+  repo_links: ApiRepoConnectionLink[]; // repos this MCP connection is attached to
 }
 
-// Agent rows here are NOT deduped by slug the way /agents does it: an
-// integration belongs to one installation and only attaches to that
-// installation's own agent rows, so each row carries its installation.
-export interface ApiIntegrationAgent extends ApiAgentSummary {
+// One repo attachment of an MCP connection, with its per-context mount
+// toggles: reviews = hosted PR reviews, automations = sandbox automation runs.
+export interface ApiRepoConnectionLink {
+  repository_id: number;
+  reviews: boolean;
+  automations: boolean;
+}
+
+// A connection belongs to one installation and only attaches to that
+// installation's own repos — the client filters on installation_id.
+export interface ApiIntegrationRepo {
+  id: number;
   installation_id: number;
+  owner: string;
+  name: string;
 }
 
 export interface ApiIntegrations {
   encryption_configured: boolean;
   installations: { id: number; account_login: string }[];
-  agents: ApiIntegrationAgent[];
+  repos: ApiIntegrationRepo[];
   connections: ApiIntegration[];
 }
 

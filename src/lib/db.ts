@@ -1573,11 +1573,13 @@ export async function listEnabledSkillsForRepo(repositoryId: number): Promise<Sk
   return res.results;
 }
 
-// --- External MCP tool connections per agent (migration 0005) ---
+// --- External MCP tool connections per repository (migration 0032) ---
 
-// Installation-level integrations registry (kanban-era model): connections
-// are added once per installation on the integrations page; MCP-kind
-// connections are attached to agents via agent_connection_links.
+// Installation-level integrations registry: connections are added once per
+// installation on the integrations page; MCP-kind connections are attached to
+// repositories via repo_connections, and every action on an attached repo
+// (hosted PR reviews, sandbox automation runs) mounts them per its context
+// toggle.
 export interface ConnectionRow {
   id: number;
   installation_id: number;
@@ -1629,15 +1631,20 @@ export function connectionSnapshot(row: ConnectionRow): ConnectionSnapshot {
   return snapshot;
 }
 
-// MCP connections attached to one agent, via the registry links.
-export async function listAgentConnections(agentId: number): Promise<ConnectionRow[]> {
+// MCP connections attached to one repository and enabled for the given
+// mount context.
+export async function listRepoConnections(
+  repositoryId: number,
+  context: 'reviews' | 'automations',
+): Promise<ConnectionRow[]> {
+  const contextColumn = context === 'reviews' ? 'l.reviews' : 'l.automations';
   const res = await env.DB.prepare(
     `SELECT c.* FROM connections c
-		 JOIN agent_connection_links l ON l.connection_id = c.id
-		 WHERE l.agent_id = ?1 AND c.kind = 'mcp'
+		 JOIN repo_connections l ON l.connection_id = c.id
+		 WHERE l.repository_id = ?1 AND ${contextColumn} = 1 AND c.kind = 'mcp'
 		 ORDER BY c.name`,
   )
-    .bind(agentId)
+    .bind(repositoryId)
     .all<ConnectionRow>();
   return res.results;
 }
@@ -1719,48 +1726,53 @@ export async function updateConnectionAuth(
 }
 
 export async function deleteConnection(id: number): Promise<void> {
-  await env.DB.prepare('DELETE FROM agent_connection_links WHERE connection_id = ?1')
-    .bind(id)
-    .run();
+  await env.DB.prepare('DELETE FROM repo_connections WHERE connection_id = ?1').bind(id).run();
   await env.DB.prepare('DELETE FROM connections WHERE id = ?1').bind(id).run();
 }
 
-export interface AgentConnectionLink {
-  agent_id: number;
+export interface RepoConnectionLink {
+  repository_id: number;
   connection_id: number;
+  reviews: number;
+  automations: number;
 }
 
-export async function listConnectionLinks(
+export async function listRepoConnectionLinks(
   installationIds: number[],
-): Promise<AgentConnectionLink[]> {
+): Promise<RepoConnectionLink[]> {
   if (installationIds.length === 0) return [];
   const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
   const res = await env.DB.prepare(
-    `SELECT l.agent_id, l.connection_id FROM agent_connection_links l
+    `SELECT l.repository_id, l.connection_id, l.reviews, l.automations FROM repo_connections l
 		 JOIN connections c ON c.id = l.connection_id
 		 WHERE c.installation_id IN (${placeholders})`,
   )
     .bind(...installationIds)
-    .all<AgentConnectionLink>();
+    .all<RepoConnectionLink>();
   return res.results;
 }
 
-export async function setAgentConnectionLink(
-  agentId: number,
+// Attach/detach one connection on one repository. Attaching upserts so the
+// context toggles can be changed on an existing link with the same call.
+export async function setRepoConnectionLink(
+  repositoryId: number,
   connectionId: number,
-  attached: boolean,
+  link: { attached: boolean; reviews: boolean; automations: boolean },
 ): Promise<void> {
-  if (attached) {
+  if (link.attached) {
     await env.DB.prepare(
-      'INSERT OR IGNORE INTO agent_connection_links (agent_id, connection_id) VALUES (?1, ?2)',
+      `INSERT INTO repo_connections (repository_id, connection_id, reviews, automations)
+			 VALUES (?1, ?2, ?3, ?4)
+			 ON CONFLICT (repository_id, connection_id)
+			 DO UPDATE SET reviews = ?3, automations = ?4`,
     )
-      .bind(agentId, connectionId)
+      .bind(repositoryId, connectionId, link.reviews ? 1 : 0, link.automations ? 1 : 0)
       .run();
   } else {
     await env.DB.prepare(
-      'DELETE FROM agent_connection_links WHERE agent_id = ?1 AND connection_id = ?2',
+      'DELETE FROM repo_connections WHERE repository_id = ?1 AND connection_id = ?2',
     )
-      .bind(agentId, connectionId)
+      .bind(repositoryId, connectionId)
       .run();
   }
 }

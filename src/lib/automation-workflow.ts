@@ -9,9 +9,11 @@ import {
   getAutomationById,
   getRepoById,
   listEnabledSkillsForRepo,
+  listRepoConnections,
   tryRecordAutomationRun,
   type AutomationRow,
 } from './db.ts';
+import { buildSandboxMcpConfig } from './mcp-proxy.ts';
 import { resolveRunnerAuth } from './fixer.ts';
 import { NPM_CACHE_ENV } from './generation-workflow.ts';
 import {
@@ -39,6 +41,7 @@ const CACHE_DIR = '/workspace/repo-cache';
 const workDir = (runId: number) => `/workspace/automation-${runId}`;
 const specFile = (runId: number) => `/workspace/automation-spec-${runId}.md`;
 const prFile = (runId: number) => `/workspace/automation-pr-${runId}.md`;
+const mcpFile = (runId: number) => `/workspace/automation-mcp-${runId}.json`;
 const AGENT_TIMEOUT_MS = 20 * 60_000;
 const CHECK_TIMEOUT_MS = 12 * 60_000;
 
@@ -208,8 +211,6 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
         { retries: { limit: 1, delay: '5 minutes' }, timeout: '23 minutes' },
         async (): Promise<{ changed: boolean; usage: CliUsage | null }> => {
           const auth = resolveRunnerAuth();
-          const scrub = (s: string) =>
-            Object.values(auth.vars).reduce((acc, v) => acc.replaceAll(v, '***'), s);
           const sandbox = sandboxFor(ctx);
           const skills = await listEnabledSkillsForRepo(ctx.repositoryId);
           for (const skill of skills) {
@@ -217,9 +218,21 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
             await sandbox.exec(`mkdir -p ${dir}`);
             await sandbox.writeFile(`${dir}/SKILL.md`, skillMarkdown(skill));
           }
+          // Mount the repo's MCP connections through the Worker's relay:
+          // the sandbox only ever holds run-scoped grants, never connection
+          // credentials (see lib/mcp-proxy.ts).
+          const connections = await listRepoConnections(ctx.repositoryId, 'automations');
+          const mcp = await buildSandboxMcpConfig(connections, ctx.repositoryId);
+          let mcpFlags = '';
+          if (mcp) {
+            await sandbox.writeFile(mcpFile(ctx.runId), mcp.configJson);
+            mcpFlags = ` --mcp-config ${mcpFile(ctx.runId)} --strict-mcp-config`;
+          }
+          const scrubValues = [...Object.values(auth.vars), ...(mcp?.secrets ?? [])];
+          const scrub = (s: string) => scrubValues.reduce((acc, v) => acc.replaceAll(v, '***'), s);
           await sandbox.writeFile(specFile(ctx.runId), automationPrompt(ctx));
           const agent = await sandbox.exec(
-            `claude -p --dangerously-skip-permissions --output-format json < ${specFile(ctx.runId)}`,
+            `claude -p --dangerously-skip-permissions${mcpFlags} --output-format json < ${specFile(ctx.runId)}`,
             {
               cwd: WORK,
               timeout: AGENT_TIMEOUT_MS,
@@ -369,7 +382,9 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
         { retries: { limit: 1, delay: '10 seconds' }, timeout: '2 minutes' },
         async () => {
           await sandboxFor(ctx)
-            .exec(`rm -rf ${WORK} ${specFile(ctx.runId)} ${prFile(ctx.runId)}`)
+            .exec(
+              `rm -rf ${WORK} ${specFile(ctx.runId)} ${prFile(ctx.runId)} ${mcpFile(ctx.runId)}`,
+            )
             .catch(() => {});
         },
       );

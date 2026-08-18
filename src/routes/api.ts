@@ -39,7 +39,6 @@ import {
   getPlanByFeatureId,
   getRepoById,
   latestVerificationForFeature,
-  listAgentConnections,
   listAgentRunsForAutomationRun,
   listAgentRunsForFeature,
   listAgentRunsForPlan,
@@ -47,7 +46,7 @@ import {
   listAutomationRuns,
   listAutomationsForInstallations,
   listCockpitComments,
-  listConnectionLinks,
+  listRepoConnectionLinks,
   listConnections,
   listFixAttemptsForRepoPrs,
   listInstallationsWithRepos,
@@ -68,7 +67,7 @@ import {
   resolveAgentEnabled,
   resolveConnectionAuth,
   resolveSkillEnabled,
-  setAgentConnectionLink,
+  setRepoConnectionLink,
   setPlanArchived,
   setRepoAgentEnabled,
   setRepoAutoFix,
@@ -1591,7 +1590,6 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.get('/agents/:id', async (c) => {
     const agent = await authorizedAgent(c);
     if (!agent) return c.json({ error: 'unknown agent' }, 404);
-    const connections = await listAgentConnections(agent.id);
     return c.json<ApiAgentDetail>({
       agent: {
         id: agent.id,
@@ -1603,17 +1601,6 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         instructions: agent.instructions,
         installation_id: agent.installation_id,
       },
-      connections: connections.map((conn) => {
-        const snap = connectionSnapshot(conn);
-        return {
-          id: conn.id,
-          name: conn.name,
-          url: conn.url,
-          tools: snap.tools ?? null,
-          has_auth: conn.auth_type !== 'none',
-        };
-      }),
-      encryption_configured: encryptionConfigured(),
       default_model: DEFAULT_MODEL,
     });
   });
@@ -1917,12 +1904,10 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
 
   app.get('/integrations', async (c) => {
     const { installationIds } = c.get('user');
-    await Promise.all(installationIds.map((id) => ensureBuiltinAgents(id)));
-    const [groups, agents, connections, links] = await Promise.all([
+    const [groups, connections, links] = await Promise.all([
       listInstallationsWithRepos(installationIds),
-      listAgents(installationIds),
       listConnections(installationIds),
-      listConnectionLinks(installationIds),
+      listRepoConnectionLinks(installationIds),
     ]);
     return c.json<ApiIntegrations>({
       encryption_configured: encryptionConfigured(),
@@ -1930,18 +1915,18 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         id: installation.id,
         account_login: installation.account_login,
       })),
-      // Not deduped by slug (unlike GET /agents): every installation has its
-      // own agent rows, and a connection may only link to the rows belonging
-      // to its installation — the client filters on installation_id.
-      agents: agents.map((a) => ({
-        id: a.id,
-        installation_id: a.installation_id,
-        slug: a.slug,
-        name: a.name,
-        description: a.description,
-        model: a.model,
-        is_builtin: a.is_builtin === 1,
-      })),
+      // A connection may only attach to repos of its own installation — the
+      // client filters on installation_id.
+      repos: groups.flatMap(({ repos }) =>
+        repos
+          .filter((r) => r.enabled === 1)
+          .map((r) => ({
+            id: r.id,
+            installation_id: r.installation_id,
+            owner: r.owner,
+            name: r.name,
+          })),
+      ),
       connections: connections.map((conn) => {
         const snap = connectionSnapshot(conn);
         return {
@@ -1954,7 +1939,13 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
           has_auth: conn.auth_type !== 'none',
           auth_type: conn.auth_type,
           oauth_status: oauthStatus(conn),
-          agent_ids: links.filter((l) => l.connection_id === conn.id).map((l) => l.agent_id),
+          repo_links: links
+            .filter((l) => l.connection_id === conn.id)
+            .map((l) => ({
+              repository_id: l.repository_id,
+              reviews: l.reviews === 1,
+              automations: l.automations === 1,
+            })),
         };
       }),
     });
@@ -2225,22 +2216,35 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   });
 
   // Attach/detach an MCP integration to an agent.
-  app.put('/integrations/:id/agents/:agentId', async (c) => {
+  app.put('/integrations/:id/repos/:repoId', async (c) => {
     const conn = await authorizedConnection(c);
     if (!conn) return c.json({ error: 'unknown integration' }, 404);
-    if (conn.kind !== 'mcp')
-      return c.json({ error: 'only MCP integrations attach to agents' }, 400);
-    const agentId = Number(c.req.param('agentId'));
-    const agent = Number.isInteger(agentId) ? await getAgentById(agentId) : null;
-    if (!agent || agent.installation_id !== conn.installation_id) {
-      return c.json({ error: 'unknown agent' }, 404);
+    if (conn.kind !== 'mcp') return c.json({ error: 'only MCP integrations attach to repos' }, 400);
+    const repoId = Number(c.req.param('repoId'));
+    const repo = Number.isInteger(repoId) ? await getRepoById(repoId) : null;
+    if (!repo || repo.installation_id !== conn.installation_id) {
+      return c.json({ error: 'unknown repository' }, 404);
     }
-    const body = await c.req.json<{ attached?: boolean }>().catch(() => null);
+    const body = await c.req
+      .json<{ attached?: boolean; reviews?: boolean; automations?: boolean }>()
+      .catch(() => null);
     const attached = body?.attached;
     if (!isBoolean(attached)) {
-      return c.json({ error: 'body must be {"attached": true|false}' }, 400);
+      return c.json({ error: 'body must be {"attached": true|false, ...}' }, 400);
     }
-    await setAgentConnectionLink(agent.id, conn.id, attached);
+    const reviews = body?.reviews;
+    const automations = body?.automations;
+    if (
+      (reviews !== undefined && !isBoolean(reviews)) ||
+      (automations !== undefined && !isBoolean(automations))
+    ) {
+      return c.json({ error: '"reviews" and "automations" must be booleans when present' }, 400);
+    }
+    await setRepoConnectionLink(repo.id, conn.id, {
+      attached,
+      reviews: reviews ?? true,
+      automations: automations ?? true,
+    });
     return c.json({ ok: true });
   });
 
