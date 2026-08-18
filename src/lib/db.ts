@@ -136,6 +136,53 @@ export async function listInstallationsWithRepos(
   }));
 }
 
+export interface OrgMemberRow {
+  id: string;
+  login: string | null;
+  email: string;
+  role: string;
+  created_at: string;
+}
+
+export interface OrgInvitationRow {
+  id: string;
+  email: string;
+  role: string;
+  status: string;
+  expires_at: string | null;
+}
+
+// The members page's read side: joins better-auth's member/user tables for
+// display (login isn't on `member` itself). Written here rather than
+// through the organization plugin's own listMembers endpoint because that
+// endpoint requires the caller to already have a member row in the org —
+// the hybrid access model reads (GET /organizations/:id/members) with plain
+// installation membership instead, same bar as every other GET route.
+export async function listMembersWithGithubLogin(organizationId: string): Promise<OrgMemberRow[]> {
+  const rows = await env.DB.prepare(
+    `SELECT "member".id AS id, "user".login AS login, "user".email AS email,
+			        "member".role AS role, "member"."createdAt" AS created_at
+		 FROM "member" JOIN "user" ON "user".id = "member"."userId"
+		 WHERE "member"."organizationId" = ?1
+		 ORDER BY "member"."createdAt"`,
+  )
+    .bind(organizationId)
+    .all<OrgMemberRow>();
+  return rows.results;
+}
+
+export async function listPendingInvitations(organizationId: string): Promise<OrgInvitationRow[]> {
+  const rows = await env.DB.prepare(
+    `SELECT id, email, role, status, "expiresAt" AS expires_at
+		 FROM "invitation"
+		 WHERE "organizationId" = ?1 AND status = 'pending'
+		 ORDER BY "createdAt"`,
+  )
+    .bind(organizationId)
+    .all<OrgInvitationRow>();
+  return rows.results;
+}
+
 export async function getRepoById(id: number): Promise<RepositoryRow | null> {
   return env.DB.prepare('SELECT * FROM repositories WHERE id = ?1').bind(id).first<RepositoryRow>();
 }

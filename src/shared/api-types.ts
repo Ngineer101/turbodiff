@@ -305,6 +305,7 @@ export interface ApiSettings {
   installations: {
     id: number;
     account_login: string;
+    account_type: string; // 'Organization' | 'User' — only orgs get a Members page
     suspended: boolean;
     repos: ApiRepoSettings[];
   }[];
@@ -314,6 +315,35 @@ export interface ApiMe {
   login: string;
   github_app_slug: string;
   vapid_public_key: string;
+}
+
+// Native org roles (migrations/0031_organizations.sql), scoped per
+// installation rather than global — an ApiMe.role would be meaningless
+// across installations, so the members page fetches role via ApiOrgMembers
+// for the one installation it's showing.
+export type ApiRole = 'owner' | 'admin' | 'member';
+
+export interface ApiMember {
+  id: string;
+  login: string | null;
+  email: string;
+  role: ApiRole;
+  joined_at: string;
+}
+
+export interface ApiInvitation {
+  id: string;
+  email: string;
+  role: ApiRole;
+  status: string;
+  expires_at: string | null;
+}
+
+export interface ApiOrgMembers {
+  org_id: string;
+  members: ApiMember[];
+  invitations: ApiInvitation[];
+  my_role: ApiRole;
 }
 
 export interface ApiError {

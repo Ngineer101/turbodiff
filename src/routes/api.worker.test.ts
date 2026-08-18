@@ -71,6 +71,9 @@ beforeEach(async () => {
     'todos',
     'repo_agents',
     'agents',
+    'member',
+    'invitation',
+    'organization',
     'repositories',
     'installations',
     'session',
@@ -211,6 +214,128 @@ describe('authenticated tenant isolation', () => {
       enabled: number;
     }>();
     expect(repo?.enabled).toBe(0);
+  });
+});
+
+describe('organization member management', () => {
+  // acmeUser.session.userId (3001) is the GitHub id memberRole looks members
+  // up by — a real better-auth user row is needed for the join to find a role.
+  async function seedOrg(role: 'owner' | 'admin' | 'member' | null): Promise<void> {
+    await testEnv.DB.batch([
+      testEnv.DB.prepare(
+        `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt", login, "githubId")
+				 VALUES ('u1', 'octocat', 'octocat@example.test', 1, '2026-01-01T00:00:00.000Z',
+				         '2026-01-01T00:00:00.000Z', 'octocat', 3001)`,
+      ),
+      testEnv.DB.prepare(
+        `INSERT INTO "organization" (id, name, slug, "installationId", "createdAt")
+				 VALUES ('org1', 'acme', 'acme', 1001, '2026-01-01T00:00:00.000Z')`,
+      ),
+    ]);
+    if (role) {
+      await testEnv.DB.prepare(
+        `INSERT INTO "member" (id, "organizationId", "userId", role, "createdAt")
+				 VALUES ('m1', 'org1', 'u1', ?1, '2026-01-01T00:00:00.000Z')`,
+      )
+        .bind(role)
+        .run();
+    }
+  }
+
+  it('is readable by any installation member, including one with no explicit member row', async () => {
+    await seedOrg(null);
+    const response = await authenticatedApi().request(
+      'https://turbodiff.test/api/organizations/1001/members',
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      org_id: 'org1',
+      my_role: 'member',
+      members: [],
+      invitations: [],
+    });
+  });
+
+  it('404s when the installation has no linked organization', async () => {
+    const response = await authenticatedApi().request(
+      'https://turbodiff.test/api/organizations/1001/members',
+    );
+    expect(response.status).toBe(404);
+  });
+
+  it('rejects invite, remove, and role-change requests from a member-role caller', async () => {
+    await seedOrg('member');
+    const app = authenticatedApi();
+
+    const invite = await app.request('https://turbodiff.test/api/organizations/1001/invitations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'new@example.test', role: 'member' }),
+    });
+    expect(invite.status).toBe(403);
+
+    const remove = await app.request('https://turbodiff.test/api/organizations/1001/members/m1', {
+      method: 'DELETE',
+    });
+    expect(remove.status).toBe(403);
+
+    const roleChange = await app.request(
+      'https://turbodiff.test/api/organizations/1001/members/m1',
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ role: 'admin' }),
+      },
+    );
+    expect(roleChange.status).toBe(403);
+  });
+
+  it('gates repo/agent configuration mutations on settings capability, independent of GitHub push permission', async () => {
+    await seedOrg('member');
+    const app = authenticatedApi(async () => true); // push permission granted; org role should still block
+
+    const repoDenied = await app.request('https://turbodiff.test/api/repos/101', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(repoDenied.status).toBe(403);
+
+    const agentDenied = await app.request('https://turbodiff.test/api/agents', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ slug: 'blocked', name: 'Blocked', instructions: 'do nothing' }),
+    });
+    expect(agentDenied.status).toBe(403);
+  });
+
+  it('lets an owner mutate repo posture once both settings capability and push permission are present', async () => {
+    await seedOrg('owner');
+    const response = await authenticatedApi(async () => true).request(
+      'https://turbodiff.test/api/repos/101',
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled: false }),
+      },
+    );
+    expect(response.status).toBe(200);
+  });
+
+  it('never gates an installation with no linked organization row on org capability', async () => {
+    // No seedOrg() here — installation 1001 has no organization row, the
+    // same shape as a personal (User-type) installation. requireCapability
+    // must return null (allowed) rather than 403, leaving push permission as
+    // the only gate, same as before this change.
+    const response = await authenticatedApi(async () => true).request(
+      'https://turbodiff.test/api/repos/101',
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled: false }),
+      },
+    );
+    expect(response.status).toBe(200);
   });
 });
 
