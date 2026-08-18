@@ -63,6 +63,108 @@ Agent runs execute inside Cloudflare Containers (the sandbox) and can spend
 either your existing Claude subscription (`claude setup-token`) or API credits
 through your AI Gateway.
 
+## Architecture
+
+Everything runs in one Cloudflare Worker deployment: an HTTP layer (Hono)
+in front of Durable Objects for the long-lived pieces (the per-PR review
+agent, the sandbox container), Cloudflare Workflows for the multi-minute
+factory runs, a queue to decouple intake from execution, and D1/R2 for state
+and artifacts.
+
+```mermaid
+flowchart TB
+  subgraph external ["External"]
+    GH["GitHub<br/>App webhooks · REST API · pull requests"]
+    BROWSER["Browser<br/>React SPA"]
+    MCPS["External MCP servers"]
+    LLM["Anthropic API<br/>(subscription or AI Gateway)"]
+  end
+
+  subgraph worker ["Cloudflare Worker (Hono — src/app.ts)"]
+    WEBHOOKS["/webhooks<br/>HMAC-verified GitHub events"]
+    API["/api<br/>session-cookie JSON for the SPA"]
+    AUTHR["/api/auth<br/>better-auth · GitHub OAuth"]
+    SHELL["/ SPA shell · landing"]
+    ART["/artifacts · /b/:id<br/>signed capability URLs"]
+    PROXY["/mcp-proxy/:id<br/>sealed-grant MCP relay"]
+    CRON["cron (*/15)<br/>automation poll"]
+    CONSUMER["queue consumer<br/>(src/cloudflare.ts)"]
+  end
+
+  subgraph durable ["Durable Objects"]
+    REVIEWER["PrReviewer (Flue agent)<br/>one instance per PR"]
+    SANDBOX["Sandbox (container)<br/>runs Claude CLI"]
+  end
+
+  subgraph wf ["Cloudflare Workflows"]
+    GEN["Generation"]
+    VERIFY["Verification"]
+    FIX["Fix"]
+    CONFLICT["Conflict resolve"]
+    AUTO["Automation"]
+  end
+
+  subgraph storage ["State"]
+    D1[("D1<br/>installations · repos · reviews · features/plans<br/>connections · repo_connections · automations<br/>(secrets AES-GCM sealed)")]
+    R2[("R2<br/>screenshots · demo videos")]
+    Q[["Queue<br/>turbodiff-factory"]]
+  end
+
+  BROWSER --> SHELL & API & AUTHR
+  GH -->|"PR / push / installation events"| WEBHOOKS
+  WEBHOOKS -->|"review.request signal"| REVIEWER
+  WEBHOOKS -->|"auto-fix · conflict messages"| Q
+  API -->|"feature intake · plan approve<br/>automation CRUD"| Q
+  CRON -->|"due automations"| Q
+  Q --> CONSUMER
+  CONSUMER -->|"plan analyze/refine (inline)"| SANDBOX
+  CONSUMER -->|"creates instances"| wf
+  wf -->|"exec: clone · edit · check"| SANDBOX
+  SANDBOX -->|"git push · open PRs"| GH
+  SANDBOX -->|"Claude CLI"| LLM
+  SANDBOX -->|"JSON-RPC + sealed grant"| PROXY
+  PROXY -->|"inject decrypted credential"| MCPS
+  REVIEWER -->|"fetch PR · post review"| GH
+  REVIEWER --> LLM
+  REVIEWER -->|"streamable HTTP<br/>per-request auth resolver"| MCPS
+  VERIFY -->|"evidence"| R2
+  ART --> R2
+  worker <--> D1
+```
+
+### MCP connections (repo-scoped)
+
+MCP servers are registered once per installation on the integrations page and
+attached to **repositories** (`repo_connections`), with independent toggles
+for the two mount contexts: hosted PR reviews and sandbox automation runs.
+Credentials are sealed (AES-256-GCM) in D1 and never leave the Worker
+boundary. Hosted reviews mount connections directly — the agent's auth
+resolver decrypts per request. Sandbox runs can't be trusted with
+credentials (they execute repo-influenced code), so they get a relay instead:
+
+```mermaid
+sequenceDiagram
+  participant WF as Automation workflow
+  participant SB as Sandbox (Claude CLI)
+  participant PX as Worker /mcp-proxy/:id
+  participant D1
+  participant MCP as External MCP server
+
+  WF->>D1: listRepoConnections(repo, 'automations')
+  WF->>WF: mint sealed grant (AES-GCM, 1 h TTL,<br/>bound to connection + repo)
+  WF->>SB: write --mcp-config (proxy URL + grant — no credentials)
+  SB->>PX: JSON-RPC request (Bearer grant)
+  PX->>PX: verify grant · enforce tool allowlist on tools/call
+  PX->>D1: resolve + decrypt connection credential
+  PX->>MCP: forward request with real auth header
+  MCP-->>SB: response (streamed back through the proxy)
+```
+
+A prompt-injected repository can therefore at worst _use_ an attached
+connection for the lifetime of one run's grant — it can never read the
+credential itself, and calls outside the connection's tool allowlist are
+rejected at the proxy.
+
 ## Code map
 
 - [src/agents/pr-reviewer.ts](src/agents/pr-reviewer.ts) — the review agent.
