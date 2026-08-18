@@ -29,6 +29,12 @@ rather than a public issue.
   cannot touch other repositories in the installation or use other App
   permissions (issues, pull requests, webhooks). Tokens are scrubbed from all
   surfaced output and removed from the git remote in a `finally` block.
+  One deliberate widening: a write token additionally carries the `workflows`
+  permission when the run's human-approved input authorizes workflow changes
+  (the approved plan or automation prompt mentions `.github/workflows`, or —
+  for fix/conflict runs — the PR already touches a workflow file). Workflow
+  write is a CI-secrets exposure path, so it is never granted by default and
+  an agent that writes a workflow file nobody asked for still fails at push.
 - **Signed artifact URLs.** Verification screenshots are served from R2 via
   capability URLs — an HMAC over the object key is required, so evidence for
   a private repo's app cannot be enumerated or guessed. Anyone who can read

@@ -1,6 +1,7 @@
 import { getSandbox, type Sandbox } from '@cloudflare/sandbox';
 import { env } from 'cloudflare:workers';
 import type { ApiPlanQuestion as Question } from '../shared/api-types.ts';
+import { isJsonArray, isJsonObject, isString, parseJson } from '../shared/json.ts';
 import { gh } from '../tools/github.ts';
 import { signArtifactKey } from './crypto.ts';
 import {
@@ -12,9 +13,10 @@ import {
   type RepositoryRow,
 } from './db.ts';
 import { persistAgentLog } from './agent-runs.ts';
-import { resolveRunnerAuth } from './fixer.ts';
+import { resolveRunnerAuth, sandboxNamespace } from './fixer.ts';
 import { installationToken, sandboxGitToken } from './github-app.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
+import { notifyPlanUsers } from './push.ts';
 
 // Phase 3 of the software factory (docs/software-factory-design.md): the
 // planning front half. A planning agent clones the repo (read-only), analyzes
@@ -47,11 +49,7 @@ async function clonePlanRepos(
   const tokens: string[] = [];
   const scrub = (s: string) => tokens.reduce((acc, t) => acc.replaceAll(t, '***'), s);
 
-  const sandbox = getSandbox(
-    env.Sandbox as unknown as DurableObjectNamespace<Sandbox>,
-    `plan--${planId}`,
-    { sleepAfter: '10m' },
-  );
+  const sandbox = getSandbox(sandboxNamespace(), `plan--${planId}`, { sleepAfter: '10m' });
   await sandbox.exec(`rm -rf ${CLONE_DIR} ${OUT_DIR} && mkdir -p ${OUT_DIR}`);
 
   const dirs: { repo: RepositoryRow; dir: string }[] = [];
@@ -61,6 +59,8 @@ async function clonePlanRepos(
     const gitToken = await sandboxGitToken(repo.installation_id, repo.name, 'read');
     tokens.push(token, gitToken);
     const full = `${repo.owner}/${repo.name}`;
+    // SAFETY: GitHub's GET /repos/:owner/:repo REST schema always includes
+    // default_branch.
     const info = (await (await gh(token, `/repos/${full}`)).json()) as { default_branch: string };
     const dir = repos.length === 1 ? CLONE_DIR : `${CLONE_DIR}/${repo.owner}--${repo.name}`;
     if (repos.length > 1) await sandbox.exec(`mkdir -p ${dir}`);
@@ -92,30 +92,29 @@ async function readJsonArray(sandbox: Sandbox, path: string): Promise<string[]> 
 // failing the whole analyze step.
 async function readQuestions(sandbox: Sandbox, path: string): Promise<Question[]> {
   try {
-    const parsed = JSON.parse((await sandbox.readFile(path)).content);
-    if (!Array.isArray(parsed)) return [];
+    const parsed = parseJson((await sandbox.readFile(path)).content);
+    if (!isJsonArray(parsed)) return [];
     return parsed
-      .map((raw: unknown): Question | null => {
-        if (typeof raw === 'string') {
+      .map((raw): Question | null => {
+        if (isString(raw)) {
           const text = raw.trim();
           return text ? { text } : null;
         }
-        if (!raw || typeof raw !== 'object') return null;
-        const obj = raw as Record<string, unknown>;
-        const text = typeof obj.text === 'string' ? obj.text.trim() : '';
+        if (!isJsonObject(raw)) return null;
+        const text = isString(raw.text) ? raw.text.trim() : '';
         if (!text) return null;
-        const rawOptions = Array.isArray(obj.options) ? obj.options : [];
+        const rawOptions = isJsonArray(raw.options) ? raw.options : [];
         const options = [
           ...new Set(
             rawOptions
-              .filter((o): o is string => typeof o === 'string' && o.trim().length > 0)
-              .map((o: string) => o.trim()),
+              .filter((o): o is string => isString(o) && o.trim().length > 0)
+              .map((o) => o.trim()),
           ),
         ];
         if (options.length < 2) return { text };
         const recommended =
-          typeof obj.recommended === 'string' && options.includes(obj.recommended.trim())
-            ? obj.recommended.trim()
+          isString(raw.recommended) && options.includes(raw.recommended.trim())
+            ? raw.recommended.trim()
             : options[0];
         return { text, options, recommended };
       })
@@ -397,11 +396,21 @@ export async function runPlanAnalyze(planId: number): Promise<void> {
         plan: planMd,
         acceptance: JSON.stringify(acceptance),
       });
+      await notifyPlanUsers(planId, {
+        title: plan.title,
+        body: 'Turbodiff finished a plan — ready for your review.',
+        url: `${env.PUBLIC_BASE_URL}/tasks/${planId}`,
+      });
     } else {
       await updatePlan(planId, {
         status: 'awaiting_answers',
         analysis,
         questions: JSON.stringify(questions),
+      });
+      await notifyPlanUsers(planId, {
+        title: plan.title,
+        body: 'Turbodiff has questions before it can plan this.',
+        url: `${env.PUBLIC_BASE_URL}/tasks/${planId}`,
       });
     }
     console.log(`turbodiff: plan ${planId} analyzed for ${full} (${questions.length} questions)`);
@@ -480,6 +489,11 @@ export async function runPlanRefine(planId: number): Promise<void> {
       acceptance: JSON.stringify(acceptance),
       // Consumed — a later answers-driven refine must not replay it.
       feedback: '[]',
+    });
+    await notifyPlanUsers(planId, {
+      title: plan.title,
+      body: 'Turbodiff finished a plan — ready for your review.',
+      url: `${env.PUBLIC_BASE_URL}/tasks/${planId}`,
     });
     console.log(`turbodiff: plan ${planId} refined for ${full}`);
   } catch (err) {

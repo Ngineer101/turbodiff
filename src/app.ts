@@ -20,7 +20,7 @@ import {
   setRepoRunCommand,
   updateFeature,
   updatePlan,
-  listAgentConnections,
+  listRepoConnections,
   markReviewFailed,
   tryRecordReview,
   type AgentRow,
@@ -28,8 +28,10 @@ import {
 } from './lib/db.ts';
 import { auth } from './lib/better-auth.ts';
 import { runFix, sandboxSmoke, type FixAuthMode } from './lib/fixer.ts';
+import { handleMcpProxy } from './lib/mcp-proxy.ts';
 import { approvePlan } from './lib/planner.ts';
 import { registerReviewMetering } from './lib/metering.ts';
+import { isString } from './shared/json.ts';
 import { createApiRoutes } from './routes/api.ts';
 import { handleEmailSignUp } from './routes/auth-email.ts';
 import { createUiRoutes } from './routes/ui.ts';
@@ -154,9 +156,20 @@ export async function dispatchReviewAgent(
   );
   if (reviewId === null) return false;
 
-  // Snapshot the agent's external MCP connections (non-secret fields only;
+  // Snapshot the repo's external MCP connections (non-secret fields only;
   // tokens are resolved from D1 at request time by the agent's auth resolver).
-  const connections = (await listAgentConnections(agent.id)).map(connectionSnapshot);
+  const connections = (await listRepoConnections(repo.id, 'reviews')).map(connectionSnapshot);
+  const baseAttributes = {
+    agent_slug: agent.slug,
+    agent_name: agent.name,
+    model: opts.modelOverride ?? agent.model,
+    pull_request: `${repo.owner}/${repo.name}#${prNumber}`,
+    trigger,
+  };
+  const attributes =
+    connections.length > 0
+      ? { ...baseAttributes, connections: JSON.stringify(connections) }
+      : baseAttributes;
   try {
     await dispatch(PrReviewer, {
       id: instanceId,
@@ -164,14 +177,7 @@ export async function dispatchReviewAgent(
         kind: 'signal',
         type: 'review.request',
         tagName: 'review-request',
-        attributes: {
-          agent_slug: agent.slug,
-          agent_name: agent.name,
-          model: opts.modelOverride ?? agent.model,
-          pull_request: `${repo.owner}/${repo.name}#${prNumber}`,
-          trigger,
-          ...(connections.length > 0 ? { connections: JSON.stringify(connections) } : {}),
-        },
+        attributes,
         body:
           `Review pull request #${prNumber} in ${repo.owner}/${repo.name} (${prUrl}) and post your review to GitHub.\n\n` +
           `Agent focus — ${agent.name}:\n${agent.instructions}`,
@@ -192,6 +198,10 @@ export async function dispatchReviewAgent(
 
 // GitHub App webhooks — authenticated by HMAC signature, not the bearer secret.
 app.route('/webhooks', createWebhookRoutes(dispatchReviewAgent));
+
+// MCP relay for sandbox runs — authenticated by a short-lived sealed grant
+// minted per run, not by session or bearer secret (see lib/mcp-proxy.ts).
+app.on(['GET', 'POST', 'DELETE'], '/mcp-proxy/:id', handleMcpProxy);
 
 // better-auth (sessions, OAuth callback, sign-out). Registered before the
 // /api data plane so it owns the /api/auth prefix.
@@ -357,13 +367,13 @@ app.post('/internal/repos/run-command', async (c) => {
     .json<{ repo?: string; command?: string; port?: number }>()
     .catch(() => null);
   const match = payload?.repo?.match(/^([\w.-]+)\/([\w.-]+)$/);
-  if (!match || typeof payload?.command !== 'string') {
+  if (!payload || !match || !isString(payload.command)) {
     return c.json(
       { error: 'body must be {"repo": "<owner>/<name>", "command": "...", "port": 3000}' },
       400,
     );
   }
-  const port = Number.isInteger(payload.port) ? (payload.port as number) : null;
+  const port = payload.port !== undefined && Number.isInteger(payload.port) ? payload.port : null;
   if (payload.command.trim() && !port) {
     return c.json({ error: 'port is required when command is set' }, 400);
   }
@@ -381,7 +391,7 @@ app.post('/internal/repos/run-command', async (c) => {
 app.post('/internal/repos/check-command', async (c) => {
   const payload = await c.req.json<{ repo?: string; command?: string }>().catch(() => null);
   const match = payload?.repo?.match(/^([\w.-]+)\/([\w.-]+)$/);
-  if (!match || typeof payload?.command !== 'string') {
+  if (!payload || !match || !isString(payload.command)) {
     return c.json({ error: 'body must be {"repo": "<owner>/<name>", "command": "..."}' }, 400);
   }
   const repo = await getRepoByFullName(match[1], match[2]);

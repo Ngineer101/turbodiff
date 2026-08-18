@@ -1,7 +1,8 @@
 import { env } from 'cloudflare:workers';
 import type { Context } from 'hono';
-import { auth, type AuthUser } from './better-auth.ts';
+import { auth } from './better-auth.ts';
 import { fetchUserCanPush, fetchUserInstallationIds } from './github-app.ts';
+import { isNumber, isString } from '../shared/json.ts';
 
 // Request-time authorization on top of better-auth sessions. The session
 // (who you are) is durable and only ends by explicit sign-out or 30-day
@@ -113,7 +114,9 @@ export async function requireUser(c: Context): Promise<AuthedUser | null> {
   // OAuth: DEV_FAKE_INSTALLATIONS="1001,1002" in .dev.vars signs you in as
   // @dev with those installation ids. Guarded to loopback hosts so setting it
   // in production by mistake cannot become an auth bypass.
-  const fake = (env as { DEV_FAKE_INSTALLATIONS?: string }).DEV_FAKE_INSTALLATIONS;
+  // SAFETY: DEV_FAKE_INSTALLATIONS comes from .dev.vars only, so `wrangler
+  // types` omits it from Env wherever .dev.vars is absent (CI, production).
+  const fake = (env as Env & { DEV_FAKE_INSTALLATIONS?: string }).DEV_FAKE_INSTALLATIONS;
   const host = new URL(c.req.url).hostname;
   if (fake && (host === 'localhost' || host === '127.0.0.1')) {
     return {
@@ -129,11 +132,15 @@ export async function requireUser(c: Context): Promise<AuthedUser | null> {
   }
   const found = await auth().api.getSession({ headers: c.req.raw.headers });
   if (!found) return null;
-  const user = found.user as AuthUser;
+  const user = found.user;
+  // better-auth's static session type erases the login/githubId
+  // additionalFields, so narrow them through guards.
+  const login = 'login' in user && isString(user.login) && user.login ? user.login : null;
+  const githubId = 'githubId' in user && isNumber(user.githubId) ? user.githubId : null;
   // Email/password sign-up that hasn't linked a GitHub account yet: a valid
   // session with no GitHub reach — empty installations, everything
   // repo-scoped answers empty, push checks fail closed.
-  if (!user.login || typeof user.githubId !== 'number') {
+  if (!login || githubId === null) {
     return {
       session: { userId: 0, login: '', ghToken: '' },
       installationIds: [],
@@ -146,9 +153,9 @@ export async function requireUser(c: Context): Promise<AuthedUser | null> {
   const ids = await installationIds(user.id, ghToken);
   if (ids === null) return null;
   return {
-    session: { userId: user.githubId, login: user.login, ghToken },
+    session: { userId: githubId, login, ghToken },
     installationIds: ids,
     githubConnected: true,
-    name: user.login,
+    name: login,
   };
 }

@@ -46,6 +46,10 @@
     // Pair with the FIXER_ANTHROPIC_API_KEY secret. Empty disables gateway mode;
     // the CLAUDE_CODE_OAUTH_TOKEN secret enables subscription mode instead.
     "FIXER_ANTHROPIC_BASE_URL": "",
+    // Web Push keys are all three secrets (see src/env.d.ts), including the
+    // VAPID public key: it isn't confidential, but a committed one would ship
+    // this deployment's app server key to every fork's users, whose pushes
+    // would then be signed by a mismatched private key and rejected.
   },
   // Fixer/codegen sandbox (docs/software-factory-design.md): each fix run
   // executes Claude Code inside an isolated container. Local dev needs Docker.

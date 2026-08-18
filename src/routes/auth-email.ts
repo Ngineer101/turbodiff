@@ -1,5 +1,6 @@
 import type { Context } from 'hono';
 import { auth } from '../lib/better-auth.ts';
+import type { JsonObject } from '../shared/json.ts';
 
 // Email/password sign-up accepts user additionalFields as client input for
 // the same reason /update-user is closed (login/githubId can't be
@@ -8,7 +9,7 @@ import { auth } from '../lib/better-auth.ts';
 // otherwise a sign-up could forge a GitHub identity and requireUser would
 // trust it.
 export async function handleEmailSignUp(c: Context): Promise<Response> {
-  const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+  const body = await c.req.json<JsonObject>().catch(() => null);
   if (!body) return c.json({ error: 'invalid body' }, 400);
   const { name, email, password, callbackURL, rememberMe } = body;
   const headers = new Headers(c.req.raw.headers);

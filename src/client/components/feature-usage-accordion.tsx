@@ -5,7 +5,7 @@ import { Muted } from './section.tsx';
 import { Pill, type PillProps } from './ui/pill.tsx';
 import { Table, Td, Th } from './ui/table.tsx';
 
-const FEATURE_STATUS_TONE: Record<string, PillProps['tone']> = {
+const FEATURE_STATUS_TONE = {
   queued: 'running',
   generating: 'running',
   pr_opened: 'on',
@@ -15,16 +15,24 @@ const FEATURE_STATUS_TONE: Record<string, PillProps['tone']> = {
   checks_failed: 'red',
   abandoned: 'red',
   pr_closed: 'neutral',
-};
+} satisfies Record<string, PillProps['tone']>;
 
-const SESSION_KIND_LABEL: Record<ApiFeatureUsageSession['kind'], string> = {
+function isFeatureStatusKey(value: string): value is keyof typeof FEATURE_STATUS_TONE {
+  return Object.hasOwn(FEATURE_STATUS_TONE, value);
+}
+
+function featureStatusTone(status: string): PillProps['tone'] {
+  return isFeatureStatusKey(status) ? FEATURE_STATUS_TONE[status] : 'neutral';
+}
+
+const SESSION_KIND_LABEL = {
   generate: 'Generate',
   review: 'Review',
   fix: 'Fix',
   verify: 'Verify',
-};
+} satisfies Record<ApiFeatureUsageSession['kind'], string>;
 
-const SESSION_TONE: Record<string, PillProps['tone']> = {
+const SESSION_TONE = {
   running: 'running',
   completed: 'on',
   passed: 'on',
@@ -36,10 +44,14 @@ const SESSION_TONE: Record<string, PillProps['tone']> = {
   checks_failed: 'red',
   tests_failed: 'red',
   stalled: 'red',
-};
+} satisfies Record<string, PillProps['tone']>;
+
+function isSessionStatusKey(value: string): value is keyof typeof SESSION_TONE {
+  return Object.hasOwn(SESSION_TONE, value);
+}
 
 function sessionTone(status: string): PillProps['tone'] {
-  return SESSION_TONE[status] ?? 'neutral';
+  return isSessionStatusKey(status) ? SESSION_TONE[status] : 'neutral';
 }
 
 // One shipped feature's accordion row: title/repo/status/PR up top, every
@@ -53,7 +65,7 @@ export function FeatureUsageAccordion({ features }: { features: ApiFeatureUsage[
           <AccordionTrigger aside={<span className="font-mono">{fmtUsd(f.total_cost_usd)}</span>}>
             <div className="flex flex-wrap items-center gap-2">
               <span className="min-w-0 truncate font-medium">{f.title}</span>
-              <Pill tone={FEATURE_STATUS_TONE[f.status] ?? 'neutral'}>{sentence(f.status)}</Pill>
+              <Pill tone={featureStatusTone(f.status)}>{sentence(f.status)}</Pill>
             </div>
             <div className="mt-0.5 text-xs text-mute">
               {f.repo ? <span className="font-mono">{f.repo}</span> : <Muted>(removed repo)</Muted>}

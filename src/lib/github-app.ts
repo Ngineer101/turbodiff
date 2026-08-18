@@ -71,38 +71,89 @@ export async function installationToken(installationId: number): Promise<string>
 // contents), so a compromised or prompt-injected agent run cannot touch other
 // repos in the installation or use any other App permission. Deliberately
 // uncached — each run gets its own token.
+//
+// opts.workflows widens the token with the App's `workflows` permission,
+// without which GitHub rejects any push that creates or updates a file under
+// .github/workflows/. Workflow-write is a real escalation (CI runs with repo
+// secrets), so callers must only pass it when the run's human-approved input
+// authorizes workflow changes — see authorizesWorkflowFiles.
 export async function sandboxGitToken(
   installationId: number,
   repoName: string,
   access: 'read' | 'write',
+  opts?: { workflows?: boolean },
 ): Promise<string> {
-  const data = await mintToken(installationId, {
-    repositories: [repoName],
-    permissions: { contents: access },
-  });
-  return data.token;
+  const workflows = Boolean(opts?.workflows) && access === 'write';
+  try {
+    const data = await mintToken(installationId, {
+      repositories: [repoName],
+      permissions: workflows ? { contents: access, workflows: 'write' } : { contents: access },
+    });
+    return data.token;
+  } catch (err) {
+    if (workflows) {
+      // Most likely the App lacks the permission or the installation hasn't
+      // re-accepted it — say so, since the raw 422 body doesn't.
+      throw new Error(
+        'this run touches .github/workflows/ and needs the GitHub App\'s "Workflows: Read and ' +
+          'write" permission, but minting a token with it failed — grant the permission in the ' +
+          'App settings, accept the updated permissions on this installation, then retry. ' +
+          `(${err instanceof Error ? err.message : String(err)})`,
+      );
+    }
+    throw err;
+  }
+}
+
+// Whether a run's human-approved input (feature spec, automation prompt)
+// declares intent to change GitHub Actions workflow files. The gate is
+// deliberately the *approved text*, not the agent's output: an agent that
+// writes a workflow file nobody asked for should fail at push, not get the
+// permission handed to it.
+export function authorizesWorkflowFiles(text: string | null | undefined): boolean {
+  return Boolean(text?.includes('.github/workflows'));
+}
+
+// Translate GitHub's cryptic workflow-permission push rejection into an
+// actionable dashboard error; everything else stays raw. Callers pass stderr
+// already scrubbed of tokens.
+export function describePushFailure(stderrScrubbed: string): string {
+  if (stderrScrubbed.includes('without `workflows` permission')) {
+    return (
+      'git push rejected: the commit creates or updates a GitHub Actions workflow file under ' +
+      '.github/workflows/, but this run was not authorized for workflow changes — the sandbox ' +
+      'token only carries the workflows permission when the approved plan or prompt explicitly ' +
+      'mentions .github/workflows (or, for fix runs, when the PR already touches it). If the ' +
+      'workflow change is intended, mention the .github/workflows path in the plan and re-run; ' +
+      'otherwise the agent went off-spec.'
+    );
+  }
+  return `git push failed: ${stderrScrubbed}`;
 }
 
 async function mintToken(
   installationId: number,
   scope?: { repositories: string[]; permissions: Record<string, string> },
 ): Promise<{ token: string; expires_at: string }> {
-  const res = await fetch(`${API}/app/installations/${installationId}/access_tokens`, {
-    method: 'POST',
-    headers: {
-      accept: 'application/vnd.github+json',
-      authorization: `Bearer ${await appJwt()}`,
-      'user-agent': 'turbodiff',
-      'x-github-api-version': '2022-11-28',
-      ...(scope ? { 'content-type': 'application/json' } : {}),
-    },
-    ...(scope ? { body: JSON.stringify(scope) } : {}),
+  const headers = new Headers({
+    accept: 'application/vnd.github+json',
+    authorization: `Bearer ${await appJwt()}`,
+    'user-agent': 'turbodiff',
+    'x-github-api-version': '2022-11-28',
   });
+  const init: RequestInit = { method: 'POST', headers };
+  if (scope) {
+    headers.set('content-type', 'application/json');
+    init.body = JSON.stringify(scope);
+  }
+  const res = await fetch(`${API}/app/installations/${installationId}/access_tokens`, init);
   if (!res.ok) {
     throw new Error(
       `Failed to mint installation token for ${installationId}: ${res.status} ${(await res.text()).slice(0, 300)}`,
     );
   }
+  // SAFETY: GitHub's create-installation-access-token endpoint documents
+  // token and expires_at on every 2xx response, and res.ok is checked above.
   return res.json() as Promise<{ token: string; expires_at: string }>;
 }
 
@@ -154,6 +205,8 @@ export async function exchangeOAuthCode(code: string, redirectUri: string): Prom
       redirect_uri: redirectUri,
     }),
   });
+  // SAFETY: every asserted field is optional, and access_token is checked
+  // before use — GitHub's OAuth token endpoint documents exactly these keys.
   const data = (await res.json()) as {
     access_token?: string;
     refresh_token?: string;
@@ -179,6 +232,8 @@ export async function refreshUserToken(refreshToken: string): Promise<OAuthToken
       refresh_token: refreshToken,
     }),
   });
+  // SAFETY: both asserted fields are optional, and access_token is checked
+  // before use — GitHub's OAuth refresh endpoint documents exactly these keys.
   const data = (await res.json()) as { access_token?: string; refresh_token?: string };
   if (!data.access_token) return null;
   return { token: data.access_token, refreshToken: data.refresh_token ?? null };
@@ -194,6 +249,8 @@ async function userApi<T>(token: string, path: string): Promise<T> {
     },
   });
   if (!res.ok) throw new Error(`GitHub ${res.status} on ${path}`);
+  // SAFETY: T is the caller-declared shape of this documented GitHub
+  // endpoint's success response, and res.ok is checked above.
   return res.json() as Promise<T>;
 }
 

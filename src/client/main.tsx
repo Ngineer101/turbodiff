@@ -16,6 +16,7 @@ import { createRoot } from 'react-dom/client';
 import { Toaster } from 'sonner';
 import { AppShell } from './components/app-shell.tsx';
 import { Button } from './components/ui/button.tsx';
+import { registerServiceWorker } from './lib/push.ts';
 import {
   agentQuery,
   agentsQuery,
@@ -264,6 +265,8 @@ declare module '@tanstack/react-router' {
     router: typeof router;
   }
 }
+
+void registerServiceWorker();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

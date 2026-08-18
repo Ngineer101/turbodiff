@@ -7,16 +7,19 @@ import { env } from 'cloudflare:workers';
 import { applyD1Migrations } from 'cloudflare:test';
 import { Hono } from 'hono';
 import { beforeAll, describe, expect, it } from 'vite-plus/test';
+import type { JsonObject } from '../shared/json.ts';
 import { handleEmailSignUp } from './auth-email.ts';
 
 type TestEnv = Cloudflare.Env & { TEST_MIGRATIONS: D1Migration[] };
+// SAFETY: vitest.worker.config.ts provisions the TEST_MIGRATIONS binding for
+// this pool on top of the generated Cloudflare.Env.
 const testEnv = env as TestEnv;
 
 beforeAll(async () => {
   await applyD1Migrations(testEnv.DB, testEnv.TEST_MIGRATIONS);
 });
 
-async function signUp(body: Record<string, unknown>): Promise<Response> {
+async function signUp(body: JsonObject): Promise<Response> {
   const app = new Hono();
   app.post('/api/auth/sign-up/email', handleEmailSignUp);
   return await app.request('https://turbodiff.test/api/auth/sign-up/email', {

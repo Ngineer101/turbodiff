@@ -12,6 +12,16 @@
 // testable without a Workers runtime. Callers (src/routes/api.ts) pass
 // env.SESSION_SECRET in.
 
+import {
+  isJsonArray,
+  isJsonObject,
+  isNumber,
+  isString,
+  parseJson,
+  type JsonObject,
+  type JsonValue,
+} from '../shared/json.ts';
+
 function b64url(bytes: Uint8Array): string {
   let bin = '';
   for (const b of bytes) bin += String.fromCharCode(b);
@@ -31,11 +41,12 @@ export interface OAuthEndpoints {
   registrationEndpoint?: string;
 }
 
-async function fetchJson(url: string): Promise<Record<string, unknown> | null> {
+async function fetchJson(url: string): Promise<JsonObject | null> {
   try {
     const res = await fetch(url, { headers: { accept: 'application/json' } });
     if (!res.ok) return null;
-    return (await res.json()) as Record<string, unknown>;
+    const parsed = parseJson(await res.text());
+    return isJsonObject(parsed) ? parsed : null;
   } catch (err) {
     console.warn(`turbodiff: oauth metadata fetch failed for ${url}:`, err);
     return null;
@@ -70,8 +81,7 @@ export async function discoverOAuthEndpoints(mcpServerUrl: string): Promise<OAut
   // server.
   const resource = await fetchJson(`${origin}/.well-known/oauth-protected-resource`);
   const servers = resource?.authorization_servers;
-  const authServer =
-    Array.isArray(servers) && typeof servers[0] === 'string' ? (servers[0] as string) : origin;
+  const authServer = isJsonArray(servers) && isString(servers[0]) ? servers[0] : origin;
   assertSecureUrl(authServer, 'authorization server');
 
   // RFC 8414, falling back to OpenID Connect discovery for authorization
@@ -81,17 +91,17 @@ export async function discoverOAuthEndpoints(mcpServerUrl: string): Promise<OAut
     (await fetchJson(`${authServer}/.well-known/openid-configuration`));
   const authorizationEndpoint = metadata?.authorization_endpoint;
   const tokenEndpoint = metadata?.token_endpoint;
-  if (typeof authorizationEndpoint !== 'string' || typeof tokenEndpoint !== 'string') {
+  if (!isString(authorizationEndpoint) || !isString(tokenEndpoint)) {
     throw new Error(
       `could not discover OAuth endpoints for ${authServer} (no oauth-authorization-server or openid-configuration metadata)`,
     );
   }
   assertSecureUrl(authorizationEndpoint, 'authorization endpoint');
   assertSecureUrl(tokenEndpoint, 'token endpoint');
-  const registrationEndpoint =
-    typeof metadata?.registration_endpoint === 'string'
-      ? metadata.registration_endpoint
-      : undefined;
+  const rawRegistrationEndpoint = metadata?.registration_endpoint;
+  const registrationEndpoint = isString(rawRegistrationEndpoint)
+    ? rawRegistrationEndpoint
+    : undefined;
   if (registrationEndpoint) assertSecureUrl(registrationEndpoint, 'registration endpoint');
   return { authorizationEndpoint, tokenEndpoint, registrationEndpoint };
 }
@@ -122,9 +132,14 @@ export async function registerOAuthClient(
       `dynamic client registration failed: HTTP ${res.status} ${(await res.text()).slice(0, 300)}`,
     );
   }
-  const data = (await res.json()) as { client_id?: string; client_secret?: string };
-  if (!data.client_id) throw new Error('dynamic client registration did not return a client_id');
-  return { clientId: data.client_id, clientSecret: data.client_secret };
+  const data = parseJson(await res.text());
+  if (!isJsonObject(data) || !isString(data.client_id) || !data.client_id) {
+    throw new Error('dynamic client registration did not return a client_id');
+  }
+  return {
+    clientId: data.client_id,
+    clientSecret: isString(data.client_secret) ? data.client_secret : undefined,
+  };
 }
 
 // --- PKCE (RFC 7636) ---
@@ -192,21 +207,17 @@ export async function unpackState(
     return null;
   }
   if (!valid) return null;
-  let parsed: { connectionId?: unknown; verifier?: unknown; exp?: unknown };
+  let parsed: JsonValue;
   try {
-    parsed = JSON.parse(new TextDecoder().decode(b64urlDecode(body)));
+    parsed = parseJson(new TextDecoder().decode(b64urlDecode(body)));
   } catch {
     return null;
   }
-  if (
-    typeof parsed.connectionId !== 'number' ||
-    typeof parsed.verifier !== 'string' ||
-    typeof parsed.exp !== 'number'
-  ) {
-    return null;
-  }
-  if (Date.now() > parsed.exp) return null;
-  return { connectionId: parsed.connectionId, verifier: parsed.verifier };
+  if (!isJsonObject(parsed)) return null;
+  const { connectionId, verifier, exp } = parsed;
+  if (!isNumber(connectionId) || !isString(verifier) || !isNumber(exp)) return null;
+  if (Date.now() > exp) return null;
+  return { connectionId, verifier };
 }
 
 // --- token grants ---
@@ -218,8 +229,8 @@ export interface TokenResult {
   scope?: string;
 }
 
-function expiresAtFrom(expiresIn: unknown): string | undefined {
-  const seconds = typeof expiresIn === 'number' ? expiresIn : Number(expiresIn);
+function expiresAtFrom(expiresIn: JsonValue | undefined): string | undefined {
+  const seconds = isNumber(expiresIn) ? expiresIn : Number(expiresIn);
   if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
   return new Date(Date.now() + seconds * 1000).toISOString();
 }
@@ -230,21 +241,22 @@ function expiresAtFrom(expiresIn: unknown): string | undefined {
 // a JSON error body still parses, so callers can surface error_description.
 async function tokenRequest(
   tokenEndpoint: string,
-  params: Record<string, string>,
-): Promise<Record<string, unknown> | null> {
+  params: URLSearchParams,
+): Promise<JsonObject | null> {
   let res: Response;
   try {
     res = await fetch(tokenEndpoint, {
       method: 'POST',
       headers: { accept: 'application/json' },
-      body: new URLSearchParams(params),
+      body: params,
     });
   } catch (err) {
     console.warn(`turbodiff: oauth token request failed for ${tokenEndpoint}:`, err);
     return null;
   }
   try {
-    return (await res.json()) as Record<string, unknown>;
+    const parsed = parseJson(await res.text());
+    return isJsonObject(parsed) ? parsed : null;
   } catch (err) {
     console.warn(
       `turbodiff: oauth token response was not JSON from ${tokenEndpoint} (HTTP ${res.status}):`,
@@ -254,12 +266,12 @@ async function tokenRequest(
   }
 }
 
-function describeTokenError(data: Record<string, unknown> | null): string {
-  return typeof data?.error_description === 'string'
-    ? data.error_description
-    : typeof data?.error === 'string'
-      ? data.error
-      : 'no access_token returned';
+function describeTokenError(data: JsonObject | null): string {
+  const errorDescription = data?.error_description;
+  if (isString(errorDescription)) return errorDescription;
+  const error = data?.error;
+  if (isString(error)) return error;
+  return 'no access_token returned';
 }
 
 export async function exchangeAuthorizationCode(
@@ -270,22 +282,23 @@ export async function exchangeAuthorizationCode(
   clientId: string,
   clientSecret?: string,
 ): Promise<TokenResult> {
-  const data = await tokenRequest(tokenEndpoint, {
+  const params = new URLSearchParams({
     grant_type: 'authorization_code',
     code,
     redirect_uri: redirectUri,
     client_id: clientId,
     code_verifier: verifier,
-    ...(clientSecret ? { client_secret: clientSecret } : {}),
   });
-  if (!data || typeof data.access_token !== 'string') {
+  if (clientSecret) params.set('client_secret', clientSecret);
+  const data = await tokenRequest(tokenEndpoint, params);
+  if (!data || !isString(data.access_token)) {
     throw new Error(`OAuth code exchange failed: ${describeTokenError(data)}`);
   }
   return {
     accessToken: data.access_token,
-    refreshToken: typeof data.refresh_token === 'string' ? data.refresh_token : undefined,
+    refreshToken: isString(data.refresh_token) ? data.refresh_token : undefined,
     expiresAt: expiresAtFrom(data.expires_in),
-    scope: typeof data.scope === 'string' ? data.scope : undefined,
+    scope: isString(data.scope) ? data.scope : undefined,
   };
 }
 
@@ -298,16 +311,17 @@ export async function refreshOAuthToken(
   clientId: string,
   clientSecret?: string,
 ): Promise<TokenResult | null> {
-  const data = await tokenRequest(tokenEndpoint, {
+  const params = new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
     client_id: clientId,
-    ...(clientSecret ? { client_secret: clientSecret } : {}),
   });
-  if (!data || typeof data.access_token !== 'string') return null;
+  if (clientSecret) params.set('client_secret', clientSecret);
+  const data = await tokenRequest(tokenEndpoint, params);
+  if (!data || !isString(data.access_token)) return null;
   return {
     accessToken: data.access_token,
-    refreshToken: typeof data.refresh_token === 'string' ? data.refresh_token : undefined,
+    refreshToken: isString(data.refresh_token) ? data.refresh_token : undefined,
     expiresAt: expiresAtFrom(data.expires_in),
   };
 }
@@ -318,13 +332,14 @@ export async function fetchClientCredentialsToken(
   clientSecret: string,
   scope?: string,
 ): Promise<{ accessToken: string; expiresAt?: string }> {
-  const data = await tokenRequest(tokenEndpoint, {
+  const params = new URLSearchParams({
     grant_type: 'client_credentials',
     client_id: clientId,
     client_secret: clientSecret,
-    ...(scope ? { scope } : {}),
   });
-  if (!data || typeof data.access_token !== 'string') {
+  if (scope) params.set('scope', scope);
+  const data = await tokenRequest(tokenEndpoint, params);
+  if (!data || !isString(data.access_token)) {
     throw new Error(`client-credentials token request failed: ${describeTokenError(data)}`);
   }
   return { accessToken: data.access_token, expiresAt: expiresAtFrom(data.expires_in) };

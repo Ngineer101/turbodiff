@@ -14,6 +14,10 @@ type TestEnv = Cloudflare.Env & {
   DB_MIGRATIONS_MULTI_REPO: D1Database;
   DB_MIGRATIONS_IDEMPOTENCY: D1Database;
 };
+// SAFETY: the worker-test harness provides these test-only bindings — the
+// TEST_MIGRATIONS miniflare binding in vitest.worker.config.ts and the
+// DB_MIGRATIONS_* D1 databases in wrangler.test.jsonc — which the generated
+// production Cloudflare.Env cannot know about.
 const testEnv = env as TestEnv;
 
 function migrationIndex(name: string): number {
@@ -77,6 +81,10 @@ describe('D1 migrations', () => {
 		 VALUES (11, 1001, 'review', 'Review', 'Review the change')`,
       ),
       db.prepare(
+        `INSERT INTO repositories (id, installation_id, owner, name)
+		 VALUES (31, 1001, 'acme', 'web')`,
+      ),
+      db.prepare(
         `INSERT INTO agent_connections
 		 (id, agent_id, name, url, tool_allowlist, auth_ciphertext, optional)
 		 VALUES (21, 11, 'catalog', 'https://mcp.example.test', '["search"]', 'sealed', 0)`,
@@ -85,17 +93,28 @@ describe('D1 migrations', () => {
 
     await applyD1Migrations(db, testEnv.TEST_MIGRATIONS.slice(start));
 
+    // 0022 moves the per-agent row into the registry; 0032 re-scopes the
+    // attachment onto every enabled repo of the connection's installation.
     const connection = await db
       .prepare(
-        `SELECT c.*, l.agent_id FROM connections c
-		 JOIN agent_connection_links l ON l.connection_id = c.id`,
+        `SELECT c.*, l.repository_id, l.reviews, l.automations FROM connections c
+		 JOIN repo_connections l ON l.connection_id = c.id`,
       )
-      .first<{ name: string; auth_ciphertext: string; optional: number; agent_id: number }>();
+      .first<{
+        name: string;
+        auth_ciphertext: string;
+        optional: number;
+        repository_id: number;
+        reviews: number;
+        automations: number;
+      }>();
     expect(connection).toMatchObject({
       name: 'catalog',
       auth_ciphertext: 'sealed',
       optional: 0,
-      agent_id: 11,
+      repository_id: 31,
+      reviews: 1,
+      automations: 1,
     });
   });
 

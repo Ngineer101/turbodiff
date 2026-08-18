@@ -1,3 +1,5 @@
+import { isJsonArray, isJsonObject, isString, parseJson, type JsonObject } from '../shared/json.ts';
+
 // Best-effort MCP streamable-HTTP handshake backing the "test" button on
 // agent connections: initialize → notifications/initialized → tools/list.
 // Reports the server identity and discovered tool names without mounting
@@ -9,9 +11,17 @@ export interface McpTestResult {
   tools?: string[];
 }
 
+// The JSON-RPC requests this probe sends.
+type McpRpcRequest = {
+  jsonrpc: '2.0';
+  id?: number;
+  method: string;
+  params?: JsonObject;
+};
+
 // Streamable-HTTP servers may answer application/json or a one-shot SSE
-// stream; accept both.
-function parseRpcBody(text: string): { result?: unknown; error?: { message?: string } } | null {
+// stream; accept both. A JSON-RPC response envelope is always an object.
+function parseRpcBody(text: string): JsonObject | null {
   const candidates =
     text.startsWith('data:') || text.includes('\ndata:')
       ? text
@@ -21,7 +31,8 @@ function parseRpcBody(text: string): { result?: unknown; error?: { message?: str
       : [text];
   for (const c of candidates) {
     try {
-      return JSON.parse(c);
+      const parsed = parseJson(c);
+      if (isJsonObject(parsed)) return parsed;
     } catch {
       // try the next SSE data line
     }
@@ -29,21 +40,25 @@ function parseRpcBody(text: string): { result?: unknown; error?: { message?: str
   return null;
 }
 
+function rpcErrorMessage(body: JsonObject): string | null {
+  const error = body['error'];
+  return isJsonObject(error) && isString(error['message']) ? error['message'] : null;
+}
+
 export async function testMcpEndpoint(
   url: string,
   auth?: { headerName: string; headerValue: string },
 ): Promise<McpTestResult> {
-  const baseHeaders: Record<string, string> = {
+  const baseHeaders = new Headers({
     'content-type': 'application/json',
     accept: 'application/json, text/event-stream',
-    ...(auth ? { [auth.headerName]: auth.headerValue } : {}),
+  });
+  if (auth) baseHeaders.set(auth.headerName, auth.headerValue);
+  const rpc = (body: McpRpcRequest, session?: string | null) => {
+    const headers = new Headers(baseHeaders);
+    if (session) headers.set('mcp-session-id', session);
+    return fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
   };
-  const rpc = (body: object, session?: string | null) =>
-    fetch(url, {
-      method: 'POST',
-      headers: { ...baseHeaders, ...(session ? { 'mcp-session-id': session } : {}) },
-      body: JSON.stringify(body),
-    });
 
   let initRes: Response;
   try {
@@ -72,17 +87,23 @@ export async function testMcpEndpoint(
 
   const session = initRes.headers.get('mcp-session-id');
   const init = parseRpcBody(await initRes.text());
-  if (!init || init.error) {
+  if (!init || init['error']) {
+    const message = init ? rpcErrorMessage(init) : null;
     return {
       ok: false,
-      detail: `initialize failed: ${init?.error?.message ?? 'unparseable response'}`,
+      detail: `initialize failed: ${message ?? 'unparseable response'}`,
     };
   }
-  const serverInfo = (init.result as { serverInfo?: { name?: string; version?: string } })
-    ?.serverInfo;
-  const identity = serverInfo?.name
-    ? `${serverInfo.name}${serverInfo.version ? ` v${serverInfo.version}` : ''}`
-    : 'server';
+  const initResult = init['result'];
+  const serverInfo = isJsonObject(initResult) ? initResult['serverInfo'] : undefined;
+  let identity = 'server';
+  if (isJsonObject(serverInfo)) {
+    const name = serverInfo['name'];
+    const version = serverInfo['version'];
+    if (isString(name) && name) {
+      identity = isString(version) && version ? `${name} v${version}` : name;
+    }
+  }
 
   // Handshake courtesy + tool discovery; a failure here still counts as a
   // reachable, authenticated server.
@@ -90,10 +111,10 @@ export async function testMcpEndpoint(
     await rpc({ jsonrpc: '2.0', method: 'notifications/initialized' }, session);
     const listRes = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list' }, session);
     const list = parseRpcBody(await listRes.text());
-    const tools = (list?.result as { tools?: { name?: string }[] })?.tools
-      ?.map((t) => t.name)
-      .filter((n): n is string => typeof n === 'string');
-    if (tools) {
+    const listResult = list ? list['result'] : undefined;
+    const rawTools = isJsonObject(listResult) ? listResult['tools'] : undefined;
+    if (isJsonArray(rawTools)) {
+      const tools = rawTools.map((t) => (isJsonObject(t) ? t['name'] : undefined)).filter(isString);
       return { ok: true, detail: `connected to ${identity}; ${tools.length} tools`, tools };
     }
   } catch {

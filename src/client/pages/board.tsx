@@ -15,7 +15,9 @@ import {
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import type { ApiBoard, ApiPlan, ApiTodo } from '../../shared/api-types.ts';
+import { isJsonObject, isString } from '../../shared/json.ts';
 import { api, ApiError } from '../lib/api.ts';
+import { useDictation } from '../lib/dictation.ts';
 import { ago, fmtUsd } from '../lib/format.ts';
 import { boardQuery } from '../lib/queries.ts';
 import { taskColumn, taskStages, taskState } from '../lib/task-state.ts';
@@ -29,6 +31,7 @@ import {
   TelemetryStrip,
   type LampTone,
 } from '../components/identity.tsx';
+import { MicButton } from '../components/mic-button.tsx';
 import { Muted, PageTitle } from '../components/section.tsx';
 import { Button } from '../components/ui/button.tsx';
 import { Card } from '../components/ui/card.tsx';
@@ -43,7 +46,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popove
 
 type ColumnKey = 'todo' | 'in_progress' | 'done';
 
-function onApiError(err: unknown) {
+function onApiError<T>(err: T) {
   toast.error(err instanceof ApiError ? err.message : 'Request failed');
 }
 
@@ -56,7 +59,7 @@ function QuickAdd({ board }: { board: ApiBoard }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
-      const tag = (e.target as HTMLElement | null)?.tagName;
+      const tag = e.target instanceof HTMLElement ? e.target.tagName : undefined;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       e.preventDefault();
       inputRef.current?.focus();
@@ -117,6 +120,9 @@ function StartDialog({
   const queryClient = useQueryClient();
   const [title, setTitle] = useState(todo.title);
   const [requirements, setRequirements] = useState(todo.notes ?? todo.title);
+  const dictation = useDictation((text) =>
+    setRequirements((prev) => (prev.trim() ? `${prev}\n\n${text}` : text)),
+  );
   const [files, setFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const start = useMutation({
@@ -128,19 +134,17 @@ function StartDialog({
         const fd = new FormData();
         fd.append('file', file);
         const res = await fetch('/api/uploads', { method: 'POST', body: fd });
-        const data = (await res.json().catch(() => null)) as {
-          key?: string;
-          name?: string;
-          content_type?: string;
-          error?: string;
-        } | null;
-        if (!res.ok || !data?.key) {
-          throw new ApiError(data?.error ?? `upload failed for ${file.name}`, res.status);
+        const body = await res.json().catch(() => null);
+        const data = isJsonObject(body) ? body : null;
+        const key = data && isString(data.key) ? data.key : null;
+        if (!res.ok || !key) {
+          const message = data && isString(data.error) ? data.error : null;
+          throw new ApiError(message ?? `upload failed for ${file.name}`, res.status);
         }
         attachments.push({
-          key: data.key,
-          name: data.name ?? file.name,
-          content_type: data.content_type ?? file.type,
+          key,
+          name: data && isString(data.name) ? data.name : file.name,
+          content_type: data && isString(data.content_type) ? data.content_type : file.type,
         });
       }
       return api.post(`/api/todos/${todo.id}/start`, { title, requirements, attachments });
@@ -175,8 +179,15 @@ function StartDialog({
           </Field>
           <Field label="Requirements">
             <Textarea
-              value={requirements}
+              value={
+                dictation.recording
+                  ? requirements.trim()
+                    ? `${requirements}\n\n${dictation.interim}`
+                    : dictation.interim
+                  : requirements
+              }
               onChange={(e) => setRequirements(e.target.value)}
+              disabled={dictation.recording}
               required
               className="min-h-28"
               placeholder="What should be built? The planning agent reads the repo and drafts a plan you approve."
@@ -195,14 +206,17 @@ function StartDialog({
                 e.target.value = '';
               }}
             />
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <Paperclip className="size-3.5" aria-hidden /> Attach files (PDF, images)
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <Paperclip className="size-3.5" aria-hidden /> Attach files (PDF, images)
+              </Button>
+              <MicButton dictation={dictation} />
+            </div>
             {files.length > 0 ? (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {files.map((f, i) => (

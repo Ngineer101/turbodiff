@@ -8,7 +8,7 @@ import { SkillForm, type SkillFormValues } from '../components/skill-form.tsx';
 import { ConfirmButton } from '../components/confirm-button.tsx';
 import { PageTitle } from '../components/section.tsx';
 
-function onApiError(err: unknown) {
+function onApiError<T>(err: T) {
   toast.error(err instanceof ApiError ? err.message : 'request failed');
 }
 

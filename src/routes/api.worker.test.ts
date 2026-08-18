@@ -9,10 +9,13 @@ import { Hono } from 'hono';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import type { AuthedUser } from '../lib/auth.ts';
 import type { ApiBoard } from '../shared/api-types.ts';
+import { isJsonObject, isString, parseJson } from '../shared/json.ts';
 import { createApiRoutes, type ApiRouteDependencies } from './api.ts';
 
 type TestEnv = Cloudflare.Env & { TEST_MIGRATIONS: D1Migration[] };
 type Authenticate = NonNullable<ApiRouteDependencies['authenticate']>;
+// SAFETY: vitest.worker.config.ts provisions the TEST_MIGRATIONS binding for
+// this pool on top of the generated Cloudflare.Env.
 const testEnv = env as TestEnv;
 
 const acmeUser: AuthedUser = {
@@ -65,6 +68,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   const tables = [
+    'push_subscriptions',
     'todo_repositories',
     'todos',
     'repo_agents',
@@ -107,6 +111,8 @@ describe('authenticated tenant isolation', () => {
   it('returns only installations, repositories, and todos owned by the caller', async () => {
     const response = await authenticatedApi().request('https://turbodiff.test/api/board');
     expect(response.status).toBe(200);
+    // SAFETY: /api/board's 200 response body is the ApiBoard contract this test
+    // exercises; the assertions below fail on any drift in that shape.
     const board = (await response.json()) as ApiBoard;
 
     expect(board.installations).toEqual([{ id: 1001, account_login: 'acme' }]);
@@ -207,5 +213,127 @@ describe('authenticated tenant isolation', () => {
       enabled: number;
     }>();
     expect(repo?.enabled).toBe(0);
+  });
+});
+
+describe('push subscriptions', () => {
+  it('includes a VAPID public key string on /me', async () => {
+    const response = await authenticatedApi().request('https://turbodiff.test/api/me');
+    expect(response.status).toBe(200);
+    const me = parseJson(await response.text());
+    expect(isJsonObject(me) && isString(me.vapid_public_key)).toBe(true);
+  });
+
+  it('upserts a subscription row for the signed-in user', async () => {
+    const response = await authenticatedApi().request('https://turbodiff.test/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        endpoint: 'https://push.example/abc',
+        keys: { p256dh: 'p256dh-key', auth: 'auth-key' },
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    const row = await testEnv.DB.prepare(
+      'SELECT user_github_id, p256dh, auth FROM push_subscriptions WHERE endpoint = ?1',
+    )
+      .bind('https://push.example/abc')
+      .first<{ user_github_id: number; p256dh: string; auth: string }>();
+    expect(row).toEqual({ user_github_id: 3001, p256dh: 'p256dh-key', auth: 'auth-key' });
+  });
+
+  it('rejects an incomplete subscription body', async () => {
+    const response = await authenticatedApi().request('https://turbodiff.test/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ endpoint: 'https://push.example/abc', keys: { p256dh: '' } }),
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it('deletes only the calling user’s subscription by endpoint', async () => {
+    await testEnv.DB.prepare(
+      `INSERT INTO push_subscriptions (user_github_id, endpoint, p256dh, auth)
+			 VALUES (3001, 'https://push.example/mine', 'p', 'a'),
+			        (4001, 'https://push.example/theirs', 'p', 'a')`,
+    ).run();
+
+    const foreign = await authenticatedApi().request(
+      'https://turbodiff.test/api/push/unsubscribe',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ endpoint: 'https://push.example/theirs' }),
+      },
+    );
+    expect(foreign.status).toBe(200);
+    expect(
+      await testEnv.DB.prepare('SELECT id FROM push_subscriptions WHERE endpoint = ?1')
+        .bind('https://push.example/theirs')
+        .first(),
+    ).not.toBeNull();
+
+    const owned = await authenticatedApi().request('https://turbodiff.test/api/push/unsubscribe', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ endpoint: 'https://push.example/mine' }),
+    });
+    expect(owned.status).toBe(200);
+    expect(
+      await testEnv.DB.prepare('SELECT id FROM push_subscriptions WHERE endpoint = ?1')
+        .bind('https://push.example/mine')
+        .first(),
+    ).toBeNull();
+  });
+});
+
+// The success path (a real audio file transcribed by the AI binding) isn't
+// covered here: wrangler.test.jsonc has no "ai" binding, matching every
+// other worker test's D1-only fixture — exercising real Workers AI needs
+// account credentials this offline suite doesn't have.
+describe('dictation transcription', () => {
+  it('rejects a request without a durable session', async () => {
+    const response = await apiApp().request('https://turbodiff.test/api/transcribe', {
+      method: 'POST',
+      body: new FormData(),
+    });
+    expect(response.status).toBe(401);
+  });
+
+  it('blocks a signed-in user with zero installations', async () => {
+    const app = apiApp({
+      authenticate: async () => ({ ...acmeUser, installationIds: [] }),
+    });
+    const response = await app.request('https://turbodiff.test/api/transcribe', {
+      method: 'POST',
+      body: new FormData(),
+    });
+    expect(response.status).toBe(403);
+    const data = parseJson(await response.text());
+    expect(isJsonObject(data) && isString(data.error)).toBe(true);
+  });
+
+  it('requires a multipart "audio" file field', async () => {
+    const fd = new FormData();
+    fd.append('audio', 'not-a-file');
+    const response = await authenticatedApi().request('https://turbodiff.test/api/transcribe', {
+      method: 'POST',
+      body: fd,
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it('rejects a recording larger than the configured size cap', async () => {
+    const oversized = new File([new Uint8Array(15 * 1024 * 1024 + 1)], 'clip.webm', {
+      type: 'audio/webm',
+    });
+    const fd = new FormData();
+    fd.append('audio', oversized);
+    const response = await authenticatedApi().request('https://turbodiff.test/api/transcribe', {
+      method: 'POST',
+      body: fd,
+    });
+    expect(response.status).toBe(400);
   });
 });

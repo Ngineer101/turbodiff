@@ -8,13 +8,13 @@ import { buttonVariants } from '../components/ui/button.tsx';
 import { Pill, type PillProps } from '../components/ui/pill.tsx';
 import { cn } from '../lib/utils.ts';
 
-const STATUS_TONE: Record<string, PillProps['tone']> = {
+const STATUS_TONE = {
   running: 'running',
   pr_opened: 'on',
   no_changes: 'neutral',
   checks_failed: 'warn',
   failed: 'red',
-};
+} satisfies Record<string, PillProps['tone']>;
 
 export function AutomationRunPage() {
   const { runId } = useParams({ from: '/shell/automations/runs/$runId' });

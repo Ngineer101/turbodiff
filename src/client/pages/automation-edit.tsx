@@ -12,17 +12,17 @@ import { EmptyState, PageTitle, SectionHeading } from '../components/section.tsx
 import { Button } from '../components/ui/button.tsx';
 import { Pill, type PillProps } from '../components/ui/pill.tsx';
 
-function onApiError(err: unknown) {
+function onApiError<T>(err: T) {
   toast.error(err instanceof ApiError ? err.message : 'request failed');
 }
 
-const STATUS_TONE: Record<string, PillProps['tone']> = {
+const STATUS_TONE = {
   running: 'running',
   pr_opened: 'on',
   no_changes: 'neutral',
   checks_failed: 'warn',
   failed: 'red',
-};
+} satisfies Record<string, PillProps['tone']>;
 
 function RunRow({ run, repo }: { run: ApiAutomationRunSummary; repo: string }) {
   return (
