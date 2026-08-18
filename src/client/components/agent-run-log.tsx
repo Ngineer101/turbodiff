@@ -9,7 +9,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from './
 // Collapsed per-run session log — the full stdout+stderr of one sandboxed
 // agent-CLI invocation. Not fetched until the user expands it: most runs are
 // never inspected, and the transcripts can be large.
-const KIND_LABEL: Record<ApiAgentRun['kind'], string> = {
+const KIND_LABEL = {
   plan_analyze: 'Plan analyze',
   plan_refine: 'Plan refine',
   generate: 'Generate',
@@ -17,7 +17,7 @@ const KIND_LABEL: Record<ApiAgentRun['kind'], string> = {
   fix: 'Fix',
   automation: 'Automation',
   resolve_conflict: 'Resolve conflict',
-};
+} satisfies Record<ApiAgentRun['kind'], string>;
 
 function AgentRunEntry({ run, open }: { run: ApiAgentRun; open: boolean }) {
   const { data, isLoading, isError } = useQuery({ ...agentRunLogQuery(run.id), enabled: open });

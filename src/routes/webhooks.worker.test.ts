@@ -19,6 +19,7 @@ import {
   type RepositoryRow,
 } from '../lib/db.ts';
 import { FIX_MAX_ATTEMPTS } from '../lib/fixer.ts';
+import type { JsonObject } from '../shared/json.ts';
 import {
   createWebhookRoutes,
   type ReviewDispatcher,
@@ -29,6 +30,9 @@ type TestEnv = Cloudflare.Env & {
   TEST_MIGRATIONS: D1Migration[];
   GITHUB_WEBHOOK_SECRET: string;
 };
+// SAFETY: vitest.worker.config.ts provisions the TEST_MIGRATIONS binding and
+// the GITHUB_WEBHOOK_SECRET var for this pool on top of the generated
+// Cloudflare.Env.
 const testEnv = env as TestEnv;
 
 function webhookApp(
@@ -57,11 +61,7 @@ async function signature(body: string): Promise<string> {
   return `sha256=${Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
 }
 
-async function postWebhook(
-  app: Hono,
-  event: string,
-  payload: Record<string, unknown>,
-): Promise<Response> {
+async function postWebhook(app: Hono, event: string, payload: JsonObject): Promise<Response> {
   const body = JSON.stringify(payload);
   return app.request('https://turbodiff.test/webhooks/github', {
     method: 'POST',
@@ -146,12 +146,12 @@ describe('GitHub webhook authentication and mirroring', () => {
     expect((await postWebhook(webhookApp(), 'installation', created)).status).toBe(200);
     expect((await postWebhook(webhookApp(), 'installation', created)).status).toBe(200);
 
-    const counts = await testEnv.DB.batch([
+    const counts = await testEnv.DB.batch<{ n: number }>([
       testEnv.DB.prepare('SELECT COUNT(*) AS n FROM installations'),
       testEnv.DB.prepare('SELECT COUNT(*) AS n FROM repositories'),
       testEnv.DB.prepare('SELECT COUNT(*) AS n FROM agents'),
     ]);
-    expect(counts.map((result) => (result.results[0] as { n: number }).n)).toEqual([1, 1, 4]);
+    expect(counts.map((result) => result.results[0].n)).toEqual([1, 1, 4]);
 
     const suspended = {
       action: 'suspend',

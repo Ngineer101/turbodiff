@@ -7,6 +7,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
+import { isJsonObject, isString } from '../../shared/json.ts';
+
 export interface Dictation {
   supported: boolean;
   recording: boolean;
@@ -22,16 +24,19 @@ async function postAudio(blob: Blob, signal: AbortSignal): Promise<string> {
   const fd = new FormData();
   fd.append('audio', blob, 'dictation.webm');
   const res = await fetch('/api/transcribe', { method: 'POST', body: fd, signal });
-  const data = (await res.json().catch(() => null)) as { text?: string; error?: string } | null;
-  if (!res.ok) throw new Error(data?.error ?? 'transcription failed');
-  return data?.text ?? '';
+  const body = await res.json().catch(() => null);
+  const data = isJsonObject(body) ? body : null;
+  if (!res.ok) {
+    throw new Error(data && isString(data.error) ? data.error : 'transcription failed');
+  }
+  return data && isString(data.text) ? data.text : '';
 }
 
 export function useDictation(onFinal: (text: string) => void): Dictation {
   const supported =
-    typeof navigator !== 'undefined' &&
+    'navigator' in globalThis &&
     !!navigator.mediaDevices?.getUserMedia &&
-    typeof MediaRecorder !== 'undefined';
+    'MediaRecorder' in globalThis;
 
   const [recording, setRecording] = useState(false);
   const [interim, setInterim] = useState('');

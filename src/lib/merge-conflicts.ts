@@ -34,8 +34,12 @@ export async function checkMergeability(
   prNumber: number,
   opts?: { retryOnUnknown?: boolean },
 ): Promise<PrMergeability> {
+  // SAFETY: gh() throws on non-2xx, and GitHub's "get a pull request" response
+  // always carries mergeable (nullable), mergeable_state, and base.ref.
   const fetchPr = () =>
-    gh(token, `/repos/${owner}/${repo}/pulls/${prNumber}`).then((r) => r.json() as Promise<PrPayload>);
+    gh(token, `/repos/${owner}/${repo}/pulls/${prNumber}`).then(
+      (r) => r.json() as Promise<PrPayload>,
+    );
   let pr = await fetchPr();
   if (pr.mergeable_state === 'unknown' && opts?.retryOnUnknown) {
     await new Promise((resolve) => setTimeout(resolve, 1_500));
@@ -56,6 +60,8 @@ export async function postConflictCommentIfAbsent(
   prNumber: number,
   baseRef: string,
 ): Promise<void> {
+  // SAFETY: gh() throws on non-2xx, and GitHub's "list issue comments" response
+  // is an array whose items always carry a string body.
   const comments = (await (
     await gh(token, `/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100`)
   ).json()) as { body: string }[];

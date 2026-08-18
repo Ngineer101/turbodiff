@@ -131,6 +131,14 @@ import {
   unpackState,
 } from '../lib/mcp-oauth.ts';
 import { DEFAULT_MODEL, RESERVED_AGENT_SLUGS } from '../lib/personas.ts';
+import {
+  isBoolean,
+  isJsonArray,
+  isNumber,
+  isString,
+  type JsonObject,
+  type JsonValue,
+} from '../shared/json.ts';
 import type {
   ApiAgentDetail,
   ApiAgentRun,
@@ -325,6 +333,8 @@ function verificationSummary(
   let total = 0;
   let failed = 0;
   try {
+    // SAFETY: verifications.results is written only by the verify pipeline as a
+    // serialized {index, verdict, note}[]; anything unparsable lands in catch.
     const results = JSON.parse(resultsJson ?? '[]') as { verdict: string }[];
     total = results.length;
     failed = results.filter((r) => r.verdict === 'fail').length;
@@ -339,19 +349,20 @@ function serializeAgentRun(r: AgentRunRow): ApiAgentRun {
 }
 
 type CockpitFixStatus = NonNullable<ApiCockpitComment['fix_status']>;
-const COCKPIT_FIX_STATUSES = new Set<CockpitFixStatus>([
+const COCKPIT_FIX_STATUSES = new Set<string>([
   'running',
   'fixed',
   'no_changes',
   'tests_failed',
   'failed',
-]);
+] satisfies CockpitFixStatus[]);
+
+function isCockpitFixStatus<T extends string>(value: T): value is T & CockpitFixStatus {
+  return COCKPIT_FIX_STATUSES.has(value);
+}
 
 function serializeCockpitComment(r: CockpitCommentRow): ApiCockpitComment {
-  const fixStatus: CockpitFixStatus | null =
-    r.fix_status && COCKPIT_FIX_STATUSES.has(r.fix_status as CockpitFixStatus)
-      ? (r.fix_status as CockpitFixStatus)
-      : null;
+  const fixStatus = r.fix_status && isCockpitFixStatus(r.fix_status) ? r.fix_status : null;
   return {
     id: r.id,
     path: r.path,
@@ -366,19 +377,25 @@ function serializeCockpitComment(r: CockpitCommentRow): ApiCockpitComment {
 }
 
 function serializeTask(p: PlanWithRepo, repoStatuses: TaskRepoStatusRow[]): ApiPlan {
+  // SAFETY: plans.questions is written only by the planner (planner.ts) as a
+  // serialized question array matching ApiPlanQuestion.
+  const questions = p.questions ? (JSON.parse(p.questions) as ApiPlanQuestion[]) : [];
+  // SAFETY: plans.acceptance is written only by the planner as a serialized string[].
+  const acceptance = p.acceptance ? (JSON.parse(p.acceptance) as string[]) : [];
+  // SAFETY: plans.attachments is written only by POST /todos/:id/start as a
+  // serialized {key, name, content_type}[] — name is the only field read back.
+  const attachments = p.attachments ? (JSON.parse(p.attachments) as { name: string }[]) : [];
   return {
     id: p.id,
     title: p.title,
     status: p.status,
     error: p.error,
     created_at: p.created_at,
-    questions: p.questions ? (JSON.parse(p.questions) as ApiPlanQuestion[]) : [],
-    acceptance: p.acceptance ? (JSON.parse(p.acceptance) as string[]) : [],
+    questions,
+    acceptance,
     plan: p.plan,
     archived: p.archived === 1,
-    attachments: (p.attachments ? (JSON.parse(p.attachments) as { name: string }[]) : []).map(
-      (a) => ({ name: a.name }),
-    ),
+    attachments: attachments.map((a) => ({ name: a.name })),
     repos: repoStatuses
       .filter((r) => r.plan_id === p.id)
       .map((r) => ({
@@ -406,8 +423,11 @@ interface AgentFormValues {
   model: string;
 }
 
-function readAgentPayload(body: Record<string, unknown>): AgentFormValues {
-  const get = (k: string) => (typeof body[k] === 'string' ? (body[k] as string).trim() : '');
+function readAgentPayload(body: JsonObject): AgentFormValues {
+  const get = (k: string) => {
+    const v = body[k];
+    return isString(v) ? v.trim() : '';
+  };
   return {
     name: get('name'),
     slug: get('slug').toLowerCase(),
@@ -435,8 +455,11 @@ interface SkillFormValues {
   instructions: string;
 }
 
-function readSkillPayload(body: Record<string, unknown>): SkillFormValues {
-  const get = (k: string) => (typeof body[k] === 'string' ? (body[k] as string).trim() : '');
+function readSkillPayload(body: JsonObject): SkillFormValues {
+  const get = (k: string) => {
+    const v = body[k];
+    return isString(v) ? v.trim() : '';
+  };
   return {
     name: get('name'),
     slug: get('slug').toLowerCase(),
@@ -456,8 +479,11 @@ function validateSkill(v: SkillFormValues, checkSlug: boolean): string | null {
 const TIME_OF_DAY_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const SCHEDULE_KINDS = new Set(['hourly', 'daily', 'weekly']);
 
-function readAutomationPayload(body: Record<string, unknown>): AutomationFields {
-  const get = (k: string) => (typeof body[k] === 'string' ? (body[k] as string).trim() : '');
+function readAutomationPayload(body: JsonObject): AutomationFields {
+  const get = (k: string) => {
+    const v = body[k];
+    return isString(v) ? v.trim() : '';
+  };
   const timeOfDay = get('time_of_day');
   const dayOfWeek = body.day_of_week;
   return {
@@ -465,7 +491,7 @@ function readAutomationPayload(body: Record<string, unknown>): AutomationFields 
     prompt: get('prompt'),
     schedule_kind: get('schedule_kind'),
     time_of_day: timeOfDay || null,
-    day_of_week: typeof dayOfWeek === 'number' && Number.isInteger(dayOfWeek) ? dayOfWeek : null,
+    day_of_week: isNumber(dayOfWeek) && Number.isInteger(dayOfWeek) ? dayOfWeek : null,
   };
 }
 
@@ -499,6 +525,8 @@ function serializeAutomation(
     id: a.id,
     name: a.name,
     repository: { id: repo.id, owner: repo.owner, name: repo.name },
+    // SAFETY: automations.schedule_kind passes validateAutomation's SCHEDULE_KINDS
+    // ('hourly' | 'daily' | 'weekly') membership check before every insert/update.
     schedule_kind: a.schedule_kind as ApiAutomationSummary['schedule_kind'],
     time_of_day: a.time_of_day,
     day_of_week: a.day_of_week,
@@ -901,7 +929,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       .json<{
         title?: string;
         requirements?: string;
-        attachments?: Record<string, unknown>[];
+        attachments?: JsonObject[];
       }>()
       .catch(() => null);
     const title = body?.title?.trim() || todo.title;
@@ -911,10 +939,10 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     }
     const rawAtts = Array.isArray(body?.attachments) ? body.attachments : [];
     const attachments = rawAtts
-      .map((a: Record<string, unknown>) => ({
-        key: typeof a.key === 'string' ? a.key : '',
-        name: typeof a.name === 'string' ? a.name.slice(-120) : 'attachment',
-        content_type: typeof a.content_type === 'string' ? a.content_type : '',
+      .map((a) => ({
+        key: isString(a.key) ? a.key : '',
+        name: isString(a.name) ? a.name.slice(-120) : 'attachment',
+        content_type: isString(a.content_type) ? a.content_type : '',
       }))
       .filter((a) => a.key.startsWith('plan-uploads/'))
       .slice(0, 5);
@@ -957,10 +985,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const plan = await authorizedPlan(c);
     if (!plan) return c.json({ error: 'unknown task' }, 404);
     const body = await c.req.json<{ archived?: boolean }>().catch(() => null);
-    if (typeof body?.archived !== 'boolean') {
+    const archived = body?.archived;
+    if (!isBoolean(archived)) {
       return c.json({ error: 'body must be {"archived": true|false}' }, 400);
     }
-    await setPlanArchived(plan.id, body.archived);
+    await setPlanArchived(plan.id, archived);
     return c.json({ ok: true });
   });
 
@@ -970,15 +999,15 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (plan.status !== 'awaiting_answers') {
       return c.json({ error: `plan is ${plan.status}, not awaiting answers` }, 409);
     }
-    const body = await c.req.json<{ answers?: unknown }>().catch(() => null);
-    if (!Array.isArray(body?.answers)) {
+    const body = await c.req.json<{ answers?: JsonValue }>().catch(() => null);
+    const given = body?.answers;
+    if (!isJsonArray(given)) {
       return c.json({ error: 'body must be {"answers": ["...", ...]}' }, 400);
     }
-    const given = body.answers as unknown[];
     const questions: ApiPlanQuestion[] = plan.questions ? JSON.parse(plan.questions) : [];
     const answers = questions.map((_, i) => {
       const v = given[i];
-      return typeof v === 'string' ? v : v == null ? '' : JSON.stringify(v);
+      return isString(v) ? v : v == null ? '' : JSON.stringify(v);
     });
     await updatePlan(plan.id, { status: 'refining', answers: JSON.stringify(answers) });
     await env.FACTORY_QUEUE.send({ kind: 'plan_refine', planId: plan.id });
@@ -1082,33 +1111,30 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     ]);
     const ghBase = `/repos/${repo.owner}/${repo.name}`;
     const [prMeta, prFiles, prReviews] = await Promise.all([
-      gh(token, `${ghBase}/pulls/${feature.pr_number}`).then(
-        (r) =>
-          r.json() as Promise<{
-            state: string;
-            merged: boolean;
-            html_url: string;
+      gh(token, `${ghBase}/pulls/${feature.pr_number}`).then((r) =>
+        r.json<{
+          state: string;
+          merged: boolean;
+          html_url: string;
+          additions: number;
+          deletions: number;
+          changed_files: number;
+          mergeable_state: string | null;
+        }>(),
+      ),
+      gh(token, `${ghBase}/pulls/${feature.pr_number}/files?per_page=100`).then((r) =>
+        r.json<
+          {
+            filename: string;
+            status: string;
             additions: number;
             deletions: number;
-            changed_files: number;
-            mergeable_state: string | null;
-          }>,
+            patch?: string;
+          }[]
+        >(),
       ),
-      gh(token, `${ghBase}/pulls/${feature.pr_number}/files?per_page=100`).then(
-        (r) =>
-          r.json() as Promise<
-            {
-              filename: string;
-              status: string;
-              additions: number;
-              deletions: number;
-              patch?: string;
-            }[]
-          >,
-      ),
-      gh(token, `${ghBase}/pulls/${feature.pr_number}/reviews?per_page=100`).then(
-        (r) =>
-          r.json() as Promise<{ state: string; body: string; user: { login: string } | null }[]>,
+      gh(token, `${ghBase}/pulls/${feature.pr_number}/reviews?per_page=100`).then((r) =>
+        r.json<{ state: string; body: string; user: { login: string } | null }[]>(),
       ),
     ]);
 
@@ -1142,6 +1168,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     base.comments = cockpitComments.map(serializeCockpitComment);
     base.plan = plan?.plan ?? null;
 
+    // SAFETY: verifications.demo is written only by the verify pipeline as a
+    // serialized {video, caption} object.
     const demo = verification?.demo
       ? (JSON.parse(verification.demo) as { video?: string; caption?: string })
       : null;
@@ -1190,9 +1218,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const payload = await c.req
       .json<{ path?: string; line?: number; side?: string; body?: string }>()
       .catch(() => null);
+    const line = payload?.line;
     if (
       !payload?.path ||
-      !Number.isInteger(payload.line) ||
+      !isNumber(line) ||
+      !Number.isInteger(line) ||
       !payload.body?.trim() ||
       !feature.pr_number
     ) {
@@ -1202,7 +1232,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const commentId = await createCockpitComment(
       feature.id,
       payload.path,
-      payload.line as number,
+      line,
       payload.side === 'deletions' ? 'deletions' : 'additions',
       payload.body.trim(),
       session.login,
@@ -1367,8 +1397,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const raw = Array.isArray(body?.comments) ? body.comments : [];
     const comments = raw
       .map((f) => ({
-        snippet: typeof f.snippet === 'string' ? f.snippet.trim().slice(0, 300) : '',
-        comment: typeof f.comment === 'string' ? f.comment.trim().slice(0, 1000) : '',
+        snippet: isString(f.snippet) ? f.snippet.trim().slice(0, 300) : '',
+        comment: isString(f.comment) ? f.comment.trim().slice(0, 1000) : '',
       }))
       .filter((f) => f.comment)
       .slice(0, 20);
@@ -1543,7 +1573,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.post('/agents', async (c) => {
     const { installationIds } = c.get('user');
     if (installationIds.length === 0) return c.json({ error: 'no installations' }, 404);
-    const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+    const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
     const values = readAgentPayload(body);
     let error = validateAgent(values, true);
@@ -1591,7 +1621,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.put('/agents/:id', async (c) => {
     const agent = await authorizedAgent(c);
     if (!agent) return c.json({ error: 'unknown agent' }, 404);
-    const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+    const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
     const values = { ...readAgentPayload(body), slug: agent.slug };
     const error = validateAgent(values, false);
@@ -1645,7 +1675,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.post('/skills', async (c) => {
     const { installationIds } = c.get('user');
     if (installationIds.length === 0) return c.json({ error: 'no installations' }, 404);
-    const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+    const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
     const values = readSkillPayload(body);
     let error = validateSkill(values, true);
@@ -1678,7 +1708,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.put('/skills/:id', async (c) => {
     const skill = await authorizedSkill(c);
     if (!skill) return c.json({ error: 'unknown skill' }, 404);
-    const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+    const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
     const values = readSkillPayload(body);
     const error = validateSkill(values, true);
@@ -1739,7 +1769,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
 
   app.post('/automations', async (c) => {
     const { installationIds } = c.get('user');
-    const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+    const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
     const values = readAutomationPayload(body);
     const error = validateAutomation(values);
@@ -1751,6 +1781,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     }
     const nextRunAt = computeNextRunAt(
       {
+        // SAFETY: validateAutomation returned null above, so schedule_kind passed
+        // the SCHEDULE_KINDS ('hourly' | 'daily' | 'weekly') membership check.
         kind: values.schedule_kind as 'hourly' | 'daily' | 'weekly',
         timeOfDay: values.time_of_day,
         dayOfWeek: values.day_of_week,
@@ -1778,7 +1810,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.put('/automations/:id', async (c) => {
     const automation = await authorizedAutomation(c);
     if (!automation) return c.json({ error: 'unknown automation' }, 404);
-    const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+    const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
     const values = readAutomationPayload(body);
     const error = validateAutomation(values);
@@ -1793,6 +1825,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const nextRunAt = scheduleChanged
       ? computeNextRunAt(
           {
+            // SAFETY: validateAutomation returned null above, so schedule_kind passed
+            // the SCHEDULE_KINDS ('hourly' | 'daily' | 'weekly') membership check.
             kind: values.schedule_kind as 'hourly' | 'daily' | 'weekly',
             timeOfDay: values.time_of_day,
             dayOfWeek: values.day_of_week,
@@ -1829,6 +1863,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       automation: { id: automation.id, name: automation.name },
       runs: runs.map((r) => ({
         id: r.id,
+        // SAFETY: automation_runs.status only ever holds running | pr_opened |
+        // no_changes | checks_failed | failed (migration 0028, finishAutomationRun).
         status: r.status as ApiAutomationRunSummary['status'],
         pr_number: r.pr_number,
         error: r.error,
@@ -1849,6 +1885,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     return c.json<ApiAutomationRunDetail>({
       run: {
         id: detail.run.id,
+        // SAFETY: automation_runs.status only ever holds running | pr_opened |
+        // no_changes | checks_failed | failed (migration 0028, finishAutomationRun).
         status: detail.run.status as ApiAutomationRunSummary['status'],
         pr_number: detail.run.pr_number,
         error: detail.run.error,
@@ -1926,9 +1964,12 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
 
   app.post('/integrations', async (c) => {
     const { installationIds } = c.get('user');
-    const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+    const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
-    const get = (k: string) => (typeof body[k] === 'string' ? (body[k] as string).trim() : '');
+    const get = (k: string) => {
+      const v = body[k];
+      return isString(v) ? v.trim() : '';
+    };
     const installationId = Number(body.installation_id ?? installationIds[0]);
     const name = get('name').toLowerCase();
     const kind = get('kind') === 'api' ? 'api' : 'mcp';
@@ -2169,16 +2210,17 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       return c.redirect('/integrations?oauth=error&reason=exchange_failed');
     }
 
-    await updateConnectionAuth(conn.id, {
+    const authUpdate: Parameters<typeof updateConnectionAuth>[1] = {
       authConfigCiphertext: await sealJson<OAuthConfigCache>({
         ...cache,
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
         scope: tokens.scope,
       }),
-      ...(tokens.expiresAt ? { oauthTokenExpiresAt: tokens.expiresAt } : {}),
       oauthNeedsReauth: false,
-    });
+    };
+    if (tokens.expiresAt) authUpdate.oauthTokenExpiresAt = tokens.expiresAt;
+    await updateConnectionAuth(conn.id, authUpdate);
     return c.redirect(`/integrations?oauth=connected&name=${encodeURIComponent(conn.name)}`);
   });
 
@@ -2194,10 +2236,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       return c.json({ error: 'unknown agent' }, 404);
     }
     const body = await c.req.json<{ attached?: boolean }>().catch(() => null);
-    if (typeof body?.attached !== 'boolean') {
+    const attached = body?.attached;
+    if (!isBoolean(attached)) {
       return c.json({ error: 'body must be {"attached": true|false}' }, 400);
     }
-    await setAgentConnectionLink(agent.id, conn.id, body.attached);
+    await setAgentConnectionLink(agent.id, conn.id, attached);
     return c.json({ ok: true });
   });
 
@@ -2292,18 +2335,16 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       }>()
       .catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
-    if (typeof body.enabled === 'boolean') await setRepoEnabled(repo.id, body.enabled);
-    if (typeof body.review_on_push === 'boolean')
-      await setRepoReviewOnPush(repo.id, body.review_on_push);
-    if (typeof body.blocking_reviews === 'boolean')
+    if (isBoolean(body.enabled)) await setRepoEnabled(repo.id, body.enabled);
+    if (isBoolean(body.review_on_push)) await setRepoReviewOnPush(repo.id, body.review_on_push);
+    if (isBoolean(body.blocking_reviews))
       await setRepoBlockingReviews(repo.id, body.blocking_reviews);
-    if (typeof body.auto_fix === 'boolean') await setRepoAutoFix(repo.id, body.auto_fix);
-    if (typeof body.auto_merge === 'boolean') await setRepoAutoMerge(repo.id, body.auto_merge);
-    if (typeof body.auto_resolve_conflicts === 'boolean')
+    if (isBoolean(body.auto_fix)) await setRepoAutoFix(repo.id, body.auto_fix);
+    if (isBoolean(body.auto_merge)) await setRepoAutoMerge(repo.id, body.auto_merge);
+    if (isBoolean(body.auto_resolve_conflicts))
       await setRepoAutoResolveConflicts(repo.id, body.auto_resolve_conflicts);
-    if (typeof body.demo_videos === 'boolean') await setRepoDemoVideos(repo.id, body.demo_videos);
-    if (typeof body.check_command === 'string')
-      await setRepoCheckCommand(repo.id, body.check_command);
+    if (isBoolean(body.demo_videos)) await setRepoDemoVideos(repo.id, body.demo_videos);
+    if (isString(body.check_command)) await setRepoCheckCommand(repo.id, body.check_command);
     return c.json({ ok: true });
   });
 
@@ -2318,10 +2359,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       return c.json({ error: 'unknown agent' }, 404);
     }
     const body = await c.req.json<{ enabled?: boolean }>().catch(() => null);
-    if (typeof body?.enabled !== 'boolean') {
+    const enabled = body?.enabled;
+    if (!isBoolean(enabled)) {
       return c.json({ error: 'body must be {"enabled": true|false}' }, 400);
     }
-    await setRepoAgentEnabled(repo.id, agent.id, body.enabled);
+    await setRepoAgentEnabled(repo.id, agent.id, enabled);
     return c.json({ ok: true });
   });
 
@@ -2336,10 +2378,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       return c.json({ error: 'unknown skill' }, 404);
     }
     const body = await c.req.json<{ enabled?: boolean }>().catch(() => null);
-    if (typeof body?.enabled !== 'boolean') {
+    const enabled = body?.enabled;
+    if (!isBoolean(enabled)) {
       return c.json({ error: 'body must be {"enabled": true|false}' }, 400);
     }
-    await setRepoSkillEnabled(repo.id, skill.id, body.enabled);
+    await setRepoSkillEnabled(repo.id, skill.id, enabled);
     return c.json({ ok: true });
   });
 

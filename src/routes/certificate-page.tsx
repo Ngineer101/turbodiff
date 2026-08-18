@@ -213,7 +213,7 @@ const CSS = `
 	}
 `;
 
-const MARK: Record<string, string> = { pass: '✓', fail: '✗', skip: '–' };
+const MARK = { pass: '✓', fail: '✗', skip: '–' };
 
 // e.g. "12 Aug 2026" from an ISO/SQLite timestamp; falls back to the raw string.
 function fmtDate(iso: string): string {

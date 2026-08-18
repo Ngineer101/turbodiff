@@ -4,6 +4,7 @@ import * as v from 'valibot';
 import { maybeAutoMerge } from '../lib/auto-merge.ts';
 import { completeReview, getRepoByFullName } from '../lib/db.ts';
 import { installationToken } from '../lib/github-app.ts';
+import type { JsonValue } from '../shared/json.ts';
 
 export type PostReviewTool = ReturnType<typeof makePostReview>;
 
@@ -50,16 +51,14 @@ export async function gh(
   path: string,
   init?: RequestInit & { accept?: string },
 ): Promise<Response> {
-  const res = await fetch(`${API}${path}`, {
-    ...init,
-    headers: {
-      accept: init?.accept ?? 'application/vnd.github+json',
-      authorization: `Bearer ${token}`,
-      'user-agent': 'turbodiff-pr-reviewer',
-      'x-github-api-version': '2022-11-28',
-      ...(init?.body ? { 'content-type': 'application/json' } : {}),
-    },
+  const headers = new Headers({
+    accept: init?.accept ?? 'application/vnd.github+json',
+    authorization: `Bearer ${token}`,
+    'user-agent': 'turbodiff-pr-reviewer',
+    'x-github-api-version': '2022-11-28',
   });
+  if (init?.body) headers.set('content-type', 'application/json');
+  const res = await fetch(`${API}${path}`, { ...init, headers });
   if (!res.ok) {
     throw new Error(`GitHub API ${res.status} on ${path}: ${(await res.text()).slice(0, 500)}`);
   }
@@ -150,7 +149,7 @@ export const makeFetchPr = (pin: RepoPin) =>
       const token = await tokenFor(data.owner, data.repo);
       const base = `/repos/${data.owner}/${data.repo}/pulls/${data.number}`;
       const [meta, diff] = await Promise.all([
-        gh(token, base).then((r) => r.json() as Promise<PrMeta>),
+        gh(token, base).then((r) => r.json<PrMeta>()),
         gh(token, base, { accept: 'application/vnd.github.v3.diff' }).then((r) => r.text()),
       ]);
       return {
@@ -201,7 +200,7 @@ export const makeFetchFile = (pin: RepoPin) =>
 async function ghGraphql<T>(
   token: string,
   query: string,
-  variables: Record<string, unknown>,
+  variables: Record<string, JsonValue>,
 ): Promise<T> {
   const res = await fetch(`${API}/graphql`, {
     method: 'POST',
@@ -212,7 +211,7 @@ async function ghGraphql<T>(
     },
     body: JSON.stringify({ query, variables }),
   });
-  const payload = (await res.json()) as { data?: T; errors?: { message: string }[] };
+  const payload = await res.json<{ data?: T; errors?: { message: string }[] }>();
   if (!res.ok || payload.errors?.length || !payload.data) {
     const detail = payload.errors?.map((e) => e.message).join('; ') ?? `HTTP ${res.status}`;
     throw new Error(`GitHub GraphQL error: ${detail.slice(0, 500)}`);
@@ -350,6 +349,17 @@ function findingsAsMarkdown(findings: v.InferOutput<typeof findingSchema>[]): st
   return findings.map((f) => `**\`${f.path}:${f.line}\`**\n${f.body}`).join('\n\n');
 }
 
+// One inline comment in a POST /pulls/:number/reviews payload (GitHub's
+// snake_case field names).
+interface ReviewComment {
+  path: string;
+  line: number;
+  side: 'LEFT' | 'RIGHT';
+  body: string;
+  start_line?: number;
+  start_side?: 'LEFT' | 'RIGHT';
+}
+
 // A per-render factory rather than a shared definition: the tool closes over
 // the agent instance id so completing the D1 review row targets exactly the
 // dispatch that ran it — concurrent agents on the same PR never collide.
@@ -391,13 +401,14 @@ export const makePostReview = (agentInstanceId: string, pin: RepoPin = null) =>
             ? 'REQUEST_CHANGES'
             : 'APPROVE';
       const path = `/repos/${data.owner}/${data.repo}/pulls/${data.number}/reviews`;
-      const comments = data.findings.map((f) => ({
-        path: f.path,
-        line: f.line,
-        side: f.side,
-        ...(f.startLine !== undefined ? { start_line: f.startLine, start_side: f.side } : {}),
-        body: f.body,
-      }));
+      const comments = data.findings.map((f) => {
+        const comment: ReviewComment = { path: f.path, line: f.line, side: f.side, body: f.body };
+        if (f.startLine !== undefined) {
+          comment.start_line = f.startLine;
+          comment.start_side = f.side;
+        }
+        return comment;
+      });
 
       // Two recoverable 422 classes, retried in a bounded loop:
       //   - self-authored PR: GitHub refuses APPROVE/REQUEST_CHANGES from the
@@ -417,7 +428,7 @@ export const makePostReview = (agentInstanceId: string, pin: RepoPin = null) =>
             method: 'POST',
             body: JSON.stringify({ body: postBody, event: postEvent, comments: postComments }),
           });
-          review = (await res.json()) as { html_url?: string };
+          review = await res.json<{ html_url?: string }>();
           break;
         } catch (err) {
           const msg = String(err);

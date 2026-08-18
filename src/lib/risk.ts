@@ -41,6 +41,9 @@ export async function computeRiskTier(
   // One page suffices: at 50+ files the tier is already 'full', so anything
   // past the first 100 can't change the answer.
   const res = await gh(token, `/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=100`);
+  // SAFETY: gh() throws on non-2xx, and GitHub's "list pull request files"
+  // response is an array whose items always carry filename, additions, and
+  // deletions.
   const files = (await res.json()) as PrFileEntry[];
 
   if (files.length >= FULL_MIN_FILES) return 'full';

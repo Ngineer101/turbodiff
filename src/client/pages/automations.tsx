@@ -16,18 +16,22 @@ function scheduleSummary(a: ApiAutomationSummary): string {
   return `weekly on ${day} at ${a.time_of_day} UTC`;
 }
 
-const STATUS_TONE: Record<string, PillProps['tone']> = {
+const STATUS_TONE = {
   running: 'running',
   pr_opened: 'on',
   no_changes: 'neutral',
   checks_failed: 'warn',
   failed: 'red',
-};
+} satisfies Record<string, PillProps['tone']>;
+
+function isKnownStatus(status: string): status is keyof typeof STATUS_TONE {
+  return status in STATUS_TONE;
+}
 
 function LastRunPill({ lastRun }: { lastRun: ApiAutomationSummary['last_run'] }) {
   if (!lastRun) return <Pill>No runs yet</Pill>;
   return (
-    <Pill tone={STATUS_TONE[lastRun.status] ?? 'neutral'}>
+    <Pill tone={isKnownStatus(lastRun.status) ? STATUS_TONE[lastRun.status] : 'neutral'}>
       {sentence(lastRun.status)} · {ago(lastRun.created_at)}
     </Pill>
   );

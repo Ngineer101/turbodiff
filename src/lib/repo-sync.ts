@@ -35,6 +35,9 @@ export async function syncInstallationRepos(installationId: number): Promise<voi
         `GitHub API ${res.status} listing repos for installation ${installationId}: ${(await res.text()).slice(0, 300)}`,
       );
     }
+    // SAFETY: non-ok responses threw above, and GitHub's "list repositories
+    // accessible to the app installation" response always carries a
+    // repositories array whose items have id, name, and full_name.
     const data = (await res.json()) as {
       repositories: { id: number; name: string; full_name: string }[];
     };

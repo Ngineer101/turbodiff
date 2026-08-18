@@ -11,12 +11,12 @@ import { cn } from '../lib/utils.ts';
 
 export type LampTone = 'go' | 'hold' | 'off' | 'abort';
 
-const LAMP_DOT: Record<LampTone, string> = {
+const LAMP_DOT = {
   go: 'bg-accent-bright lamp-glow-go',
   hold: 'bg-hold lamp-glow-hold',
   abort: 'bg-danger lamp-glow-abort',
   off: 'bg-line-2',
-};
+} satisfies Record<LampTone, string>;
 
 export function Lamp({
   tone,
@@ -147,13 +147,13 @@ export function Ledger({
 // this task?" at a glance without opening it.
 export type StageState = 'done' | 'live' | 'attention' | 'failed' | 'idle';
 
-const STAGE_LAMP: Record<StageState, { tone: LampTone; pulse: boolean; text: string }> = {
+const STAGE_LAMP = {
   done: { tone: 'go', pulse: false, text: 'text-ink-dim' },
   live: { tone: 'hold', pulse: true, text: 'text-hold' },
   attention: { tone: 'hold', pulse: false, text: 'text-hold' },
   failed: { tone: 'abort', pulse: false, text: 'text-danger' },
   idle: { tone: 'off', pulse: false, text: 'text-mute' },
-};
+} satisfies Record<StageState, { tone: LampTone; pulse: boolean; text: string }>;
 
 export function StageLights({
   stages,

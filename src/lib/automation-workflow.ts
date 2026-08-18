@@ -83,11 +83,13 @@ ${ctx.prompt}
 }
 
 function sandboxFor(repo: { owner: string; name: string }): Sandbox {
-  return getSandbox(
-    env.Sandbox as unknown as DurableObjectNamespace<Sandbox>,
-    `automation--${repo.owner}--${repo.name}`.toLowerCase(),
-    { sleepAfter: '45m' },
-  ) as unknown as Sandbox;
+  // SAFETY: the Sandbox binding's class_name in wrangler.jsonc is the SDK's
+  // Sandbox Durable Object; the generated Env only types it as a bare
+  // DurableObjectNamespace, so the instance type is restated here.
+  const namespace = env.Sandbox as DurableObjectNamespace<Sandbox>;
+  return getSandbox(namespace, `automation--${repo.owner}--${repo.name}`.toLowerCase(), {
+    sleepAfter: '45m',
+  });
 }
 
 // Serializable context threaded between steps (a type alias, not an
@@ -134,6 +136,8 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
           const repo = await getRepoById(automation.repository_id);
           if (!repo || !repo.enabled) return null;
           const token = await installationToken(repo.installation_id);
+          // SAFETY: GitHub's get-repository endpoint always includes
+          // default_branch in its success response.
           const info = (await (await gh(token, `/repos/${repo.owner}/${repo.name}`)).json()) as {
             default_branch: string;
           };
@@ -330,6 +334,8 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
             .then((f) => f.content.trim() || undefined)
             .catch(() => undefined);
           const token = await installationToken(ctx.installationId);
+          // SAFETY: GitHub's create-pull-request endpoint returns the created
+          // PR object, which always carries its number.
           const pr = (await (
             await gh(token, `/repos/${full}/pulls`, {
               method: 'POST',

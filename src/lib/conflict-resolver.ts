@@ -163,8 +163,13 @@ async function runConflictResolve(
 
   const { headRef, headRepo } = await fetchPrHead(token, repo.owner, repo.name, prNumber);
 
+  // SAFETY: wrangler's generated Env types the Sandbox binding as an unbranded
+  // DurableObjectNamespace (it cannot see into @cloudflare/sandbox), but
+  // wrangler.jsonc binds it to that package's Sandbox class — the namespace
+  // getSandbox requires.
+  const sandboxNamespace = env.Sandbox as DurableObjectNamespace<Sandbox>;
   const sandbox = getSandbox(
-    env.Sandbox as unknown as DurableObjectNamespace<Sandbox>,
+    sandboxNamespace,
     `resolve-conflict--${repo.owner}--${repo.name}--${prNumber}`.toLowerCase(),
     { sleepAfter: '20m' },
   );

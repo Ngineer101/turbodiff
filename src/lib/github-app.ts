@@ -135,22 +135,25 @@ async function mintToken(
   installationId: number,
   scope?: { repositories: string[]; permissions: Record<string, string> },
 ): Promise<{ token: string; expires_at: string }> {
-  const res = await fetch(`${API}/app/installations/${installationId}/access_tokens`, {
-    method: 'POST',
-    headers: {
-      accept: 'application/vnd.github+json',
-      authorization: `Bearer ${await appJwt()}`,
-      'user-agent': 'turbodiff',
-      'x-github-api-version': '2022-11-28',
-      ...(scope ? { 'content-type': 'application/json' } : {}),
-    },
-    ...(scope ? { body: JSON.stringify(scope) } : {}),
+  const headers = new Headers({
+    accept: 'application/vnd.github+json',
+    authorization: `Bearer ${await appJwt()}`,
+    'user-agent': 'turbodiff',
+    'x-github-api-version': '2022-11-28',
   });
+  const init: RequestInit = { method: 'POST', headers };
+  if (scope) {
+    headers.set('content-type', 'application/json');
+    init.body = JSON.stringify(scope);
+  }
+  const res = await fetch(`${API}/app/installations/${installationId}/access_tokens`, init);
   if (!res.ok) {
     throw new Error(
       `Failed to mint installation token for ${installationId}: ${res.status} ${(await res.text()).slice(0, 300)}`,
     );
   }
+  // SAFETY: GitHub's create-installation-access-token endpoint documents
+  // token and expires_at on every 2xx response, and res.ok is checked above.
   return res.json() as Promise<{ token: string; expires_at: string }>;
 }
 
@@ -202,6 +205,8 @@ export async function exchangeOAuthCode(code: string, redirectUri: string): Prom
       redirect_uri: redirectUri,
     }),
   });
+  // SAFETY: every asserted field is optional, and access_token is checked
+  // before use — GitHub's OAuth token endpoint documents exactly these keys.
   const data = (await res.json()) as {
     access_token?: string;
     refresh_token?: string;
@@ -227,6 +232,8 @@ export async function refreshUserToken(refreshToken: string): Promise<OAuthToken
       refresh_token: refreshToken,
     }),
   });
+  // SAFETY: both asserted fields are optional, and access_token is checked
+  // before use — GitHub's OAuth refresh endpoint documents exactly these keys.
   const data = (await res.json()) as { access_token?: string; refresh_token?: string };
   if (!data.access_token) return null;
   return { token: data.access_token, refreshToken: data.refresh_token ?? null };
@@ -242,6 +249,8 @@ async function userApi<T>(token: string, path: string): Promise<T> {
     },
   });
   if (!res.ok) throw new Error(`GitHub ${res.status} on ${path}`);
+  // SAFETY: T is the caller-declared shape of this documented GitHub
+  // endpoint's success response, and res.ok is checked above.
   return res.json() as Promise<T>;
 }
 

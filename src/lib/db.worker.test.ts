@@ -29,6 +29,9 @@ import {
 } from './db.ts';
 
 type TestEnv = Cloudflare.Env & { TEST_MIGRATIONS: D1Migration[] };
+// SAFETY: vitest.worker.config.ts defines the test-only TEST_MIGRATIONS
+// miniflare binding, which the generated production Cloudflare.Env cannot
+// know about.
 const testEnv = env as TestEnv;
 
 async function seedTenant(): Promise<void> {

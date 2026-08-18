@@ -22,6 +22,7 @@ import {
 import { FIX_MAX_ATTEMPTS, type FixQueueMessage } from '../lib/fixer.ts';
 import { verifyWebhookSignature } from '../lib/github-app.ts';
 import { agentsForTier, computeRiskTier, tierModelOverride, type RiskTier } from '../lib/risk.ts';
+import { parseJson, type JsonValue } from '../shared/json.ts';
 
 // GitHub App webhook receiver. Two jobs:
 //   1. Mirror installation / repository-selection changes into D1.
@@ -74,10 +75,22 @@ interface WorkflowRunEvent {
   repository: { id: number; full_name: string };
 }
 
+interface RepositoryEvent {
+  action: string;
+  repository: WebhookRepoRef;
+}
+
+// Handler bodies are flat JSON diagnostics: flags, identifiers, and counts.
+// (Deliberately not the recursive JsonObject — Hono's c.json response typing
+// recurses into its argument type and blows the instantiation depth on it.)
+type HandlerBody = Record<string, string | number | boolean | string[]>;
+
 interface HandlerResult {
-  body: Record<string, unknown>;
+  body: HandlerBody;
   status?: 401 | 502;
 }
+
+export type DispatchOptions = { riskTier?: string; modelOverride?: string };
 
 export type ReviewDispatcher = (
   agent: AgentRow,
@@ -85,7 +98,7 @@ export type ReviewDispatcher = (
   prNumber: number,
   prUrl: string,
   trigger: string,
-  opts?: { riskTier?: string; modelOverride?: string },
+  opts?: DispatchOptions,
 ) => Promise<boolean>;
 
 export type FixEnqueuer = (message: FixQueueMessage) => Promise<void>;
@@ -115,7 +128,7 @@ export function createWebhookRoutes(
     if (!ok) return c.json({ error: 'invalid signature' }, 401);
 
     const event = c.req.header('x-github-event') ?? '';
-    const payload = JSON.parse(new TextDecoder().decode(rawBody));
+    const payload = parseJson(new TextDecoder().decode(rawBody));
     const result = await handleEvent(event, payload, dispatch, computeRisk, enqueueFix);
     return c.json(result.body, result.status ?? 200);
   });
@@ -123,27 +136,44 @@ export function createWebhookRoutes(
   return app;
 }
 
+// GitHub's webhook contract fixes the payload schema delivered for each
+// x-github-event name, so once a delivery is authenticated the event name is
+// the schema selector.
+function verifiedEventPayload<T>(payload: JsonValue): T {
+  // SAFETY: callers reach this only after verifyWebhookSignature accepted the
+  // delivery's HMAC, so the body is a genuine GitHub payload whose schema is
+  // fixed by the x-github-event name each handleEvent case matches on.
+  return payload as T;
+}
+
 async function handleEvent(
   event: string,
-  payload: unknown,
+  payload: JsonValue,
   dispatch: ReviewDispatcher,
   computeRisk: typeof computeRiskTier,
   enqueueFix: FixEnqueuer,
 ): Promise<HandlerResult> {
   switch (event) {
     case 'installation':
-      return handleInstallation(payload as InstallationEvent);
+      return handleInstallation(verifiedEventPayload<InstallationEvent>(payload));
     case 'installation_repositories':
-      return handleInstallationRepositories(payload as InstallationEvent);
+      return handleInstallationRepositories(verifiedEventPayload<InstallationEvent>(payload));
     case 'pull_request':
-      return handlePullRequest(payload as PullRequestEvent, dispatch, computeRisk);
+      return handlePullRequest(
+        verifiedEventPayload<PullRequestEvent>(payload),
+        dispatch,
+        computeRisk,
+      );
     case 'pull_request_review':
-      return handlePullRequestReview(payload as PullRequestReviewEvent, enqueueFix);
+      return handlePullRequestReview(
+        verifiedEventPayload<PullRequestReviewEvent>(payload),
+        enqueueFix,
+      );
     case 'workflow_run':
-      return handleWorkflowRun(payload as WorkflowRunEvent, enqueueFix);
+      return handleWorkflowRun(verifiedEventPayload<WorkflowRunEvent>(payload), enqueueFix);
     case 'repository': {
       // Keep owner/name current when a repo is renamed or transferred.
-      const p = payload as { action: string; repository: WebhookRepoRef };
+      const p = verifiedEventPayload<RepositoryEvent>(payload);
       if (p.action === 'renamed' || p.action === 'transferred') {
         const row = await getRepoById(p.repository.id);
         if (row) await addRepositories(row.installation_id, [p.repository]);
@@ -289,7 +319,8 @@ async function handlePullRequest(
 
   const dispatched: string[] = [];
   for (const agent of agents.slice(0, budget)) {
-    const opts = { riskTier: tier, ...(modelOverride ? { modelOverride } : {}) };
+    const opts: DispatchOptions = { riskTier: tier };
+    if (modelOverride) opts.modelOverride = modelOverride;
     if (await dispatch(agent, repo, p.number, p.pull_request.html_url, p.action, opts)) {
       dispatched.push(agent.slug);
     }
