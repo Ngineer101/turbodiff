@@ -9,6 +9,7 @@ import {
   Search,
   Wrench,
 } from 'lucide-react';
+import { Link } from '@tanstack/react-router';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import type { ApiRepoSettings, ApiSettings } from '../../shared/api-types.ts';
@@ -443,9 +444,20 @@ export function SettingsPage() {
           <section key={inst.id}>
             <SectionHeading
               aside={
-                <Muted className="text-xs">
-                  {inst.repos.length} {inst.repos.length === 1 ? 'repo' : 'repos'}
-                </Muted>
+                <div className="flex items-center gap-3">
+                  {inst.account_type === 'Organization' ? (
+                    <Link
+                      to="/settings/members/$installationId"
+                      params={{ installationId: String(inst.id) }}
+                      className="text-accent-bright hover:underline"
+                    >
+                      Members
+                    </Link>
+                  ) : null}
+                  <Muted className="text-xs">
+                    {inst.repos.length} {inst.repos.length === 1 ? 'repo' : 'repos'}
+                  </Muted>
+                </div>
               }
             >
               {inst.account_login} {inst.suspended ? <Pill tone="red">Suspended</Pill> : null}

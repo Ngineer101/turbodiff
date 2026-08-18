@@ -1,5 +1,8 @@
 import { env } from 'cloudflare:workers';
 import { betterAuth } from 'better-auth';
+import { organization } from 'better-auth/plugins/organization';
+import { sendInvitationEmail } from './email.ts';
+import { orgAc, orgRoles } from './permissions.ts';
 
 // Identity and sessions via better-auth (tables in migrations/0026_better_auth.sql).
 // Design notes:
@@ -123,6 +126,38 @@ function createAuth() {
         githubId: { type: 'number', required: false },
       },
     },
+    // Teams & orgs (migrations/0031_organizations.sql): one organization row
+    // per Organization-type installation, linked by installationId. Rows are
+    // written by hand from src/lib/permissions.ts (webhook provisioning,
+    // never this plugin's own createOrganization/addMember endpoints — those
+    // require an existing signed-in creator, which the installing webhook
+    // doesn't have) — ac/roles here matter because the plugin's own
+    // invite/remove/role-change endpoints check permissions through them.
+    plugins: [
+      organization({
+        ac: orgAc,
+        roles: orgRoles,
+        schema: {
+          organization: {
+            additionalFields: {
+              installationId: { type: 'number', required: true },
+            },
+          },
+        },
+        sendInvitationEmail: async (data) => {
+          // SAFETY: better-auth's static user type erases the additionalFields
+          // (login, githubId) configured on the user schema below; every user
+          // row is written with them via the GitHub OAuth profile mapping.
+          const inviter = data.inviter.user as AuthUser;
+          await sendInvitationEmail({
+            to: data.email,
+            orgName: data.organization.name,
+            inviteUrl: `${env.PUBLIC_BASE_URL}/accept-invite?id=${data.id}`,
+            inviterLogin: inviter.login ?? data.inviter.user.name,
+          });
+        },
+      }),
+    ],
   });
 }
 
