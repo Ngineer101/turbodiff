@@ -3,6 +3,8 @@
 // result message carries a top-level `total_cost_usd` and `usage` object in
 // snake_case, plus a `modelUsage` map keyed by model id).
 
+import { isJsonObject, isString, parseJson, type JsonObject } from '../shared/json.ts';
+
 export interface CliUsage {
   inputTokens: number;
   outputTokens: number;
@@ -12,22 +14,10 @@ export interface CliUsage {
   model: string | null;
 }
 
-interface ClaudeCliResult {
-  result?: unknown;
-  total_cost_usd?: unknown;
-  usage?: {
-    input_tokens?: unknown;
-    output_tokens?: unknown;
-    cache_read_input_tokens?: unknown;
-    cache_creation_input_tokens?: unknown;
-  };
-  modelUsage?: Record<string, unknown>;
-}
-
-function parseCliResult(stdout: string): ClaudeCliResult | null {
+function parseCliResult(stdout: string): JsonObject | null {
   try {
-    const parsed = JSON.parse(stdout.trim());
-    return parsed && typeof parsed === 'object' ? (parsed as ClaudeCliResult) : null;
+    const parsed = parseJson(stdout.trim());
+    return isJsonObject(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -39,8 +29,8 @@ function parseCliResult(stdout: string): ClaudeCliResult | null {
 // killed process that never wrote its final line) — the same content callers
 // used before switching output formats.
 export function claudeCliResultText(stdout: string): string {
-  const parsed = parseCliResult(stdout);
-  return typeof parsed?.result === 'string' ? parsed.result : stdout;
+  const result = parseCliResult(stdout)?.result;
+  return isString(result) ? result : stdout;
 }
 
 // Token/cost usage from the same payload. Returns null on any parse failure
@@ -50,8 +40,9 @@ export function claudeCliResultText(stdout: string): string {
 export function parseClaudeCliUsage(stdout: string): CliUsage | null {
   const parsed = parseCliResult(stdout);
   const usage = parsed?.usage;
-  if (!usage) return null;
-  const models = parsed?.modelUsage ? Object.keys(parsed.modelUsage) : [];
+  if (!isJsonObject(usage)) return null;
+  const modelUsage = parsed?.modelUsage;
+  const models = isJsonObject(modelUsage) ? Object.keys(modelUsage) : [];
   return {
     inputTokens: Number(usage.input_tokens) || 0,
     outputTokens: Number(usage.output_tokens) || 0,

@@ -18,6 +18,9 @@ export async function pollAutomations(): Promise<void> {
   for (const automation of due) {
     try {
       const schedule: ScheduleInput = {
+        // SAFETY: automation rows are only written through the API routes,
+        // which reject any schedule_kind outside hourly | daily | weekly
+        // before insert/update (SCHEDULE_KINDS in src/routes/api.ts).
         kind: automation.schedule_kind as ScheduleInput['kind'],
         timeOfDay: automation.time_of_day,
         dayOfWeek: automation.day_of_week,

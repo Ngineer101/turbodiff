@@ -10,6 +10,9 @@ import { createPlan, upsertPushSubscription } from './db.ts';
 import { notifyPlanUsers, sendPushToSubscription } from './push.ts';
 
 type TestEnv = Cloudflare.Env & { TEST_MIGRATIONS: D1Migration[] };
+// SAFETY: vitest.worker.config.ts defines the test-only TEST_MIGRATIONS
+// miniflare binding, which the generated production Cloudflare.Env cannot
+// know about.
 const testEnv = env as TestEnv;
 
 // Fixture client keys (a valid ECDH P-256 public point + 16-byte auth

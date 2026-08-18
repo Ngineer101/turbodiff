@@ -135,12 +135,26 @@ export function resolveRunnerAuth(requested?: FixAuthMode): {
   return picked;
 }
 
+// The generated Env types the binding as a bare `DurableObjectNamespace` —
+// type generation cannot see which class wrangler.jsonc binds it to. This is
+// the single place that bridges that gap; every sandbox boot site (fixer,
+// planner, verifier) goes through it.
+export function sandboxNamespace(): DurableObjectNamespace<Sandbox> {
+  // SAFETY: wrangler.jsonc declares this Durable Object binding with
+  // class_name "Sandbox" (the @cloudflare/sandbox class), so its stubs are
+  // Sandbox instances.
+  return env.Sandbox as DurableObjectNamespace<Sandbox>;
+}
+
 export async function fetchPrHead(
   token: string,
   owner: string,
   repo: string,
   prNumber: number,
 ): Promise<{ headRef: string; headRepo: string }> {
+  // SAFETY: GitHub's GET /pulls/:number REST schema guarantees head.ref and
+  // base.repo.full_name; only head.repo is nullable (deleted fork), which the
+  // type reflects and the check below handles.
   const pr = (await (await gh(token, `/repos/${owner}/${repo}/pulls/${prNumber}`)).json()) as {
     head: { ref: string; repo: { full_name: string } | null };
     base: { repo: { full_name: string } };
@@ -165,6 +179,9 @@ export async function prTouchesWorkflowFiles(
   prNumber: number,
 ): Promise<boolean> {
   for (let page = 1; page <= 10; page++) {
+    // SAFETY: GitHub's GET /pulls/:number/files REST schema returns an array
+    // of file entries with `filename` always present and `previous_filename`
+    // only on renames.
     const files = (await (
       await gh(token, `/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=100&page=${page}`)
     ).json()) as { filename: string; previous_filename?: string }[];
@@ -190,6 +207,8 @@ async function latestBlockingFindings(
   repo: string,
   prNumber: number,
 ): Promise<string | null> {
+  // SAFETY: GitHub's GET /pulls/:number/reviews REST schema returns review
+  // objects with id/state/body always present and a nullable user.
   const reviews = (await (
     await gh(token, `/repos/${owner}/${repo}/pulls/${prNumber}/reviews?per_page=100`)
   ).json()) as {
@@ -210,6 +229,9 @@ async function latestBlockingFindings(
     .at(-1);
   if (!blocking) return null;
 
+  // SAFETY: GitHub's GET /pulls/:number/reviews/:id/comments REST schema
+  // returns review comment objects with path/body always present and nullable
+  // line/original_line.
   const comments = (await (
     await gh(
       token,
@@ -248,9 +270,7 @@ ${findings}
 // verifies the image, the DO binding, and exec plumbing without touching
 // GitHub or spending any model tokens.
 export async function sandboxSmoke(checkAuth = false): Promise<Record<string, string>> {
-  const sandbox = getSandbox(env.Sandbox as unknown as DurableObjectNamespace<Sandbox>, 'smoke', {
-    sleepAfter: '2m',
-  });
+  const sandbox = getSandbox(sandboxNamespace(), 'smoke', { sleepAfter: '2m' });
   const out: Record<string, string> = {};
   for (const cmd of ['git --version', 'node --version', 'claude --version']) {
     const res = await sandbox.exec(cmd, { timeout: 60_000 });
@@ -297,7 +317,7 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
   const { headRef, headRepo } = await fetchPrHead(token, owner, repo, prNumber);
 
   const sandbox = getSandbox(
-    env.Sandbox as unknown as DurableObjectNamespace<Sandbox>,
+    sandboxNamespace(),
     `fix--${owner}--${repo}--${prNumber}`.toLowerCase(),
     { sleepAfter: '20m' },
   );

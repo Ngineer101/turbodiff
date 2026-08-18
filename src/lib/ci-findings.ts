@@ -34,6 +34,9 @@ export async function ciFailureFindings(
   repo: string,
   runId: number,
 ): Promise<string | null> {
+  // SAFETY: gh() throws on non-2xx, and GitHub's "list jobs for a workflow
+  // run" response always carries a jobs array with id, name, and a nullable
+  // conclusion per job.
   const { jobs } = (await (
     await gh(token, `/repos/${owner}/${repo}/actions/runs/${runId}/jobs?per_page=100`)
   ).json()) as JobsResponse;

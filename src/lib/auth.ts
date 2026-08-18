@@ -1,7 +1,8 @@
 import { env } from 'cloudflare:workers';
 import type { Context } from 'hono';
-import { auth, type AuthUser } from './better-auth.ts';
+import { auth } from './better-auth.ts';
 import { fetchUserCanPush, fetchUserInstallationIds } from './github-app.ts';
+import { isNumber, isString } from '../shared/json.ts';
 
 // Request-time authorization on top of better-auth sessions. The session
 // (who you are) is durable and only ends by explicit sign-out or 30-day
@@ -104,7 +105,7 @@ export async function requireUser(c: Context): Promise<AuthedUser | null> {
   // OAuth: DEV_FAKE_INSTALLATIONS="1001,1002" in .dev.vars signs you in as
   // @dev with those installation ids. Guarded to loopback hosts so setting it
   // in production by mistake cannot become an auth bypass.
-  const fake = (env as { DEV_FAKE_INSTALLATIONS?: string }).DEV_FAKE_INSTALLATIONS;
+  const fake = env.DEV_FAKE_INSTALLATIONS;
   const host = new URL(c.req.url).hostname;
   if (fake && (host === 'localhost' || host === '127.0.0.1')) {
     return {
@@ -118,10 +119,12 @@ export async function requireUser(c: Context): Promise<AuthedUser | null> {
   }
   const found = await auth().api.getSession({ headers: c.req.raw.headers });
   if (!found) return null;
-  const user = found.user as AuthUser;
+  const user = found.user;
   // Pre-better-auth rows can't exist (the tables shipped together), so a
-  // user without GitHub identity fields is malformed — treat as signed out.
-  if (!user.login || typeof user.githubId !== 'number') return null;
+  // user without the GitHub identity additionalFields (which better-auth's
+  // static session type erases) is malformed — treat as signed out.
+  if (!('login' in user) || !isString(user.login) || !user.login) return null;
+  if (!('githubId' in user) || !isNumber(user.githubId)) return null;
 
   const ghToken = await githubToken(user.id);
   const ids = await installationIds(user.id, ghToken);

@@ -14,6 +14,10 @@ type TestEnv = Cloudflare.Env & {
   DB_MIGRATIONS_MULTI_REPO: D1Database;
   DB_MIGRATIONS_IDEMPOTENCY: D1Database;
 };
+// SAFETY: the worker-test harness provides these test-only bindings — the
+// TEST_MIGRATIONS miniflare binding in vitest.worker.config.ts and the
+// DB_MIGRATIONS_* D1 databases in wrangler.test.jsonc — which the generated
+// production Cloudflare.Env cannot know about.
 const testEnv = env as TestEnv;
 
 function migrationIndex(name: string): number {

@@ -26,7 +26,11 @@ import { Table, Td, Th } from '../components/ui/table.tsx';
 const AUTH_TYPES = ['none', 'bearer', 'api_key', 'client_credentials', 'oauth'] as const;
 type AuthType = (typeof AUTH_TYPES)[number];
 
-function onApiError(err: unknown) {
+function isAuthType(value: string): value is AuthType {
+  return AUTH_TYPES.some((t) => t === value);
+}
+
+function onApiError<T>(err: T) {
   toast.error(err instanceof ApiError ? err.message : 'Request failed');
 }
 
@@ -342,15 +346,31 @@ function CredentialsPanel({ children, note }: { children?: ReactNode; note?: Rea
   );
 }
 
+interface AddFormState {
+  installation_id: number;
+  kind: string;
+  name: string;
+  url: string;
+  auth_type: AuthType;
+  token: string;
+  header_name: string;
+  header_value: string;
+  client_id: string;
+  client_secret: string;
+  token_endpoint: string;
+  scope: string;
+  tools: string;
+}
+
 function AddForm() {
   const queryClient = useQueryClient();
   const { data } = useSuspenseQuery(integrationsQuery);
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<AddFormState>({
     installation_id: data.installations[0]?.id ?? 0,
     kind: 'mcp',
     name: '',
     url: '',
-    auth_type: 'none' as AuthType,
+    auth_type: 'none',
     token: '',
     header_name: '',
     header_value: '',
@@ -450,7 +470,10 @@ function AddForm() {
           <Field label="Auth type" className="mt-0">
             <Select
               value={form.auth_type}
-              onChange={(e) => setForm((f) => ({ ...f, auth_type: e.target.value as AuthType }))}
+              onChange={(e) => {
+                const value = e.target.value;
+                if (isAuthType(value)) setForm((f) => ({ ...f, auth_type: value }));
+              }}
             >
               <option value="none">None</option>
               <option value="bearer">Bearer token</option>

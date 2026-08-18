@@ -15,6 +15,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import type { ApiBoard, ApiPlan, ApiTodo } from '../../shared/api-types.ts';
+import { isJsonObject, isString } from '../../shared/json.ts';
 import { api, ApiError } from '../lib/api.ts';
 import { ago, fmtUsd } from '../lib/format.ts';
 import { boardQuery } from '../lib/queries.ts';
@@ -43,7 +44,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popove
 
 type ColumnKey = 'todo' | 'in_progress' | 'done';
 
-function onApiError(err: unknown) {
+function onApiError<T>(err: T) {
   toast.error(err instanceof ApiError ? err.message : 'Request failed');
 }
 
@@ -56,7 +57,7 @@ function QuickAdd({ board }: { board: ApiBoard }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
-      const tag = (e.target as HTMLElement | null)?.tagName;
+      const tag = e.target instanceof HTMLElement ? e.target.tagName : undefined;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       e.preventDefault();
       inputRef.current?.focus();
@@ -128,19 +129,17 @@ function StartDialog({
         const fd = new FormData();
         fd.append('file', file);
         const res = await fetch('/api/uploads', { method: 'POST', body: fd });
-        const data = (await res.json().catch(() => null)) as {
-          key?: string;
-          name?: string;
-          content_type?: string;
-          error?: string;
-        } | null;
-        if (!res.ok || !data?.key) {
-          throw new ApiError(data?.error ?? `upload failed for ${file.name}`, res.status);
+        const body = await res.json().catch(() => null);
+        const data = isJsonObject(body) ? body : null;
+        const key = data && isString(data.key) ? data.key : null;
+        if (!res.ok || !key) {
+          const message = data && isString(data.error) ? data.error : null;
+          throw new ApiError(message ?? `upload failed for ${file.name}`, res.status);
         }
         attachments.push({
-          key: data.key,
-          name: data.name ?? file.name,
-          content_type: data.content_type ?? file.type,
+          key,
+          name: data && isString(data.name) ? data.name : file.name,
+          content_type: data && isString(data.content_type) ? data.content_type : file.type,
         });
       }
       return api.post(`/api/todos/${todo.id}/start`, { title, requirements, attachments });

@@ -1,5 +1,6 @@
 import { collectFile, getSandbox, type Sandbox } from '@cloudflare/sandbox';
 import { env } from 'cloudflare:workers';
+import { isJsonArray, isJsonObject, isString, parseJson, type JsonValue } from '../shared/json.ts';
 import { gh } from '../tools/github.ts';
 import { claudeCliResultText, parseClaudeCliUsage, type CliUsage } from './cli-usage.ts';
 import {
@@ -16,7 +17,7 @@ import { persistAgentLog } from './agent-runs.ts';
 import { maybeAutoMerge } from './auto-merge.ts';
 import { certificateUrl } from './certificate.ts';
 import { signArtifactKey } from './crypto.ts';
-import { resolveRunnerAuth } from './fixer.ts';
+import { resolveRunnerAuth, sandboxNamespace } from './fixer.ts';
 import { installationToken, sandboxGitToken } from './github-app.ts';
 import { NPM_CACHE_ENV } from './generation-workflow.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
@@ -208,11 +209,9 @@ async function verify(
 
   // Same container id as generation: verify usually follows a generation on
   // the same repo, so the container, repo cache, and package caches are warm.
-  const sandbox = getSandbox(
-    env.Sandbox as unknown as DurableObjectNamespace<Sandbox>,
-    `gen--${repo.owner}--${repo.name}`.toLowerCase(),
-    { sleepAfter: '45m' },
-  );
+  const sandbox = getSandbox(sandboxNamespace(), `gen--${repo.owner}--${repo.name}`.toLowerCase(), {
+    sleepAfter: '45m',
+  });
   const WORK = cloneDir(feature.id);
   const OUT = outDir(feature.id);
 
@@ -279,21 +278,21 @@ async function verify(
     // code; the sandbox is the boundary.
     if (!repo.run_command && repo.launchable !== 0) {
       try {
-        const detected = JSON.parse(
-          (await sandbox.readFile(`${OUT}/run-command.json`)).content,
-        ) as { command?: unknown; port?: unknown; launchable?: unknown; reason?: unknown };
-        if (detected.launchable === false) {
-          await setRepoLaunchable(repo.id, false);
-          console.log(
-            `turbodiff: cached NOT-launchable verdict for ${full}: ${String(detected.reason ?? '').slice(0, 120)}`,
-          );
-        } else {
-          const cmd = typeof detected.command === 'string' ? detected.command.trim() : '';
-          const port = Number(detected.port);
-          if (cmd && cmd.length <= 500 && Number.isInteger(port) && port > 0 && port < 65536) {
-            await setRepoRunCommand(repo.id, cmd, port);
-            await setRepoLaunchable(repo.id, true);
-            console.log(`turbodiff: cached auto-detected run command for ${full} (port ${port})`);
+        const detected = parseJson((await sandbox.readFile(`${OUT}/run-command.json`)).content);
+        if (isJsonObject(detected)) {
+          if (detected.launchable === false) {
+            await setRepoLaunchable(repo.id, false);
+            console.log(
+              `turbodiff: cached NOT-launchable verdict for ${full}: ${String(detected.reason ?? '').slice(0, 120)}`,
+            );
+          } else {
+            const cmd = isString(detected.command) ? detected.command.trim() : '';
+            const port = Number(detected.port);
+            if (cmd && cmd.length <= 500 && Number.isInteger(port) && port > 0 && port < 65536) {
+              await setRepoRunCommand(repo.id, cmd, port);
+              await setRepoLaunchable(repo.id, true);
+              console.log(`turbodiff: cached auto-detected run command for ${full} (port ${port})`);
+            }
           }
         }
       } catch {
@@ -336,15 +335,16 @@ async function readResults(
   out: string,
   count: number,
 ): Promise<CriterionResult[]> {
-  let parsed: unknown;
+  let parsed: JsonValue;
   try {
-    parsed = JSON.parse((await sandbox.readFile(`${out}/results.json`)).content);
+    parsed = parseJson((await sandbox.readFile(`${out}/results.json`)).content);
   } catch {
     throw new Error('verifier agent did not produce a parseable results.json');
   }
-  if (!Array.isArray(parsed)) throw new Error('results.json is not an array');
+  if (!isJsonArray(parsed)) throw new Error('results.json is not an array');
   const byIndex = new Map<number, CriterionResult>();
-  for (const raw of parsed as Record<string, unknown>[]) {
+  for (const raw of parsed) {
+    if (!isJsonObject(raw)) continue;
     const index = Number(raw.index);
     if (!Number.isInteger(index) || index < 0 || index >= count) continue;
     const verdict = raw.verdict === 'pass' || raw.verdict === 'fail' ? raw.verdict : 'skip';
@@ -352,7 +352,7 @@ async function readResults(
       index,
       verdict,
       note: String(raw.note ?? '').slice(0, 500),
-      screenshot: typeof raw.screenshot === 'string' ? raw.screenshot : undefined,
+      screenshot: isString(raw.screenshot) ? raw.screenshot : undefined,
     });
   }
   // A criterion the agent silently dropped is unverified, not passed.
@@ -437,11 +437,11 @@ async function uploadDemo(sandbox: Sandbox, featureId: number): Promise<DemoInfo
   return { key, url: `${env.PUBLIC_BASE_URL}/artifacts/${key}?sig=${sig}`, caption };
 }
 
-const VERDICT_BADGE: Record<CriterionResult['verdict'], string> = {
+const VERDICT_BADGE = {
   pass: '✅',
   fail: '❌',
   skip: '⚪',
-};
+} satisfies Record<CriterionResult['verdict'], string>;
 
 async function postReport(
   token: string,

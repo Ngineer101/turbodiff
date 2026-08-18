@@ -7,6 +7,14 @@ import { GENERATION_STOPPED } from './queries.ts';
 
 export type TaskTone = 'running' | 'on' | 'red' | 'warn' | 'neutral';
 
+// The pill vocabulary for one task: label + tone for the pill itself, hint
+// for the line underneath it.
+export interface TaskState {
+  label: string;
+  tone: TaskTone;
+  hint: string;
+}
+
 // The PLAN → BUILD → VERIFY → SHIP stage lights, aggregated across the
 // task's repos. A summary visual, deliberately coarser than taskState's
 // label — precise wording stays on the pill, position on the line lives
@@ -54,7 +62,7 @@ export function taskColumn(p: ApiPlan): 'in_progress' | 'done' {
     : 'in_progress';
 }
 
-export function taskState(p: ApiPlan): { label: string; tone: TaskTone; hint: string } {
+export function taskState(p: ApiPlan): TaskState {
   switch (p.status) {
     case 'analyzing':
       return {

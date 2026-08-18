@@ -26,7 +26,7 @@ import { Button, buttonVariants } from '../components/ui/button.tsx';
 import { Textarea } from '../components/ui/input.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 
-function onApiError(err: unknown) {
+function onApiError<T>(err: T) {
   toast.error(err instanceof ApiError ? err.message : 'Request failed');
 }
 
@@ -44,7 +44,7 @@ function NotificationsBanner({ vapidPublicKey }: { vapidPublicKey: string }) {
   if (
     dismissed ||
     !pushSupported() ||
-    typeof Notification === 'undefined' ||
+    !('Notification' in window) ||
     Notification.permission !== 'default'
   ) {
     return null;
@@ -409,6 +409,7 @@ export function TaskPage() {
                   : r.pr_number
                     ? `PR #${r.pr_number}`
                     : 'Generating';
+            const featureId = r.feature_id;
             return (
               <div key={r.repository_id} className="rounded-xl bg-raised/40 p-3">
                 <div className="flex flex-wrap items-center gap-2">
@@ -421,10 +422,10 @@ export function TaskPage() {
                   <p className="mt-2 text-[0.85rem] text-danger">{r.feature_error}</p>
                 ) : null}
                 <div className="mt-2 flex flex-col gap-2 sm:flex-row">
-                  {stopped && r.feature_id !== null ? (
+                  {stopped && featureId !== null ? (
                     <Button
                       size="sm"
-                      onClick={() => retry.mutate(r.feature_id as number)}
+                      onClick={() => retry.mutate(featureId)}
                       loading={retry.isPending && retry.variables === r.feature_id}
                     >
                       Retry generation

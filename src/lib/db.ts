@@ -780,7 +780,7 @@ export async function approvePlanFeatures(
 		 WHERE id = ?1 AND status = 'approving'`,
     ).bind(planId),
   ]);
-  const claimed = (results[0].results as { id: number }[] | undefined)?.length;
+  const claimed = results[0].results.length;
   if (!claimed) return null;
   const rows = await env.DB.prepare(
     `SELECT f.id FROM features f
@@ -1617,15 +1617,16 @@ export function connectionSnapshot(row: ConnectionRow): ConnectionSnapshot {
       // Malformed allowlist behaves as "all tools" rather than failing runs.
     }
   }
-  return {
+  const snapshot: ConnectionSnapshot = {
     id: row.id,
     name: row.name,
     url: row.url,
-    ...(tools ? { tools } : {}),
     hasAuth: row.auth_type !== 'none',
     authType: row.auth_type,
     optional: row.optional === 1,
   };
+  if (tools) snapshot.tools = tools;
+  return snapshot;
 }
 
 // MCP connections attached to one agent, via the registry links.
@@ -1688,14 +1689,16 @@ export async function createConnection(fields: {
 // field is optional and left unchanged when omitted (COALESCE), except
 // oauth_needs_reauth which is a boolean so `false` must still bind 0 rather
 // than be skipped.
+export interface ConnectionAuthUpdate {
+  authType?: string;
+  authConfigCiphertext?: string;
+  oauthTokenExpiresAt?: string;
+  oauthNeedsReauth?: boolean;
+}
+
 export async function updateConnectionAuth(
   id: number,
-  fields: {
-    authType?: string;
-    authConfigCiphertext?: string;
-    oauthTokenExpiresAt?: string;
-    oauthNeedsReauth?: boolean;
-  },
+  fields: ConnectionAuthUpdate,
 ): Promise<void> {
   await env.DB.prepare(
     `UPDATE connections SET
@@ -1862,15 +1865,16 @@ export async function resolveConnectionAuth(conn: ConnectionRow): Promise<Resolv
           `turbodiff: connection ${conn.id}'s OAuth token could not be refreshed — reconnect it from the integrations page`,
         );
       }
-      await updateConnectionAuth(conn.id, {
+      const authUpdate: ConnectionAuthUpdate = {
         authConfigCiphertext: await sealJson<OAuthConfig>({
           ...config,
           accessToken: refreshed.accessToken,
           refreshToken: refreshed.refreshToken ?? config.refreshToken,
         }),
-        ...(refreshed.expiresAt ? { oauthTokenExpiresAt: refreshed.expiresAt } : {}),
         oauthNeedsReauth: false,
-      });
+      };
+      if (refreshed.expiresAt) authUpdate.oauthTokenExpiresAt = refreshed.expiresAt;
+      await updateConnectionAuth(conn.id, authUpdate);
       return { headerName: 'authorization', headerValue: `Bearer ${refreshed.accessToken}` };
     }
     case 'none':

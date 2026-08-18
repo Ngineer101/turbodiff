@@ -9,10 +9,13 @@ import { Hono } from 'hono';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import type { AuthedUser } from '../lib/auth.ts';
 import type { ApiBoard } from '../shared/api-types.ts';
+import { isJsonObject, isString, parseJson } from '../shared/json.ts';
 import { createApiRoutes, type ApiRouteDependencies } from './api.ts';
 
 type TestEnv = Cloudflare.Env & { TEST_MIGRATIONS: D1Migration[] };
 type Authenticate = NonNullable<ApiRouteDependencies['authenticate']>;
+// SAFETY: vitest.worker.config.ts provisions the TEST_MIGRATIONS binding for
+// this pool on top of the generated Cloudflare.Env.
 const testEnv = env as TestEnv;
 
 const acmeUser: AuthedUser = {
@@ -106,6 +109,8 @@ describe('authenticated tenant isolation', () => {
   it('returns only installations, repositories, and todos owned by the caller', async () => {
     const response = await authenticatedApi().request('https://turbodiff.test/api/board');
     expect(response.status).toBe(200);
+    // SAFETY: /api/board's 200 response body is the ApiBoard contract this test
+    // exercises; the assertions below fail on any drift in that shape.
     const board = (await response.json()) as ApiBoard;
 
     expect(board.installations).toEqual([{ id: 1001, account_login: 'acme' }]);
@@ -213,8 +218,8 @@ describe('push subscriptions', () => {
   it('includes a VAPID public key string on /me', async () => {
     const response = await authenticatedApi().request('https://turbodiff.test/api/me');
     expect(response.status).toBe(200);
-    const me = (await response.json()) as { vapid_public_key: string };
-    expect(typeof me.vapid_public_key).toBe('string');
+    const me = parseJson(await response.text());
+    expect(isJsonObject(me) && isString(me.vapid_public_key)).toBe(true);
   });
 
   it('upserts a subscription row for the signed-in user', async () => {

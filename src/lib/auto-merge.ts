@@ -31,6 +31,9 @@ export async function maybeAutoMerge(repo: RepositoryRow, prNumber: number): Pro
     }
 
     const token = await installationToken(repo.installation_id);
+    // SAFETY: gh() throws on non-2xx, and GitHub's "list reviews for a pull
+    // request" response is an array whose items always carry string state and
+    // body plus a nullable user with type and login.
     const reviews = (await (
       await gh(token, `/repos/${repo.owner}/${repo.name}/pulls/${prNumber}/reviews?per_page=100`)
     ).json()) as { state: string; body: string; user: { type: string; login: string } | null }[];
@@ -59,11 +62,21 @@ export async function maybeAutoMerge(repo: RepositoryRow, prNumber: number): Pro
     });
     if (mergeability.hasConflict) {
       if (repo.auto_resolve_conflicts === 1) {
-        const msg: ConflictResolveQueueMessage = { kind: 'resolve_conflict', repoId: repo.id, prNumber };
+        const msg: ConflictResolveQueueMessage = {
+          kind: 'resolve_conflict',
+          repoId: repo.id,
+          prNumber,
+        };
         await env.FACTORY_QUEUE.send(msg);
         console.log(`turbodiff: conflict detected on ${label}, resolution enqueued`);
       } else {
-        await postConflictCommentIfAbsent(token, repo.owner, repo.name, prNumber, mergeability.baseRef);
+        await postConflictCommentIfAbsent(
+          token,
+          repo.owner,
+          repo.name,
+          prNumber,
+          mergeability.baseRef,
+        );
         console.log(`turbodiff: auto-merge declined for ${label} (merge conflict)`);
       }
       return;
@@ -73,6 +86,8 @@ export async function maybeAutoMerge(repo: RepositoryRow, prNumber: number): Pro
       method: 'PUT',
       body: JSON.stringify({ merge_method: 'merge' }),
     });
+    // SAFETY: gh() throws on non-2xx; a 200 from GitHub's merge endpoint is a
+    // JSON object, and both fields are typed optional so no shape is presumed.
     const merged = (await res.json()) as { merged?: boolean; sha?: string };
     if (!merged.merged) throw new Error('merge endpoint returned merged=false');
     console.log(`turbodiff: auto-merged ${label} (${merged.sha?.slice(0, 8)})`);

@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { useParams } from '@tanstack/react-router';
-import { PatchDiff, type DiffLineAnnotation } from '@pierre/diffs/react';
+import { PatchDiff, type DiffLineAnnotation, type SelectedLineRange } from '@pierre/diffs/react';
 import {
   ChevronDown,
   ChevronRight,
@@ -54,7 +54,7 @@ interface CommentMeta {
   composer?: boolean;
 }
 
-function onApiError(err: unknown) {
+function onApiError<T>(err: T) {
   toast.error(err instanceof ApiError ? err.message : 'Request failed');
 }
 
@@ -230,7 +230,7 @@ function FileDiff({
     const list: DiffLineAnnotation<CommentMeta>[] = data.comments
       .filter((c) => c.path === file.filename)
       .map((c) => ({
-        side: (c.side === 'deletions' ? 'deletions' : 'additions') as 'additions' | 'deletions',
+        side: c.side === 'deletions' ? 'deletions' : 'additions',
         lineNumber: c.line,
         metadata: { comment: c },
       }));
@@ -245,16 +245,13 @@ function FileDiff({
   }, [data.comments, file.filename, selection]);
 
   const onSelectionEnd = useCallback(
-    (range: unknown) => {
-      const r = range as { start: number; end: number; side?: string; endSide?: string } | null;
-      if (!r || !Number.isFinite(r.start) || !Number.isFinite(r.end)) return;
+    (range: SelectedLineRange | null) => {
+      if (!range || !Number.isFinite(range.start) || !Number.isFinite(range.end)) return;
       setSelection({
         file: file.filename,
-        startLine: Math.min(r.start, r.end),
-        endLine: Math.max(r.start, r.end),
-        side: ((r.endSide ?? r.side) === 'deletions' ? 'deletions' : 'additions') as
-          | 'additions'
-          | 'deletions',
+        startLine: Math.min(range.start, range.end),
+        endLine: Math.max(range.start, range.end),
+        side: (range.endSide ?? range.side) === 'deletions' ? 'deletions' : 'additions',
       });
     },
     [file.filename],

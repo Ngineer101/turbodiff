@@ -27,6 +27,10 @@ export interface AutomationSubmitValues {
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+function isScheduleKind(value: string): value is AutomationFormValues['schedule_kind'] {
+  return value === 'hourly' || value === 'daily' || value === 'weekly';
+}
+
 // Shared create/edit form. Server-side validation is authoritative; the
 // caller surfaces its error message via the `error` prop.
 export function AutomationForm({
@@ -96,9 +100,9 @@ export function AutomationForm({
       <Field label="schedule">
         <Select
           value={values.schedule_kind}
-          onChange={(e) =>
-            set({ schedule_kind: e.target.value as AutomationFormValues['schedule_kind'] })
-          }
+          onChange={(e) => {
+            if (isScheduleKind(e.target.value)) set({ schedule_kind: e.target.value });
+          }}
         >
           <option value="hourly">Hourly</option>
           <option value="daily">Daily</option>

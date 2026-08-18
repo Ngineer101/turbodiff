@@ -23,7 +23,7 @@ import { Pill } from '../components/ui/pill.tsx';
 import { Switch } from '../components/ui/switch.tsx';
 import { cn } from '../lib/utils.ts';
 
-function onApiError(err: unknown) {
+function onApiError<T>(err: T) {
   toast.error(err instanceof ApiError ? err.message : 'Request failed');
 }
 

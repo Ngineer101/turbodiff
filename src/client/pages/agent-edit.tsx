@@ -9,7 +9,7 @@ import { ConfirmButton } from '../components/confirm-button.tsx';
 import { Muted, PageTitle, SectionHeading } from '../components/section.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 
-function onApiError(err: unknown) {
+function onApiError<T>(err: T) {
   toast.error(err instanceof ApiError ? err.message : 'Request failed');
 }
 
