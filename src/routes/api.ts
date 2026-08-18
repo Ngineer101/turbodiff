@@ -1340,6 +1340,49 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     return c.json({ ok: true, key, name: file.name.slice(-120), content_type: file.type });
   });
 
+  // Speech-to-text for dictation into requirement/feedback/comment fields.
+  // Transient: the recording is transcribed and discarded, never written to
+  // R2 (contrast with /uploads, which persists planning attachments).
+  const TRANSCRIBE_MAX_BYTES = 15 * 1024 * 1024;
+
+  app.post('/transcribe', async (c) => {
+    // Same cost-control gate as /uploads: dictation is only reachable from
+    // screens that already require an installation (todo start, plan
+    // feedback, feature comments), so this only blocks the zero-installation
+    // edge case from spending Workers AI inference.
+    if (c.get('user').installationIds.length === 0) {
+      return c.json({ error: 'install the GitHub App before using dictation' }, 403);
+    }
+    const body = await c.req.parseBody();
+    const file = body.audio;
+    if (!(file instanceof File)) {
+      return c.json({ error: 'multipart "audio" field is required' }, 400);
+    }
+    if (!file.type.startsWith('audio/')) {
+      return c.json({ error: 'only audio recordings are supported' }, 400);
+    }
+    if (file.size > TRANSCRIBE_MAX_BYTES) {
+      return c.json({ error: 'recording exceeds 15MB' }, 400);
+    }
+    if (file.size === 0) return c.json({ ok: true, text: '' });
+
+    // Same byte->base64 idiom as src/lib/github-app.ts's base64url() — a
+    // fromCharCode loop instead of a spread, so it doesn't blow the call
+    // stack on a multi-MB buffer.
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let bin = '';
+    for (const b of bytes) bin += String.fromCharCode(b);
+    const audio = btoa(bin);
+
+    try {
+      const result = await env.AI.run('@cf/openai/whisper-large-v3-turbo', { audio });
+      return c.json({ ok: true, text: (result.text ?? '').trim() });
+    } catch (err) {
+      console.error('turbodiff: transcription failed:', err);
+      return c.json({ error: 'transcription failed' }, 502);
+    }
+  });
+
   // Batched plan-review feedback: snippet-anchored comments collected in the
   // UI, submitted once, and consumed by a revise (plan_refine) run.
   app.post('/factory/plans/:id/feedback', async (c) => {

@@ -285,3 +285,53 @@ describe('push subscriptions', () => {
     ).toBeNull();
   });
 });
+
+// The success path (a real audio file transcribed by the AI binding) isn't
+// covered here: wrangler.test.jsonc has no "ai" binding, matching every
+// other worker test's D1-only fixture — exercising real Workers AI needs
+// account credentials this offline suite doesn't have.
+describe('dictation transcription', () => {
+  it('rejects a request without a durable session', async () => {
+    const response = await apiApp().request('https://turbodiff.test/api/transcribe', {
+      method: 'POST',
+      body: new FormData(),
+    });
+    expect(response.status).toBe(401);
+  });
+
+  it('blocks a signed-in user with zero installations', async () => {
+    const app = apiApp({
+      authenticate: async () => ({ ...acmeUser, installationIds: [] }),
+    });
+    const response = await app.request('https://turbodiff.test/api/transcribe', {
+      method: 'POST',
+      body: new FormData(),
+    });
+    expect(response.status).toBe(403);
+    const data = (await response.json()) as { error?: string };
+    expect(typeof data.error).toBe('string');
+  });
+
+  it('requires a multipart "audio" file field', async () => {
+    const fd = new FormData();
+    fd.append('audio', 'not-a-file');
+    const response = await authenticatedApi().request('https://turbodiff.test/api/transcribe', {
+      method: 'POST',
+      body: fd,
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it('rejects a recording larger than the configured size cap', async () => {
+    const oversized = new File([new Uint8Array(15 * 1024 * 1024 + 1)], 'clip.webm', {
+      type: 'audio/webm',
+    });
+    const fd = new FormData();
+    fd.append('audio', oversized);
+    const response = await authenticatedApi().request('https://turbodiff.test/api/transcribe', {
+      method: 'POST',
+      body: fd,
+    });
+    expect(response.status).toBe(400);
+  });
+});

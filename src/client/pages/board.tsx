@@ -17,6 +17,7 @@ import { toast } from 'sonner';
 import type { ApiBoard, ApiPlan, ApiTodo } from '../../shared/api-types.ts';
 import { isJsonObject, isString } from '../../shared/json.ts';
 import { api, ApiError } from '../lib/api.ts';
+import { useDictation } from '../lib/dictation.ts';
 import { ago, fmtUsd } from '../lib/format.ts';
 import { boardQuery } from '../lib/queries.ts';
 import { taskColumn, taskStages, taskState } from '../lib/task-state.ts';
@@ -30,6 +31,7 @@ import {
   TelemetryStrip,
   type LampTone,
 } from '../components/identity.tsx';
+import { MicButton } from '../components/mic-button.tsx';
 import { Muted, PageTitle } from '../components/section.tsx';
 import { Button } from '../components/ui/button.tsx';
 import { Card } from '../components/ui/card.tsx';
@@ -118,6 +120,9 @@ function StartDialog({
   const queryClient = useQueryClient();
   const [title, setTitle] = useState(todo.title);
   const [requirements, setRequirements] = useState(todo.notes ?? todo.title);
+  const dictation = useDictation((text) =>
+    setRequirements((prev) => (prev.trim() ? `${prev}\n\n${text}` : text)),
+  );
   const [files, setFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const start = useMutation({
@@ -174,8 +179,15 @@ function StartDialog({
           </Field>
           <Field label="Requirements">
             <Textarea
-              value={requirements}
+              value={
+                dictation.recording
+                  ? requirements.trim()
+                    ? `${requirements}\n\n${dictation.interim}`
+                    : dictation.interim
+                  : requirements
+              }
               onChange={(e) => setRequirements(e.target.value)}
+              disabled={dictation.recording}
               required
               className="min-h-28"
               placeholder="What should be built? The planning agent reads the repo and drafts a plan you approve."
@@ -194,14 +206,17 @@ function StartDialog({
                 e.target.value = '';
               }}
             />
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <Paperclip className="size-3.5" aria-hidden /> Attach files (PDF, images)
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <Paperclip className="size-3.5" aria-hidden /> Attach files (PDF, images)
+              </Button>
+              <MicButton dictation={dictation} />
+            </div>
             {files.length > 0 ? (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {files.map((f, i) => (
