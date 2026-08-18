@@ -698,8 +698,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   });
 
   app.get('/me', (c) => {
+    const user = c.get('user');
     return c.json<ApiMe>({
-      login: c.get('user').session.login,
+      login: user.githubConnected ? user.session.login : null,
+      name: user.name,
+      github_connected: user.githubConnected,
       github_app_slug: env.GITHUB_APP_SLUG,
       vapid_public_key: env.VAPID_PUBLIC_KEY,
     });

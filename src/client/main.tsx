@@ -45,6 +45,7 @@ import { AutomationsPage } from './pages/automations.tsx';
 import { BoardPage } from './pages/board.tsx';
 import { IntegrationsPage } from './pages/integrations.tsx';
 import { MembersPage } from './pages/members.tsx';
+import { OnboardingPage } from './pages/onboarding.tsx';
 import { SettingsPage } from './pages/settings.tsx';
 import { SkillEditPage } from './pages/skill-edit.tsx';
 import { SkillNewPage } from './pages/skill-new.tsx';
@@ -53,10 +54,10 @@ import { TaskPage } from './pages/task.tsx';
 import { UsagePage } from './pages/usage.tsx';
 import './styles.css';
 
-function RootLayout() {
+function ShellLayout() {
   const { data: me } = useSuspenseQuery(meQuery);
   return (
-    <AppShell login={me.login}>
+    <AppShell me={me}>
       <Outlet />
     </AppShell>
   );
@@ -100,34 +101,47 @@ function NotFound() {
 }
 
 const rootRoute = createRootRoute({
-  component: RootLayout,
   loader: () => queryClient.ensureQueryData(meQuery),
   notFoundComponent: NotFound,
 });
 
-const boardRoute = createRoute({
+// Pathless layout: every signed-in page lives inside the AppShell chrome.
+// /onboarding sits outside it — a focused page with no nav to wander off to.
+const shellRoute = createRoute({
   getParentRoute: () => rootRoute,
+  id: 'shell',
+  component: ShellLayout,
+});
+
+const onboardingRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/onboarding',
+  component: OnboardingPage,
+});
+
+const boardRoute = createRoute({
+  getParentRoute: () => shellRoute,
   path: '/',
   loader: () => queryClient.ensureQueryData(boardQuery),
   component: BoardPage,
 });
 
 const taskRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: '/tasks/$taskId',
   loader: ({ params }) => queryClient.ensureQueryData(taskQuery(Number(params.taskId))),
   component: TaskPage,
 });
 
 const usageRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: '/usage',
   loader: () => queryClient.ensureQueryData(usageQuery),
   component: UsagePage,
 });
 
 const integrationsRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: '/integrations',
   loader: () => queryClient.ensureQueryData(integrationsQuery),
   component: IntegrationsPage,
@@ -136,61 +150,61 @@ const integrationsRoute = createRoute({
 // The cockpit pulls in @pierre/diffs (+ syntax themes) — lazy so the rest of
 // the app doesn't pay for it.
 const featureRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: '/factory/features/$featureId',
   loader: ({ params }) => queryClient.ensureQueryData(featureQuery(Number(params.featureId))),
   component: lazyRouteComponent(() => import('./pages/feature.tsx')),
 });
 
 const agentsRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: '/agents',
   loader: () => queryClient.ensureQueryData(agentsQuery),
   component: AgentsPage,
 });
 
 const agentNewRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: '/agents/new',
   component: AgentNewPage,
 });
 
 const agentEditRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: '/agents/$agentId/edit',
   loader: ({ params }) => queryClient.ensureQueryData(agentQuery(Number(params.agentId))),
   component: AgentEditPage,
 });
 
 const skillsRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: '/skills',
   loader: () => queryClient.ensureQueryData(skillsQuery),
   component: SkillsPage,
 });
 
 const skillNewRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: '/skills/new',
   component: SkillNewPage,
 });
 
 const skillEditRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: '/skills/$skillId/edit',
   loader: ({ params }) => queryClient.ensureQueryData(skillQuery(Number(params.skillId))),
   component: SkillEditPage,
 });
 
 const settingsRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: '/settings',
   loader: () => queryClient.ensureQueryData(settingsQuery),
   component: SettingsPage,
 });
 
 const membersRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: '/settings/members/$installationId',
   loader: ({ params }) =>
     queryClient.ensureQueryData(orgMembersQuery(Number(params.installationId))),
@@ -198,51 +212,54 @@ const membersRoute = createRoute({
 });
 
 const automationsRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: '/automations',
   loader: () => queryClient.ensureQueryData(automationsQuery),
   component: AutomationsPage,
 });
 
 const automationNewRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: '/automations/new',
   loader: () => queryClient.ensureQueryData(automationsQuery),
   component: AutomationNewPage,
 });
 
 const automationEditRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: '/automations/$automationId/edit',
   loader: ({ params }) => queryClient.ensureQueryData(automationQuery(Number(params.automationId))),
   component: AutomationEditPage,
 });
 
 const automationRunRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: '/automations/runs/$runId',
   loader: ({ params }) => queryClient.ensureQueryData(automationRunQuery(Number(params.runId))),
   component: AutomationRunPage,
 });
 
 const routeTree = rootRoute.addChildren([
-  boardRoute,
-  taskRoute,
-  usageRoute,
-  integrationsRoute,
-  featureRoute,
-  agentsRoute,
-  agentNewRoute,
-  agentEditRoute,
-  skillsRoute,
-  skillNewRoute,
-  skillEditRoute,
-  settingsRoute,
-  membersRoute,
-  automationsRoute,
-  automationNewRoute,
-  automationEditRoute,
-  automationRunRoute,
+  onboardingRoute,
+  shellRoute.addChildren([
+    boardRoute,
+    taskRoute,
+    usageRoute,
+    integrationsRoute,
+    featureRoute,
+    agentsRoute,
+    agentNewRoute,
+    agentEditRoute,
+    skillsRoute,
+    skillNewRoute,
+    skillEditRoute,
+    settingsRoute,
+    membersRoute,
+    automationsRoute,
+    automationNewRoute,
+    automationEditRoute,
+    automationRunRoute,
+  ]),
 ]);
 
 const router = createRouter({

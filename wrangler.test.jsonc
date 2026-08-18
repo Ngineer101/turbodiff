@@ -3,6 +3,11 @@
   "name": "turbodiff-tests",
   "compatibility_date": "2026-06-01",
   "compatibility_flags": ["nodejs_compat"],
+  // better-auth (src/lib/better-auth.ts) needs a base URL at construction;
+  // secrets (SESSION_SECRET etc.) come from .dev.vars.
+  "vars": {
+    "PUBLIC_BASE_URL": "https://turbodiff.test",
+  },
   "d1_databases": [
     {
       "binding": "DB",

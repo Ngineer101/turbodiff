@@ -14,7 +14,7 @@ function onApiError<T>(err: T) {
 }
 
 export function AgentEditPage() {
-  const { agentId } = useParams({ from: '/agents/$agentId/edit' });
+  const { agentId } = useParams({ from: '/shell/agents/$agentId/edit' });
   const id = Number(agentId);
   const navigate = useNavigate();
   const queryClient = useQueryClient();

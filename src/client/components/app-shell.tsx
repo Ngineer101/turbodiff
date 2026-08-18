@@ -10,7 +10,9 @@ import {
   Sparkles,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
+import type { ApiMe } from '../../shared/api-types.ts';
 import { cn } from '../lib/utils.ts';
+import { Lamp } from './identity.tsx';
 
 // Control-room nav: every destination is a station with a distinct icon,
 // lit where you are, dark elsewhere. Both the sidebar and the mobile bottom
@@ -106,10 +108,12 @@ function BottomTabs() {
   );
 }
 
-function UserBlock({ login }: { login: string }) {
+function UserBlock({ me }: { me: ApiMe }) {
   return (
     <div className="flex items-center justify-between gap-2">
-      <span className="truncate font-mono text-xs text-mute">@{login}</span>
+      <span className="truncate font-mono text-xs text-mute">
+        {me.login ? `@${me.login}` : me.name}
+      </span>
       <form method="post" action="/auth/logout">
         <button
           className="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-xs text-mute hover:bg-raised hover:text-ink"
@@ -126,7 +130,7 @@ function UserBlock({ login }: { login: string }) {
 // Desktop: fixed sidebar. Small screens: sticky top bar with the same nav.
 // The cockpit's diff pane needs room, so that route gets a much wider
 // container than the reading-width default.
-export function AppShell({ login, children }: { login: string; children: ReactNode }) {
+export function AppShell({ me, children }: { me: ApiMe; children: ReactNode }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const wide = pathname.startsWith('/factory/features/');
   // The board's three lanes need more room than the reading-width default.
@@ -138,12 +142,12 @@ export function AppShell({ login, children }: { login: string; children: ReactNo
           <Logo />
           <SidebarNav />
         </div>
-        <UserBlock login={login} />
+        <UserBlock me={me} />
       </aside>
 
       <div className="sticky top-0 z-40 flex items-center justify-between border-b border-line/60 bg-bg/95 px-4 py-2.5 backdrop-blur md:hidden">
         <Logo />
-        <UserBlock login={login} />
+        <UserBlock me={me} />
       </div>
 
       <main className="min-w-0 flex-1">
@@ -155,6 +159,17 @@ export function AppShell({ login, children }: { login: string; children: ReactNo
             wide ? 'max-w-[96rem]' : board ? 'max-w-7xl' : 'max-w-4xl',
           )}
         >
+          {/* Password account without GitHub: every station reads empty until
+              a GitHub account is connected, so say why once, up top. */}
+          {!me.github_connected && (
+            <div className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-line-2/70 bg-surface/60 px-4 py-3 text-[0.85rem] text-ink-dim">
+              <Lamp tone="hold" />
+              GitHub isn&rsquo;t connected — the factory can&rsquo;t reach any repositories yet.
+              <a href="/onboarding" className="font-medium text-accent-bright hover:underline">
+                Connect GitHub &rarr;
+              </a>
+            </div>
+          )}
           {children}
         </div>
       </main>

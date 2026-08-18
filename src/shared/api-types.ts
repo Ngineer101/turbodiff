@@ -312,7 +312,11 @@ export interface ApiSettings {
 }
 
 export interface ApiMe {
-  login: string;
+  // GitHub login when a GitHub account is connected, null for a password
+  // account that hasn't linked one yet (name carries the display identity).
+  login: string | null;
+  name: string;
+  github_connected: boolean;
   github_app_slug: string;
   vapid_public_key: string;
 }

@@ -54,7 +54,7 @@ function RunRow({ run, repo }: { run: ApiAutomationRunSummary; repo: string }) {
 }
 
 export function AutomationEditPage() {
-  const { automationId } = useParams({ from: '/automations/$automationId/edit' });
+  const { automationId } = useParams({ from: '/shell/automations/$automationId/edit' });
   const id = Number(automationId);
   const navigate = useNavigate();
   const queryClient = useQueryClient();

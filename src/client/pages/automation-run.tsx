@@ -17,7 +17,7 @@ const STATUS_TONE = {
 } satisfies Record<string, PillProps['tone']>;
 
 export function AutomationRunPage() {
-  const { runId } = useParams({ from: '/automations/runs/$runId' });
+  const { runId } = useParams({ from: '/shell/automations/runs/$runId' });
   const id = Number(runId);
   const { data } = useSuspenseQuery(automationRunQuery(id));
 

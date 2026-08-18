@@ -111,7 +111,7 @@ function AnswersForm({ task, onDone }: { task: ApiPlan; onDone: () => void }) {
 }
 
 export function TaskPage() {
-  const { taskId } = useParams({ from: '/tasks/$taskId' });
+  const { taskId } = useParams({ from: '/shell/tasks/$taskId' });
   const id = Number(taskId);
   const queryClient = useQueryClient();
   const navigate = useNavigate();

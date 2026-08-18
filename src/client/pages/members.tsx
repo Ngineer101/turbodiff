@@ -166,7 +166,7 @@ function InviteForm({ installationId }: { installationId: number }) {
 }
 
 export function MembersPage() {
-  const { installationId } = useParams({ from: '/settings/members/$installationId' });
+  const { installationId } = useParams({ from: '/shell/settings/members/$installationId' });
   const id = Number(installationId);
   const { data } = useSuspenseQuery(orgMembersQuery(id));
   const canManage = data.my_role !== 'member';

@@ -13,8 +13,17 @@ import { isNumber, isString } from '../shared/json.ts';
 // polling signed users out on every rate-limit blip.
 
 export type AuthedUser = {
+  // GitHub identity. For a password sign-up that hasn't linked GitHub yet,
+  // userId is 0 and login/ghToken are empty — installationIds is [] so every
+  // repo-scoped query answers empty and every push check fails closed; the
+  // attribution paths that read userId/login all sit behind an installation
+  // check a GitHub-less user can't pass.
   session: { userId: number; login: string; ghToken: string };
   installationIds: number[];
+  githubConnected: boolean;
+  // Display identity for the shell — the GitHub login when connected, the
+  // sign-up name otherwise.
+  name: string;
   // Local DEV_FAKE_INSTALLATIONS session — no GitHub token to verify repo
   // permissions with, so permission checks pass by construction.
   devFake?: boolean;
@@ -116,20 +125,37 @@ export async function requireUser(c: Context): Promise<AuthedUser | null> {
         .split(',')
         .map(Number)
         .filter((n) => Number.isInteger(n)),
+      githubConnected: true,
+      name: 'dev',
       devFake: true,
     };
   }
   const found = await auth().api.getSession({ headers: c.req.raw.headers });
   if (!found) return null;
   const user = found.user;
-  // Pre-better-auth rows can't exist (the tables shipped together), so a
-  // user without the GitHub identity additionalFields (which better-auth's
-  // static session type erases) is malformed — treat as signed out.
-  if (!('login' in user) || !isString(user.login) || !user.login) return null;
-  if (!('githubId' in user) || !isNumber(user.githubId)) return null;
+  // better-auth's static session type erases the login/githubId
+  // additionalFields, so narrow them through guards.
+  const login = 'login' in user && isString(user.login) && user.login ? user.login : null;
+  const githubId = 'githubId' in user && isNumber(user.githubId) ? user.githubId : null;
+  // Email/password sign-up that hasn't linked a GitHub account yet: a valid
+  // session with no GitHub reach — empty installations, everything
+  // repo-scoped answers empty, push checks fail closed.
+  if (!login || githubId === null) {
+    return {
+      session: { userId: 0, login: '', ghToken: '' },
+      installationIds: [],
+      githubConnected: false,
+      name: user.name || user.email,
+    };
+  }
 
   const ghToken = await githubToken(user.id);
   const ids = await installationIds(user.id, ghToken);
   if (ids === null) return null;
-  return { session: { userId: user.githubId, login: user.login, ghToken }, installationIds: ids };
+  return {
+    session: { userId: githubId, login, ghToken },
+    installationIds: ids,
+    githubConnected: true,
+    name: login,
+  };
 }

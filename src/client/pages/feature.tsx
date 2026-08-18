@@ -396,7 +396,7 @@ function FileSection({
 
 export default function FeaturePage() {
   ensureDiffStyles();
-  const { featureId } = useParams({ from: '/factory/features/$featureId' });
+  const { featureId } = useParams({ from: '/shell/factory/features/$featureId' });
   const id = Number(featureId);
   const queryClient = useQueryClient();
   const { data } = useSuspenseQuery(featureQuery(id));
