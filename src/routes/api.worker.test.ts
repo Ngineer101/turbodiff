@@ -308,8 +308,8 @@ describe('dictation transcription', () => {
       body: new FormData(),
     });
     expect(response.status).toBe(403);
-    const data = (await response.json()) as { error?: string };
-    expect(typeof data.error).toBe('string');
+    const data = parseJson(await response.text());
+    expect(isJsonObject(data) && isString(data.error)).toBe(true);
   });
 
   it('requires a multipart "audio" file field', async () => {
