@@ -2242,6 +2242,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       code_challenge_method: 'S256',
       state,
     });
+    // Request the server's advertised scopes — some issue refresh tokens
+    // only when the authorization request names a scope (offline_access).
+    if (endpoints.scopesSupported?.length) {
+      params.set('scope', endpoints.scopesSupported.join(' '));
+    }
     return c.redirect(`${endpoints.authorizationEndpoint}?${params}`);
   });
 
@@ -2285,7 +2290,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       return c.redirect('/integrations?oauth=error&reason=exchange_failed');
     }
 
-    const authUpdate: Parameters<typeof updateConnectionAuth>[1] = {
+    await updateConnectionAuth(conn.id, {
       authConfigCiphertext: await sealJson<OAuthConfigCache>({
         ...cache,
         accessToken: tokens.accessToken,
@@ -2293,9 +2298,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         scope: tokens.scope,
       }),
       oauthNeedsReauth: false,
-    };
-    if (tokens.expiresAt) authUpdate.oauthTokenExpiresAt = tokens.expiresAt;
-    await updateConnectionAuth(conn.id, authUpdate);
+      oauthHasRefreshToken: tokens.refreshToken !== undefined,
+      // Always record an expiry: a null column can never be advanced by the
+      // COALESCE-based update, which would force a refresh on every request.
+      oauthTokenExpiresAt: tokens.expiresAt ?? new Date(Date.now() + 60 * 60_000).toISOString(),
+    });
     return c.redirect(`/integrations?oauth=connected&name=${encodeURIComponent(conn.name)}`);
   });
 

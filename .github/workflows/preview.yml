@@ -64,9 +64,14 @@ jobs:
           script: |
             const marker = '<!-- turbodiff-preview -->';
             const url = ${{ toJSON(steps.upload.outputs.preview_url) }};
+            const noUrlHint =
+              '_upload succeeded but wrangler printed no preview URL — preview URLs are likely ' +
+              'disabled for this Worker. Set `"preview_urls": true` in wrangler.jsonc (applies on ' +
+              'the next production deploy) and make sure the account has a workers.dev subdomain ' +
+              'registered._';
             const body = [
               marker,
-              `**Preview:** ${url || '_upload succeeded but no preview URL was found in wrangler output — check the workflow log_'}`,
+              `**Preview:** ${url || noUrlHint}`,
               '',
               'This preview shares production’s database, queue, and sandbox container with `main` — avoid destructive or data-mutating actions. Sign-in and other redirect-based flows may not work correctly since auth URLs are pinned to the production domain. Use this for UI/API smoke-testing only.',
             ].join('\n');

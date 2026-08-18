@@ -39,6 +39,10 @@ export interface OAuthEndpoints {
   authorizationEndpoint: string;
   tokenEndpoint: string;
   registrationEndpoint?: string;
+  // Advertised scopes (RFC 8414 scopes_supported). Requested verbatim during
+  // authorization — some servers only issue refresh tokens when the request
+  // names a scope (e.g. offline_access).
+  scopesSupported?: string[];
 }
 
 async function fetchJson(url: string): Promise<JsonObject | null> {
@@ -103,7 +107,9 @@ export async function discoverOAuthEndpoints(mcpServerUrl: string): Promise<OAut
     ? rawRegistrationEndpoint
     : undefined;
   if (registrationEndpoint) assertSecureUrl(registrationEndpoint, 'registration endpoint');
-  return { authorizationEndpoint, tokenEndpoint, registrationEndpoint };
+  const rawScopes = metadata?.scopes_supported;
+  const scopesSupported = isJsonArray(rawScopes) ? rawScopes.filter(isString) : undefined;
+  return { authorizationEndpoint, tokenEndpoint, registrationEndpoint, scopesSupported };
 }
 
 // --- dynamic client registration (RFC 7591) ---
@@ -302,15 +308,20 @@ export async function exchangeAuthorizationCode(
   };
 }
 
-// Null on any failure (revoked, expired, or rotated elsewhere) — callers set
-// oauth_needs_reauth and drop the stored credential, mirroring
-// refreshUserToken's contract in github-app.ts.
+// Failures are discriminated so callers can tell a definitive revocation
+// (invalid_grant — the refresh token is dead, re-auth is genuinely required)
+// from a transient failure (network blip, 5xx, non-JSON body) that should be
+// retried on the next request without scrapping the stored credential.
+export type OAuthRefreshResult =
+  | { ok: true; accessToken: string; refreshToken?: string; expiresAt?: string }
+  | { ok: false; invalidGrant: boolean; detail: string };
+
 export async function refreshOAuthToken(
   tokenEndpoint: string,
   refreshToken: string,
   clientId: string,
   clientSecret?: string,
-): Promise<TokenResult | null> {
+): Promise<OAuthRefreshResult> {
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
@@ -318,8 +329,15 @@ export async function refreshOAuthToken(
   });
   if (clientSecret) params.set('client_secret', clientSecret);
   const data = await tokenRequest(tokenEndpoint, params);
-  if (!data || !isString(data.access_token)) return null;
+  if (!data || !isString(data.access_token)) {
+    return {
+      ok: false,
+      invalidGrant: data?.error === 'invalid_grant',
+      detail: describeTokenError(data),
+    };
+  }
   return {
+    ok: true,
     accessToken: data.access_token,
     refreshToken: isString(data.refresh_token) ? data.refresh_token : undefined,
     expiresAt: expiresAtFrom(data.expires_in),

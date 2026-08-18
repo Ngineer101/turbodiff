@@ -15,6 +15,7 @@ import {
 } from './db.ts';
 import { persistAgentLog } from './agent-runs.ts';
 import { maybeAutoMerge } from './auto-merge.ts';
+import { maybeResolveConflict } from './merge-conflicts.ts';
 import { certificateUrl } from './certificate.ts';
 import { signArtifactKey } from './crypto.ts';
 import { resolveRunnerAuth, sandboxNamespace } from './fixer.ts';
@@ -302,6 +303,9 @@ async function verify(
 
     const failed = results.filter((r) => r.verdict === 'fail');
     await postReport(token, repo, feature, criteria, results, shots, summary, demo);
+    // Conflict detection runs on every verification completion — not only the
+    // auto-merge-eligible path — so auto_resolve_conflicts works standalone.
+    await maybeResolveConflict(repo, feature.pr_number!);
     if (failed.length === 0) {
       await maybeAutoMerge(repo, feature.pr_number!);
     }

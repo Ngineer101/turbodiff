@@ -3,6 +3,12 @@
   "name": "turbodiff",
   "compatibility_date": "2026-06-01",
   "compatibility_flags": ["nodejs_compat"],
+  // Version preview URLs (<version-prefix>-turbodiff.<subdomain>.workers.dev)
+  // for the per-PR previews uploaded by .github/workflows/preview.yml. This
+  // does NOT serve production on workers.dev (that's workers_dev, still off);
+  // it only makes uploaded versions reachable. Requires the account's
+  // workers.dev subdomain to be registered.
+  "preview_urls": true,
   // Workers Traces shows each agent response as a trace with agent-level
   // spans: https://flueframework.com/docs/guide/observability/#cloudflare
   "observability": { "traces": { "enabled": true } },

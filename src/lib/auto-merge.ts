@@ -2,8 +2,7 @@ import { env } from 'cloudflare:workers';
 import { gh } from '../tools/github.ts';
 import { getFeatureByRepoPr, latestVerificationForFeature, type RepositoryRow } from './db.ts';
 import { installationToken } from './github-app.ts';
-import { checkMergeability, postConflictCommentIfAbsent } from './merge-conflicts.ts';
-import type { ConflictResolveQueueMessage } from './conflict-resolver.ts';
+import { checkMergeability, maybeResolveConflict } from './merge-conflicts.ts';
 
 // Phase 5 (docs/software-factory-design.md): opt-in auto-merge for factory
 // PRs. Trust is earned, not configured — even with the toggle on, a PR merges
@@ -61,24 +60,8 @@ export async function maybeAutoMerge(repo: RepositoryRow, prNumber: number): Pro
       retryOnUnknown: true,
     });
     if (mergeability.hasConflict) {
-      if (repo.auto_resolve_conflicts === 1) {
-        const msg: ConflictResolveQueueMessage = {
-          kind: 'resolve_conflict',
-          repoId: repo.id,
-          prNumber,
-        };
-        await env.FACTORY_QUEUE.send(msg);
-        console.log(`turbodiff: conflict detected on ${label}, resolution enqueued`);
-      } else {
-        await postConflictCommentIfAbsent(
-          token,
-          repo.owner,
-          repo.name,
-          prNumber,
-          mergeability.baseRef,
-        );
-        console.log(`turbodiff: auto-merge declined for ${label} (merge conflict)`);
-      }
+      console.log(`turbodiff: auto-merge declined for ${label} (merge conflict)`);
+      await maybeResolveConflict(repo, prNumber);
       return;
     }
 
@@ -104,5 +87,9 @@ export async function maybeAutoMerge(repo: RepositoryRow, prNumber: number): Pro
     // Failure to auto-merge is never an error state for the pipeline: the PR
     // simply stays open for a human (branch protection, conflicts, races).
     console.warn(`turbodiff: auto-merge attempt failed for ${label}:`, err);
+    // A failed merge PUT is frequently a conflict that landed between the
+    // mergeability check and the merge — re-check and dispatch the resolver
+    // instead of going silent (maybeResolveConflict never throws).
+    await maybeResolveConflict(repo, prNumber);
   }
 }

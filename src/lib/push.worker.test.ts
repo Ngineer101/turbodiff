@@ -16,8 +16,8 @@ type TestEnv = Cloudflare.Env & { TEST_MIGRATIONS: D1Migration[] };
 const testEnv = env as TestEnv;
 
 // Fixture client keys (a valid ECDH P-256 public point + 16-byte auth
-// secret) — buildPushPayload derives a real shared secret from these, so
-// arbitrary strings fail with "Point is not on curve" before fetch is ever
+// secret) — the RFC 8291 encryption derives a real shared secret from these,
+// so arbitrary strings fail with "Point is not on curve" before fetch is ever
 // called.
 const P256DH =
   'BLrWn8rWI8dZelMSSqVi0rah4tWXjJ3LJB52reUt6_u7CmyZUqKPcJvr497BbuZSFQ2UGeHN2D4MUr0gapZwGrg';
@@ -92,6 +92,86 @@ describe('sendPushToSubscription', () => {
       );
       expect(result).toBe('sent');
     } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('speaks the modern protocol: aes128gcm body, vapid authorization, ttl/urgency', async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(null, { status: 201 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const payload = { title: 'Turbodiff', body: 'hi', url: 'https://turbodiff.test/tasks/1' };
+    try {
+      const result = await sendPushToSubscription(
+        {
+          id: 1,
+          user_github_id: 3001,
+          endpoint: 'https://push.example/live',
+          p256dh: P256DH,
+          auth: AUTH,
+          created_at: '',
+        },
+        payload,
+      );
+      expect(result).toBe('sent');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init?.method).toBe('POST');
+
+    // RFC 8292 VAPID + RFC 8291 request headers. Apple's push service rejects
+    // the obsolete `WebPush <jwt>` / aesgcm scheme, so these are load-bearing.
+    const headers = new Headers(init?.headers);
+    expect(headers.get('content-encoding')).toBe('aes128gcm');
+    expect(headers.get('content-type')).toBe('application/octet-stream');
+    expect(headers.get('ttl')).toBe('86400');
+    expect(headers.get('urgency')).toBe('high');
+    expect(headers.get('authorization')).toMatch(/^vapid t=.+\..+\..+, k=.+$/);
+
+    // Body layout: 86-byte aes128gcm coding header (salt(16) || rs uint32-BE ||
+    // idlen(1)=65 || 65-byte uncompressed sender public key), then a single
+    // record of plaintext + 0x02 delimiter + 16-byte GCM tag.
+    const body = init?.body;
+    if (!(body instanceof Uint8Array)) throw new Error('expected a Uint8Array push body');
+    const view = new DataView(body.buffer, body.byteOffset, body.byteLength);
+    expect(view.getUint32(16)).toBe(4096); // record size
+    expect(body[20]).toBe(65); // keyid length
+    expect(body[21]).toBe(0x04); // keyid is an uncompressed P-256 point
+    const plaintextLength = new TextEncoder().encode(JSON.stringify(payload)).length;
+    expect(body.length).toBe(86 + plaintextLength + 1 + 16);
+  });
+
+  it('returns error (after logging) on a non-2xx, non-gone response', async () => {
+    const fetchMock = vi.fn(
+      async () => new Response('Unauthorized: bad vapid token', { status: 403 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const result = await sendPushToSubscription(
+        {
+          id: 1,
+          user_github_id: 3001,
+          endpoint: 'https://push.example/rejects',
+          p256dh: P256DH,
+          auth: AUTH,
+          created_at: '',
+        },
+        { title: 'Turbodiff', body: 'hi', url: 'https://turbodiff.test/tasks/1' },
+      );
+      expect(result).toBe('error');
+      expect(errorSpy).toHaveBeenCalledWith(
+        'turbodiff: push service rejected send',
+        'https://push.example',
+        403,
+        'Unauthorized: bad vapid token',
+      );
+    } finally {
+      errorSpy.mockRestore();
       vi.unstubAllGlobals();
     }
   });
