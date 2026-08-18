@@ -207,6 +207,14 @@ Every commit to `main` deploys automatically via
 The workflow needs two repository secrets, `CLOUDFLARE_API_TOKEN` (Workers
 Scripts:Edit, D1:Edit, Containers:Edit) and `CLOUDFLARE_ACCOUNT_ID`.
 
+Pull requests from branches in this repository (not forks) also get a
+preview: [`preview.yml`](.github/workflows/preview.yml) uploads a Worker
+version via `wrangler versions upload` and comments the preview URL on the
+PR. The preview shares production's D1 database, queue, and sandbox
+container — it's for UI/API smoke-testing only, not for exercising
+webhook-triggered flows or destructive actions. The comment is updated on
+every push and marked closed when the PR closes.
+
 To deploy manually (Docker required):
 
 ```sh
