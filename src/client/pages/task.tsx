@@ -5,6 +5,7 @@ import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { ApiPlan } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
+import { useDictation } from '../lib/dictation.ts';
 import { ago } from '../lib/format.ts';
 import { pushSupported, subscribeToPush } from '../lib/push.ts';
 import { GENERATION_STOPPED, meQuery, taskQuery } from '../lib/queries.ts';
@@ -14,6 +15,7 @@ import { AgentRunLog } from '../components/agent-run-log.tsx';
 import { ConfirmButton } from '../components/confirm-button.tsx';
 import { Serial, StageLights, Stamp } from '../components/identity.tsx';
 import { Markdown } from '../components/markdown.tsx';
+import { MicButton } from '../components/mic-button.tsx';
 import {
   Accordion,
   AccordionContent,
@@ -162,6 +164,9 @@ export function TaskPage() {
   const planRef = useRef<HTMLDivElement>(null);
   const [popover, setPopover] = useState<{ x: number; y: number; snippet: string } | null>(null);
   const [note, setNote] = useState('');
+  const dictation = useDictation((text) =>
+    setNote((prev) => (prev.trim() ? `${prev}\n\n${text}` : text)),
+  );
   const [comments, setComments] = useState<{ snippet: string; comment: string }[]>([]);
   const sendFeedback = useMutation({
     mutationFn: () => api.post(`/api/factory/plans/${task.id}/feedback`, { comments }),
@@ -190,6 +195,7 @@ export function TaskPage() {
     setComments((prev) => [...prev, { snippet: popover.snippet, comment: note.trim() }]);
     setPopover(null);
     window.getSelection()?.removeAllRanges();
+    dictation.stop();
   };
 
   return (
@@ -371,13 +377,28 @@ export function TaskPage() {
               <p className="line-clamp-2 text-xs text-mute italic">{popover.snippet}</p>
               <Textarea
                 autoFocus
-                value={note}
+                value={
+                  dictation.recording
+                    ? note.trim()
+                      ? `${note}\n\n${dictation.interim}`
+                      : dictation.interim
+                    : note
+                }
                 onChange={(e) => setNote(e.target.value)}
+                disabled={dictation.recording}
                 placeholder="What should change here?"
                 className="mt-2 min-h-16"
               />
               <div className="mt-2 flex justify-end gap-2">
-                <Button size="sm" variant="secondary" onClick={() => setPopover(null)}>
+                <MicButton dictation={dictation} />
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    dictation.stop();
+                    setPopover(null);
+                  }}
+                >
                   Cancel
                 </Button>
                 <Button size="sm" onClick={addComment} disabled={!note.trim()}>

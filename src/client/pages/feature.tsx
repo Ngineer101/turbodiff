@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { ApiCockpitComment, ApiFeatureDetail } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
+import { useDictation } from '../lib/dictation.ts';
 import { sentence } from '../lib/format.ts';
 import { featureQuery, FIX_TERMINAL, GENERATION_STOPPED } from '../lib/queries.ts';
 import { cn } from '../lib/utils.ts';
@@ -21,6 +22,7 @@ import { ensureDiffStyles } from '../components/diff-styles.ts';
 import { CertStrip, Lamp, Serial, Stamp, type LampTone } from '../components/identity.tsx';
 import { FILE_STATUS_DOT, FileTree } from '../components/file-tree.tsx';
 import { Markdown } from '../components/markdown.tsx';
+import { MicButton } from '../components/mic-button.tsx';
 import { Muted, PageTitle, SectionHeading } from '../components/section.tsx';
 import {
   Accordion,
@@ -168,6 +170,9 @@ function Composer({
   onCancel: () => void;
 }) {
   const [body, setBody] = useState('');
+  const dictation = useDictation((text) =>
+    setBody((prev) => (prev.trim() ? `${prev}\n\n${text}` : text)),
+  );
   const submit = useMutation({
     mutationFn: () =>
       api.post(`/api/factory/features/${featureId}/comments`, {
@@ -191,11 +196,19 @@ function Composer({
       <Textarea
         autoFocus
         className="min-h-20"
-        value={body}
+        value={
+          dictation.recording
+            ? body.trim()
+              ? `${body}\n\n${dictation.interim}`
+              : dictation.interim
+            : body
+        }
         onChange={(e) => setBody(e.target.value)}
+        disabled={dictation.recording}
         placeholder="What should change here?"
       />
       <div className="mt-2 flex gap-2">
+        <MicButton dictation={dictation} />
         <Button
           size="sm"
           onClick={() => body.trim() && submit.mutate()}
@@ -204,7 +217,14 @@ function Composer({
         >
           {submit.isPending ? 'Adding…' : 'Add comment'}
         </Button>
-        <Button size="sm" variant="secondary" onClick={onCancel}>
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() => {
+            dictation.stop();
+            onCancel();
+          }}
+        >
           Cancel
         </Button>
       </div>
