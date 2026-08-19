@@ -176,7 +176,14 @@ export function createUiRoutes() {
     '/factory/*',
     '/agents',
     '/agents/*',
+    '/skills',
+    '/skills/*',
+    '/automations',
+    '/automations/*',
     '/settings',
+    '/settings/*',
+    // Retired hub page — the client router redirects it to /settings.
+    '/config',
     '/onboarding',
   ]) {
     app.get(path, async (c) => {

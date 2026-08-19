@@ -15,11 +15,11 @@ import { cn } from '../lib/utils.ts';
 import { Lamp } from './identity.tsx';
 
 // Control-room nav: every destination is a station with a distinct icon,
-// lit where you are, dark elsewhere. The sidebar and the mobile bottom bar
-// each render their own icon-per-station list — they diverge slightly (the
-// bottom bar drops Usage and routes its Config slot through the /config
-// hub instead of straight to /settings), so they're separate arrays.
-// `short` fits the mobile bottom bar's six slots without truncation.
+// lit where you are, dark elsewhere. Settings is the single admin
+// destination (notifications, repos, org members live inside it). The
+// mobile bottom bar has six slots, so Usage yields its slot there and rides
+// as a link row inside Settings instead. `short` fits the bottom bar's
+// slots without truncation.
 const SIDEBAR_NAV = [
   { to: '/', label: 'Board', exact: true, icon: LayoutDashboard },
   { to: '/agents', label: 'Agents', icon: Bot },
@@ -28,7 +28,6 @@ const SIDEBAR_NAV = [
   { to: '/integrations', label: 'Integrations', icon: Plug },
   { to: '/usage', label: 'Usage', icon: BarChart2 },
   { to: '/settings', label: 'Settings', icon: Settings },
-  { to: '/config', label: 'Config', icon: Settings },
 ] as const;
 
 const BOTTOM_NAV = [
@@ -37,7 +36,7 @@ const BOTTOM_NAV = [
   { to: '/skills', label: 'Skills', short: 'Skills', icon: Sparkles },
   { to: '/automations', label: 'Automations', short: 'Autos', icon: Repeat },
   { to: '/integrations', label: 'Integrations', short: 'MCP', icon: Plug },
-  { to: '/config', label: 'Config', short: 'Config', icon: Settings },
+  { to: '/settings', label: 'Settings', short: 'Settings', icon: Settings },
 ] as const;
 
 function Logo() {
