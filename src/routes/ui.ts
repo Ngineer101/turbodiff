@@ -35,10 +35,36 @@ const SHELL = `<!doctype html>
 			rel="stylesheet"
 		/>
 		<link rel="stylesheet" href="/app/app.css" />
-		<style>html { background: #0f1318; }</style>
+		<style>
+			html { background: #0f1318; }
+			/* Static splash inside #root, painted before app.js runs; React's
+			   first render (the router's pending Splash, visually identical)
+			   replaces it, so PWA launches don't flash an empty page. */
+			#splash {
+				position: fixed;
+				inset: 0;
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				justify-content: center;
+				gap: 1rem;
+				background: #0f1318;
+				color: #8595a4;
+				font-family: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+			}
+			#splash img { border-radius: 8px; }
+			#splash .cursor { color: #56d364; animation: splash-blink 1.1s step-end infinite; }
+			@keyframes splash-blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+			@media (prefers-reduced-motion: reduce) { #splash .cursor { animation: none; } }
+		</style>
 	</head>
 	<body>
-		<div id="root"></div>
+		<div id="root">
+			<div id="splash" role="status">
+				<img src="/logo-small.png" alt="Turbodiff" width="56" height="56" />
+				<span>Loading<span class="cursor">_</span></span>
+			</div>
+		</div>
 		<script type="module" src="/app/app.js"></script>
 	</body>
 </html>`;

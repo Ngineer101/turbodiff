@@ -76,8 +76,11 @@ function Pending() {
 
 function Splash() {
   return (
-    <div className="fixed inset-0 flex flex-col items-center justify-center gap-4 bg-bg" role="status">
-      <img src="/logo-small.png" alt="Turbodiff" width="56" height="56" />
+    <div
+      className="fixed inset-0 flex flex-col items-center justify-center gap-4 bg-bg"
+      role="status"
+    >
+      <img src="/logo-small.png" alt="Turbodiff" width="56" height="56" className="rounded-lg" />
       <span className="text-mute">
         Loading<span className="animate-cursor text-accent-bright">_</span>
       </span>

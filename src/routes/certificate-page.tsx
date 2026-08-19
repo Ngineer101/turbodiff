@@ -1,8 +1,7 @@
 // Public "Proof of Build" certificate page, server-rendered as hono/jsx like
 // landing.tsx. Pure render — no env or DB access — so it can be previewed and
 // tested with fixture data outside the Worker. Data assembly lives in
-// src/lib/certificate.ts; the design source is
-// marketing/mockups/build-certificate.html.
+// src/lib/certificate.ts;
 
 export interface CertificateCriterion {
   text: string;

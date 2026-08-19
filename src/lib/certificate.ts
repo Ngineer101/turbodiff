@@ -1,5 +1,4 @@
-// "Proof of Build" certificate assembly (design: marketing/mockups/
-// build-certificate.html; render: src/routes/certificate-page.tsx). Each
+// "Proof of Build" certificate assembly (render: src/routes/certificate-page.tsx). Each
 // feature gets a public capability URL at GET /b/:id — the HMAC over
 // cert/<id> is the only credential, mirroring the /artifacts/* scheme, so
 // links are shareable but not enumerable.
