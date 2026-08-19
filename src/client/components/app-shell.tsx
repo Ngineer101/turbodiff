@@ -15,17 +15,29 @@ import { cn } from '../lib/utils.ts';
 import { Lamp } from './identity.tsx';
 
 // Control-room nav: every destination is a station with a distinct icon,
-// lit where you are, dark elsewhere. Both the sidebar and the mobile bottom
-// bar render that icon per station.
-// `short` fits the mobile bottom bar's seven slots without truncation.
-const NAV = [
+// lit where you are, dark elsewhere. The sidebar and the mobile bottom bar
+// each render their own icon-per-station list — they diverge slightly (the
+// bottom bar drops Usage and routes its Config slot through the /config
+// hub instead of straight to /settings), so they're separate arrays.
+// `short` fits the mobile bottom bar's six slots without truncation.
+const SIDEBAR_NAV = [
+  { to: '/', label: 'Board', exact: true, icon: LayoutDashboard },
+  { to: '/agents', label: 'Agents', icon: Bot },
+  { to: '/skills', label: 'Skills', icon: Sparkles },
+  { to: '/automations', label: 'Automations', icon: Repeat },
+  { to: '/integrations', label: 'Integrations', icon: Plug },
+  { to: '/usage', label: 'Usage', icon: BarChart2 },
+  { to: '/settings', label: 'Settings', icon: Settings },
+  { to: '/config', label: 'Config', icon: Settings },
+] as const;
+
+const BOTTOM_NAV = [
   { to: '/', label: 'Board', short: 'Board', exact: true, icon: LayoutDashboard },
   { to: '/agents', label: 'Agents', short: 'Agents', icon: Bot },
   { to: '/skills', label: 'Skills', short: 'Skills', icon: Sparkles },
   { to: '/automations', label: 'Automations', short: 'Autos', icon: Repeat },
   { to: '/integrations', label: 'Integrations', short: 'MCP', icon: Plug },
-  { to: '/usage', label: 'Usage', short: 'Usage', icon: BarChart2 },
-  { to: '/settings', label: 'Settings', short: 'Config', icon: Settings },
+  { to: '/config', label: 'Config', short: 'Config', icon: Settings },
 ] as const;
 
 function Logo() {
@@ -50,7 +62,7 @@ function SidebarNav() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   return (
     <nav aria-label="Main" className="flex flex-col gap-0.5">
-      {NAV.map(({ to, label, icon: Icon, ...item }) => {
+      {SIDEBAR_NAV.map(({ to, label, icon: Icon, ...item }) => {
         const active = isActive(pathname, to, 'exact' in item && item.exact);
         return (
           <Link
@@ -85,7 +97,7 @@ function BottomTabs() {
       {/* flex, not a fixed column count, so adding a destination can never
           wrap the bar onto a second row */}
       <div className="flex">
-        {NAV.map(({ to, label, short, icon: Icon, ...item }) => {
+        {BOTTOM_NAV.map(({ to, label, short, icon: Icon, ...item }) => {
           const active = isActive(pathname, to, 'exact' in item && item.exact);
           return (
             <Link
