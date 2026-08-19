@@ -4,7 +4,13 @@ import { NonRetryableError } from 'cloudflare:workflows';
 import { gh } from '../tools/github.ts';
 import { persistAgentLog } from './agent-runs.ts';
 import { coauthorTrailer, gitAuthorEnv } from './attribution.ts';
-import { claudeCliResultText, parseClaudeCliUsage, type CliUsage } from './cli-usage.ts';
+import {
+  addCliUsage,
+  claudeCliResultText,
+  claudeCliSessionId,
+  parseClaudeCliUsage,
+  type CliUsage,
+} from './cli-usage.ts';
 import {
   getFeature,
   getRepoById,
@@ -21,6 +27,7 @@ import {
   sandboxGitToken,
 } from './github-app.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
+import { installDependencies, NPM_CACHE_ENV } from './sandbox-deps.ts';
 import { skillMarkdown } from './skill-files.ts';
 import { mintUserToken } from './user-tokens.ts';
 
@@ -48,19 +55,23 @@ import { mintUserToken } from './user-tokens.ts';
 // the agent does run cache-hot. Each feature works in its own directory for
 // isolation; only the caches are shared.
 const CACHE_DIR = '/workspace/repo-cache';
-export const NPM_CACHE_ENV = {
-  npm_config_cache: '/workspace/.npm-cache',
-  npm_config_store_dir: '/workspace/.pnpm-store',
-};
 const workDir = (featureId: number) => `/workspace/gen-${featureId}`;
 const specFile = (featureId: number) => `/workspace/gen-spec-${featureId}.md`;
 const prFile = (featureId: number) => `/workspace/gen-pr-${featureId}.md`;
+const repairFile = (featureId: number, round: number) =>
+  `/workspace/gen-repair-${featureId}-${round}.md`;
 // Agent exec budgets by tier — trivial requests don't get to burn a
 // feature-sized window. Step timeouts sit slightly above so the exec timeout
 // (a clean, attributable failure) fires before the step timeout does.
 const AGENT_TIMEOUT_MS = { trivial: 8 * 60_000, standard: 25 * 60_000 };
 const AGENT_STEP_TIMEOUT = { trivial: '10 minutes', standard: '28 minutes' } as const;
 const CHECK_TIMEOUT_MS = 12 * 60_000;
+// The repair loop: a failing check goes back to the agent (its session
+// resumed, full context intact) instead of ending the run — the local
+// edit/check/fix cycle a human gets. Bounded so a hopeless failure (broken
+// base, flaky check) can't spend forever.
+const REPAIR_ROUNDS = 2;
+const REPAIR_TIMEOUT_MS = 15 * 60_000;
 
 export interface GenQueueMessage {
   kind: 'generate';
@@ -84,6 +95,17 @@ function branchName(feature: FeatureRow): string {
 
 function generationPrompt(ctx: RunContext): string {
   const trivial = ctx.tier === 'trivial';
+  // Trivial runs keep the tight no-checks budget; standard runs with a check
+  // command are told to verify their own work — the harness re-runs the check
+  // afterwards either way, and the repair loop catches what slips through.
+  const checkRule =
+    !trivial && ctx.checkCommand
+      ? `- Dependencies are already installed. Before finishing, run \`${ctx.checkCommand}\`
+  and fix any failures your changes caused. Failures that clearly pre-date this
+  feature are not yours to fix — note them in Implementation notes instead.`
+      : `- Do NOT run dependency installs, builds, or test suites unless the change itself
+  requires it — the harness runs the repository's check command after you finish,
+  and a separate verification phase checks the acceptance criteria empirically.`;
   return `You are an automated implementation agent working in a fresh checkout of ${ctx.owner}/${ctx.name}.
 
 Implement the feature specified below. Rules:
@@ -95,9 +117,7 @@ ${
     : `- If the repository has an established testing pattern, add or update tests for
   the new behavior in that same pattern.`
 }
-- Do NOT run dependency installs, builds, or test suites unless the change itself
-  requires it — the harness runs the repository's check command after you finish,
-  and a separate verification phase checks the acceptance criteria empirically.
+${checkRule}
 - Do NOT run git commit or git push; the harness handles git.
 - If part of the spec is ambiguous, choose the most conventional interpretation
   and note the choice in a "## Implementation notes" section you append to
@@ -111,6 +131,30 @@ ${UNTRUSTED_CONTENT_RULES}
 ## Feature: ${ctx.title}
 
 ${ctx.spec}
+`;
+}
+
+// Work order for a repair round. The resumed session already carries the
+// spec and the reasoning behind every change; the check output is all it
+// needs. A fresh-session fallback (no resumable id) gets pointed at the spec
+// file, which is still on disk.
+function repairPrompt(ctx: RunContext, checkOutput: string, fresh: boolean): string {
+  return `${
+    fresh
+      ? `Read ${specFile(ctx.featureId)} for the feature spec previously implemented in this checkout.\n\n`
+      : ''
+  }The repository check command (\`${ctx.checkCommand}\`) failed after your changes:
+
+\`\`\`
+${checkOutput}
+\`\`\`
+
+Fix the failures your changes caused, then re-run the check to confirm. Rules
+unchanged: no git commit or push, no scope creep. If a failure clearly
+pre-dates this feature and cannot be fixed safely, note it under
+"## Implementation notes" in ${specFile(ctx.featureId)} and stop.
+
+${UNTRUSTED_CONTENT_RULES}
 `;
 }
 
@@ -135,6 +179,7 @@ type RunContext = {
   base: string;
   branch: string;
   checkCommand: string | null;
+  runnerModel: string | null; // the task's requested model; null = default
   title: string;
   spec: string;
   authorLogin: string | null;
@@ -193,6 +238,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
             base: info.default_branch,
             branch: branchName(feature),
             checkCommand: repo.check_command,
+            runnerModel: feature.runner_model,
             title: feature.title,
             spec: feature.spec,
             authorLogin: feature.author_login,
@@ -251,14 +297,35 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
         },
       );
 
+      // Install dependencies up front so the agent can run the repo's check
+      // command while it works instead of flying blind until the post-run
+      // check (and so the repair loop's re-checks don't each pay an install).
+      if (ctx.checkCommand) {
+        await step.do(
+          'install dependencies',
+          { retries: { limit: 1, delay: '30 seconds' }, timeout: '12 minutes' },
+          async () => {
+            await updateFeature(featureId, { runStartedAt: 'now' });
+            const failure = await installDependencies(sandboxFor(ctx), WORK);
+            if (failure) {
+              console.warn(`turbodiff: dependency preinstall failed for ${label}: ${failure}`);
+            }
+          },
+        );
+      }
+
       // THE paid step. retries.limit 1 = at most two agent runs per
       // instance, ever. Memoization means success is never re-bought.
       const agentRan = await step.do(
         'run coding agent',
         { retries: { limit: 1, delay: '5 minutes' }, timeout: AGENT_STEP_TIMEOUT[ctx.tier] },
-        async (): Promise<{ changed: boolean; usage: CliUsage | null }> => {
+        async (): Promise<{
+          changed: boolean;
+          usage: CliUsage | null;
+          sessionId: string | null;
+        }> => {
           await updateFeature(featureId, { runStartedAt: 'now' });
-          const auth = resolveRunnerAuth();
+          const auth = resolveRunnerAuth(undefined, ctx.runnerModel);
           // The git/installation tokens live in other steps' scopes, not this
           // one — only the runner credential can appear in this step's output.
           const scrub = (s: string) =>
@@ -270,13 +337,17 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
             await sandbox.writeFile(`${dir}/SKILL.md`, skillMarkdown(skill));
           }
           await sandbox.writeFile(specFile(featureId), generationPrompt(ctx));
+          // stream-json (requires --verbose headless) captures every turn,
+          // not just the final result — persisted below so a sandbox run can
+          // be compared against a local session turn by turn.
           const agent = await sandbox.exec(
-            `claude -p --dangerously-skip-permissions --output-format json < ${specFile(featureId)}`,
+            `claude -p --dangerously-skip-permissions --output-format stream-json --verbose < ${specFile(featureId)}`,
             {
               cwd: WORK,
               timeout: AGENT_TIMEOUT_MS[ctx.tier],
               env: {
                 ...auth.vars,
+                ...auth.config,
                 ...NPM_CACHE_ENV,
                 IS_SANDBOX: '1',
                 DISABLE_AUTOUPDATER: '1',
@@ -291,6 +362,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
             scrub(`${resultText}\n${agent.stderr}`.trim()),
             agent.success,
             { featureId },
+            scrub(agent.stdout),
           );
           if (!agent.success) {
             // Scrubbed: this message persists to features.error and renders
@@ -300,7 +372,11 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
             );
           }
           const status = await sandbox.exec(`git -C ${WORK} status --porcelain`);
-          return { changed: Boolean(status.stdout.trim()), usage };
+          return {
+            changed: Boolean(status.stdout.trim()),
+            usage,
+            sessionId: claudeCliSessionId(agent.stdout),
+          };
         },
       );
 
@@ -315,18 +391,21 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
         return 'no_changes';
       }
 
+      // Attribution: instructing user is the git author (bot stays
+      // committer), coauthor rides as a trailer — on the main commit and any
+      // repair commits alike.
+      const author =
+        ctx.authorLogin && ctx.authorId !== null
+          ? { login: ctx.authorLogin, id: ctx.authorId }
+          : null;
+      const coauthor =
+        ctx.coauthorLogin && ctx.coauthorId !== null
+          ? { login: ctx.coauthorLogin, id: ctx.coauthorId }
+          : null;
+
       await step.do('commit', QUICK, async () => {
         // Commit BEFORE checks so check-command working-tree mutations never
-        // leak into the pushed commit. Attribution: instructing user is the
-        // git author (bot stays committer), coauthor rides as a trailer.
-        const author =
-          ctx.authorLogin && ctx.authorId !== null
-            ? { login: ctx.authorLogin, id: ctx.authorId }
-            : null;
-        const coauthor =
-          ctx.coauthorLogin && ctx.coauthorId !== null
-            ? { login: ctx.coauthorLogin, id: ctx.coauthorId }
-            : null;
+        // leak into the pushed commit.
         const sandbox = sandboxFor(ctx);
         const commit = await sandbox.exec(
           `git -C ${WORK} add -A && git -C ${WORK} commit -m "$COMMIT_MSG"`,
@@ -343,29 +422,125 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
         if (!commit.success) throw new Error(`git commit failed: ${commit.stderr.slice(0, 500)}`);
       });
 
+      let totalUsage = agentRan.usage;
+
       if (ctx.checkCommand) {
-        const checks = await step.do(
-          'run check command',
-          { retries: { limit: 1, delay: '1 minute' }, timeout: '15 minutes' },
-          async (): Promise<{ ok: boolean; output: string }> => {
-            await updateFeature(featureId, { runStartedAt: 'now' });
-            const sandbox = sandboxFor(ctx);
-            const res = await sandbox.exec(ctx.checkCommand!, {
-              cwd: WORK,
-              timeout: CHECK_TIMEOUT_MS,
-              env: NPM_CACHE_ENV,
-            });
-            // A failing check command is a business outcome, not an infra
-            // error — return it so the step is never retried for it.
-            return { ok: res.success, output: `${res.stdout}\n${res.stderr}`.trim().slice(-500) };
-          },
-        );
+        // A failing check command is a business outcome, not an infra error —
+        // returned, never thrown, so the step is never retried for it. The
+        // tail is sized for the repair prompt to see the actual errors;
+        // features.error gets a shorter slice below.
+        const runCheck = (name: string) =>
+          step.do(
+            name,
+            { retries: { limit: 1, delay: '1 minute' }, timeout: '15 minutes' },
+            async (): Promise<{ ok: boolean; output: string }> => {
+              await updateFeature(featureId, { runStartedAt: 'now' });
+              const res = await sandboxFor(ctx).exec(ctx.checkCommand!, {
+                cwd: WORK,
+                timeout: CHECK_TIMEOUT_MS,
+                env: NPM_CACHE_ENV,
+              });
+              return {
+                ok: res.success,
+                output: `${res.stdout}\n${res.stderr}`.trim().slice(-6_000),
+              };
+            },
+          );
+
+        let checks = await runCheck('run check command');
+        let sessionId = agentRan.sessionId;
+        for (let round = 1; !checks.ok && round <= REPAIR_ROUNDS; round++) {
+          const repair = await step.do(
+            `repair check failures (round ${round})`,
+            { retries: { limit: 1, delay: '2 minutes' }, timeout: '18 minutes' },
+            async (): Promise<{
+              ok: boolean;
+              changed: boolean;
+              usage: CliUsage | null;
+              sessionId: string | null;
+            }> => {
+              await updateFeature(featureId, { runStartedAt: 'now' });
+              const auth = resolveRunnerAuth(undefined, ctx.runnerModel);
+              const scrub = (s: string) =>
+                Object.values(auth.vars).reduce((acc, v) => acc.replaceAll(v, '***'), s);
+              const sandbox = sandboxFor(ctx);
+              // Drop check-command working-tree mutations before the agent
+              // looks: tracked files reset to the agent's own commit, and
+              // untracked check artifacts (non-ignored only) go with them.
+              await sandbox.exec(`git -C ${WORK} checkout -- . && git -C ${WORK} clean -fd`);
+              await sandbox.writeFile(
+                repairFile(featureId, round),
+                repairPrompt(ctx, checks.output, sessionId === null),
+              );
+              // --resume continues the run that made the changes with its
+              // full context intact (each resume prints a fresh session id,
+              // carried forward for the next round). No id — a killed run
+              // that never printed its result payload — falls back to a
+              // fresh session pointed at the spec file.
+              const baseEnv = {
+                ...auth.vars,
+                ...auth.config,
+                ...NPM_CACHE_ENV,
+                IS_SANDBOX: '1',
+                DISABLE_AUTOUPDATER: '1',
+                CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+              };
+              const agentEnv = sessionId ? { ...baseEnv, RESUME_SESSION: sessionId } : baseEnv;
+              const agent = await sandbox.exec(
+                `claude -p ${sessionId ? '--resume "$RESUME_SESSION" ' : ''}` +
+                  `--dangerously-skip-permissions --output-format stream-json --verbose < ${repairFile(featureId, round)}`,
+                { cwd: WORK, timeout: REPAIR_TIMEOUT_MS, env: agentEnv },
+              );
+              const usage = parseClaudeCliUsage(agent.stdout);
+              await persistAgentLog(
+                'generate',
+                scrub(`${claudeCliResultText(agent.stdout)}\n${agent.stderr}`.trim()),
+                agent.success,
+                { featureId },
+                scrub(agent.stdout),
+              );
+              // A failed repair run ends the loop, not the workflow — the
+              // check verdict (checks_failed) is the recorded outcome.
+              if (!agent.success) return { ok: false, changed: false, usage, sessionId: null };
+              const status = await sandbox.exec(`git -C ${WORK} status --porcelain`);
+              return {
+                ok: true,
+                changed: Boolean(status.stdout.trim()),
+                usage,
+                sessionId: claudeCliSessionId(agent.stdout),
+              };
+            },
+          );
+          totalUsage = addCliUsage(totalUsage, repair.usage);
+          sessionId = repair.sessionId ?? sessionId;
+          // Agent failed or found nothing to change: the last verdict stands.
+          if (!repair.ok || !repair.changed) break;
+          await step.do(`commit repair (round ${round})`, QUICK, async () => {
+            const commit = await sandboxFor(ctx).exec(
+              `git -C ${WORK} add -A && git -C ${WORK} commit -m "$COMMIT_MSG"`,
+              {
+                env: {
+                  COMMIT_MSG:
+                    `Fix check failures (turbodiff generator, feature #${featureId})` +
+                    coauthorTrailer(coauthor),
+                  ...gitAuthorEnv(author),
+                },
+                timeout: 60_000,
+              },
+            );
+            if (!commit.success) {
+              throw new Error(`repair commit failed: ${commit.stderr.slice(0, 500)}`);
+            }
+          });
+          checks = await runCheck(`re-run check command (round ${round})`);
+        }
+
         if (!checks.ok) {
           await step.do('record checks_failed', QUICK, async () => {
             await updateFeature(featureId, {
               status: 'checks_failed',
-              error: checks.output,
-              usage: agentRan.usage ?? undefined,
+              error: checks.output.slice(-500),
+              usage: totalUsage ?? undefined,
             });
           });
           return 'checks_failed';
@@ -444,7 +619,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
           status: 'pr_opened',
           branch: ctx.branch,
           prNumber: pr.number,
-          usage: agentRan.usage ?? undefined,
+          usage: totalUsage ?? undefined,
         });
         // Phase 4: acceptance criteria get an empirical verification run.
         if (ctx.acceptance) await env.FACTORY_QUEUE.send({ kind: 'verify', featureId });
@@ -458,7 +633,10 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
           // Bound the warm container's disk: drop this feature's working copy
           // and prompt files; the shared repo/package caches stay.
           await sandboxFor(ctx)
-            .exec(`rm -rf ${WORK} ${specFile(featureId)} ${prFile(featureId)}`)
+            .exec(
+              `rm -rf ${WORK} ${specFile(featureId)} ${prFile(featureId)} ` +
+                `/workspace/gen-repair-${featureId}-*.md`,
+            )
             .catch(() => {});
         },
       );

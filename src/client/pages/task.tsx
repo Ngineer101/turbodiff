@@ -4,6 +4,7 @@ import { ArrowLeft, Bell, MessageSquarePlus, Paperclip, X } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { ApiPlan } from '../../shared/api-types.ts';
+import { RUNNER_MODELS } from '../../shared/runner-models.ts';
 import { api, ApiError } from '../lib/api.ts';
 import { useDictation } from '../lib/dictation.ts';
 import { ago } from '../lib/format.ts';
@@ -25,7 +26,7 @@ import {
 import { QuestionsCarousel } from '../components/questions-carousel.tsx';
 import { SectionHeading } from '../components/section.tsx';
 import { Button, buttonVariants } from '../components/ui/button.tsx';
-import { Textarea } from '../components/ui/input.tsx';
+import { Select, Textarea } from '../components/ui/input.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 
 function onApiError<T>(err: T) {
@@ -149,6 +150,14 @@ export function TaskPage() {
     },
     onError: onApiError,
   });
+  const setModel = useMutation({
+    mutationFn: (model: string) => api.post(`/api/tasks/${task.id}/model`, { model }),
+    onSuccess: () => {
+      toast.success('Model updated — applies to future runs on this task');
+      refresh();
+    },
+    onError: onApiError,
+  });
   const archive = useMutation({
     mutationFn: (archived: boolean) => api.post(`/api/tasks/${task.id}/archive`, { archived }),
     onSuccess: (_d, archived) => {
@@ -243,6 +252,22 @@ export function TaskPage() {
         </span>{' '}
         · {ago(task.created_at)}
       </p>
+      <div className="mt-2 flex items-center gap-2 text-xs text-mute">
+        <label htmlFor="task-model">Model</label>
+        <Select
+          id="task-model"
+          value={task.model}
+          onChange={(e) => setModel.mutate(e.target.value)}
+          disabled={setModel.isPending}
+          className="w-40 text-xs"
+        >
+          {RUNNER_MODELS.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label}
+            </option>
+          ))}
+        </Select>
+      </div>
       {task.attachments.length > 0 ? (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {task.attachments.map((a, i) => (

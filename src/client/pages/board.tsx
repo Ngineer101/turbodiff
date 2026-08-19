@@ -16,6 +16,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 import { toast } from 'sonner';
 import type { ApiBoard, ApiPlan, ApiTodo } from '../../shared/api-types.ts';
 import { isJsonObject, isString } from '../../shared/json.ts';
+import { DEFAULT_RUNNER_MODEL, RUNNER_MODELS } from '../../shared/runner-models.ts';
 import { api, ApiError } from '../lib/api.ts';
 import { useDictation } from '../lib/dictation.ts';
 import { ago, fmtUsd } from '../lib/format.ts';
@@ -123,6 +124,7 @@ function StartDialog({
   const dictation = useDictation((text) =>
     setRequirements((prev) => (prev.trim() ? `${prev}\n\n${text}` : text)),
   );
+  const [model, setModel] = useState<string>(DEFAULT_RUNNER_MODEL);
   const [files, setFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const start = useMutation({
@@ -147,7 +149,7 @@ function StartDialog({
           content_type: data && isString(data.content_type) ? data.content_type : file.type,
         });
       }
-      return api.post(`/api/todos/${todo.id}/start`, { title, requirements, attachments });
+      return api.post(`/api/todos/${todo.id}/start`, { title, requirements, attachments, model });
     },
     onSuccess: () => {
       toast.success('Task started — the planning agent is on it');
@@ -192,6 +194,15 @@ function StartDialog({
               className="min-h-28"
               placeholder="What should be built? The planning agent reads the repo and drafts a plan you approve."
             />
+          </Field>
+          <Field label="Model">
+            <Select value={model} onChange={(e) => setModel(e.target.value)} aria-label="Model">
+              {RUNNER_MODELS.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </Select>
           </Field>
           <div className="mt-3">
             <input

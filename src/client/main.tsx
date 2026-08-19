@@ -9,6 +9,7 @@ import {
   createRouter,
   lazyRouteComponent,
   Outlet,
+  redirect,
   RouterProvider,
 } from '@tanstack/react-router';
 import { StrictMode } from 'react';
@@ -43,7 +44,6 @@ import { AutomationNewPage } from './pages/automation-new.tsx';
 import { AutomationRunPage } from './pages/automation-run.tsx';
 import { AutomationsPage } from './pages/automations.tsx';
 import { BoardPage } from './pages/board.tsx';
-import { ConfigPage } from './pages/config.tsx';
 import { IntegrationsPage } from './pages/integrations.tsx';
 import { MembersPage } from './pages/members.tsx';
 import { OnboardingPage } from './pages/onboarding.tsx';
@@ -76,8 +76,11 @@ function Pending() {
 
 function Splash() {
   return (
-    <div className="fixed inset-0 flex flex-col items-center justify-center gap-4 bg-bg" role="status">
-      <img src="/logo-small.png" alt="Turbodiff" width="56" height="56" />
+    <div
+      className="fixed inset-0 flex flex-col items-center justify-center gap-4 bg-bg"
+      role="status"
+    >
+      <img src="/logo-small.png" alt="Turbodiff" width="56" height="56" className="rounded-lg" />
       <span className="text-mute">
         Loading<span className="animate-cursor text-accent-bright">_</span>
       </span>
@@ -217,11 +220,14 @@ const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
+// /config was a hub page (usage/settings/members links) before those moved
+// into Settings proper — the redirect keeps old bookmarks working.
 const configRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/config',
-  loader: () => queryClient.ensureQueryData(settingsQuery),
-  component: ConfigPage,
+  beforeLoad: () => {
+    throw redirect({ to: '/settings' });
+  },
 });
 
 const membersRoute = createRoute({

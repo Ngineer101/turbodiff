@@ -1,5 +1,7 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
 import {
+  BarChart2,
   Bell,
   Clapperboard,
   GitCompare,
@@ -7,6 +9,7 @@ import {
   OctagonMinus,
   RefreshCw,
   Search,
+  Users,
   Wrench,
 } from 'lucide-react';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
@@ -391,6 +394,8 @@ export function SettingsPage() {
     // While searching, orgs with no matches drop out entirely.
     .filter((inst) => !q || inst.repos.length > 0);
   const repoCount = data.installations.reduce((n, i) => n + i.repos.length, 0);
+  // Org installations get a Members admin page; personal installations don't.
+  const orgs = data.installations.filter((inst) => inst.account_type === 'Organization');
 
   return (
     <>
@@ -407,9 +412,39 @@ export function SettingsPage() {
         Settings
       </PageTitle>
 
+      {/* Usage has a sidebar slot on desktop; the mobile bottom bar doesn't,
+          so Settings carries the link there. */}
+      <Card className="mt-6 p-0 md:hidden">
+        <Link
+          to="/usage"
+          className="flex items-center gap-2.5 px-4 py-3 text-[0.85rem] font-medium"
+        >
+          <BarChart2 className="size-4 text-mute" aria-hidden />
+          Usage
+        </Link>
+      </Card>
+
       <div className="mt-6">
         <NotificationsSettings />
       </div>
+
+      {orgs.length > 0 ? (
+        <>
+          <SectionHeading>Members</SectionHeading>
+          {orgs.map((inst) => (
+            <Card key={inst.id} className="mt-2 p-0">
+              <Link
+                to="/settings/members/$installationId"
+                params={{ installationId: String(inst.id) }}
+                className="flex items-center gap-2.5 px-4 py-3 text-[0.85rem] font-medium"
+              >
+                <Users className="size-4 text-mute" aria-hidden />
+                {inst.account_login}
+              </Link>
+            </Card>
+          ))}
+        </>
+      ) : null}
 
       {repoCount > 5 ? (
         <div className="relative mt-5 sm:max-w-sm">

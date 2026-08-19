@@ -4,7 +4,13 @@ import { gh } from '../tools/github.ts';
 import { persistAgentLog } from './agent-runs.ts';
 import { gitAuthorEnv } from './attribution.ts';
 import { ciFailureFindings } from './ci-findings.ts';
-import { claudeCliResultText, parseClaudeCliUsage, type CliUsage } from './cli-usage.ts';
+import {
+  addCliUsage,
+  claudeCliResultText,
+  claudeCliSessionId,
+  parseClaudeCliUsage,
+  type CliUsage,
+} from './cli-usage.ts';
 import {
   finishFixAttempt,
   getFeatureByRepoPr,
@@ -16,7 +22,9 @@ import {
   tryRecordFixAttempt,
 } from './db.ts';
 import { describePushFailure, installationToken, sandboxGitToken } from './github-app.ts';
+import { DEFAULT_RUNNER_MODEL } from '../shared/runner-models.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
+import { installDependencies, NPM_CACHE_ENV } from './sandbox-deps.ts';
 import { skillMarkdown } from './skill-files.ts';
 
 // Phase 1 spike of the software factory fix loop (docs/software-factory-design.md):
@@ -56,6 +64,8 @@ export interface FixParams {
   // `latestBlockingFindings` is used when `findings` is absent for the review
   // trigger.
   workflowRunId?: number;
+  // The task's requested model (features.runner_model); absent = default.
+  runnerModel?: string;
 }
 
 // Human-readable label for the thing a fix run is addressing, used in the
@@ -87,22 +97,41 @@ export interface FixOutcome {
 const CLONE_DIR = '/workspace/repo';
 const TASK_FILE = '/workspace/fix-task.md';
 const NOTES_FILE = '/workspace/fix-notes.md';
+const repairFile = (round: number) => `/workspace/fix-repair-${round}.md`;
 // Fix runs execute inside a Workflow step (no wall clock — see
 // fix-workflow.ts), so the budgets reflect the work, not a deadline.
 const AGENT_TIMEOUT_MS = 15 * 60_000;
 const TEST_TIMEOUT_MS = 10 * 60_000;
+// Failing tests go back to the agent (session resumed, context intact)
+// instead of ending the run — bounded so a hopeless failure can't spend
+// forever. Mirrors the generator's repair loop.
+const REPAIR_ROUNDS = 2;
+const REPAIR_TIMEOUT_MS = 10 * 60_000;
 
 // Fix runs per PR across all triggers. A fix push causes a re-review, which
 // can cause another blocking review and another fix — the cap guarantees the
 // loop terminates and hands off to a human.
 export const FIX_MAX_ATTEMPTS = 3;
 
+export interface RunnerAuth {
+  mode: FixAuthMode;
+  // Secrets — call sites scrub these from any surfaced output.
+  vars: Record<string, string>;
+  // Non-secret runner tuning (the model pin) — spread into the CLI env
+  // alongside vars but never scrubbed, so a model id appearing in output
+  // can't get ***-mangled in logs.
+  config: Record<string, string>;
+}
+
 // Pick the runner credential: explicit request wins, otherwise prefer the
 // user's subscription token over gateway metering. Shared with the generator.
-export function resolveRunnerAuth(requested?: FixAuthMode): {
-  mode: FixAuthMode;
-  vars: Record<string, string>;
-} {
+// `model` is the task's requested model (plans/features.runner_model);
+// absent/null falls back to the default so a fresh container never runs the
+// CLI's own headless default.
+export function resolveRunnerAuth(requested?: FixAuthMode, model?: string | null): RunnerAuth {
+  const config = {
+    ANTHROPIC_MODEL: model?.trim() || DEFAULT_RUNNER_MODEL,
+  };
   const subscriptionToken = (env.CLAUDE_CODE_OAUTH_TOKEN ?? '').trim();
   const gatewayKey = (env.FIXER_ANTHROPIC_API_KEY ?? '').trim();
   const gatewayUrl = (env.FIXER_ANTHROPIC_BASE_URL ?? '').trim();
@@ -132,7 +161,7 @@ export function resolveRunnerAuth(requested?: FixAuthMode): {
       'no runner credential configured: set CLAUDE_CODE_OAUTH_TOKEN (subscription) or FIXER_ANTHROPIC_API_KEY + FIXER_ANTHROPIC_BASE_URL (gateway)',
     );
   }
-  return picked;
+  return { ...picked, config };
 }
 
 // The generated Env types the binding as a bare `DurableObjectNamespace` —
@@ -246,7 +275,7 @@ async function latestBlockingFindings(
   return [blocking.body, ...inline].filter(Boolean).join('\n\n');
 }
 
-function taskPrompt(pr: string, branch: string, findings: string): string {
+function taskPrompt(pr: string, branch: string, findings: string, testCommand?: string): string {
   return `You are an automated fix agent operating on a checked-out pull request branch.
 
 Address every finding listed below. Rules:
@@ -254,7 +283,13 @@ Address every finding listed below. Rules:
 - Match the repository's existing code style and conventions.
 - Do NOT run git commit or git push; the harness handles git.
 - If a finding is wrong, already fixed, or cannot be fixed safely, leave the
-  code unchanged and append one line to ${NOTES_FILE} explaining why.
+  code unchanged and append one line to ${NOTES_FILE} explaining why.${
+    testCommand
+      ? `
+- Dependencies are already installed. Before finishing, run \`${testCommand}\`
+  and fix any failures your changes caused.`
+      : ''
+  }
 
 ${UNTRUSTED_CONTENT_RULES}
 
@@ -263,6 +298,28 @@ ${pr} — branch \`${branch}\`
 
 ## Findings
 ${findings}
+`;
+}
+
+// Work order for a repair round; mirrors the generator's. The resumed
+// session carries the findings and the reasoning behind the fix; a
+// fresh-session fallback (no resumable id) gets pointed at the task file,
+// which is still on disk.
+function repairPrompt(testCommand: string, testOutput: string, fresh: boolean): string {
+  return `${
+    fresh ? `Read ${TASK_FILE} for the findings previously addressed in this checkout.\n\n` : ''
+  }The repository test command (\`${testCommand}\`) failed after your changes:
+
+\`\`\`
+${testOutput}
+\`\`\`
+
+Fix the failures your changes caused, then re-run the tests to confirm. Rules
+unchanged: no git commit or push, no scope creep. If a failure clearly
+pre-dates this fix and cannot be fixed safely, append one line to ${NOTES_FILE}
+explaining why and stop.
+
+${UNTRUSTED_CONTENT_RULES}
 `;
 }
 
@@ -292,7 +349,7 @@ export async function sandboxSmoke(checkAuth = false): Promise<Record<string, st
 export async function runFix(params: FixParams): Promise<FixOutcome> {
   const { owner, repo, prNumber } = params;
   const token = await installationToken(params.installationId);
-  const auth = resolveRunnerAuth(params.authMode);
+  const auth = resolveRunnerAuth(params.authMode, params.runnerModel);
   // Any surfaced output must never leak a token. The sandbox only ever sees
   // gitToken — scoped to this one repository with contents access only (plus
   // workflows when the PR already touches .github/workflows/) — so a
@@ -325,7 +382,7 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
   // Fresh checkout per run; the branch name and token travel via env so the
   // command string stays free of secrets and shell-hostile ref names.
   const gitEnv = { GIT_TOKEN: gitToken, FIX_BRANCH: headRef };
-  await sandbox.exec(`rm -rf ${CLONE_DIR} ${NOTES_FILE}`);
+  await sandbox.exec(`rm -rf ${CLONE_DIR} ${NOTES_FILE} /workspace/fix-repair-*.md`);
   const clone = await sandbox.exec(
     `git clone --depth 50 --single-branch --branch "$FIX_BRANCH" ` +
       `"https://x-access-token:$GIT_TOKEN@github.com/${headRepo}.git" ${CLONE_DIR}`,
@@ -345,10 +402,23 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
       `git -C ${CLONE_DIR} config user.email "turbodiff[bot]@users.noreply.github.com"`,
   );
 
+  // Install dependencies up front so the agent can run the repo's tests
+  // while it works instead of flying blind until the post-run check (and so
+  // the repair loop's re-runs don't each pay an install). Non-fatal: some
+  // repos' test commands do their own install.
+  if (params.testCommand) {
+    const installFailure = await installDependencies(sandbox, CLONE_DIR);
+    if (installFailure) {
+      console.warn(
+        `turbodiff: dependency preinstall failed for ${owner}/${repo}#${prNumber}: ${scrub(installFailure)}`,
+      );
+    }
+  }
+
   try {
     await sandbox.writeFile(
       TASK_FILE,
-      taskPrompt(`${owner}/${repo}#${prNumber}`, headRef, findings),
+      taskPrompt(`${owner}/${repo}#${prNumber}`, headRef, findings, params.testCommand),
     );
 
     const skills = await listEnabledSkillsForRepo(params.repositoryId);
@@ -360,33 +430,46 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
 
     // Headless Claude Code run. --dangerously-skip-permissions is safe here —
     // the container is the isolation boundary (IS_SANDBOX acknowledges that).
+    // stream-json (requires --verbose headless) captures every turn, not just
+    // the final result — persisted below so a sandbox run can be compared
+    // against a local session turn by turn.
     const agent = await sandbox.exec(
-      `claude -p --dangerously-skip-permissions --output-format json < ${TASK_FILE}`,
+      `claude -p --dangerously-skip-permissions --output-format stream-json --verbose < ${TASK_FILE}`,
       {
         cwd: CLONE_DIR,
         timeout: AGENT_TIMEOUT_MS,
         env: {
           ...auth.vars,
+          ...auth.config,
+          ...NPM_CACHE_ENV,
           IS_SANDBOX: '1',
           DISABLE_AUTOUPDATER: '1',
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
         },
       },
     );
-    const usage = parseClaudeCliUsage(agent.stdout);
+    let totalUsage = parseClaudeCliUsage(agent.stdout);
     const fullOutput = scrub(`${claudeCliResultText(agent.stdout)}\n${agent.stderr}`.trim());
     const agentOutput = fullOutput.slice(-8_000);
     if (params.attemptId !== undefined) {
-      await persistAgentLog('fix', fullOutput, agent.success, { fixAttemptId: params.attemptId });
+      await persistAgentLog(
+        'fix',
+        fullOutput,
+        agent.success,
+        { fixAttemptId: params.attemptId },
+        scrub(agent.stdout),
+      );
     }
     if (!agent.success) {
       throw new Error(`fix agent exited ${agent.exitCode}: ${agentOutput.slice(-1_000)}`);
     }
 
-    const notes = await sandbox
-      .readFile(NOTES_FILE)
-      .then((f) => f.content.trim() || undefined)
-      .catch(() => undefined);
+    const readNotes = () =>
+      sandbox
+        .readFile(NOTES_FILE)
+        .then((f) => f.content.trim() || undefined)
+        .catch(() => undefined);
+    let notes = await readNotes();
 
     const status = await sandbox.exec(`git -C ${CLONE_DIR} status --porcelain`);
     if (!status.stdout.trim()) {
@@ -397,7 +480,7 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
         branch: headRef,
         notes,
         agentOutput,
-        usage,
+        usage: totalUsage,
       };
     }
 
@@ -415,12 +498,75 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
 
     let testOutput: string | undefined;
     if (params.testCommand) {
-      const tests = await sandbox.exec(params.testCommand, {
-        cwd: CLONE_DIR,
-        timeout: TEST_TIMEOUT_MS,
-      });
-      testOutput = scrub(`${tests.stdout}\n${tests.stderr}`.trim()).slice(-4_000);
-      if (!tests.success) {
+      const runTests = async () => {
+        const tests = await sandbox.exec(params.testCommand!, {
+          cwd: CLONE_DIR,
+          timeout: TEST_TIMEOUT_MS,
+          env: NPM_CACHE_ENV,
+        });
+        return { ok: tests.success, output: scrub(`${tests.stdout}\n${tests.stderr}`.trim()) };
+      };
+      let tests = await runTests();
+      let sessionId = claudeCliSessionId(agent.stdout);
+      for (let round = 1; !tests.ok && round <= REPAIR_ROUNDS; round++) {
+        // Drop test-command working-tree mutations before the agent looks:
+        // tracked files reset to the fix commit, and untracked test
+        // artifacts (non-ignored only) go with them.
+        await sandbox.exec(`git -C ${CLONE_DIR} checkout -- . && git -C ${CLONE_DIR} clean -fd`);
+        await sandbox.writeFile(
+          repairFile(round),
+          repairPrompt(params.testCommand, tests.output.slice(-6_000), sessionId === null),
+        );
+        // --resume continues the run that made the changes with its full
+        // context intact (each resume prints a fresh session id, carried
+        // forward). No id — a killed run that never printed its result —
+        // falls back to a fresh session pointed at the task file.
+        const baseEnv = {
+          ...auth.vars,
+          ...auth.config,
+          ...NPM_CACHE_ENV,
+          IS_SANDBOX: '1',
+          DISABLE_AUTOUPDATER: '1',
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+        };
+        const repairEnv = sessionId ? { ...baseEnv, RESUME_SESSION: sessionId } : baseEnv;
+        const repair = await sandbox.exec(
+          `claude -p ${sessionId ? '--resume "$RESUME_SESSION" ' : ''}` +
+            `--dangerously-skip-permissions --output-format stream-json --verbose < ${repairFile(round)}`,
+          { cwd: CLONE_DIR, timeout: REPAIR_TIMEOUT_MS, env: repairEnv },
+        );
+        totalUsage = addCliUsage(totalUsage, parseClaudeCliUsage(repair.stdout));
+        if (params.attemptId !== undefined) {
+          await persistAgentLog(
+            'fix',
+            scrub(`${claudeCliResultText(repair.stdout)}\n${repair.stderr}`.trim()),
+            repair.success,
+            { fixAttemptId: params.attemptId },
+            scrub(repair.stdout),
+          );
+        }
+        // A failed repair run ends the loop, not the fix — the last test
+        // verdict is the recorded outcome either way.
+        if (!repair.success) break;
+        sessionId = claudeCliSessionId(repair.stdout) ?? sessionId;
+        const repaired = await sandbox.exec(`git -C ${CLONE_DIR} status --porcelain`);
+        if (!repaired.stdout.trim()) break;
+        // Fold into the existing fix commit: nothing is pushed yet, and one
+        // commit per attempt keeps the PR readable. --amend preserves the
+        // instructing user as author.
+        const amended = await sandbox.exec(
+          `git -C ${CLONE_DIR} add -A && git -C ${CLONE_DIR} commit --amend --no-edit`,
+          { timeout: 60_000 },
+        );
+        if (!amended.success) {
+          throw new Error(`repair commit failed: ${scrub(amended.stderr).slice(0, 500)}`);
+        }
+        tests = await runTests();
+      }
+      // Repair rounds may have appended to the notes file.
+      notes = await readNotes();
+      testOutput = tests.output.slice(-4_000);
+      if (!tests.ok) {
         return {
           status: 'tests_failed',
           authMode: auth.mode,
@@ -428,7 +574,7 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
           notes,
           testOutput,
           agentOutput,
-          usage,
+          usage: totalUsage,
         };
       }
     }
@@ -457,7 +603,7 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
       notes,
       testOutput,
       agentOutput,
-      usage,
+      usage: totalUsage,
     };
   } finally {
     // Belt and braces: the remote was already scrubbed right after clone,
@@ -563,6 +709,7 @@ export async function processFixMessage(
       attemptId,
       trigger: msg.trigger,
       workflowRunId: msg.workflowRunId,
+      runnerModel: feature.runner_model ?? undefined,
     });
     await finishFixAttempt(
       attemptId,

@@ -750,6 +750,7 @@ export interface FeatureRow {
   cache_write_tokens: number;
   cost_usd: number;
   model: string | null;
+  runner_model: string | null; // requested model for this feature's runs; null = default
 }
 
 export async function createFeature(
@@ -818,11 +819,13 @@ export async function approvePlanFeatures(
 		 RETURNING id`,
     ).bind(planId),
     ...features.map((feature) =>
+      // runner_model snapshots from the plan so every downstream run
+      // (generation, repair, fix) reads the feature row alone.
       env.DB.prepare(
         `INSERT INTO features
 		   (repository_id, title, spec, acceptance, author_login, author_id,
-		    coauthor_login, coauthor_id, tier, plan_id)
-		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
+		    coauthor_login, coauthor_id, tier, plan_id, runner_model)
+		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, p.runner_model
 		 FROM plans p
 		 JOIN plan_repositories pr ON pr.plan_id = p.id AND pr.repository_id = ?1
 		 WHERE p.id = ?10 AND p.status = 'approving'
@@ -958,6 +961,7 @@ export interface PlanRow {
   feedback: string | null; // JSON [{snippet, comment}] awaiting a revise run
   attachments: string | null; // JSON [{key, name, content_type}] in R2
   todo_id: number | null; // unique origin todo; prevents concurrent double-start
+  runner_model: string | null; // requested model for this task's runs; null = default
 }
 
 // repositoryIds[0] becomes plans.repository_id (the "primary" repo — every
@@ -1014,12 +1018,14 @@ export async function createPlanForTodo(
   requirements: string,
   createdBy?: { login: string; id: number },
   attachments?: string,
+  // Model for this task's sandboxed runs; null = the default.
+  runnerModel?: string,
 ): Promise<CreatePlanForTodoResult | null> {
   if (repositoryIds.length === 0) return null;
   const inserted = await env.DB.prepare(
     `INSERT INTO plans
-		 (repository_id, title, requirements, created_by_login, created_by_id, attachments, todo_id)
-		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
+		 (repository_id, title, requirements, created_by_login, created_by_id, attachments, todo_id, runner_model)
+		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
 		 FROM todos WHERE id = ?7 AND plan_id IS NULL
 		 ON CONFLICT(todo_id) DO NOTHING
 		 RETURNING id`,
@@ -1032,6 +1038,7 @@ export async function createPlanForTodo(
       createdBy?.id ?? null,
       attachments ?? null,
       todoId,
+      runnerModel ?? null,
     )
     .first<{ id: number }>();
   const existing = inserted
@@ -1056,6 +1063,16 @@ export async function createPlanForTodo(
     ).bind(todoId, planId),
   ]);
   return { planId, created: inserted !== null };
+}
+
+// Change the task's model after start. Propagates to its already-created
+// features (they snapshot the plan value at approval) so retries and fix
+// runs pick it up; runs already in flight keep the model they launched with.
+export async function setTaskRunnerModel(planId: number, model: string): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare('UPDATE plans SET runner_model = ?2 WHERE id = ?1').bind(planId, model),
+    env.DB.prepare('UPDATE features SET runner_model = ?2 WHERE plan_id = ?1').bind(planId, model),
+  ]);
 }
 
 export async function getPlan(id: number): Promise<PlanRow | null> {

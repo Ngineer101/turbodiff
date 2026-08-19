@@ -146,6 +146,8 @@ export interface ApiPlan {
   acceptance: string[];
   plan: string | null;
   archived: boolean;
+  // The model this task's sandboxed runs use (see src/shared/runner-models.ts).
+  model: string;
   attachments: { name: string }[];
   repos: ApiTaskRepo[];
 }
