@@ -73,6 +73,17 @@ function Pending() {
   );
 }
 
+function Splash() {
+  return (
+    <div className="fixed inset-0 flex flex-col items-center justify-center gap-4 bg-bg" role="status">
+      <img src="/logo-small.png" alt="Turbodiff" width="56" height="56" />
+      <span className="text-mute">
+        Loading<span className="animate-cursor text-accent-bright">_</span>
+      </span>
+    </div>
+  );
+}
+
 function RouteError({ error, reset }: { error: Error; reset: () => void }) {
   return (
     <div className="mx-auto mt-16 max-w-md text-center">
@@ -102,6 +113,8 @@ function NotFound() {
 
 const rootRoute = createRootRoute({
   loader: () => queryClient.ensureQueryData(meQuery),
+  pendingComponent: Splash,
+  pendingMs: 0,
   notFoundComponent: NotFound,
 });
 
