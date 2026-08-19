@@ -81,6 +81,7 @@ import {
   setRepoEnabled,
   setRepoReviewOnPush,
   setRepoSkillEnabled,
+  setTaskRunnerModel,
   setTodoRepositories,
   todoRepositoriesForTodos,
   updateAgent,
@@ -108,6 +109,8 @@ import {
   type TaskRepoStatusRow,
   type VerificationRow,
 } from '../lib/db.ts';
+import { transcriptKey } from '../lib/agent-runs.ts';
+import { DEFAULT_RUNNER_MODEL, isRunnerModel } from '../shared/runner-models.ts';
 import { computeNextRunAt } from '../lib/automation-schedule.ts';
 import { requireUser, userCanPushToRepo, type AuthedUser } from '../lib/auth.ts';
 import { APIError } from 'better-auth';
@@ -406,6 +409,7 @@ function serializeTask(p: PlanWithRepo, repoStatuses: TaskRepoStatusRow[]): ApiP
     acceptance,
     plan: p.plan,
     archived: p.archived === 1,
+    model: p.runner_model ?? DEFAULT_RUNNER_MODEL,
     attachments: attachments.map((a) => ({ name: a.name })),
     repos: repoStatuses
       .filter((r) => r.plan_id === p.id)
@@ -981,12 +985,19 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         title?: string;
         requirements?: string;
         attachments?: JsonObject[];
+        model?: string;
       }>()
       .catch(() => null);
     const title = body?.title?.trim() || todo.title;
     const requirements = body?.requirements?.trim() ?? '';
     if (!requirements) {
       return c.json({ error: 'requirements are required' }, 400);
+    }
+    // Per-task model for the sandboxed runs; unset rides as NULL (= default),
+    // so the picker's default choice doesn't pin future default changes.
+    const model = body?.model?.trim() ?? '';
+    if (model && !isRunnerModel(model)) {
+      return c.json({ error: 'unknown model' }, 400);
     }
     const rawAtts = Array.isArray(body?.attachments) ? body.attachments : [];
     const attachments = rawAtts
@@ -1005,6 +1016,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       requirements,
       { login: session.login, id: session.userId },
       attachments.length > 0 ? JSON.stringify(attachments) : undefined,
+      model || undefined,
     );
     if (!started) return c.json({ error: 'todo could not be started' }, 409);
     if (!started.created) return c.json({ error: 'already started' }, 409);
@@ -1029,6 +1041,18 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       ...serializeTask(plan, repoStatuses),
       runs: runs.map(serializeAgentRun),
     });
+  });
+
+  // Change the task's model for future runs (retries, repair rounds, fixes).
+  // Runs already in flight keep the model they launched with.
+  app.post('/tasks/:id/model', async (c) => {
+    const plan = await authorizedPlan(c);
+    if (!plan) return c.json({ error: 'unknown task' }, 404);
+    const body = await c.req.json<{ model?: string }>().catch(() => null);
+    const model = body?.model?.trim() ?? '';
+    if (!isRunnerModel(model)) return c.json({ error: 'unknown model' }, 400);
+    await setTaskRunnerModel(plan.id, model);
+    return c.json({ ok: true });
   });
 
   // Started tasks are never deleted — archived hides them from the board.
@@ -1113,6 +1137,24 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const object = await env.ARTIFACTS.get(run.logKey);
     if (!object) return c.json({ error: 'log no longer available' }, 404);
     return c.json({ log: await object.text() });
+  });
+
+  // Raw stream-json transcript for one run — every turn, not just the final
+  // result. Same JSONL schema as a local Claude Code session file
+  // (~/.claude/projects/<project>/<session>.jsonl), so a sandbox run can be
+  // diffed against a local one. Served raw (not JSON-wrapped): transcripts
+  // are large and this is jq food, not UI copy. Same auth gate as the log.
+  app.get('/factory/runs/:id/transcript', async (c) => {
+    const id = Number(c.req.param('id'));
+    const run = Number.isInteger(id) ? await getAgentRunForAuth(id) : null;
+    if (!run || !c.get('user').installationIds.includes(run.installationId)) {
+      return c.json({ error: 'unknown run' }, 404);
+    }
+    const object = await env.ARTIFACTS.get(transcriptKey(run.logKey));
+    if (!object) {
+      return c.json({ error: 'no transcript for this run (pre-dates transcript capture)' }, 404);
+    }
+    return c.body(object.body, 200, { 'content-type': 'application/x-ndjson' });
   });
 
   // --- Factory PR cockpit ---

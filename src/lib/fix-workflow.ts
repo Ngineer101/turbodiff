@@ -15,7 +15,9 @@ export class FixWorkflow extends WorkflowEntrypoint<unknown, FixParams> {
   async run(event: WorkflowEvent<FixParams>, step: WorkflowStep): Promise<string> {
     await step.do(
       'run fix',
-      { retries: { limit: 1, delay: '5 minutes' }, timeout: '40 minutes' },
+      // Budget covers the worst case: clone + install + agent + tests, plus
+      // up to REPAIR_ROUNDS repair/re-test cycles (see fixer.ts).
+      { retries: { limit: 1, delay: '5 minutes' }, timeout: '85 minutes' },
       async () => {
         await processFixMessage(event.payload.message);
       },

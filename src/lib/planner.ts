@@ -138,8 +138,10 @@ async function runAgent(
   scrub: (s: string) => string,
   kind: 'plan_analyze' | 'plan_refine',
   planId: number,
+  // The task's requested model (plans.runner_model); null = default.
+  model: string | null,
 ): Promise<void> {
-  const auth = resolveRunnerAuth();
+  const auth = resolveRunnerAuth(undefined, model);
   await sandbox.writeFile(`${OUT_DIR}/task.md`, prompt);
   const res = await sandbox.exec(
     `claude -p --dangerously-skip-permissions --output-format text < ${OUT_DIR}/task.md`,
@@ -148,6 +150,7 @@ async function runAgent(
       timeout: AGENT_TIMEOUT_MS,
       env: {
         ...auth.vars,
+        ...auth.config,
         IS_SANDBOX: '1',
         DISABLE_AUTOUPDATER: '1',
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
@@ -374,6 +377,7 @@ export async function runPlanAnalyze(planId: number): Promise<void> {
       booted.scrub,
       'plan_analyze',
       planId,
+      plan.runner_model,
     );
     const analysis = await readText(sandbox, `${OUT_DIR}/analysis.md`);
     const questions = await readQuestions(sandbox, `${OUT_DIR}/questions.json`);
@@ -386,6 +390,7 @@ export async function runPlanAnalyze(planId: number): Promise<void> {
         booted.scrub,
         'plan_analyze',
         planId,
+        plan.runner_model,
       );
       const planMd = await readText(sandbox, `${OUT_DIR}/plan.md`);
       const acceptance = await readJsonArray(sandbox, `${OUT_DIR}/acceptance.json`);
@@ -480,6 +485,7 @@ export async function runPlanRefine(planId: number): Promise<void> {
       booted.scrub,
       'plan_refine',
       planId,
+      plan.runner_model,
     );
     const planMd = await readText(sandbox, `${OUT_DIR}/plan.md`);
     const acceptance = await readJsonArray(sandbox, `${OUT_DIR}/acceptance.json`);

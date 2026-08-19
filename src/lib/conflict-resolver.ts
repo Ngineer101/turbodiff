@@ -291,6 +291,7 @@ async function runConflictResolve(
         timeout: AGENT_TIMEOUT_MS,
         env: {
           ...auth.vars,
+          ...auth.config,
           IS_SANDBOX: '1',
           DISABLE_AUTOUPDATER: '1',
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',

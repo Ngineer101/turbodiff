@@ -20,7 +20,7 @@ import { certificateUrl } from './certificate.ts';
 import { signArtifactKey } from './crypto.ts';
 import { resolveRunnerAuth, sandboxNamespace } from './fixer.ts';
 import { installationToken, sandboxGitToken } from './github-app.ts';
-import { NPM_CACHE_ENV } from './generation-workflow.ts';
+import { NPM_CACHE_ENV } from './sandbox-deps.ts';
 import { UNTRUSTED_CONTENT_RULES } from './prompt-security.ts';
 
 // Phase 4 (docs/software-factory-design.md): empirical verification of factory
@@ -251,6 +251,7 @@ async function verify(
         timeout: AGENT_TIMEOUT_MS,
         env: {
           ...auth.vars,
+          ...auth.config,
           ...NPM_CACHE_ENV,
           IS_SANDBOX: '1',
           DISABLE_AUTOUPDATER: '1',

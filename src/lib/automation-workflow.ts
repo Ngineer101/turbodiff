@@ -15,7 +15,7 @@ import {
 } from './db.ts';
 import { buildSandboxMcpConfig } from './mcp-proxy.ts';
 import { resolveRunnerAuth } from './fixer.ts';
-import { NPM_CACHE_ENV } from './generation-workflow.ts';
+import { NPM_CACHE_ENV } from './sandbox-deps.ts';
 import {
   authorizesWorkflowFiles,
   describePushFailure,
@@ -238,6 +238,7 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
               timeout: AGENT_TIMEOUT_MS,
               env: {
                 ...auth.vars,
+                ...auth.config,
                 ...NPM_CACHE_ENV,
                 IS_SANDBOX: '1',
                 DISABLE_AUTOUPDATER: '1',
