@@ -43,6 +43,7 @@ import { AutomationNewPage } from './pages/automation-new.tsx';
 import { AutomationRunPage } from './pages/automation-run.tsx';
 import { AutomationsPage } from './pages/automations.tsx';
 import { BoardPage } from './pages/board.tsx';
+import { ConfigPage } from './pages/config.tsx';
 import { IntegrationsPage } from './pages/integrations.tsx';
 import { MembersPage } from './pages/members.tsx';
 import { OnboardingPage } from './pages/onboarding.tsx';
@@ -203,6 +204,13 @@ const settingsRoute = createRoute({
   component: SettingsPage,
 });
 
+const configRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: '/config',
+  loader: () => queryClient.ensureQueryData(settingsQuery),
+  component: ConfigPage,
+});
+
 const membersRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/settings/members/$installationId',
@@ -254,6 +262,7 @@ const routeTree = rootRoute.addChildren([
     skillNewRoute,
     skillEditRoute,
     settingsRoute,
+    configRoute,
     membersRoute,
     automationsRoute,
     automationNewRoute,
