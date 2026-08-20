@@ -23,11 +23,7 @@ import {
 import { DEFAULT_MODEL, RESERVED_AGENT_SLUGS } from '../domain/personas.ts';
 import { certificateUrl } from '../services/certificates.ts';
 import { capabilityDenied, orgForInstallationWithHeal } from '../services/access-control.ts';
-import {
-  userCanPushToRepo,
-  type AuthedUser,
-  type userIsGithubOrgAdmin,
-} from '../services/auth.ts';
+import { userCanPushToRepo, type AuthedUser, type userIsGithubOrgAdmin } from '../services/auth.ts';
 import { DEFAULT_RUNNER_MODEL } from '../shared/runner-models.ts';
 import { isNumber, isString, type JsonObject } from '../shared/json.ts';
 import { parseUtc, STALL_AFTER_MS } from '../shared/time.ts';

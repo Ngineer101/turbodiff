@@ -157,61 +157,90 @@ export async function automationUsageForMonth(
   return res.results;
 }
 
+// The five metered pipeline stages, each reduced to (month, cost) and unioned
+// into ONE statement: /api/board polls while tasks are live, so five separate
+// round-trips per poll was five times the D1 row-read bill for the same total.
+// Reviews scope on reviews.installation_id; every other stage reaches an
+// installation through repositories (equivalent — a review's repository always
+// belongs to the same installation). Each leg pre-aggregates by month, so the
+// union materialises at most five rows per month rather than one row per event.
+function pipelineCostUnion(installationIds: number[]): { sql: string; binds: number[] } {
+  const scope = (leg: number) =>
+    placeholderList(installationIds.length, leg * installationIds.length + 1);
+  const legs = [
+    `SELECT strftime('%Y-%m', r.created_at) AS month, SUM(r.cost_usd) AS cost
+			 FROM reviews r
+			 WHERE r.installation_id IN (${scope(0)})
+			 GROUP BY month`,
+    `SELECT strftime('%Y-%m', f.created_at) AS month, SUM(f.cost_usd) AS cost
+			 FROM features f
+			 JOIN repositories repo ON repo.id = f.repository_id
+			 WHERE repo.installation_id IN (${scope(1)})
+			 GROUP BY month`,
+    `SELECT strftime('%Y-%m', fa.created_at) AS month, SUM(fa.cost_usd) AS cost
+			 FROM fix_attempts fa
+			 JOIN repositories repo ON repo.id = fa.repository_id
+			 WHERE repo.installation_id IN (${scope(2)})
+			 GROUP BY month`,
+    `SELECT strftime('%Y-%m', v.created_at) AS month, SUM(v.cost_usd) AS cost
+			 FROM verifications v
+			 JOIN features f ON f.id = v.feature_id
+			 JOIN repositories repo ON repo.id = f.repository_id
+			 WHERE repo.installation_id IN (${scope(3)})
+			 GROUP BY month`,
+    `SELECT strftime('%Y-%m', ar.created_at) AS month, SUM(ar.cost_usd) AS cost
+			 FROM automation_runs ar
+			 JOIN automations a ON a.id = ar.automation_id
+			 JOIN repositories repo ON repo.id = a.repository_id
+			 WHERE repo.installation_id IN (${scope(4)})
+			 GROUP BY month`,
+  ];
+  return {
+    sql: legs.join('\n UNION ALL\n'),
+    binds: legs.flatMap(() => installationIds),
+  };
+}
+
 // Pipeline-wide cost for one 'YYYY-MM' month: review + generation + fix +
-// verification + automation, each a small single-purpose query (matching
-// dashboardStats/monthlyUsage/repoUsageForMonth's style) rather than one
-// UNION, summed here.
+// verification + automation. Plan-stage agent spend is not metered anywhere
+// (the plans table has no cost columns), so this is "pipeline cost", not
+// "everything you spent".
 export async function pipelineCostForMonth(
   installationIds: number[],
   month: string,
 ): Promise<number> {
   if (installationIds.length === 0) return 0;
-  const placeholders = placeholderList(installationIds.length);
-  const monthParam = `?${installationIds.length + 1}`;
-  const bind = (stmt: D1PreparedStatement) => stmt.bind(...installationIds, month);
-  const [reviews, generation, fixes, verifications, automations] = await Promise.all([
-    bind(
-      env.DB.prepare(
-        `SELECT COALESCE(SUM(cost_usd), 0) AS cost FROM reviews
-			 WHERE installation_id IN (${placeholders}) AND strftime('%Y-%m', created_at) = ${monthParam}`,
-      ),
-    ).first<{ cost: number }>(),
-    bind(
-      env.DB.prepare(
-        `SELECT COALESCE(SUM(f.cost_usd), 0) AS cost FROM features f
-			 JOIN repositories repo ON repo.id = f.repository_id
-			 WHERE repo.installation_id IN (${placeholders}) AND strftime('%Y-%m', f.created_at) = ${monthParam}`,
-      ),
-    ).first<{ cost: number }>(),
-    bind(
-      env.DB.prepare(
-        `SELECT COALESCE(SUM(fa.cost_usd), 0) AS cost FROM fix_attempts fa
-			 JOIN repositories repo ON repo.id = fa.repository_id
-			 WHERE repo.installation_id IN (${placeholders}) AND strftime('%Y-%m', fa.created_at) = ${monthParam}`,
-      ),
-    ).first<{ cost: number }>(),
-    bind(
-      env.DB.prepare(
-        `SELECT COALESCE(SUM(v.cost_usd), 0) AS cost FROM verifications v
-			 JOIN features f ON f.id = v.feature_id
-			 JOIN repositories repo ON repo.id = f.repository_id
-			 WHERE repo.installation_id IN (${placeholders}) AND strftime('%Y-%m', v.created_at) = ${monthParam}`,
-      ),
-    ).first<{ cost: number }>(),
-    bind(
-      env.DB.prepare(
-        `SELECT COALESCE(SUM(ar.cost_usd), 0) AS cost FROM automation_runs ar
-			 JOIN automations a ON a.id = ar.automation_id
-			 JOIN repositories repo ON repo.id = a.repository_id
-			 WHERE repo.installation_id IN (${placeholders}) AND strftime('%Y-%m', ar.created_at) = ${monthParam}`,
-      ),
-    ).first<{ cost: number }>(),
-  ]);
-  return (
-    (reviews?.cost ?? 0) +
-    (generation?.cost ?? 0) +
-    (fixes?.cost ?? 0) +
-    (verifications?.cost ?? 0) +
-    (automations?.cost ?? 0)
-  );
+  const { sql, binds } = pipelineCostUnion(installationIds);
+  const row = await env.DB.prepare(
+    `SELECT COALESCE(SUM(cost), 0) AS cost_usd FROM (${sql}) legs WHERE month = ?${binds.length + 1}`,
+  )
+    .bind(...binds, month)
+    .first<{ cost_usd: number }>();
+  return row?.cost_usd ?? 0;
+}
+
+export interface PipelineMonthCostRow {
+  month: string; // 'YYYY-MM' (UTC)
+  cost_usd: number;
+}
+
+// The same aggregate, grouped — backs the usage page's cost-by-month table so
+// its current-month row equals the headline tile by construction. `months` is
+// inlined into the SQL exactly like monthlyUsage: a caller-side literal, never
+// request input.
+export async function pipelineCostByMonth(
+  installationIds: number[],
+  months = 6,
+): Promise<PipelineMonthCostRow[]> {
+  if (installationIds.length === 0) return [];
+  const { sql, binds } = pipelineCostUnion(installationIds);
+  const res = await env.DB.prepare(
+    `SELECT month, COALESCE(SUM(cost), 0) AS cost_usd FROM (${sql}) legs
+			 GROUP BY month
+			 ORDER BY month DESC
+			 LIMIT ${months}`,
+  )
+    .bind(...binds)
+    .all<PipelineMonthCostRow>();
+  return res.results;
 }
