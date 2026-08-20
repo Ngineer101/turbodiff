@@ -164,7 +164,7 @@ export async function automationUsageForMonth(
 // installation through repositories (equivalent — a review's repository always
 // belongs to the same installation). Each leg pre-aggregates by month, so the
 // union materialises at most five rows per month rather than one row per event.
-function pipelineCostUnion(installationIds: number[]): { sql: string; binds: number[] } {
+function pipelineCostUnion(installationIds: number[]) {
   const scope = (leg: number) =>
     placeholderList(installationIds.length, leg * installationIds.length + 1);
   const legs = [

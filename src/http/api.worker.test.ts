@@ -282,9 +282,11 @@ describe('pipeline cost reporting', () => {
     const usageResponse = await app.request('https://turbodiff.test/api/usage');
     expect(boardResponse.status).toBe(200);
     expect(usageResponse.status).toBe(200);
-    // SAFETY: both 200 bodies are the ApiBoard/ApiUsage contracts this test
-    // exercises; the assertions below fail on any drift in those shapes.
+    // SAFETY: /api/board's 200 body is the ApiBoard contract this test
+    // exercises; the assertions below fail on any drift in that shape.
     const board = (await boardResponse.json()) as ApiBoard;
+    // SAFETY: /api/usage's 200 body is the ApiUsage contract this test
+    // exercises; the assertions below fail on any drift in that shape.
     const usage = (await usageResponse.json()) as ApiUsage;
 
     // SQLite sums doubles in its own order, so never compare these exactly.
