@@ -32,10 +32,16 @@ function apiApp(dependencies: ApiRouteDependencies = {}) {
   return app;
 }
 
-function authenticatedApi(canPush = async () => true) {
+// orgAdmin defaults to true so callers with no member row elevate-and-allow
+// through the lazy org heal (installation 1001 is Organization-type with no
+// org row, so every capability gate now runs through it) — with the u1 user
+// row seeded in seedTenants the caller is bootstrapped to owner, preserving
+// the pre-heal "allowed" outcome for the unrelated suites.
+function authenticatedApi(canPush = async () => true, orgAdmin = async () => true) {
   return apiApp({
     authenticate: async () => acmeUser,
     canPushToRepo: canPush,
+    orgAdmin,
   });
 }
 
@@ -59,6 +65,17 @@ async function seedTenants(): Promise<void> {
     testEnv.DB.prepare(
       `INSERT INTO todo_repositories (todo_id, repository_id, position)
 		 VALUES (401, 101, 0), (402, 202, 0)`,
+    ),
+    // A better-auth user row for acmeUser — session.userId (3001) is the
+    // GitHub id memberRole and the owner bootstrap look members up by.
+    // Seeded globally so the lazy org heal's elevate-to-owner path (orgAdmin
+    // defaults to true in authenticatedApi) actually records the member row,
+    // keeping capability-gated suites that never seed org rows on their
+    // pre-heal "allowed" outcome.
+    testEnv.DB.prepare(
+      `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt", login, "githubId")
+		 VALUES ('u1', 'octocat', 'octocat@example.test', 1, '2026-01-01T00:00:00.000Z',
+		         '2026-01-01T00:00:00.000Z', 'octocat', 3001)`,
     ),
   ]);
 }
@@ -221,20 +238,14 @@ describe('authenticated tenant isolation', () => {
 });
 
 describe('organization member management', () => {
-  // acmeUser.session.userId (3001) is the GitHub id memberRole looks members
-  // up by — a real better-auth user row is needed for the join to find a role.
+  // The better-auth user row for acmeUser (u1, githubId 3001) is seeded
+  // globally in seedTenants — this seeds only the org row (and optionally an
+  // explicit member row) on top of it.
   async function seedOrg(role: 'owner' | 'admin' | 'member' | null): Promise<void> {
-    await testEnv.DB.batch([
-      testEnv.DB.prepare(
-        `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt", login, "githubId")
-				 VALUES ('u1', 'octocat', 'octocat@example.test', 1, '2026-01-01T00:00:00.000Z',
-				         '2026-01-01T00:00:00.000Z', 'octocat', 3001)`,
-      ),
-      testEnv.DB.prepare(
-        `INSERT INTO "organization" (id, name, slug, "installationId", "createdAt")
+    await testEnv.DB.prepare(
+      `INSERT INTO "organization" (id, name, slug, "installationId", "createdAt")
 				 VALUES ('org1', 'acme', 'acme', 1001, '2026-01-01T00:00:00.000Z')`,
-      ),
-    ]);
+    ).run();
     if (role) {
       await testEnv.DB.prepare(
         `INSERT INTO "member" (id, "organizationId", "userId", role, "createdAt")
@@ -247,7 +258,9 @@ describe('organization member management', () => {
 
   it('is readable by any installation member, including one with no explicit member row', async () => {
     await seedOrg(null);
-    const response = await authenticatedApi().request(
+    // orgAdmin false: a plain GitHub member stays an implicit 'member'
+    // rather than being bootstrapped to owner.
+    const response = await authenticatedApi(undefined, async () => false).request(
       'https://turbodiff.test/api/organizations/1001/members',
     );
     expect(response.status).toBe(200);
@@ -259,11 +272,18 @@ describe('organization member management', () => {
     });
   });
 
-  it('404s when the installation has no linked organization', async () => {
+  it('404s for a personal installation and never provisions an org row for it', async () => {
+    await testEnv.DB.prepare(
+      `UPDATE installations SET account_type = 'User' WHERE id = 1001`,
+    ).run();
     const response = await authenticatedApi().request(
       'https://turbodiff.test/api/organizations/1001/members',
     );
     expect(response.status).toBe(404);
+    const orgRow = await testEnv.DB.prepare(
+      'SELECT id FROM "organization" WHERE "installationId" = 1001',
+    ).first();
+    expect(orgRow).toBeNull();
   });
 
   it('rejects invite, remove, and role-change requests from a member-role caller', async () => {
@@ -325,20 +345,97 @@ describe('organization member management', () => {
     expect(response.status).toBe(200);
   });
 
-  it('never gates an installation with no linked organization row on org capability', async () => {
-    // No seedOrg() here — installation 1001 has no organization row, the
-    // same shape as a personal (User-type) installation. requireCapability
-    // must return null (allowed) rather than 403, leaving push permission as
-    // the only gate, same as before this change.
-    const response = await authenticatedApi(async () => true).request(
-      'https://turbodiff.test/api/repos/101',
-      {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ enabled: false }),
-      },
+  it('never gates a personal installation on org capability', async () => {
+    // A personal (User-type) installation has no organization row and the
+    // heal must not create one — requireCapability returns null (allowed)
+    // rather than 403, leaving push permission as the only gate.
+    await testEnv.DB.prepare(
+      `UPDATE installations SET account_type = 'User' WHERE id = 1001`,
+    ).run();
+    const response = await authenticatedApi(
+      async () => true,
+      async () => false,
+    ).request('https://turbodiff.test/api/repos/101', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(response.status).toBe(200);
+  });
+
+  it('heals a missing organization row on first visit, idempotently', async () => {
+    // No seedOrg() — installation 1001 is Organization-type with no org row,
+    // the shape left behind by a missed provisioning webhook.
+    const app = authenticatedApi(undefined, async () => false);
+    const first = await app.request('https://turbodiff.test/api/organizations/1001/members');
+    expect(first.status).toBe(200);
+    const healed = await testEnv.DB.prepare(
+      'SELECT id FROM "organization" WHERE "installationId" = 1001',
+    ).first<{ id: string }>();
+    expect(healed).not.toBeNull();
+    expect(await first.json()).toMatchObject({ org_id: healed?.id, my_role: 'member' });
+
+    const second = await app.request('https://turbodiff.test/api/organizations/1001/members');
+    expect(second.status).toBe(200);
+    expect(await second.json()).toMatchObject({ org_id: healed?.id });
+    const count = await testEnv.DB.prepare(
+      'SELECT COUNT(*) AS n FROM "organization" WHERE "installationId" = 1001',
+    ).first<{ n: number }>();
+    expect(count?.n).toBe(1);
+  });
+
+  it('bootstraps a GitHub org admin with no member row as the first owner', async () => {
+    const response = await authenticatedApi(undefined, async () => true).request(
+      'https://turbodiff.test/api/organizations/1001/members',
     );
     expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ my_role: 'owner' });
+    const member = await testEnv.DB.prepare(
+      `SELECT "member".role AS role FROM "member"
+			 JOIN "organization" ON "organization".id = "member"."organizationId"
+			 WHERE "organization"."installationId" = 1001 AND "member"."userId" = 'u1'`,
+    ).first<{ role: string }>();
+    expect(member?.role).toBe('owner');
+  });
+
+  it('never re-elevates a caller who already has an explicit member row', async () => {
+    await seedOrg('member');
+    const response = await authenticatedApi(undefined, async () => true).request(
+      'https://turbodiff.test/api/organizations/1001/members',
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ my_role: 'member' });
+    const row = await testEnv.DB.prepare(`SELECT role FROM "member" WHERE id = 'm1'`).first<{
+      role: string;
+    }>();
+    expect(row?.role).toBe('member');
+  });
+
+  it('tightens settings capability after the heal, keeping GitHub org admins in', async () => {
+    // The org row is healed by capabilityDenied itself (not the members
+    // page): an implicit member without GitHub org-admin status loses the
+    // settings capability it incidentally had while the row was missing…
+    const denied = await authenticatedApi(
+      async () => true,
+      async () => false,
+    ).request('https://turbodiff.test/api/repos/101', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(denied.status).toBe(403);
+
+    // …while a GitHub org admin is bootstrapped to owner via the same
+    // capability path and keeps access.
+    const allowed = await authenticatedApi(
+      async () => true,
+      async () => true,
+    ).request('https://turbodiff.test/api/repos/101', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(allowed.status).toBe(200);
   });
 });
 

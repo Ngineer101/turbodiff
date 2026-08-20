@@ -1,6 +1,10 @@
 import { env } from 'cloudflare:workers';
 import { auth } from '../integrations/auth/better-auth.ts';
-import { fetchUserCanPush, fetchUserInstallationIds } from '../integrations/github/app.ts';
+import {
+  fetchUserCanPush,
+  fetchUserInstallationIds,
+  fetchUserOrgRole,
+} from '../integrations/github/app.ts';
 import { isNumber, isString } from '../shared/json.ts';
 
 // Application authorization on top of better-auth sessions. The session
@@ -104,6 +108,29 @@ export async function userCanPushToRepo(
     repoPermCache.set(key, { push, fetchedAt: Date.now() });
     return push;
   } catch {
+    return false;
+  }
+}
+
+const ORG_ROLE_TTL_MS = 5 * 60_000;
+const orgAdminCache = new Map<string, { admin: boolean; fetchedAt: number }>();
+
+// Whether GitHub says this user is an admin (owner) of the organization,
+// checked with their own token. Fail-closed: no token or a failed GitHub
+// call (including a missing App org-members permission) answers false.
+export async function userIsGithubOrgAdmin(user: AuthedUser, orgLogin: string): Promise<boolean> {
+  if (user.devFake) return true;
+  const { userId, ghToken } = user.session;
+  if (!ghToken) return false;
+  const key = `${userId}:${orgLogin}`;
+  const cached = orgAdminCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < ORG_ROLE_TTL_MS) return cached.admin;
+  try {
+    const admin = (await fetchUserOrgRole(ghToken, orgLogin)) === 'admin';
+    orgAdminCache.set(key, { admin, fetchedAt: Date.now() });
+    return admin;
+  } catch (err) {
+    console.warn(`turbodiff: org membership check failed for ${orgLogin}:`, err);
     return false;
   }
 }
