@@ -22,8 +22,12 @@ import {
 } from '../data/db.ts';
 import { DEFAULT_MODEL, RESERVED_AGENT_SLUGS } from '../domain/personas.ts';
 import { certificateUrl } from '../services/certificates.ts';
-import { capabilityDenied, orgForInstallation } from '../services/access-control.ts';
-import { userCanPushToRepo, type AuthedUser } from '../services/auth.ts';
+import { capabilityDenied, orgForInstallationWithHeal } from '../services/access-control.ts';
+import {
+  userCanPushToRepo,
+  type AuthedUser,
+  type userIsGithubOrgAdmin,
+} from '../services/auth.ts';
 import { DEFAULT_RUNNER_MODEL } from '../shared/runner-models.ts';
 import { isNumber, isString, type JsonObject } from '../shared/json.ts';
 import { parseUtc, STALL_AFTER_MS } from '../shared/time.ts';
@@ -459,11 +463,14 @@ export async function authorizedAutomation(c: Context<ApiEnv>): Promise<Automati
 
 // Resolves the :installationId param to its linked organization, only when
 // the caller's installationIds already covers it (the same GitHub-derived
-// baseline every other authorizedX helper checks) and the installation
-// actually has one (personal installations never do — 404, not 403: there's
-// nothing here to manage regardless of role).
+// baseline every other authorizedX helper checks). Personal installations
+// and unknown ids still 404 (not 403: there's nothing here to manage
+// regardless of role); an Organization-type installation with a missing org
+// row is provisioned on first visit, and a GitHub org admin is bootstrapped
+// as the first owner (orgForInstallationWithHeal).
 export async function authorizedOrg(
   c: Context<ApiEnv>,
+  isOrgAdmin: typeof userIsGithubOrgAdmin,
 ): Promise<{ installationId: number; orgId: string } | null> {
   const installationId = Number(c.req.param('installationId'));
   if (
@@ -472,7 +479,7 @@ export async function authorizedOrg(
   ) {
     return null;
   }
-  const org = await orgForInstallation(installationId);
+  const org = await orgForInstallationWithHeal(c.get('user'), installationId, isOrgAdmin);
   if (!org) return null;
   return { installationId, orgId: org.id };
 }
@@ -487,10 +494,13 @@ export async function authorizedOrg(
 export async function capableInstallationIds(
   c: Context<ApiEnv>,
   installationIds: number[],
+  isOrgAdmin: typeof userIsGithubOrgAdmin,
 ): Promise<number[]> {
   const user = c.get('user');
   const checked = await Promise.all(
-    installationIds.map(async (id) => ((await capabilityDenied(user, id, 'settings')) ? null : id)),
+    installationIds.map(async (id) =>
+      (await capabilityDenied(user, id, 'settings', isOrgAdmin)) ? null : id,
+    ),
   );
   return checked.filter((id): id is number => id !== null);
 }
@@ -501,8 +511,9 @@ export async function requireCapability(
   c: Context<ApiEnv>,
   installationId: number,
   action: 'member' | 'settings',
+  isOrgAdmin: typeof userIsGithubOrgAdmin,
 ): Promise<Response | null> {
-  const denied = await capabilityDenied(c.get('user'), installationId, action);
+  const denied = await capabilityDenied(c.get('user'), installationId, action, isOrgAdmin);
   return denied ? c.json({ error: denied }, 403) : null;
 }
 

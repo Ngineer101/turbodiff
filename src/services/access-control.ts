@@ -1,5 +1,6 @@
 import { env } from 'cloudflare:workers';
-import type { AuthedUser } from './auth.ts';
+import { getInstallation } from '../data/repositories.ts';
+import type { AuthedUser, userIsGithubOrgAdmin } from './auth.ts';
 import { orgRoles, type OrgRole } from '../integrations/auth/organization-access.ts';
 
 // Native org roles on top of GitHub installation membership (migration
@@ -19,10 +20,11 @@ import { orgRoles, type OrgRole } from '../integrations/auth/organization-access
 // reimplementing invitation creation, member removal, and the "can't remove
 // the last owner" guard by hand.
 // The better-auth organization row linked to this installation, if any.
-// Read-only lookup — organization/member row creation happens only from the
-// webhook provisioning path (ensureOrganizationForInstallation below), never
-// implicitly from a request handler.
-export async function orgForInstallation(installationId: number): Promise<{ id: string } | null> {
+// Read-only lookup — organization/member row creation happens from the
+// webhook provisioning path (ensureOrganizationForInstallation below) and,
+// for installations whose webhook delivery was missed, lazily from
+// orgForInstallationWithHeal on request paths.
+async function orgForInstallation(installationId: number): Promise<{ id: string } | null> {
   return env.DB.prepare('SELECT id FROM "organization" WHERE "installationId" = ?1')
     .bind(installationId)
     .first<{ id: string }>();
@@ -30,8 +32,10 @@ export async function orgForInstallation(installationId: number): Promise<{ id: 
 
 // Idempotent: creates the linked organization row for an Organization-type
 // installation if one doesn't already exist, returning its id either way.
-// Called only from the installation/installation_repositories webhook
-// handlers (src/http/webhooks.ts) — never from a request path.
+// Called from the installation/installation_repositories webhook handlers
+// (src/services/github-webhooks.ts) and from orgForInstallationWithHeal
+// below, which self-heals installations whose provisioning webhook was
+// missed (or that predate migrations/0031_organizations.sql).
 export async function ensureOrganizationForInstallation(
   installationId: number,
   accountLogin: string,
@@ -53,12 +57,15 @@ export async function ensureOrganizationForInstallation(
   return row.id;
 }
 
-// Records the GitHub App installer as the organization's owner — only
-// possible if they already have a better-auth `user` row (i.e. they signed
-// in to Turbodiff before or after installing the app). If they haven't yet,
-// this is a no-op: the auto-provisioning fallback in memberRole treats them
-// as an implicit 'member' (never locked out) until their first sign-in, at
-// which point an existing owner/admin can promote them via
+// Records a GitHub user as the organization's owner — called for the App
+// installer from the `installation created` webhook, and from the
+// GitHub-admin bootstrap below (ensureGithubAdminOwner) for orgs provisioned
+// without an installer identity. Only possible if the user already has a
+// better-auth `user` row (i.e. they signed in to Turbodiff before or after
+// installing the app). If they haven't yet, this is a no-op: the
+// auto-provisioning fallback in memberRole treats them as an implicit
+// 'member' (never locked out) until their first sign-in, at which point an
+// existing owner/admin can promote them via
 // PATCH /organizations/:installationId/members/:memberId.
 export async function ensureOwnerMember(
   organizationId: string,
@@ -93,21 +100,87 @@ export async function memberRole(organizationId: string, githubId: number): Prom
   return row?.role === 'owner' || row?.role === 'admin' ? row.role : 'member';
 }
 
+// Whether the user has an explicit member row — memberRole cannot tell an
+// explicit 'member' row from the implicit fallback, and explicit in-app role
+// assignments must win over GitHub-derived elevation.
+async function hasMemberRow(organizationId: string, githubId: number): Promise<boolean> {
+  const row = await env.DB.prepare(
+    `SELECT 1 AS x FROM "member"
+     JOIN "user" ON "user".id = "member"."userId"
+     WHERE "member"."organizationId" = ?1 AND "user"."githubId" = ?2`,
+  )
+    .bind(organizationId, githubId)
+    .first();
+  return row !== null;
+}
+
+// First-owner bootstrap for orgs provisioned without an `installation
+// created` webhook (no installer identity): a caller with no member row who
+// is an admin (owner) of the org on GitHub becomes this org's owner. Runs
+// only when there is no explicit row, so in-app demotions are never undone.
+async function ensureGithubAdminOwner(
+  user: AuthedUser,
+  organizationId: string,
+  accountLogin: string,
+  isOrgAdmin: typeof userIsGithubOrgAdmin,
+): Promise<void> {
+  if (user.devFake || !user.session.ghToken) return;
+  if (await hasMemberRow(organizationId, user.session.userId)) return;
+  if (!(await isOrgAdmin(user, accountLogin))) return;
+  await ensureOwnerMember(organizationId, user.session.userId);
+}
+
+// Resolve an installation to its linked organization, provisioning the row
+// if the webhook that should have created it was missed (installations that
+// predate migrations/0031_organizations.sql, or dropped deliveries). Also
+// bootstraps the first owner from GitHub: see ensureGithubAdminOwner. Null
+// for personal (User-type) installations and unknown installation ids.
+// A pre-existing org row keeps gating even if the installations row is
+// missing or odd — orgForInstallation is consulted before the account_type
+// gate.
+export async function orgForInstallationWithHeal(
+  user: AuthedUser,
+  installationId: number,
+  isOrgAdmin: typeof userIsGithubOrgAdmin,
+): Promise<{ id: string } | null> {
+  const installation = await getInstallation(installationId);
+  let org = await orgForInstallation(installationId);
+  if (!org) {
+    if (!installation || installation.account_type !== 'Organization') return null;
+    org = {
+      id: await ensureOrganizationForInstallation(installationId, installation.account_login),
+    };
+  }
+  if (installation) {
+    // The GitHub call inside runs only for callers with no member row —
+    // exactly the callers who would otherwise be denied — and is cached 5
+    // minutes in userIsGithubOrgAdmin, so owners/admins with rows never
+    // trigger it.
+    await ensureGithubAdminOwner(user, org.id, installation.account_login, isOrgAdmin);
+  }
+  return org;
+}
+
 // Gate for the in-app actions layered on top of installation membership
 // (member management, app configuration). Null means allowed; a denial
 // message otherwise — the HTTP layer maps it to a 403 (requireCapability in
 // http/api-support.ts). A personal (User-type) installation has no linked
-// organization by construction (ensureOrganizationForInstallation only runs
-// for Organization-type installations), so every caller who already cleared
-// the installationIds check is fully permitted there — GitHub membership is
-// already the whole authorization story for a personal installation.
+// organization by construction (the heal only provisions Organization-type
+// installations), so every caller who already cleared the installationIds
+// check is fully permitted there — GitHub membership is already the whole
+// authorization story for a personal installation. A missing org row for an
+// Organization-type installation is provisioned here (a GET-time heal that
+// writes to D1 deliberately — same precedent as the GET /settings repo
+// self-heal in src/http/api.ts), so a GitHub org admin is never locked out
+// of settings writes just because they haven't visited the members page yet.
 export async function capabilityDenied(
   user: AuthedUser,
   installationId: number,
   action: 'member' | 'settings',
+  isOrgAdmin: typeof userIsGithubOrgAdmin,
 ): Promise<string | null> {
   if (user.devFake) return null;
-  const org = await orgForInstallation(installationId);
+  const org = await orgForInstallationWithHeal(user, installationId, isOrgAdmin);
   if (!org) return null;
   const role = await memberRole(org.id, user.session.userId);
   const request =

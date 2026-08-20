@@ -220,3 +220,20 @@ export async function fetchUserCanPush(
     data.permissions?.admin === true
   );
 }
+
+// The caller's own membership in a GitHub organization: role 'admin' means
+// org owner on GitHub. Throws on HTTP errors (including 404 = not a member);
+// callers fail closed. With a GitHub App user token this endpoint needs the
+// App's Organization → Members (read) permission; a 403 lands in the caller's
+// catch and is treated as not-admin (fail closed).
+export async function fetchUserOrgRole(
+  token: string,
+  orgLogin: string,
+): Promise<'admin' | 'member' | null> {
+  const data = await githubJson<{ state?: string; role?: string }>(
+    token,
+    `/user/memberships/orgs/${orgLogin}`,
+  );
+  if (data.state !== 'active') return null;
+  return data.role === 'admin' ? 'admin' : 'member';
+}

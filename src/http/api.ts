@@ -99,7 +99,7 @@ import {
 import { transcriptKey } from '../ai/runtime/agent-runs.ts';
 import { isRunnerModel } from '../shared/runner-models.ts';
 import { computeNextRunAt } from '../domain/automation-schedule.ts';
-import { requireUser, userCanPushToRepo } from '../services/auth.ts';
+import { requireUser, userCanPushToRepo, userIsGithubOrgAdmin } from '../services/auth.ts';
 import { APIError } from 'better-auth';
 import { auth } from '../integrations/auth/better-auth.ts';
 import { certificateUrl } from '../services/certificates.ts';
@@ -191,12 +191,14 @@ import {
 export interface ApiRouteDependencies {
   authenticate?: typeof requireUser;
   canPushToRepo?: typeof userCanPushToRepo;
+  orgAdmin?: typeof userIsGithubOrgAdmin;
 }
 
 export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   const app = new Hono<ApiEnv>();
   const authenticate = dependencies.authenticate ?? requireUser;
   const canPushToRepo = dependencies.canPushToRepo ?? userCanPushToRepo;
+  const orgAdmin = dependencies.orgAdmin ?? userIsGithubOrgAdmin;
 
   // CSRF gate for the cookie-authed data plane: browsers attach Origin to
   // every POST (same-origin and cross-site alike), so a mismatched Origin is
@@ -1177,7 +1179,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.post('/agents', async (c) => {
     const { installationIds } = c.get('user');
     if (installationIds.length === 0) return c.json({ error: 'no installations' }, 404);
-    const capableIds = await capableInstallationIds(c, installationIds);
+    const capableIds = await capableInstallationIds(c, installationIds, orgAdmin);
     if (capableIds.length === 0) {
       return c.json({ error: "'settings' capability required for this action" }, 403);
     }
@@ -1217,7 +1219,12 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.put('/agents/:id', async (c) => {
     const agent = await authorizedAgent(c);
     if (!agent) return c.json({ error: 'unknown agent' }, 404);
-    const deniedCapability = await requireCapability(c, agent.installation_id, 'settings');
+    const deniedCapability = await requireCapability(
+      c,
+      agent.installation_id,
+      'settings',
+      orgAdmin,
+    );
     if (deniedCapability) return deniedCapability;
     const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
@@ -1241,7 +1248,12 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.delete('/agents/:id', async (c) => {
     const agent = await authorizedAgent(c);
     if (!agent) return c.json({ error: 'unknown agent' }, 404);
-    const deniedCapability = await requireCapability(c, agent.installation_id, 'settings');
+    const deniedCapability = await requireCapability(
+      c,
+      agent.installation_id,
+      'settings',
+      orgAdmin,
+    );
     if (deniedCapability) return deniedCapability;
     if (agent.is_builtin === 1) return c.json({ error: 'built-in agents cannot be deleted' }, 403);
     // Fan out by slug: deleting a generic agent removes every installation's copy.
@@ -1275,7 +1287,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.post('/skills', async (c) => {
     const { installationIds } = c.get('user');
     if (installationIds.length === 0) return c.json({ error: 'no installations' }, 404);
-    const capableIds = await capableInstallationIds(c, installationIds);
+    const capableIds = await capableInstallationIds(c, installationIds, orgAdmin);
     if (capableIds.length === 0) {
       return c.json({ error: "'settings' capability required for this action" }, 403);
     }
@@ -1312,7 +1324,12 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.put('/skills/:id', async (c) => {
     const skill = await authorizedSkill(c);
     if (!skill) return c.json({ error: 'unknown skill' }, 404);
-    const deniedCapability = await requireCapability(c, skill.installation_id, 'settings');
+    const deniedCapability = await requireCapability(
+      c,
+      skill.installation_id,
+      'settings',
+      orgAdmin,
+    );
     if (deniedCapability) return deniedCapability;
     const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
@@ -1337,7 +1354,12 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.delete('/skills/:id', async (c) => {
     const skill = await authorizedSkill(c);
     if (!skill) return c.json({ error: 'unknown skill' }, 404);
-    const deniedCapability = await requireCapability(c, skill.installation_id, 'settings');
+    const deniedCapability = await requireCapability(
+      c,
+      skill.installation_id,
+      'settings',
+      orgAdmin,
+    );
     if (deniedCapability) return deniedCapability;
     // Fan out by slug: deleting a generic skill removes every installation's copy.
     const siblings = (await listSkills(c.get('user').installationIds)).filter(
@@ -1387,7 +1409,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (!repo || !installationIds.includes(repo.installation_id) || repo.enabled !== 1) {
       return c.json({ error: 'unknown or disabled repository' }, 404);
     }
-    const deniedCapability = await requireCapability(c, repo.installation_id, 'settings');
+    const deniedCapability = await requireCapability(c, repo.installation_id, 'settings', orgAdmin);
     if (deniedCapability) return deniedCapability;
     const nextRunAt = computeNextRunAt(
       {
@@ -1423,7 +1445,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const repoForCapability = await getRepoById(automation.repository_id);
     const deniedCapability =
       repoForCapability &&
-      (await requireCapability(c, repoForCapability.installation_id, 'settings'));
+      (await requireCapability(c, repoForCapability.installation_id, 'settings', orgAdmin));
     if (deniedCapability) return deniedCapability;
     const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
@@ -1459,7 +1481,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const repoForCapability = await getRepoById(automation.repository_id);
     const deniedCapability =
       repoForCapability &&
-      (await requireCapability(c, repoForCapability.installation_id, 'settings'));
+      (await requireCapability(c, repoForCapability.installation_id, 'settings', orgAdmin));
     if (deniedCapability) return deniedCapability;
     await deleteAutomation(automation.id);
     return c.json({ ok: true });
@@ -1642,7 +1664,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       error = `an integration named "${name}" already exists`;
     }
     if (error) return c.json({ error }, 400);
-    const deniedCapability = await requireCapability(c, installationId, 'settings');
+    const deniedCapability = await requireCapability(c, installationId, 'settings', orgAdmin);
     if (deniedCapability) return deniedCapability;
 
     let authCiphertext: string | null = null;
@@ -1678,7 +1700,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.delete('/integrations/:id', async (c) => {
     const conn = await authorizedConnection(c);
     if (!conn) return c.json({ error: 'unknown integration' }, 404);
-    const deniedCapability = await requireCapability(c, conn.installation_id, 'settings');
+    const deniedCapability = await requireCapability(c, conn.installation_id, 'settings', orgAdmin);
     if (deniedCapability) return deniedCapability;
     await deleteConnection(conn.id);
     return c.json({ ok: true });
@@ -1766,7 +1788,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.put('/integrations/:id/repos/:repoId', async (c) => {
     const conn = await authorizedConnection(c);
     if (!conn) return c.json({ error: 'unknown integration' }, 404);
-    const deniedCapability = await requireCapability(c, conn.installation_id, 'settings');
+    const deniedCapability = await requireCapability(c, conn.installation_id, 'settings', orgAdmin);
     if (deniedCapability) return deniedCapability;
     if (conn.kind !== 'mcp') return c.json({ error: 'only MCP integrations attach to repos' }, 400);
     const repoId = Number(c.req.param('repoId'));
@@ -1868,7 +1890,10 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
 
   // --- Organizations: member management for Organization-type installations ---
   // (migrations/0031_organizations.sql). Reads use plain installation
-  // membership (the hybrid model's baseline); writes go through requireCapability
+  // membership (the hybrid model's baseline), but the org row itself is now
+  // provisioned lazily on first visit for installations whose webhook was
+  // missed, with the first owner bootstrapped from GitHub org-admin status
+  // (orgForInstallationWithHeal); writes go through requireCapability
   // then better-auth's own organization endpoints, which double-enforce
   // permission (via the caller's real session) and already implement the
   // "can't remove/demote the org's last owner" guard — see
@@ -1897,7 +1922,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   }
 
   app.get('/organizations/:installationId/members', async (c) => {
-    const resolved = await authorizedOrg(c);
+    const resolved = await authorizedOrg(c, orgAdmin);
     if (!resolved) return c.json({ error: 'unknown organization' }, 404);
     const [members, invitations, myRole] = await Promise.all([
       listMembersWithGithubLogin(resolved.orgId),
@@ -1931,9 +1956,9 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   });
 
   app.post('/organizations/:installationId/invitations', async (c) => {
-    const resolved = await authorizedOrg(c);
+    const resolved = await authorizedOrg(c, orgAdmin);
     if (!resolved) return c.json({ error: 'unknown organization' }, 404);
-    const denied = await requireCapability(c, resolved.installationId, 'member');
+    const denied = await requireCapability(c, resolved.installationId, 'member', orgAdmin);
     if (denied) return denied;
     const body = await c.req.json<{ email?: string; role?: string }>().catch(() => null);
     const email = body?.email?.trim();
@@ -1964,9 +1989,9 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   });
 
   app.delete('/organizations/:installationId/members/:memberId', async (c) => {
-    const resolved = await authorizedOrg(c);
+    const resolved = await authorizedOrg(c, orgAdmin);
     if (!resolved) return c.json({ error: 'unknown organization' }, 404);
-    const denied = await requireCapability(c, resolved.installationId, 'member');
+    const denied = await requireCapability(c, resolved.installationId, 'member', orgAdmin);
     if (denied) return denied;
     try {
       await auth().api.removeMember({
@@ -1980,9 +2005,9 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   });
 
   app.patch('/organizations/:installationId/members/:memberId', async (c) => {
-    const resolved = await authorizedOrg(c);
+    const resolved = await authorizedOrg(c, orgAdmin);
     if (!resolved) return c.json({ error: 'unknown organization' }, 404);
-    const denied = await requireCapability(c, resolved.installationId, 'member');
+    const denied = await requireCapability(c, resolved.installationId, 'member', orgAdmin);
     if (denied) return denied;
     const body = await c.req.json<{ role?: string }>().catch(() => null);
     const role = body?.role;
@@ -2008,7 +2033,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.patch('/repos/:id', async (c) => {
     const repo = await authorizedRepo(c);
     if (!repo) return c.json({ error: 'unknown repository' }, 404);
-    const deniedCapability = await requireCapability(c, repo.installation_id, 'settings');
+    const deniedCapability = await requireCapability(c, repo.installation_id, 'settings', orgAdmin);
     if (deniedCapability) return deniedCapability;
     const denied = await requireRepoPush(c, repo, canPushToRepo);
     if (denied) return denied;
@@ -2041,7 +2066,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.put('/repos/:id/agents/:agentId', async (c) => {
     const repo = await authorizedRepo(c);
     if (!repo) return c.json({ error: 'unknown repository' }, 404);
-    const deniedCapability = await requireCapability(c, repo.installation_id, 'settings');
+    const deniedCapability = await requireCapability(c, repo.installation_id, 'settings', orgAdmin);
     if (deniedCapability) return deniedCapability;
     const denied = await requireRepoPush(c, repo, canPushToRepo);
     if (denied) return denied;
@@ -2062,7 +2087,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.put('/repos/:id/skills/:skillId', async (c) => {
     const repo = await authorizedRepo(c);
     if (!repo) return c.json({ error: 'unknown repository' }, 404);
-    const deniedCapability = await requireCapability(c, repo.installation_id, 'settings');
+    const deniedCapability = await requireCapability(c, repo.installation_id, 'settings', orgAdmin);
     if (deniedCapability) return deniedCapability;
     const denied = await requireRepoPush(c, repo, canPushToRepo);
     if (denied) return denied;
