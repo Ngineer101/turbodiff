@@ -11,7 +11,7 @@ import { Table, Td, Th } from '../components/ui/table.tsx';
 export function UsagePage() {
   const { data } = useSuspenseQuery(usageQuery);
   const { data: me } = useSuspenseQuery(meQuery);
-  const maxMonthCost = Math.max(...data.months.map((m) => m.review_cost_usd), 0);
+  const maxMonthCost = Math.max(...data.months.map((m) => m.pipeline_cost_usd), 0);
 
   return (
     <>
@@ -22,7 +22,7 @@ export function UsagePage() {
           index={0}
           label="Pipeline cost this month"
           value={fmtUsd(data.stats.month_pipeline_cost_usd)}
-          sub={monthLabel(data.month)}
+          sub={`${monthLabel(data.month)} · all stages`}
         />
         <StatTile
           index={1}
@@ -55,9 +55,15 @@ export function UsagePage() {
         />
       </div>
 
-      <SectionHeading aside={<Muted>Review cost only</Muted>}>Review cost by month</SectionHeading>
+      <SectionHeading
+        aside={<Muted>Review + generation + fixes + verification + automations</Muted>}
+      >
+        Cost by month
+      </SectionHeading>
       {data.months.length === 0 ? (
-        <EmptyState>No reviews yet — costs will accumulate here per calendar month.</EmptyState>
+        <EmptyState>
+          No pipeline activity yet — costs accumulate here per calendar month.
+        </EmptyState>
       ) : (
         <Table>
           <thead>
@@ -66,7 +72,7 @@ export function UsagePage() {
               <Th className="w-2/5" />
               <Th numeric>Cost</Th>
               <Th numeric>Reviews</Th>
-              <Th numeric>Tokens</Th>
+              <Th numeric>Review tokens</Th>
             </tr>
           </thead>
           <tbody>
@@ -77,11 +83,11 @@ export function UsagePage() {
                   <span
                     className="block h-3.5 min-w-0.5 rounded-r bg-accent/80"
                     style={{
-                      width: `${maxMonthCost > 0 ? Math.max(1, Math.round((m.review_cost_usd / maxMonthCost) * 100)) : 1}%`,
+                      width: `${maxMonthCost > 0 ? Math.max(1, Math.round((m.pipeline_cost_usd / maxMonthCost) * 100)) : 1}%`,
                     }}
                   />
                 </Td>
-                <Td numeric>{fmtUsd(m.review_cost_usd)}</Td>
+                <Td numeric>{fmtUsd(m.pipeline_cost_usd)}</Td>
                 <Td numeric>{m.reviews}</Td>
                 <Td numeric>{fmtTokens(m.total_tokens)}</Td>
               </tr>
@@ -161,11 +167,14 @@ export function UsagePage() {
 
       <SectionHeading
         aside={
-          data.repo_count > 0 ? (
-            <Link to="/settings" className="text-[0.85rem] text-accent-bright hover:underline">
-              View all repos &rarr;
-            </Link>
-          ) : undefined
+          <>
+            <Muted>Review cost only</Muted>
+            {data.repo_count > 0 ? (
+              <Link to="/settings" className="text-[0.85rem] text-accent-bright hover:underline">
+                View all repos &rarr;
+              </Link>
+            ) : null}
+          </>
         }
       >
         Repositories
@@ -188,7 +197,7 @@ export function UsagePage() {
               <Th>Repository</Th>
               <Th>Factory</Th>
               <Th numeric>Reviews ({monthLabel(data.month)})</Th>
-              <Th numeric>Cost ({monthLabel(data.month)})</Th>
+              <Th numeric>Review cost ({monthLabel(data.month)})</Th>
             </tr>
           </thead>
           <tbody>

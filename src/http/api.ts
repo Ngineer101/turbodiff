@@ -61,6 +61,7 @@ import {
   listTodos,
   listVerificationsForFeatures,
   monthlyUsage,
+  pipelineCostByMonth,
   pipelineCostForMonth,
   repoUsageForMonth,
   resolveAgentEnabled,
@@ -264,17 +265,27 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.get('/usage', async (c) => {
     const { installationIds } = c.get('user');
     const month = currentMonth();
-    const [stats, months, repoUsage, agentUsage, groups, features, automationUsage, pipelineCost] =
-      await Promise.all([
-        dashboardStats(installationIds),
-        monthlyUsage(installationIds, 6),
-        repoUsageForMonth(installationIds, month),
-        agentUsageForMonth(installationIds, month),
-        listInstallationsWithRepos(installationIds),
-        listRecentFeaturesForUsage(installationIds),
-        automationUsageForMonth(installationIds, month),
-        pipelineCostForMonth(installationIds, month),
-      ]);
+    const [
+      stats,
+      reviewMonthly,
+      repoUsage,
+      agentUsage,
+      groups,
+      features,
+      automationUsage,
+      pipelineCost,
+      pipelineMonths,
+    ] = await Promise.all([
+      dashboardStats(installationIds),
+      monthlyUsage(installationIds, 6),
+      repoUsageForMonth(installationIds, month),
+      agentUsageForMonth(installationIds, month),
+      listInstallationsWithRepos(installationIds),
+      listRecentFeaturesForUsage(installationIds),
+      automationUsageForMonth(installationIds, month),
+      pipelineCostForMonth(installationIds, month),
+      pipelineCostByMonth(installationIds, 6),
+    ]);
 
     // Second fan-out needs the feature ids/repo-pr pairs from the first.
     const prPairs = features
@@ -306,6 +317,10 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     );
 
     const usageByRepo = new Map(repoUsage.map((u) => [u.repository_id, u]));
+    // The months table is driven by the pipeline rows (a superset of review
+    // months, so a month with only generation/automation spend still shows);
+    // the review-only counts are joined in by month.
+    const reviewMonths = new Map(reviewMonthly.map((m) => [m.month, m]));
     // The 5 most recently connected repos; the rest live on /settings.
     const recentRepos = groups
       .flatMap(({ installation, repos }) => repos.map((repo) => ({ installation, repo })))
@@ -323,11 +338,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         avg_findings: stats.avg_findings,
         running: stats.running,
       },
-      months: months.map((m) => ({
+      months: pipelineMonths.map((m) => ({
         month: m.month,
-        reviews: m.reviews,
-        total_tokens: m.total_tokens,
-        review_cost_usd: m.cost_usd,
+        reviews: reviewMonths.get(m.month)?.reviews ?? 0,
+        total_tokens: reviewMonths.get(m.month)?.total_tokens ?? 0,
+        pipeline_cost_usd: m.cost_usd,
       })),
       agent_usage: agentUsage,
       repo_count: groups.reduce((n, g) => n + g.repos.length, 0),
@@ -374,11 +389,14 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     // never show an eternal "generating" for a dead run.
     await failStrandedGeneration();
     await failStrandedVerifications();
-    const [groups, plans, todos, stats] = await Promise.all([
+    // The board deliberately shows /api/usage's pipeline figure, not the
+    // review-only one dashboardStats computes — same number, both surfaces.
+    const [groups, plans, todos, stats, pipelineCost] = await Promise.all([
       listInstallationsWithRepos(installationIds),
       listPlansForInstallations(installationIds),
       listTodos(installationIds),
       dashboardStats(installationIds),
+      pipelineCostForMonth(installationIds, currentMonth()),
     ]);
     // Batched per-task/per-todo repo reads — one query each, not per-row.
     const [repoStatuses, todoRepos] = await Promise.all([
@@ -386,7 +404,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       todoRepositoriesForTodos(todos.map((t) => t.id)),
     ]);
     return c.json<ApiBoard>({
-      stats: { month_cost_usd: stats.month_cost_usd, running: stats.running },
+      stats: { month_pipeline_cost_usd: pipelineCost, running: stats.running },
       todos: todos.map((t) => ({
         id: t.id,
         installation_id: t.installation_id,

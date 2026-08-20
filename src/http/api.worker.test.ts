@@ -9,7 +9,7 @@ import { applyD1Migrations } from 'cloudflare:test';
 import { Hono } from 'hono';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import type { AuthedUser } from '../services/auth.ts';
-import type { ApiBoard } from '../shared/api-types.ts';
+import type { ApiBoard, ApiUsage } from '../shared/api-types.ts';
 import { isJsonObject, isString, parseJson } from '../shared/json.ts';
 import { createApiRoutes, type ApiRouteDependencies } from './api.ts';
 
@@ -94,6 +94,12 @@ beforeEach(async () => {
     'member',
     'invitation',
     'organization',
+    'verifications',
+    'fix_attempts',
+    'automation_runs',
+    'automations',
+    'features',
+    'reviews',
     'repositories',
     'installations',
     'session',
@@ -234,6 +240,65 @@ describe('authenticated tenant isolation', () => {
       enabled: number;
     }>();
     expect(repo?.enabled).toBe(0);
+  });
+});
+
+describe('pipeline cost reporting', () => {
+  // One row per metered stage in the current UTC month (created_at defaults to
+  // datetime('now'), which is what dashboardStats and the cost union both
+  // compare against), plus a foreign installation's row that neither surface
+  // may count.
+  async function seedPipelineCosts(): Promise<void> {
+    await testEnv.DB.batch([
+      testEnv.DB.prepare(
+        `INSERT INTO reviews (repository_id, installation_id, pr_number, trigger_event, cost_usd)
+			 VALUES (101, 1001, 7, 'opened', 0.1),
+			        (202, 2002, 9, 'opened', 9.99)`,
+      ),
+      testEnv.DB.prepare(
+        `INSERT INTO features (id, repository_id, title, spec, cost_usd)
+			 VALUES (501, 101, 'Ship it', 'spec', 0.02)`,
+      ),
+      testEnv.DB.prepare(
+        `INSERT INTO fix_attempts (repository_id, pr_number, "trigger", cost_usd)
+			 VALUES (101, 7, 'blocking_review', 0.003)`,
+      ),
+      testEnv.DB.prepare(`INSERT INTO verifications (feature_id, cost_usd) VALUES (501, 0.0004)`),
+      testEnv.DB.prepare(
+        `INSERT INTO automations (id, repository_id, name, prompt, schedule_kind, next_run_at)
+			 VALUES (601, 101, 'Nightly', 'do the thing', 'daily', '2026-01-01T00:00:00Z')`,
+      ),
+      testEnv.DB.prepare(
+        `INSERT INTO automation_runs (automation_id, cost_usd) VALUES (601, 0.00005)`,
+      ),
+    ]);
+  }
+
+  it('reports the same pipeline cost on the board and the usage page', async () => {
+    await seedPipelineCosts();
+    const app = authenticatedApi();
+
+    const boardResponse = await app.request('https://turbodiff.test/api/board');
+    const usageResponse = await app.request('https://turbodiff.test/api/usage');
+    expect(boardResponse.status).toBe(200);
+    expect(usageResponse.status).toBe(200);
+    // SAFETY: /api/board's 200 body is the ApiBoard contract this test
+    // exercises; the assertions below fail on any drift in that shape.
+    const board = (await boardResponse.json()) as ApiBoard;
+    // SAFETY: /api/usage's 200 body is the ApiUsage contract this test
+    // exercises; the assertions below fail on any drift in that shape.
+    const usage = (await usageResponse.json()) as ApiUsage;
+
+    // SQLite sums doubles in its own order, so never compare these exactly.
+    expect(board.stats.month_pipeline_cost_usd).toBeCloseTo(0.12345, 6);
+    expect(board.stats.month_pipeline_cost_usd).toBeCloseTo(usage.stats.month_pipeline_cost_usd, 6);
+
+    const currentMonthRow = usage.months.find((m) => m.month === usage.month);
+    expect(currentMonthRow?.pipeline_cost_usd).toBeCloseTo(usage.stats.month_pipeline_cost_usd, 6);
+
+    // Still a distinct concept — and the foreign installation's 9.99 is in
+    // neither figure.
+    expect(usage.stats.month_review_cost_usd).toBeCloseTo(0.1, 6);
   });
 });
 

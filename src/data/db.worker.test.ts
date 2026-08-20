@@ -21,6 +21,7 @@ import {
   finishFixAttempt,
   listPushSubscriptionsForUser,
   listReposForPlan,
+  pipelineCostByMonth,
   tryRecordAutomationRun,
   tryRecordFixAttempt,
   tryRecordReview,
@@ -357,5 +358,48 @@ describe('push subscriptions', () => {
 
     await deletePushSubscriptionById(row.id);
     expect(await listPushSubscriptionsForUser(3001)).toHaveLength(0);
+  });
+});
+
+describe('pipeline cost by month', () => {
+  it('reports a month whose only spend is non-review, and scopes to the caller', async () => {
+    await testEnv.DB.batch([
+      testEnv.DB.prepare(
+        `INSERT INTO installations (id, account_login, account_id, account_type)
+		 VALUES (2002, 'other', 2002, 'Organization')`,
+      ),
+      testEnv.DB.prepare(
+        `INSERT INTO repositories (id, installation_id, owner, name)
+		 VALUES (202, 2002, 'other', 'private')`,
+      ),
+      testEnv.DB.prepare(
+        `INSERT INTO automations (id, repository_id, name, prompt, schedule_kind, next_run_at)
+		 VALUES (601, 101, 'Nightly', 'do the thing', 'daily', '2026-01-01T00:00:00Z'),
+		        (602, 202, 'Theirs', 'not mine', 'daily', '2026-01-01T00:00:00Z')`,
+      ),
+      testEnv.DB.prepare(
+        `INSERT INTO automation_runs (automation_id, cost_usd, created_at)
+		 VALUES (601, 0.25, '2026-03-04 05:06:07'),
+		        (602, 9.99, '2026-03-04 05:06:07')`,
+      ),
+    ]);
+
+    const rows = await pipelineCostByMonth([1001], 6);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].month).toBe('2026-03');
+    expect(rows[0].cost_usd).toBeCloseTo(0.25, 6);
+  });
+
+  it('orders months newest first', async () => {
+    await testEnv.DB.batch([
+      testEnv.DB.prepare(
+        `INSERT INTO reviews (repository_id, installation_id, pr_number, trigger_event, cost_usd, created_at)
+		 VALUES (101, 1001, 7, 'opened', 0.5, '2026-01-15 00:00:00'),
+		        (101, 1001, 8, 'opened', 0.75, '2026-02-15 00:00:00')`,
+      ),
+    ]);
+
+    const rows = await pipelineCostByMonth([1001], 6);
+    expect(rows.map((r) => r.month)).toEqual(['2026-02', '2026-01']);
   });
 });

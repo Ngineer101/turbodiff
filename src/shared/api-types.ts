@@ -60,14 +60,17 @@ export interface ApiUsage {
     // Review-stage cost only, same value as before this field was renamed.
     month_review_cost_usd: number;
     // Review + generation + fix + verification + automation for the month.
+    // Plan-stage spend is not metered, so this is not a total-spend figure.
     month_pipeline_cost_usd: number;
     month_tokens: number;
     avg_duration_s: number | null;
     avg_findings: number | null;
     running: number;
   };
-  // Review-only cost by month — this table stays scoped to review-stage cost.
-  months: { month: string; reviews: number; total_tokens: number; review_cost_usd: number }[];
+  // Pipeline cost by month (all metered stages) so the current-month row
+  // reconciles with stats.month_pipeline_cost_usd. `reviews` and
+  // `total_tokens` remain review-stage figures.
+  months: { month: string; reviews: number; total_tokens: number; pipeline_cost_usd: number }[];
   agent_usage: { agent_slug: string | null; reviews: number; cost_usd: number }[];
   repo_count: number;
   enabled_count: number;
@@ -364,7 +367,9 @@ export interface ApiTodo {
 // derived client-side — done = feature_status 'merged', everything else
 // started is in progress.
 export interface ApiBoard {
-  stats: { month_cost_usd: number; running: number };
+  // Same pipeline-wide figure the usage page shows (renamed from
+  // month_cost_usd, which was review-stage cost only and did not match /usage).
+  stats: { month_pipeline_cost_usd: number; running: number };
   todos: ApiTodo[];
   tasks: ApiPlan[]; // non-archived
   installations: { id: number; account_login: string }[];

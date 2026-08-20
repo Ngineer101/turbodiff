@@ -775,7 +775,7 @@ export function BoardPage() {
         running={data.stats.running}
         items={[
           { label: 'Active runs', value: data.stats.running },
-          { label: 'Month', value: fmtUsd(data.stats.month_cost_usd) },
+          { label: 'Pipeline (month)', value: fmtUsd(data.stats.month_pipeline_cost_usd) },
         ]}
       />
 
