@@ -1,4 +1,4 @@
-// The JSON contract between the Worker's /api routes (src/routes/api.ts) and
+// The JSON contract between the Worker's /api routes (src/http/api.ts) and
 // the SPA (src/client). Keep this file dependency-free: it is type-checked in
 // both the worker and client TypeScript programs.
 
@@ -176,11 +176,6 @@ export interface ApiAgentRun {
 // per card.
 export interface ApiTaskDetail extends ApiPlan {
   runs: ApiAgentRun[];
-}
-
-export interface ApiFactoryLegacy_unused {
-  repos: { id: number; owner: string; name: string }[]; // enabled repos, plan targets
-  plans: ApiPlan[];
 }
 
 export interface ApiCockpitComment {

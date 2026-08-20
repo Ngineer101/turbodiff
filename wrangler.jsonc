@@ -75,7 +75,7 @@
   "durable_objects": {
     "bindings": [{ "class_name": "Sandbox", "name": "Sandbox" }],
   },
-  // Generation runs as a durable Workflow (src/lib/generation-workflow.ts):
+  // Generation runs as a durable Workflow (src/ai/workflows/generation.ts):
   // each stage is a memoized step with bounded retries, so a killed isolate
   // resumes instead of stranding, and the paid agent step can never be
   // silently re-run. The queue message only creates the instance.
@@ -124,7 +124,7 @@
       },
     ],
   },
-  // Polls for due automations (src/lib/automation-poll.ts, `scheduled`
+  // Polls for due automations (src/services/automation-poll.ts, `scheduled`
   // handler in src/cloudflare.ts). Per-tenant "run daily at 9am" schedules
   // aren't expressible as static Cron Triggers, so this fires often and the
   // handler itself finds and claims whatever's due — schedule precision is
