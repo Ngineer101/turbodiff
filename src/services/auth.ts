@@ -1,5 +1,4 @@
 import { env } from 'cloudflare:workers';
-import type { Context } from 'hono';
 import { auth } from '../integrations/auth/better-auth.ts';
 import { fetchUserCanPush, fetchUserInstallationIds } from '../integrations/github/app.ts';
 import { isNumber, isString } from '../shared/json.ts';
@@ -109,7 +108,7 @@ export async function userCanPushToRepo(
   }
 }
 
-export async function requireUser(c: Context): Promise<AuthedUser | null> {
+export async function requireUser(request: Request): Promise<AuthedUser | null> {
   // Local-only escape hatch for developing the signed-in UI without GitHub
   // OAuth: DEV_FAKE_INSTALLATIONS="1001,1002" in .dev.vars signs you in as
   // @dev with those installation ids. Guarded to loopback hosts so setting it
@@ -117,7 +116,7 @@ export async function requireUser(c: Context): Promise<AuthedUser | null> {
   // SAFETY: DEV_FAKE_INSTALLATIONS comes from .dev.vars only, so `wrangler
   // types` omits it from Env wherever .dev.vars is absent (CI, production).
   const fake = (env as Env & { DEV_FAKE_INSTALLATIONS?: string }).DEV_FAKE_INSTALLATIONS;
-  const host = new URL(c.req.url).hostname;
+  const host = new URL(request.url).hostname;
   if (fake && (host === 'localhost' || host === '127.0.0.1')) {
     return {
       session: { userId: 0, login: 'dev', ghToken: '' },
@@ -130,7 +129,7 @@ export async function requireUser(c: Context): Promise<AuthedUser | null> {
       devFake: true,
     };
   }
-  const found = await auth().api.getSession({ headers: c.req.raw.headers });
+  const found = await auth().api.getSession({ headers: request.headers });
   if (!found) return null;
   const user = found.user;
   // better-auth's static session type erases the login/githubId

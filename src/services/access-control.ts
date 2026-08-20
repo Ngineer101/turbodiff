@@ -1,5 +1,4 @@
 import { env } from 'cloudflare:workers';
-import type { Context } from 'hono';
 import type { AuthedUser } from './auth.ts';
 import { orgRoles, type OrgRole } from '../integrations/auth/organization-access.ts';
 
@@ -94,22 +93,19 @@ export async function memberRole(organizationId: string, githubId: number): Prom
   return row?.role === 'owner' || row?.role === 'admin' ? row.role : 'member';
 }
 
-type ApiEnv = { Variables: { user: AuthedUser } };
-
 // Gate for the in-app actions layered on top of installation membership
-// (member management, app configuration). Null means allowed — the same
-// null-means-allowed, Response-means-403 contract as requireRepoPush in
-// api.ts. A personal (User-type) installation has no linked organization by
-// construction (ensureOrganizationForInstallation only runs for
-// Organization-type installations), so every caller who already cleared the
-// installationIds check is fully permitted there — GitHub membership is
+// (member management, app configuration). Null means allowed; a denial
+// message otherwise — the HTTP layer maps it to a 403 (requireCapability in
+// http/api-support.ts). A personal (User-type) installation has no linked
+// organization by construction (ensureOrganizationForInstallation only runs
+// for Organization-type installations), so every caller who already cleared
+// the installationIds check is fully permitted there — GitHub membership is
 // already the whole authorization story for a personal installation.
-export async function requireCapability(
-  c: Context<ApiEnv>,
+export async function capabilityDenied(
+  user: AuthedUser,
   installationId: number,
   action: 'member' | 'settings',
-): Promise<Response | null> {
-  const user = c.get('user');
+): Promise<string | null> {
   if (user.devFake) return null;
   const org = await orgForInstallation(installationId);
   if (!org) return null;
@@ -117,5 +113,5 @@ export async function requireCapability(
   const request =
     action === 'member' ? { member: ['update'] as const } : { settings: ['update'] as const };
   if (orgRoles[role].authorize(request).success) return null;
-  return c.json({ error: `'${action}' capability required for this organization` }, 403);
+  return `'${action}' capability required for this organization`;
 }

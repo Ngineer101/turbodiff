@@ -25,7 +25,12 @@ export async function syncInstallationRepos(installationId: number): Promise<voi
   const live = await githubPaginate<
     { repositories: { id: number; name: string; full_name: string }[] },
     { id: number; name: string; full_name: string }
-  >(token, '/installation/repositories?per_page=100', (page) => page.repositories);
+  >(token, '/installation/repositories?per_page=100', (page) => page.repositories, {
+    // Reconciliation must see the complete repo list: a capped listing would
+    // permanently wedge large installations (the throw is caught upstream and
+    // the 60s throttle would retry-and-fail forever).
+    maxPages: Infinity,
+  });
 
   await addRepositories(installationId, live);
   const liveIds = new Set(live.map((r) => r.id));

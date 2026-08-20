@@ -1,6 +1,7 @@
 import { env, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { getFeature, latestVerificationForFeature } from '../../data/db.ts';
 import { runVerification } from '../runners/verifier.ts';
+import { parseUtc } from '../../shared/time.ts';
 
 // Verification as a durable Workflow, for the same reason generation is one:
 // the queue consumer's 15-minute wall clock silently killed long verify runs
@@ -35,7 +36,7 @@ export async function startVerification(featureId: number): Promise<void> {
   if (!feature) return;
   const latest = await latestVerificationForFeature(featureId);
   if (latest?.status === 'running') {
-    const startedMs = Date.parse(`${latest.created_at.replace(' ', 'T')}Z`);
+    const startedMs = parseUtc(latest.created_at);
     if (Date.now() - startedMs < 45 * 60_000) {
       console.log(`turbodiff: verification skipped for feature ${featureId} — a run is in flight`);
       return;

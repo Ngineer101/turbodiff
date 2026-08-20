@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { placeholderList } from './sql.ts';
 
 // --- kanban board: todos (unstarted backlog cards) + task archiving ---
 
@@ -15,7 +16,7 @@ export interface TodoRow {
 
 export async function listTodos(installationIds: number[]): Promise<TodoRow[]> {
   if (installationIds.length === 0) return [];
-  const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+  const placeholders = placeholderList(installationIds.length);
   const res = await env.DB.prepare(
     `SELECT * FROM todos
 		 WHERE installation_id IN (${placeholders}) AND plan_id IS NULL
@@ -47,10 +48,6 @@ export async function getTodo(id: number): Promise<TodoRow | null> {
 
 export async function deleteTodo(id: number): Promise<void> {
   await env.DB.prepare('DELETE FROM todos WHERE id = ?1').bind(id).run();
-}
-
-export async function linkTodoToPlan(id: number, planId: number): Promise<void> {
-  await env.DB.prepare('UPDATE todos SET plan_id = ?2 WHERE id = ?1').bind(id, planId).run();
 }
 
 export async function setPlanArchived(id: number, archived: boolean): Promise<void> {

@@ -90,22 +90,12 @@ function blockedToolResponse(conn: ConnectionRow, body: string): Response | null
   return null;
 }
 
-export interface McpProxyRequest {
-  connectionId: number;
-  authorization: string;
-  method: string;
-  headers: Headers;
-  body?: string;
-}
-
-export async function proxyMcpRequest(request: McpProxyRequest): Promise<Response> {
-  const { connectionId } = request;
+export async function proxyMcpRequest(connectionId: number, request: Request): Promise<Response> {
   if (!Number.isInteger(connectionId) || connectionId <= 0) {
     return Response.json({ error: 'not found' }, { status: 404 });
   }
-  const token = request.authorization.startsWith('Bearer ')
-    ? request.authorization.slice('Bearer '.length)
-    : '';
+  const authorization = request.headers.get('authorization') ?? '';
+  const token = authorization.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : '';
   if (!token || !(await verifyGrant(token, connectionId))) {
     return Response.json({ error: 'invalid or expired grant' }, { status: 401 });
   }
@@ -114,8 +104,11 @@ export async function proxyMcpRequest(request: McpProxyRequest): Promise<Respons
     return Response.json({ error: 'not found' }, { status: 404 });
   }
 
-  if (request.method === 'POST' && request.body !== undefined) {
-    const blocked = blockedToolResponse(conn, request.body);
+  // Buffer the body only after the grant has been verified — rejected
+  // requests must be turned away on headers alone.
+  const body = request.method === 'POST' ? await request.text() : undefined;
+  if (body !== undefined) {
+    const blocked = blockedToolResponse(conn, body);
     if (blocked) return blocked;
   }
 
@@ -137,7 +130,7 @@ export async function proxyMcpRequest(request: McpProxyRequest): Promise<Respons
   const upstream = await fetch(conn.url, {
     method: request.method,
     headers,
-    body: request.body,
+    body,
   });
   const responseHeaders = new Headers();
   for (const name of FORWARDED_RESPONSE_HEADERS) {

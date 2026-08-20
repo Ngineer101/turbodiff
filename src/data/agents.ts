@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { placeholderList } from './sql.ts';
 import { BUILTIN_PERSONAS, DEFAULT_AGENT_SLUG, DEFAULT_MODEL } from '../domain/personas.ts';
 import type { RepositoryRow } from './repositories.ts';
 
@@ -33,7 +34,7 @@ export async function ensureBuiltinAgents(installationId: number): Promise<void>
 
 export async function listAgents(installationIds: number[]): Promise<AgentRow[]> {
   if (installationIds.length === 0) return [];
-  const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+  const placeholders = placeholderList(installationIds.length);
   const res = await env.DB.prepare(
     `SELECT * FROM agents WHERE installation_id IN (${placeholders})
 		 ORDER BY is_builtin DESC, name`,
@@ -115,7 +116,7 @@ export async function listRepoAgentOverrides(
   installationIds: number[],
 ): Promise<RepoAgentOverride[]> {
   if (installationIds.length === 0) return [];
-  const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+  const placeholders = placeholderList(installationIds.length);
   const res = await env.DB.prepare(
     `SELECT ra.repository_id, ra.agent_id, ra.enabled
 		 FROM repo_agents ra
@@ -173,7 +174,7 @@ export interface SkillRow {
 
 export async function listSkills(installationIds: number[]): Promise<SkillRow[]> {
   if (installationIds.length === 0) return [];
-  const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+  const placeholders = placeholderList(installationIds.length);
   const res = await env.DB.prepare(
     `SELECT * FROM skills WHERE installation_id IN (${placeholders})
 		 ORDER BY name`,
@@ -244,7 +245,7 @@ export async function listRepoSkillOverrides(
   installationIds: number[],
 ): Promise<RepoSkillOverride[]> {
   if (installationIds.length === 0) return [];
-  const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+  const placeholders = placeholderList(installationIds.length);
   const res = await env.DB.prepare(
     `SELECT rs.repository_id, rs.skill_id, rs.enabled
 		 FROM repo_skills rs
@@ -254,24 +255,6 @@ export async function listRepoSkillOverrides(
     .bind(...installationIds)
     .all<RepoSkillOverride>();
   return res.results;
-}
-
-export interface RepoSkillRow extends SkillRow {
-  repo_enabled: number | null; // raw repo_skills.enabled; null = no row
-  enabled: boolean; // resolved per resolveSkillEnabled
-}
-
-export async function listSkillsForRepo(repo: RepositoryRow): Promise<RepoSkillRow[]> {
-  const res = await env.DB.prepare(
-    `SELECT s.*, rs.enabled AS repo_enabled
-		 FROM skills s
-		 LEFT JOIN repo_skills rs ON rs.skill_id = s.id AND rs.repository_id = ?2
-		 WHERE s.installation_id = ?1
-		 ORDER BY s.name`,
-  )
-    .bind(repo.installation_id, repo.id)
-    .all<SkillRow & { repo_enabled: number | null }>();
-  return res.results.map((s) => ({ ...s, enabled: resolveSkillEnabled(s.repo_enabled) }));
 }
 
 export async function setRepoSkillEnabled(

@@ -28,6 +28,7 @@ import { signArtifactKey } from '../../integrations/security/crypto.ts';
 import { resolveRunnerAuth, runnerEnvironment } from '../runtime/runner-auth.ts';
 import { runnerSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
+import { prepareCachedWorktree } from '../runtime/repository-workspace.ts';
 import { installationToken, sandboxGitToken } from '../../integrations/github/app.ts';
 import { NPM_CACHE_ENV } from '../runtime/sandbox-deps.ts';
 import { UNTRUSTED_CONTENT_RULES } from '../../domain/prompt-security.ts';
@@ -224,28 +225,16 @@ async function verify(
     await sandbox.exec(`rm -rf ${WORK} ${OUT} && mkdir -p ${shotsDir(feature.id)}`);
     // Warm path: force-fetch the PR branch into the shared repo cache, then
     // hardlink-clone it into this feature's own working dir. Cold path
-    // bootstraps the cache. Credentials only ever travel via env to
-    // explicit-URL commands.
-    const sync = await sandbox.exec(
-      `if [ -d ${CACHE_DIR}/.git ]; then ` +
-        `git -C ${CACHE_DIR} fetch --depth 50 "https://x-access-token:$GIT_TOKEN@github.com/${full}.git" "+refs/heads/$VERIFY_BRANCH:refs/heads/$VERIFY_BRANCH"; ` +
-        `else git clone --depth 50 --single-branch --branch "$VERIFY_BRANCH" ` +
-        `"https://x-access-token:$GIT_TOKEN@github.com/${full}.git" ${CACHE_DIR} && ` +
-        `git -C ${CACHE_DIR} remote set-url origin "https://github.com/${full}.git"; fi`,
-      { env: { GIT_TOKEN: gitToken, VERIFY_BRANCH: feature.branch! }, timeout: 3 * 60_000 },
-    );
-    if (!sync.success) {
-      // A corrupted cache must never wedge the repo — drop it for next time.
-      await sandbox.exec(`rm -rf ${CACHE_DIR}`).catch(() => {});
-      throw new Error(`repo cache sync failed: ${scrub(sync.stderr).slice(0, 500)}`);
-    }
-    const clone = await sandbox.exec(`git clone --local ${CACHE_DIR} ${WORK} -b "$VERIFY_BRANCH"`, {
-      env: { VERIFY_BRANCH: feature.branch! },
-      timeout: 2 * 60_000,
+    // bootstraps the cache.
+    await prepareCachedWorktree({
+      sandbox,
+      cacheDir: CACHE_DIR,
+      workDir: WORK,
+      repository: full,
+      base: feature.branch!,
+      gitToken,
+      secrets: [token],
     });
-    if (!clone.success) {
-      throw new Error(`working-copy clone failed: ${scrub(clone.stderr).slice(0, 500)}`);
-    }
 
     await sandbox.writeFile(`${OUT}/task.md`, verifyPrompt(feature, repo, criteria));
     const agent = await sandbox.exec(

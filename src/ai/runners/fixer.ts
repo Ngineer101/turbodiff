@@ -35,6 +35,7 @@ import {
 } from '../runtime/runner-auth.ts';
 import { runnerSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
+import { prepareFreshClone } from '../runtime/repository-workspace.ts';
 import { mountSkills } from '../runtime/skills.ts';
 import {
   fetchPushablePrHead,
@@ -276,27 +277,18 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
   });
 
   // Fresh checkout per run; the branch name and token travel via env so the
-  // command string stays free of secrets and shell-hostile ref names.
+  // command string stays free of secrets and shell-hostile ref names. The
+  // push below supplies the token via env to an explicit-URL command.
   const gitEnv = { GIT_TOKEN: gitToken, FIX_BRANCH: headRef };
-  await sandbox.exec(`rm -rf ${CLONE_DIR} ${NOTES_FILE} /workspace/fix-repair-*.md`);
-  const clone = await sandbox.exec(
-    `git clone --depth 50 --single-branch --branch "$FIX_BRANCH" ` +
-      `"https://x-access-token:$GIT_TOKEN@github.com/${headRepo}.git" ${CLONE_DIR}`,
-    { env: gitEnv, timeout: 5 * 60_000 },
-  );
-  if (!clone.success) {
-    throw new Error(`git clone failed: ${scrub(clone.stderr).slice(0, 500)}`);
-  }
-  // The clone URL (token included) lands in .git/config — strip it before
-  // anything else runs in the checkout. Both the agent and the repo's own
-  // check command execute untrusted repo content with network egress, so the
-  // token must not be readable from disk during either; the push below
-  // supplies it via env to an explicit-URL command instead.
-  await sandbox.exec(
-    `git -C ${CLONE_DIR} remote set-url origin "https://github.com/${headRepo}.git" && ` +
-      `git -C ${CLONE_DIR} config user.name "turbodiff[bot]" && ` +
-      `git -C ${CLONE_DIR} config user.email "turbodiff[bot]@users.noreply.github.com"`,
-  );
+  await sandbox.exec(`rm -rf ${NOTES_FILE} /workspace/fix-repair-*.md`);
+  await prepareFreshClone({
+    sandbox,
+    cloneDir: CLONE_DIR,
+    repository: headRepo,
+    branch: headRef,
+    gitToken,
+    secrets: [token],
+  });
 
   // Install dependencies up front so the agent can run the repo's tests
   // while it works instead of flying blind until the post-run check (and so

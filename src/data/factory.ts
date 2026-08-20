@@ -1,4 +1,6 @@
 import { env } from 'cloudflare:workers';
+import { placeholderList } from './sql.ts';
+import { STALL_CUTOFF_MODIFIER } from '../shared/time.ts';
 import type { CliUsage } from '../shared/usage.ts';
 import type { RepositoryRow } from './repositories.ts';
 
@@ -77,7 +79,7 @@ export async function linkCommentsToFixAttempt(
   attemptId: number,
 ): Promise<void> {
   if (commentIds.length === 0) return;
-  const placeholders = commentIds.map((_, i) => `?${i + 2}`).join(', ');
+  const placeholders = placeholderList(commentIds.length, 2);
   await env.DB.prepare(
     `UPDATE cockpit_comments SET fix_attempt_id = ?1 WHERE id IN (${placeholders})`,
   )
@@ -147,7 +149,7 @@ export interface TodoRepoRow {
 // instead of one per row.
 export async function todoRepositoriesForTodos(todoIds: number[]): Promise<TodoRepoRow[]> {
   if (todoIds.length === 0) return [];
-  const placeholders = todoIds.map((_, i) => `?${i + 1}`).join(', ');
+  const placeholders = placeholderList(todoIds.length);
   const res = await env.DB.prepare(
     `SELECT tr.todo_id, tr.repository_id, r.owner, r.name
 		 FROM todo_repositories tr
@@ -190,7 +192,7 @@ export interface TaskRepoStatusRow {
 // getPlanWithRepoById, which stay keyed to the primary repo only.
 export async function getTaskRepoStatuses(planIds: number[]): Promise<TaskRepoStatusRow[]> {
   if (planIds.length === 0) return [];
-  const placeholders = planIds.map((_, i) => `?${i + 1}`).join(', ');
+  const placeholders = placeholderList(planIds.length);
   const res = await env.DB.prepare(
     `SELECT pr.plan_id, pr.repository_id, r.owner, r.name,
 		        f.id AS feature_id, f.status AS feature_status, f.error AS feature_error,
@@ -336,7 +338,7 @@ export async function tryRecordFixAttempt(
   await env.DB.prepare(
     `UPDATE fix_attempts SET status = 'failed', error = 'stale: consumer killed before completion'
 		 WHERE repository_id = ?1 AND pr_number = ?2 AND status = 'running'
-		 AND created_at < datetime('now', '-20 minutes')`,
+		 AND created_at < datetime('now', '${STALL_CUTOFF_MODIFIER}')`,
   )
     .bind(repositoryId, prNumber)
     .run();
@@ -844,7 +846,7 @@ export async function listPlansForInstallations(
   limit = 50,
 ): Promise<PlanWithRepo[]> {
   if (installationIds.length === 0) return [];
-  const placeholders = installationIds.map((_, i) => `?${i + 2}`).join(', ');
+  const placeholders = placeholderList(installationIds.length, 2);
   const res = await env.DB.prepare(
     `SELECT p.*, r.owner, r.name, r.installation_id, f.pr_number AS pr_number,
 		        f.status AS feature_status, f.error AS feature_error,
@@ -1020,9 +1022,9 @@ export async function finishFixAttempt(
 // status='running', so a duplicate row causes writes to land on the wrong
 // dispatch. Mirrors tryRecordFixAttempt / tryRecordAutomationRun: sweep stale
 // rows, then insert atomically guarded by NOT EXISTS. Returns null when
-// another dispatch for this exact instance is already in flight. The
-// 20-minute threshold matches STALL_AFTER_MS in routes/api.ts, which
-// separately drives the 'stalled' UI label — keep both in sync if changed.
+// another dispatch for this exact instance is already in flight. The sweep
+// threshold is STALL_CUTOFF_MODIFIER (shared/time.ts), the same cutoff that
+// drives the 'stalled' UI label.
 export async function tryRecordReview(
   repositoryId: number,
   installationId: number,
@@ -1035,7 +1037,7 @@ export async function tryRecordReview(
   await env.DB.prepare(
     `UPDATE reviews SET status = 'failed', completed_at = datetime('now')
 		 WHERE agent_instance_id = ?1 AND status = 'running'
-		 AND created_at < datetime('now', '-20 minutes')`,
+		 AND created_at < datetime('now', '${STALL_CUTOFF_MODIFIER}')`,
   )
     .bind(agentInstanceId)
     .run();

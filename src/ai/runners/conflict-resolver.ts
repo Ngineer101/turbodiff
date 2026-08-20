@@ -18,6 +18,7 @@ import {
 import { resolveRunnerAuth, runnerEnvironment } from '../runtime/runner-auth.ts';
 import { runnerSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
+import { prepareFreshClone } from '../runtime/repository-workspace.ts';
 import { mountSkills } from '../runtime/skills.ts';
 import {
   describePushFailure,
@@ -205,26 +206,16 @@ async function runConflictResolve(
     }
     return (await sandbox.exec(`git -C ${CLONE_DIR} rev-parse HEAD`)).stdout.trim();
   };
-  await sandbox.exec(`rm -rf ${CLONE_DIR}`);
-  const clone = await sandbox.exec(
-    `git clone --depth 50 --single-branch --branch "$FIX_BRANCH" ` +
-      `"https://x-access-token:$GIT_TOKEN@github.com/${headRepo}.git" ${CLONE_DIR}`,
-    { env: gitEnv, timeout: 5 * 60_000 },
-  );
-  if (!clone.success) {
-    throw new Error(`git clone failed: ${scrub(clone.stderr).slice(0, 500)}`);
-  }
-  // The clone URL (token included) lands in .git/config — strip it before
-  // anything else runs in the checkout. The resolution agent and the repo's
-  // check command both execute untrusted repo content with network egress,
-  // so the token must not be readable from disk during either; fetch and
-  // push below supply it via env to explicit-URL commands instead (git
-  // anonymizes those URLs in FETCH_HEAD and merge messages).
-  await sandbox.exec(
-    `git -C ${CLONE_DIR} remote set-url origin "https://github.com/${headRepo}.git" && ` +
-      `git -C ${CLONE_DIR} config user.name "turbodiff[bot]" && ` +
-      `git -C ${CLONE_DIR} config user.email "turbodiff[bot]@users.noreply.github.com"`,
-  );
+  // Fetch and push below supply the token via env to explicit-URL commands
+  // (git anonymizes those URLs in FETCH_HEAD and merge messages).
+  await prepareFreshClone({
+    sandbox,
+    cloneDir: CLONE_DIR,
+    repository: headRepo,
+    branch: headRef,
+    gitToken,
+    secrets: [token],
+  });
 
   try {
     // Explicit refspec into refs/remotes/origin so `merge origin/<base>`

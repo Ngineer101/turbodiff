@@ -11,8 +11,6 @@ import {
 } from '../../integrations/github/client.ts';
 import { REVIEW_NOISE_PATTERNS } from '../../domain/review-diff.ts';
 
-export type PostReviewTool = ReturnType<typeof makePostReview>;
-
 // The repository a review dispatch is scoped to. The model supplies
 // owner/repo as tool arguments, and tokenFor resolves a full installation
 // token — so without this pin a prompt-injected agent could read files from

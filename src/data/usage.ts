@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { placeholderList } from './sql.ts';
 import type { VerificationRow } from './factory.ts';
 import type { ReviewActivityRow } from './reviews.ts';
 
@@ -30,7 +31,7 @@ export async function listRecentFeaturesForUsage(
   limit = 20,
 ): Promise<FeatureUsageRow[]> {
   if (installationIds.length === 0) return [];
-  const placeholders = installationIds.map((_, i) => `?${i + 2}`).join(', ');
+  const placeholders = placeholderList(installationIds.length, 2);
   const res = await env.DB.prepare(
     `SELECT f.id, f.repository_id, repo.owner AS repo_owner, repo.name AS repo_name,
 		        f.title, f.status, f.pr_number, f.created_at,
@@ -58,8 +59,8 @@ export async function listReviewsForRepoPrs(
   if (pairs.length === 0) return [];
   const repoIds = [...new Set(pairs.map((p) => p.repositoryId))];
   const prNumbers = [...new Set(pairs.map((p) => p.prNumber))];
-  const repoPlaceholders = repoIds.map((_, i) => `?${i + 1}`).join(', ');
-  const prPlaceholders = prNumbers.map((_, i) => `?${repoIds.length + i + 1}`).join(', ');
+  const repoPlaceholders = placeholderList(repoIds.length);
+  const prPlaceholders = placeholderList(prNumbers.length, repoIds.length + 1);
   const res = await env.DB.prepare(
     `SELECT r.*, repo.owner AS repo_owner, repo.name AS repo_name
 		 FROM reviews r
@@ -95,8 +96,8 @@ export async function listFixAttemptsForRepoPrs(
   if (pairs.length === 0) return [];
   const repoIds = [...new Set(pairs.map((p) => p.repositoryId))];
   const prNumbers = [...new Set(pairs.map((p) => p.prNumber))];
-  const repoPlaceholders = repoIds.map((_, i) => `?${i + 1}`).join(', ');
-  const prPlaceholders = prNumbers.map((_, i) => `?${repoIds.length + i + 1}`).join(', ');
+  const repoPlaceholders = placeholderList(repoIds.length);
+  const prPlaceholders = placeholderList(prNumbers.length, repoIds.length + 1);
   const res = await env.DB.prepare(
     `SELECT id, repository_id, pr_number, "trigger", status, commit_sha, error, created_at,
 		        input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, model
@@ -113,7 +114,7 @@ export async function listVerificationsForFeatures(
   featureIds: number[],
 ): Promise<VerificationRow[]> {
   if (featureIds.length === 0) return [];
-  const placeholders = featureIds.map((_, i) => `?${i + 1}`).join(', ');
+  const placeholders = placeholderList(featureIds.length);
   const res = await env.DB.prepare(
     `SELECT * FROM verifications WHERE feature_id IN (${placeholders}) ORDER BY created_at ASC`,
   )
@@ -139,7 +140,7 @@ export async function automationUsageForMonth(
   month: string,
 ): Promise<AutomationUsageRow[]> {
   if (installationIds.length === 0) return [];
-  const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+  const placeholders = placeholderList(installationIds.length);
   const res = await env.DB.prepare(
     `SELECT a.id AS automation_id, a.name, repo.owner AS repo_owner, repo.name AS repo_name,
 		        COUNT(ar.id) AS runs, COALESCE(SUM(ar.cost_usd), 0) AS cost_usd
@@ -165,7 +166,7 @@ export async function pipelineCostForMonth(
   month: string,
 ): Promise<number> {
   if (installationIds.length === 0) return 0;
-  const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+  const placeholders = placeholderList(installationIds.length);
   const monthParam = `?${installationIds.length + 1}`;
   const bind = (stmt: D1PreparedStatement) => stmt.bind(...installationIds, month);
   const [reviews, generation, fixes, verifications, automations] = await Promise.all([

@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { placeholderList } from './sql.ts';
 
 // --- External MCP tool connections per repository (migration 0032) ---
 
@@ -44,7 +45,7 @@ export async function listRepoConnections(
 
 export async function listConnections(installationIds: number[]): Promise<ConnectionRow[]> {
   if (installationIds.length === 0) return [];
-  const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+  const placeholders = placeholderList(installationIds.length);
   const res = await env.DB.prepare(
     `SELECT * FROM connections WHERE installation_id IN (${placeholders}) ORDER BY name`,
   )
@@ -136,7 +137,7 @@ export async function listRepoConnectionLinks(
   installationIds: number[],
 ): Promise<RepoConnectionLink[]> {
   if (installationIds.length === 0) return [];
-  const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+  const placeholders = placeholderList(installationIds.length);
   const res = await env.DB.prepare(
     `SELECT l.repository_id, l.connection_id, l.reviews, l.automations FROM repo_connections l
 		 JOIN connections c ON c.id = l.connection_id

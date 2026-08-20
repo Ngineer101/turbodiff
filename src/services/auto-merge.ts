@@ -8,6 +8,26 @@ import {
 import { installationToken } from '../integrations/github/app.ts';
 import { checkMergeability, maybeResolveConflict } from './merge-conflicts.ts';
 
+// The one merge protocol call for factory PRs (merge_method: 'merge' is the
+// factory's policy everywhere), shared by auto-merge and the cockpit Merge
+// button. Throws when GitHub refuses or reports merged=false.
+export async function mergePullRequest(
+  token: string,
+  owner: string,
+  repo: string,
+  prNumber: number,
+): Promise<{ sha?: string }> {
+  const res = await gh(token, `/repos/${owner}/${repo}/pulls/${prNumber}/merge`, {
+    method: 'PUT',
+    body: JSON.stringify({ merge_method: 'merge' }),
+  });
+  // SAFETY: gh() throws on non-2xx; a 200 from GitHub's merge endpoint is a
+  // JSON object, and both fields are typed optional so no shape is presumed.
+  const merged = (await res.json()) as { merged?: boolean; sha?: string };
+  if (!merged.merged) throw new Error('merge endpoint returned merged=false');
+  return merged;
+}
+
 // Phase 5 (docs/software-factory-design.md): opt-in auto-merge for factory
 // PRs. Trust is earned, not configured — even with the toggle on, a PR merges
 // only when BOTH gates are green:
@@ -69,14 +89,7 @@ export async function maybeAutoMerge(repo: RepositoryRow, prNumber: number): Pro
       return;
     }
 
-    const res = await gh(token, `/repos/${repo.owner}/${repo.name}/pulls/${prNumber}/merge`, {
-      method: 'PUT',
-      body: JSON.stringify({ merge_method: 'merge' }),
-    });
-    // SAFETY: gh() throws on non-2xx; a 200 from GitHub's merge endpoint is a
-    // JSON object, and both fields are typed optional so no shape is presumed.
-    const merged = (await res.json()) as { merged?: boolean; sha?: string };
-    if (!merged.merged) throw new Error('merge endpoint returned merged=false');
+    const merged = await mergePullRequest(token, repo.owner, repo.name, prNumber);
     console.log(`turbodiff: auto-merged ${label} (${merged.sha?.slice(0, 8)})`);
 
     await gh(token, `/repos/${repo.owner}/${repo.name}/issues/${prNumber}/comments`, {

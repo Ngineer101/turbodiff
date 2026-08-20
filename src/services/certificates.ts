@@ -4,6 +4,7 @@
 // links are shareable but not enumerable.
 import { env } from 'cloudflare:workers';
 import { signArtifactKey } from '../integrations/security/crypto.ts';
+import { parseUtc } from '../shared/time.ts';
 import {
   getFeature,
   getRepoById,
@@ -63,7 +64,7 @@ export async function loadCertificateData(featureId: number): Promise<Certificat
   let agentMinutes: number | null = null;
   const lastRun = runs.at(-1);
   if (feature.run_started_at && lastRun) {
-    const ms = sqliteMs(lastRun.created_at) - sqliteMs(feature.run_started_at);
+    const ms = parseUtc(lastRun.created_at) - parseUtc(feature.run_started_at);
     if (Number.isFinite(ms) && ms > 0) agentMinutes = Math.max(1, Math.round(ms / 60_000));
   }
 
@@ -90,12 +91,7 @@ export async function loadCertificateData(featureId: number): Promise<Certificat
   };
 }
 
-// SQLite datetime('now') has no timezone marker; treat it as UTC.
-function sqliteMs(ts: string): number {
-  return new Date(ts.includes('T') ? ts : `${ts.replace(' ', 'T')}Z`).getTime();
-}
-
 function yearOf(ts: string): string {
-  const y = new Date(ts.includes('T') ? ts : `${ts.replace(' ', 'T')}Z`).getUTCFullYear();
+  const y = new Date(parseUtc(ts)).getUTCFullYear();
   return Number.isFinite(y) ? String(y) : '0000';
 }

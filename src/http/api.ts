@@ -82,7 +82,6 @@ import {
   todoRepositoriesForTodos,
   updateAgent,
   updateAutomation,
-  updateConnectionAuth,
   updateFeature,
   updatePlan,
   updateSkill,
@@ -90,7 +89,13 @@ import {
   type ConnectionRow,
   type VerificationRow,
 } from '../data/db.ts';
-import { connectionSnapshot, oauthStatus, resolveConnectionAuth } from '../services/connections.ts';
+import {
+  completeOAuthConnect,
+  connectionSnapshot,
+  oauthStatus,
+  resolveConnectionAuth,
+  startOAuthConnect,
+} from '../services/connections.ts';
 import { transcriptKey } from '../ai/runtime/agent-runs.ts';
 import { isRunnerModel } from '../shared/runner-models.ts';
 import { computeNextRunAt } from '../domain/automation-schedule.ts';
@@ -98,12 +103,11 @@ import { requireUser, userCanPushToRepo } from '../services/auth.ts';
 import { APIError } from 'better-auth';
 import { auth } from '../integrations/auth/better-auth.ts';
 import { certificateUrl } from '../services/certificates.ts';
-import { memberRole, requireCapability } from '../services/access-control.ts';
+import { memberRole } from '../services/access-control.ts';
 import { syncInstallationRepos } from '../services/repository-sync.ts';
 import { approvePlan } from '../ai/runners/planner.ts';
 import {
   encryptionConfigured,
-  openJson,
   sealJson,
   sealToken,
   signArtifactKey,
@@ -111,17 +115,9 @@ import {
 import { githubRequest as gh } from '../integrations/github/client.ts';
 import { installationToken } from '../integrations/github/app.ts';
 import { testMcpEndpoint } from '../integrations/mcp/client.ts';
-import { checkMergeability } from '../services/merge-conflicts.ts';
-import type { ConflictResolveQueueMessage } from '../shared/factory-messages.ts';
+import { checkMergeability, dispatchConflictResolution } from '../services/merge-conflicts.ts';
+import { mergePullRequest } from '../services/auto-merge.ts';
 import { enqueueFactoryMessage, enqueueFactoryMessages } from '../services/factory-queue.ts';
-import {
-  discoverOAuthEndpoints,
-  exchangeAuthorizationCode,
-  generatePkce,
-  packState,
-  registerOAuthClient,
-  unpackState,
-} from '../integrations/mcp/oauth.ts';
 import { DEFAULT_MODEL } from '../domain/personas.ts';
 import {
   isBoolean,
@@ -171,6 +167,7 @@ import {
   authorizedRepo,
   authorizedSkill,
   capableInstallationIds,
+  requireCapability,
   currentMonth,
   groupByRepoPr,
   readAgentPayload,
@@ -219,7 +216,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   });
 
   app.use('*', async (c, next) => {
-    const user = await authenticate(c);
+    const user = await authenticate(c.req.raw);
     if (!user) return c.json({ error: 'unauthorized' }, 401);
     c.set('user', user);
     await next();
@@ -1052,13 +1049,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       },
     );
     if (mergeability.hasConflict) {
-      if (repo.auto_resolve_conflicts === 1) {
-        const msg: ConflictResolveQueueMessage = {
-          kind: 'resolve_conflict',
-          repoId: repo.id,
-          prNumber: feature.pr_number,
-        };
-        await enqueueFactoryMessage(msg);
+      if (await dispatchConflictResolution(repo, feature.pr_number)) {
         return c.json({ ok: true, conflict: true, resolving: true });
       }
       return c.json(
@@ -1069,11 +1060,9 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         409,
       );
     }
-    const mergePath = `/repos/${repo.owner}/${repo.name}/pulls/${feature.pr_number}/merge`;
-    const mergeBody = { method: 'PUT' as const, body: JSON.stringify({ merge_method: 'merge' }) };
     const userToken = c.get('user').session.ghToken;
     try {
-      await gh(userToken || appToken, mergePath, mergeBody);
+      await mergePullRequest(userToken || appToken, repo.owner, repo.name, feature.pr_number);
     } catch (err) {
       if (!userToken) {
         console.error(`turbodiff: cockpit merge failed for feature ${id}:`, err);
@@ -1081,7 +1070,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       }
       console.warn(`turbodiff: user-token merge failed for feature ${id}, retrying as app:`, err);
       try {
-        await gh(appToken, mergePath, mergeBody);
+        await mergePullRequest(appToken, repo.owner, repo.name, feature.pr_number);
       } catch (appErr) {
         console.error(`turbodiff: cockpit merge failed for feature ${id}:`, appErr);
         return c.json({ error: 'merge failed — check the PR on GitHub' }, 502);
@@ -1737,20 +1726,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     });
   });
 
-  interface OAuthConfigCache {
-    clientId?: string;
-    clientSecret?: string;
-    authorizationEndpoint?: string;
-    tokenEndpoint?: string;
-    accessToken?: string;
-    refreshToken?: string;
-    scope?: string;
-  }
-
   // Browser-navigated (not fetched by the SPA), so failures redirect back to
   // the integrations page with a query param instead of a JSON error — the
   // one exception is the two caller-error cases below, which 400 before any
-  // redirect makes sense.
+  // redirect makes sense. The connect flow itself (discovery, registration,
+  // PKCE, token exchange) lives in services/connections.ts.
   app.get('/integrations/:id/oauth/start', async (c) => {
     const conn = await authorizedConnection(c);
     if (!conn) return c.json({ error: 'unknown integration' }, 404);
@@ -1759,59 +1739,10 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     }
     if (conn.auth_type !== 'oauth') return c.json({ error: 'not an OAuth integration' }, 400);
 
-    const redirectUri = `${env.PUBLIC_BASE_URL}/api/integrations/${conn.id}/oauth/callback`;
-    let endpoints: Awaited<ReturnType<typeof discoverOAuthEndpoints>>;
-    try {
-      endpoints = await discoverOAuthEndpoints(conn.url);
-    } catch (err) {
-      console.error(`turbodiff: oauth discovery failed for connection ${conn.id}:`, err);
-      return c.redirect('/integrations?oauth=error&reason=discovery_failed');
-    }
-
-    let cache: OAuthConfigCache = conn.auth_config_ciphertext
-      ? await openJson<OAuthConfigCache>(conn.auth_config_ciphertext)
-      : {};
-    if (!cache.clientId) {
-      if (!endpoints.registrationEndpoint) {
-        return c.redirect('/integrations?oauth=error&reason=no_registration_endpoint');
-      }
-      try {
-        const registered = await registerOAuthClient(endpoints.registrationEndpoint, redirectUri);
-        cache = { ...cache, clientId: registered.clientId, clientSecret: registered.clientSecret };
-      } catch (err) {
-        console.error(
-          `turbodiff: oauth client registration failed for connection ${conn.id}:`,
-          err,
-        );
-        return c.redirect('/integrations?oauth=error&reason=registration_failed');
-      }
-    }
-    // Re-registering on every connect click would be wasteful, but the
-    // discovered endpoints are cheap to refresh each time so /oauth/callback
-    // always exchanges against the server's current metadata.
-    cache = {
-      ...cache,
-      authorizationEndpoint: endpoints.authorizationEndpoint,
-      tokenEndpoint: endpoints.tokenEndpoint,
-    };
-    await updateConnectionAuth(conn.id, { authConfigCiphertext: await sealJson(cache) });
-
-    const { verifier, challenge } = await generatePkce();
-    const state = await packState({ connectionId: conn.id, verifier }, env.SESSION_SECRET);
-    const params = new URLSearchParams({
-      response_type: 'code',
-      client_id: cache.clientId!,
-      redirect_uri: redirectUri,
-      code_challenge: challenge,
-      code_challenge_method: 'S256',
-      state,
-    });
-    // Request the server's advertised scopes — some issue refresh tokens
-    // only when the authorization request names a scope (offline_access).
-    if (endpoints.scopesSupported?.length) {
-      params.set('scope', endpoints.scopesSupported.join(' '));
-    }
-    return c.redirect(`${endpoints.authorizationEndpoint}?${params.toString()}`);
+    const started = await startOAuthConnect(conn);
+    return c.redirect(
+      started.ok ? started.authorizeUrl : `/integrations?oauth=error&reason=${started.reason}`,
+    );
   });
 
   app.get('/integrations/:id/oauth/callback', async (c) => {
@@ -1826,47 +1757,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const state = c.req.query('state');
     if (!code || !state) return c.redirect('/integrations?oauth=error&reason=missing_code');
 
-    const unpacked = await unpackState(state, env.SESSION_SECRET);
-    if (!unpacked || unpacked.connectionId !== conn.id) {
-      return c.redirect('/integrations?oauth=error&reason=invalid_state');
-    }
-
-    const cache = conn.auth_config_ciphertext
-      ? await openJson<OAuthConfigCache>(conn.auth_config_ciphertext)
-      : null;
-    if (!cache?.clientId || !cache.tokenEndpoint) {
-      return c.redirect('/integrations?oauth=error&reason=not_started');
-    }
-
-    const redirectUri = `${env.PUBLIC_BASE_URL}/api/integrations/${conn.id}/oauth/callback`;
-    let tokens: Awaited<ReturnType<typeof exchangeAuthorizationCode>>;
-    try {
-      tokens = await exchangeAuthorizationCode(
-        cache.tokenEndpoint,
-        code,
-        unpacked.verifier,
-        redirectUri,
-        cache.clientId,
-        cache.clientSecret,
-      );
-    } catch (err) {
-      console.error(`turbodiff: oauth code exchange failed for connection ${conn.id}:`, err);
-      return c.redirect('/integrations?oauth=error&reason=exchange_failed');
-    }
-
-    await updateConnectionAuth(conn.id, {
-      authConfigCiphertext: await sealJson<OAuthConfigCache>({
-        ...cache,
-        accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken,
-        scope: tokens.scope,
-      }),
-      oauthNeedsReauth: false,
-      oauthHasRefreshToken: tokens.refreshToken !== undefined,
-      // Always record an expiry: a null column can never be advanced by the
-      // COALESCE-based update, which would force a refresh on every request.
-      oauthTokenExpiresAt: tokens.expiresAt ?? new Date(Date.now() + 60 * 60_000).toISOString(),
-    });
+    const result = await completeOAuthConnect(conn, code, state);
+    if (!result.ok) return c.redirect(`/integrations?oauth=error&reason=${result.reason}`);
     return c.redirect(`/integrations?oauth=connected&name=${encodeURIComponent(conn.name)}`);
   });
 

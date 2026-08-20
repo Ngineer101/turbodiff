@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { placeholderList } from './sql.ts';
 
 // Thin typed layer over the D1 config store (schema in migrations/).
 
@@ -113,7 +114,7 @@ export async function listInstallationsWithRepos(
   installationIds: number[],
 ): Promise<{ installation: InstallationRow; repos: RepositoryRow[] }[]> {
   if (installationIds.length === 0) return [];
-  const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+  const placeholders = placeholderList(installationIds.length);
   const [installations, repos] = await Promise.all([
     env.DB.prepare(
       `SELECT * FROM installations WHERE id IN (${placeholders}) ORDER BY account_login`,

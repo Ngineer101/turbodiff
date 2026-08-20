@@ -51,6 +51,9 @@ function nextPage(response: Response): string | null {
   return match?.[1] ?? null;
 }
 
+// Follows rel="next" links, failing loudly (never truncating) past maxPages.
+// Callers that must reconcile a complete listing pass maxPages: Infinity to
+// paginate to exhaustion instead.
 export async function githubPaginate<Page, Item>(
   token: string,
   path: string,

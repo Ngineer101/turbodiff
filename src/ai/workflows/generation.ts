@@ -3,6 +3,7 @@ import { env, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from '
 import { NonRetryableError } from 'cloudflare:workflows';
 import { githubRequest as gh } from '../../integrations/github/client.ts';
 import { persistAgentLog } from '../runtime/agent-runs.ts';
+import { parseUtc } from '../../shared/time.ts';
 import { coauthorTrailer, gitAuthorEnv } from '../../domain/attribution.ts';
 import {
   addCliUsage,
@@ -628,9 +629,7 @@ export async function startGeneration(featureId: number): Promise<void> {
     console.log(`turbodiff: generation skipped for feature ${featureId} — PR already opened`);
     return;
   }
-  const startedMs = feature.run_started_at
-    ? Date.parse(`${feature.run_started_at.replace(' ', 'T')}Z`)
-    : 0;
+  const startedMs = feature.run_started_at ? parseUtc(feature.run_started_at) : 0;
   // A live instance heartbeats runStartedAt from its steps; fresh = in flight.
   if (feature.status === 'generating' && Date.now() - startedMs < 45 * 60_000) {
     console.log(

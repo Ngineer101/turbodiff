@@ -1,4 +1,6 @@
 import { env } from 'cloudflare:workers';
+import { placeholderList } from './sql.ts';
+import { STALL_CUTOFF_MODIFIER } from '../shared/time.ts';
 import type { CliUsage } from '../shared/usage.ts';
 import type { AgentRunRow } from './factory.ts';
 
@@ -53,7 +55,7 @@ export async function listAutomationsForInstallations(
   installationIds: number[],
 ): Promise<AutomationWithRepo[]> {
   if (installationIds.length === 0) return [];
-  const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+  const placeholders = placeholderList(installationIds.length);
   const res = await env.DB.prepare(
     `SELECT a.*, r.owner, r.name AS name_repo,
 		        lr.id AS last_run_id, lr.status AS last_run_status, lr.created_at AS last_run_created_at
@@ -174,7 +176,7 @@ export async function tryRecordAutomationRun(automationId: number): Promise<numb
   await env.DB.prepare(
     `UPDATE automation_runs SET status = 'failed', error = 'stale: consumer killed before completion'
 		 WHERE automation_id = ?1 AND status = 'running'
-		 AND created_at < datetime('now', '-20 minutes')`,
+		 AND created_at < datetime('now', '${STALL_CUTOFF_MODIFIER}')`,
   )
     .bind(automationId)
     .run();

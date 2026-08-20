@@ -1,10 +1,9 @@
 // Display formatting, ported verbatim from the old server-rendered pages so
 // numbers read identically before and after the SPA migration.
 
-// D1's datetime('now') stores UTC as 'YYYY-MM-DD HH:MM:SS'.
-export function parseUtc(sql: string): number {
-  return Date.parse(`${sql.replace(' ', 'T')}Z`);
-}
+import { parseUtc } from '../../shared/time.ts';
+
+export { parseUtc };
 
 export function ago(sql: string): string {
   const s = Math.max(0, Math.floor((Date.now() - parseUtc(sql)) / 1000));

@@ -1,4 +1,6 @@
 import { env } from 'cloudflare:workers';
+import { placeholderList } from './sql.ts';
+import { STALL_CUTOFF_MODIFIER } from '../shared/time.ts';
 
 export interface AgentUsageRow {
   agent_slug: string | null;
@@ -13,7 +15,7 @@ export async function agentUsageForMonth(
   month: string,
 ): Promise<AgentUsageRow[]> {
   if (installationIds.length === 0) return [];
-  const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+  const placeholders = placeholderList(installationIds.length);
   const res = await env.DB.prepare(
     `SELECT agent_slug, COUNT(*) AS reviews, SUM(cost_usd) AS cost_usd
 		 FROM reviews
@@ -57,7 +59,7 @@ export async function listRecentReviews(
   offset = 0,
 ): Promise<ReviewActivityRow[]> {
   if (installationIds.length === 0) return [];
-  const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+  const placeholders = placeholderList(installationIds.length);
   const res = await env.DB.prepare(
     `SELECT r.*, repo.owner AS repo_owner, repo.name AS repo_name
 		 FROM reviews r
@@ -73,7 +75,7 @@ export async function listRecentReviews(
 
 export async function countReviews(installationIds: number[]): Promise<number> {
   if (installationIds.length === 0) return 0;
-  const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+  const placeholders = placeholderList(installationIds.length);
   const row = await env.DB.prepare(
     `SELECT COUNT(*) AS n FROM reviews WHERE installation_id IN (${placeholders})`,
   )
@@ -95,7 +97,7 @@ export async function monthlyUsage(
   months = 6,
 ): Promise<MonthlyUsageRow[]> {
   if (installationIds.length === 0) return [];
-  const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+  const placeholders = placeholderList(installationIds.length);
   const res = await env.DB.prepare(
     `SELECT strftime('%Y-%m', created_at) AS month,
 			COUNT(*) AS reviews,
@@ -128,7 +130,7 @@ export async function repoUsageForMonth(
   month: string,
 ): Promise<RepoUsageRow[]> {
   if (installationIds.length === 0) return [];
-  const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
+  const placeholders = placeholderList(installationIds.length);
   const res = await env.DB.prepare(
     `SELECT r.repository_id,
 			repo.owner AS repo_owner, repo.name AS repo_name,
@@ -166,9 +168,9 @@ export async function dashboardStats(installationIds: number[]): Promise<Dashboa
     running: 0,
   };
   if (installationIds.length === 0) return empty;
-  const placeholders = installationIds.map((_, i) => `?${i + 1}`).join(', ');
-  // `running` counts only dispatches younger than the 20-minute stall window
-  // (STALL_AFTER_MS in routes/api.ts): a review row flips out of 'running'
+  const placeholders = placeholderList(installationIds.length);
+  // `running` counts only dispatches younger than the shared stall window
+  // (STALL_AFTER_MS in shared/time.ts): a review row flips out of 'running'
   // solely when its agent posts, so a run that dies mid-flight would
   // otherwise pin the dashboard's active count forever.
   const row = await env.DB.prepare(
@@ -184,7 +186,7 @@ export async function dashboardStats(installationIds: number[]): Promise<Dashboa
 				AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
 				THEN findings_count END) AS avg_findings,
 			COALESCE(SUM(status = 'running'
-				AND created_at > datetime('now', '-20 minutes')), 0) AS running
+				AND created_at > datetime('now', '${STALL_CUTOFF_MODIFIER}')), 0) AS running
 		 FROM reviews
 		 WHERE installation_id IN (${placeholders})`,
   )
@@ -220,7 +222,7 @@ export async function hasActiveReview(
   const row = await env.DB.prepare(
     `SELECT id FROM reviews
 		 WHERE repository_id = ?1 AND pr_number = ?2 AND agent_slug = ?3
-			AND status = 'running' AND created_at > datetime('now', '-20 minutes')
+			AND status = 'running' AND created_at > datetime('now', '${STALL_CUTOFF_MODIFIER}')
 		 LIMIT 1`,
   )
     .bind(repositoryId, prNumber, agentSlug)

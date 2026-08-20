@@ -62,6 +62,24 @@ export async function checkMergeability(
   return toMergeability(pr);
 }
 
+// The resolution-dispatch decision in one place, shared by every merge path
+// (auto-merge, the cockpit Merge button, completion paths, the sweep): a
+// resolution run is enqueued only when the repo's factory is enabled and its
+// auto_resolve_conflicts toggle is on. Returns whether a run was enqueued.
+export async function dispatchConflictResolution(
+  repo: RepositoryRow,
+  prNumber: number,
+): Promise<boolean> {
+  if (repo.enabled !== 1 || repo.auto_resolve_conflicts !== 1) return false;
+  const msg: ConflictResolveQueueMessage = {
+    kind: 'resolve_conflict',
+    repoId: repo.id,
+    prNumber,
+  };
+  await enqueueFactoryMessage(msg);
+  return true;
+}
+
 // Standalone conflict detection + dispatch, gated ONLY on the repo's
 // auto_resolve_conflicts toggle — deliberately independent of the auto-merge
 // gates (auto_merge, blocking_reviews, review history), which previously made
@@ -84,13 +102,7 @@ export async function maybeResolveConflict(
       retryOnUnknown: opts?.retryOnUnknown ?? true,
     });
     if (!mergeability.hasConflict) return;
-    if (repo.auto_resolve_conflicts === 1) {
-      const msg: ConflictResolveQueueMessage = {
-        kind: 'resolve_conflict',
-        repoId: repo.id,
-        prNumber,
-      };
-      await enqueueFactoryMessage(msg);
+    if (await dispatchConflictResolution(repo, prNumber)) {
       console.log(`turbodiff: conflict detected on ${label}, resolution enqueued`);
     } else {
       await postConflictCommentIfAbsent(

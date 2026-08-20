@@ -1,3 +1,4 @@
+import { env } from 'cloudflare:workers';
 import {
   getConnection,
   tryClaimConnectionRefresh,
@@ -7,7 +8,16 @@ import {
 } from '../data/db.ts';
 import type { ConnectionSnapshot } from '../shared/connections.ts';
 import { openJson, openToken, sealJson } from '../integrations/security/crypto.ts';
-import { fetchClientCredentialsToken, refreshOAuthToken } from '../integrations/mcp/oauth.ts';
+import {
+  discoverOAuthEndpoints,
+  exchangeAuthorizationCode,
+  fetchClientCredentialsToken,
+  generatePkce,
+  packState,
+  refreshOAuthToken,
+  registerOAuthClient,
+  unpackState,
+} from '../integrations/mcp/oauth.ts';
 
 export interface ResolvedAuth {
   headerName: string;
@@ -176,6 +186,135 @@ async function resolveOAuthConnection(conn: ConnectionRow): Promise<ResolvedAuth
   };
   await updateConnectionAuth(conn.id, update);
   return { headerName: 'authorization', headerValue: `Bearer ${refreshed.accessToken}` };
+}
+
+// The same config blob while the connect flow is still building it up:
+// /oauth/start's registration fills clientId/clientSecret and refreshes the
+// endpoints, and the callback adds the tokens — after which it reads as the
+// full OAuthConfig that resolveOAuthConnection consumes.
+type OAuthConfigDraft = Partial<OAuthConfig>;
+
+function oauthRedirectUri(connectionId: number): string {
+  return `${env.PUBLIC_BASE_URL}/api/integrations/${connectionId}/oauth/callback`;
+}
+
+export type OAuthConnectStart =
+  | { ok: true; authorizeUrl: string }
+  | { ok: false; reason: 'discovery_failed' | 'no_registration_endpoint' | 'registration_failed' };
+
+// Begin the authorization-code connect flow for an MCP integration: discover
+// the server's OAuth endpoints, dynamically register a client when none is
+// stored yet, persist the (re-)discovered endpoints, and produce the
+// authorization URL to send the browser to. The HTTP layer only maps the
+// result onto redirects.
+export async function startOAuthConnect(conn: ConnectionRow): Promise<OAuthConnectStart> {
+  const redirectUri = oauthRedirectUri(conn.id);
+  let endpoints: Awaited<ReturnType<typeof discoverOAuthEndpoints>>;
+  try {
+    endpoints = await discoverOAuthEndpoints(conn.url);
+  } catch (err) {
+    console.error(`turbodiff: oauth discovery failed for connection ${conn.id}:`, err);
+    return { ok: false, reason: 'discovery_failed' };
+  }
+
+  let cache: OAuthConfigDraft = conn.auth_config_ciphertext
+    ? await openJson<OAuthConfigDraft>(conn.auth_config_ciphertext)
+    : {};
+  let clientId = cache.clientId;
+  if (!clientId) {
+    if (!endpoints.registrationEndpoint) {
+      return { ok: false, reason: 'no_registration_endpoint' };
+    }
+    try {
+      const registered = await registerOAuthClient(endpoints.registrationEndpoint, redirectUri);
+      clientId = registered.clientId;
+      cache = { ...cache, clientId, clientSecret: registered.clientSecret };
+    } catch (err) {
+      console.error(`turbodiff: oauth client registration failed for connection ${conn.id}:`, err);
+      return { ok: false, reason: 'registration_failed' };
+    }
+  }
+  // Re-registering on every connect click would be wasteful, but the
+  // discovered endpoints are cheap to refresh each time so the callback
+  // always exchanges against the server's current metadata.
+  cache = {
+    ...cache,
+    authorizationEndpoint: endpoints.authorizationEndpoint,
+    tokenEndpoint: endpoints.tokenEndpoint,
+  };
+  await updateConnectionAuth(conn.id, { authConfigCiphertext: await sealJson(cache) });
+
+  const { verifier, challenge } = await generatePkce();
+  const state = await packState({ connectionId: conn.id, verifier }, env.SESSION_SECRET);
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+    state,
+  });
+  // Request the server's advertised scopes — some issue refresh tokens
+  // only when the authorization request names a scope (offline_access).
+  if (endpoints.scopesSupported?.length) {
+    params.set('scope', endpoints.scopesSupported.join(' '));
+  }
+  return { ok: true, authorizeUrl: `${endpoints.authorizationEndpoint}?${params.toString()}` };
+}
+
+export type OAuthConnectResult =
+  | { ok: true }
+  | { ok: false; reason: 'invalid_state' | 'not_started' | 'exchange_failed' };
+
+// Complete the connect flow: validate the signed state, exchange the code
+// against the endpoints persisted by startOAuthConnect, and store the tokens.
+export async function completeOAuthConnect(
+  conn: ConnectionRow,
+  code: string,
+  state: string,
+): Promise<OAuthConnectResult> {
+  const unpacked = await unpackState(state, env.SESSION_SECRET);
+  if (!unpacked || unpacked.connectionId !== conn.id) {
+    return { ok: false, reason: 'invalid_state' };
+  }
+
+  const cache = conn.auth_config_ciphertext
+    ? await openJson<OAuthConfigDraft>(conn.auth_config_ciphertext)
+    : null;
+  if (!cache?.clientId || !cache.tokenEndpoint) {
+    return { ok: false, reason: 'not_started' };
+  }
+
+  let tokens: Awaited<ReturnType<typeof exchangeAuthorizationCode>>;
+  try {
+    tokens = await exchangeAuthorizationCode(
+      cache.tokenEndpoint,
+      code,
+      unpacked.verifier,
+      oauthRedirectUri(conn.id),
+      cache.clientId,
+      cache.clientSecret,
+    );
+  } catch (err) {
+    console.error(`turbodiff: oauth code exchange failed for connection ${conn.id}:`, err);
+    return { ok: false, reason: 'exchange_failed' };
+  }
+
+  await updateConnectionAuth(conn.id, {
+    authConfigCiphertext: await sealJson<OAuthConfigDraft>({
+      ...cache,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      scope: tokens.scope,
+    }),
+    oauthNeedsReauth: false,
+    oauthHasRefreshToken: tokens.refreshToken !== undefined,
+    // Always record an expiry: a null column can never be advanced by the
+    // COALESCE-based update, which would force a refresh on every request.
+    oauthTokenExpiresAt:
+      tokens.expiresAt ?? new Date(Date.now() + DEFAULT_TOKEN_TTL_MS).toISOString(),
+  });
+  return { ok: true };
 }
 
 export function oauthStatus(

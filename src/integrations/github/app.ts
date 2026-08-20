@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { githubJson, githubRequest } from './client.ts';
+import { githubJson } from './client.ts';
 
 // GitHub integration: App JWTs, per-installation access tokens, webhook
 // signature verification, and the user-facing OAuth flow for the settings UI.
@@ -161,46 +161,13 @@ export async function verifyWebhookSignature(
   return crypto.subtle.verify('HMAC', key, sigBytes, rawBody);
 }
 
-// --- OAuth (settings UI sign-in; uses the App's built-in OAuth credentials) ---
-
-export function oauthAuthorizeUrl(redirectUri: string, state: string): string {
-  const params = new URLSearchParams({
-    client_id: env.GITHUB_OAUTH_CLIENT_ID,
-    redirect_uri: redirectUri,
-    state,
-  });
-  return `https://github.com/login/oauth/authorize?${params.toString()}`;
-}
+// --- OAuth user tokens (uses the App's built-in OAuth credentials) ---
 
 export interface OAuthTokens {
   token: string;
   // Present when the App has expiring user tokens enabled (it does — the 8h
   // session TTL mirrors it). Valid ~6 months, rotated on every use.
   refreshToken: string | null;
-}
-
-export async function exchangeOAuthCode(code: string, redirectUri: string): Promise<OAuthTokens> {
-  const res = await fetch('https://github.com/login/oauth/access_token', {
-    method: 'POST',
-    headers: { accept: 'application/json', 'content-type': 'application/json' },
-    body: JSON.stringify({
-      client_id: env.GITHUB_OAUTH_CLIENT_ID,
-      client_secret: env.GITHUB_OAUTH_CLIENT_SECRET,
-      code,
-      redirect_uri: redirectUri,
-    }),
-  });
-  // SAFETY: every asserted field is optional, and access_token is checked
-  // before use — GitHub's OAuth token endpoint documents exactly these keys.
-  const data = (await res.json()) as {
-    access_token?: string;
-    refresh_token?: string;
-    error_description?: string;
-  };
-  if (!data.access_token) {
-    throw new Error(`OAuth exchange failed: ${data.error_description ?? 'no token returned'}`);
-  }
-  return { token: data.access_token, refreshToken: data.refresh_token ?? null };
 }
 
 // Exchange a stored refresh token for a fresh user access token. Null on any
@@ -222,10 +189,6 @@ export async function refreshUserToken(refreshToken: string): Promise<OAuthToken
   const data = (await res.json()) as { access_token?: string; refresh_token?: string };
   if (!data.access_token) return null;
   return { token: data.access_token, refreshToken: data.refresh_token ?? null };
-}
-
-export function fetchUser(token: string) {
-  return githubJson<{ id: number; login: string; avatar_url: string }>(token, '/user');
 }
 
 // Installations of THIS app that the signed-in user can access — this is the
@@ -256,19 +219,4 @@ export async function fetchUserCanPush(
     data.permissions?.maintain === true ||
     data.permissions?.admin === true
   );
-}
-
-// Acknowledge a comment-triggered review with an emoji reaction (👀 while
-// dispatching). Requires the App's Issues permission to be read & write.
-export async function reactToIssueComment(
-  installationId: number,
-  repoFullName: string,
-  commentId: number,
-  content: 'eyes' | 'confused' | '+1' | 'rocket',
-): Promise<void> {
-  const token = await installationToken(installationId);
-  await githubRequest(token, `/repos/${repoFullName}/issues/comments/${commentId}/reactions`, {
-    method: 'POST',
-    body: JSON.stringify({ content }),
-  });
 }

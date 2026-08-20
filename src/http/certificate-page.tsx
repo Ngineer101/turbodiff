@@ -3,6 +3,7 @@
 // tested with fixture data outside the Worker. Data assembly lives in
 // src/services/certificates.ts.
 import type { CertificateData } from '../shared/certificate.ts';
+import { parseUtc } from '../shared/time.ts';
 
 const CSS = `
 	:root {
@@ -189,13 +190,13 @@ const MARK = { pass: '✓', fail: '✗', skip: '–' };
 
 // e.g. "12 Aug 2026" from an ISO/SQLite timestamp; falls back to the raw string.
 function fmtDate(iso: string): string {
-  const d = new Date(iso.includes('T') ? iso : `${iso.replace(' ', 'T')}Z`);
+  const d = new Date(parseUtc(iso));
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 function stampDate(iso: string): string {
-  const d = new Date(iso.includes('T') ? iso : `${iso.replace(' ', 'T')}Z`);
+  const d = new Date(parseUtc(iso));
   if (Number.isNaN(d.getTime())) return '';
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${pad(d.getUTCDate())} · ${pad(d.getUTCMonth() + 1)} · ${d.getUTCFullYear()}`;

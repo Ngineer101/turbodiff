@@ -22,10 +22,11 @@ import {
 } from '../data/db.ts';
 import { DEFAULT_MODEL, RESERVED_AGENT_SLUGS } from '../domain/personas.ts';
 import { certificateUrl } from '../services/certificates.ts';
-import { orgForInstallation, requireCapability } from '../services/access-control.ts';
+import { capabilityDenied, orgForInstallation } from '../services/access-control.ts';
 import { userCanPushToRepo, type AuthedUser } from '../services/auth.ts';
 import { DEFAULT_RUNNER_MODEL } from '../shared/runner-models.ts';
 import { isNumber, isString, type JsonObject } from '../shared/json.ts';
+import { parseUtc, STALL_AFTER_MS } from '../shared/time.ts';
 import type {
   ApiAgentRun,
   ApiAutomationSummary,
@@ -39,15 +40,6 @@ import type {
 } from '../shared/api-types.ts';
 
 // HTTP presentation, payload validation, and resource authorization helpers.
-// D1's datetime('now') stores UTC as 'YYYY-MM-DD HH:MM:SS'.
-export function parseUtc(sql: string): number {
-  return Date.parse(`${sql.replace(' ', 'T')}Z`);
-}
-
-// A dispatch that never completed and is older than this is presumed dead
-// (agent error before post_review) rather than still running. Matches the
-// sweep threshold in db.ts's tryRecordReview — keep both in sync if changed.
-const STALL_AFTER_MS = 20 * 60 * 1000;
 
 export function reviewState(r: ReviewActivityRow): ApiReview['state'] {
   if (r.status === 'failed') return 'failed';
@@ -496,10 +488,22 @@ export async function capableInstallationIds(
   c: Context<ApiEnv>,
   installationIds: number[],
 ): Promise<number[]> {
+  const user = c.get('user');
   const checked = await Promise.all(
-    installationIds.map(async (id) => ((await requireCapability(c, id, 'settings')) ? null : id)),
+    installationIds.map(async (id) => ((await capabilityDenied(user, id, 'settings')) ? null : id)),
   );
   return checked.filter((id): id is number => id !== null);
+}
+
+// HTTP mapping for the capability gate: null means allowed, a ready-to-return
+// 403 otherwise — the same null-means-allowed contract as requireRepoPush.
+export async function requireCapability(
+  c: Context<ApiEnv>,
+  installationId: number,
+  action: 'member' | 'settings',
+): Promise<Response | null> {
+  const denied = await capabilityDenied(c.get('user'), installationId, action);
+  return denied ? c.json({ error: denied }, 403) : null;
 }
 
 // Push (write) permission on the repo, verified against GitHub with the

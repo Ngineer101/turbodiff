@@ -178,11 +178,6 @@ export interface ApiTaskDetail extends ApiPlan {
   runs: ApiAgentRun[];
 }
 
-export interface ApiFactoryLegacy_unused {
-  repos: { id: number; owner: string; name: string }[]; // enabled repos, plan targets
-  plans: ApiPlan[];
-}
-
 export interface ApiCockpitComment {
   id: number;
   path: string;
