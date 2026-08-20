@@ -6,7 +6,7 @@ import { api, ApiError } from '../lib/api.ts';
 import { AgentForm, type AgentFormValues } from '../components/agent-form.tsx';
 import { PageTitle, SectionHeading } from '../components/section.tsx';
 
-// Default model mirrors src/lib/personas.ts; the server substitutes it when
+// Default model mirrors src/domain/personas.ts; the server substitutes it when
 // the field is blank and validates the final value either way.
 const DEFAULT_MODEL_HINT = 'cloudflare/anthropic/claude-sonnet-5';
 

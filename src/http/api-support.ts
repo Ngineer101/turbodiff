@@ -1,0 +1,520 @@
+import type { Context } from 'hono';
+import {
+  getAgentById,
+  getAutomationById,
+  getPlan,
+  getRepoById,
+  getSkillById,
+  type AgentRow,
+  type AgentRunRow,
+  type AutomationFields,
+  type AutomationRow,
+  type CockpitCommentRow,
+  type FeatureUsageRow,
+  type FixAttemptRow,
+  type PlanRow,
+  type PlanWithRepo,
+  type RepositoryRow,
+  type ReviewActivityRow,
+  type SkillRow,
+  type TaskRepoStatusRow,
+  type VerificationRow,
+} from '../data/db.ts';
+import { DEFAULT_MODEL, RESERVED_AGENT_SLUGS } from '../domain/personas.ts';
+import { certificateUrl } from '../services/certificates.ts';
+import { orgForInstallation, requireCapability } from '../services/access-control.ts';
+import { userCanPushToRepo, type AuthedUser } from '../services/auth.ts';
+import { DEFAULT_RUNNER_MODEL } from '../shared/runner-models.ts';
+import { isNumber, isString, type JsonObject } from '../shared/json.ts';
+import type {
+  ApiAgentRun,
+  ApiAutomationSummary,
+  ApiCockpitComment,
+  ApiFeatureUsage,
+  ApiFeatureUsageSession,
+  ApiPlan,
+  ApiPlanQuestion,
+  ApiReview,
+  ApiVerificationSummary,
+} from '../shared/api-types.ts';
+
+// HTTP presentation, payload validation, and resource authorization helpers.
+// D1's datetime('now') stores UTC as 'YYYY-MM-DD HH:MM:SS'.
+export function parseUtc(sql: string): number {
+  return Date.parse(`${sql.replace(' ', 'T')}Z`);
+}
+
+// A dispatch that never completed and is older than this is presumed dead
+// (agent error before post_review) rather than still running. Matches the
+// sweep threshold in db.ts's tryRecordReview — keep both in sync if changed.
+const STALL_AFTER_MS = 20 * 60 * 1000;
+
+export function reviewState(r: ReviewActivityRow): ApiReview['state'] {
+  if (r.status === 'failed') return 'failed';
+  if (r.status !== 'running') return 'completed';
+  return Date.now() - parseUtc(r.created_at) > STALL_AFTER_MS ? 'stalled' : 'running';
+}
+
+// Shared by every usage-cost row shape (reviews, fix attempts, verifications,
+// features' own generation row) — they all carry the same 4 token columns.
+export function totalTokens(row: {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+}): number {
+  return row.input_tokens + row.output_tokens + row.cache_read_tokens + row.cache_write_tokens;
+}
+
+export function serializeReview(r: ReviewActivityRow): ApiReview {
+  const repo = r.repo_owner && r.repo_name ? `${r.repo_owner}/${r.repo_name}` : null;
+  return {
+    id: r.id,
+    repo,
+    pr_number: r.pr_number,
+    pr_url: repo ? `https://github.com/${repo}/pull/${r.pr_number}` : null,
+    agent_slug: r.agent_slug,
+    trigger_event: r.trigger_event,
+    risk_tier: r.risk_tier,
+    findings_count: r.findings_count,
+    state: reviewState(r),
+    review_url: r.review_url,
+    total_tokens: totalTokens(r),
+    cost_usd: r.cost_usd,
+    duration_s:
+      r.completed_at === null ? null : (parseUtc(r.completed_at) - parseUtc(r.created_at)) / 1000,
+    created_at: r.created_at,
+  };
+}
+
+// A generation attempt actually ran only when its usage columns hold real
+// data — a still-queued (or never-metered) feature keeps its all-zero
+// defaults, and the accordion shows no "generate" session for it rather than
+// a misleading all-dashes row.
+export function hasUsage(row: { cost_usd: number; model: string | null }): boolean {
+  return row.cost_usd > 0 || row.model !== null;
+}
+
+// Every session belonging to one shipped feature, chronological. Reuses
+// totalTokens/reviewState for the review sessions; fix/verify/generate rows
+// sum their own 4 token columns the same way.
+export async function serializeFeatureUsage(
+  f: FeatureUsageRow,
+  reviews: ReviewActivityRow[],
+  fixes: FixAttemptRow[],
+  verifications: VerificationRow[],
+): Promise<ApiFeatureUsage> {
+  const repo = `${f.repo_owner}/${f.repo_name}`;
+  const prUrl = f.pr_number !== null ? `https://github.com/${repo}/pull/${f.pr_number}` : null;
+
+  const sessions: ApiFeatureUsageSession[] = [];
+  if (hasUsage(f)) {
+    sessions.push({
+      kind: 'generate',
+      label: 'generate',
+      status: f.status,
+      cost_usd: f.cost_usd,
+      total_tokens: totalTokens(f),
+      duration_s: null,
+      created_at: f.created_at,
+      url: prUrl,
+    });
+  }
+  for (const r of reviews) {
+    sessions.push({
+      kind: 'review',
+      label: r.agent_slug ?? 'review',
+      status: reviewState(r),
+      cost_usd: r.cost_usd,
+      total_tokens: totalTokens(r),
+      duration_s:
+        r.completed_at === null ? null : (parseUtc(r.completed_at) - parseUtc(r.created_at)) / 1000,
+      created_at: r.created_at,
+      url: r.review_url,
+    });
+  }
+  for (const fx of fixes) {
+    sessions.push({
+      kind: 'fix',
+      label: fx.trigger,
+      status: fx.status,
+      cost_usd: fx.cost_usd,
+      total_tokens: totalTokens(fx),
+      duration_s: null, // fix_attempts has no completion timestamp
+      created_at: fx.created_at,
+      url: prUrl,
+    });
+  }
+  for (const v of verifications) {
+    // The shareable "Proof of Build" certificate only exists once
+    // verification has actually passed (mirrors postReport's cert gate).
+    const url = v.status === 'passed' ? await certificateUrl(f.id) : null;
+    sessions.push({
+      kind: 'verify',
+      label: 'verify',
+      status: v.status,
+      cost_usd: v.cost_usd,
+      total_tokens: totalTokens(v),
+      duration_s: null, // verifications has no completion timestamp
+      created_at: v.created_at,
+      url,
+    });
+  }
+  sessions.sort((a, b) => parseUtc(a.created_at) - parseUtc(b.created_at));
+
+  return {
+    id: f.id,
+    title: f.title,
+    repo,
+    status: f.status,
+    pr_number: f.pr_number,
+    pr_url: prUrl,
+    created_at: f.created_at,
+    total_cost_usd: sessions.reduce((sum, s) => sum + s.cost_usd, 0),
+    total_tokens: sessions.reduce((sum, s) => sum + s.total_tokens, 0),
+    sessions,
+  };
+}
+
+// Groups reviews/fix attempts (over-fetched by repo id + PR number
+// separately, D1 having no clean tuple-IN) down to the exact pair.
+export function groupByRepoPr<T extends { repository_id: number; pr_number: number }>(
+  rows: T[],
+): Map<string, T[]> {
+  const map = new Map<string, T[]>();
+  for (const row of rows) {
+    const key = `${row.repository_id}:${row.pr_number}`;
+    const list = map.get(key);
+    if (list) list.push(row);
+    else map.set(key, [row]);
+  }
+  return map;
+}
+
+export function verificationSummary(
+  status: string | null,
+  resultsJson: string | null,
+): ApiVerificationSummary | null {
+  if (!status) return null;
+  let total = 0;
+  let failed = 0;
+  try {
+    // SAFETY: verifications.results is written only by the verify pipeline as a
+    // serialized {index, verdict, note}[]; anything unparsable lands in catch.
+    const results = JSON.parse(resultsJson ?? '[]') as { verdict: string }[];
+    total = results.length;
+    failed = results.filter((r) => r.verdict === 'fail').length;
+  } catch {
+    // results unparsable — report the bare status
+  }
+  return { status, total, failed };
+}
+
+export function serializeAgentRun(r: AgentRunRow): ApiAgentRun {
+  return { id: r.id, kind: r.kind, success: r.success === 1, created_at: r.created_at };
+}
+
+type CockpitFixStatus = NonNullable<ApiCockpitComment['fix_status']>;
+const COCKPIT_FIX_STATUSES = new Set<string>([
+  'running',
+  'fixed',
+  'no_changes',
+  'tests_failed',
+  'failed',
+] satisfies CockpitFixStatus[]);
+
+export function isCockpitFixStatus<T extends string>(value: T): value is T & CockpitFixStatus {
+  return COCKPIT_FIX_STATUSES.has(value);
+}
+
+export function serializeCockpitComment(r: CockpitCommentRow): ApiCockpitComment {
+  const fixStatus = r.fix_status && isCockpitFixStatus(r.fix_status) ? r.fix_status : null;
+  return {
+    id: r.id,
+    path: r.path,
+    line: r.line,
+    side: r.side,
+    body: r.body,
+    author: r.author,
+    status: r.status,
+    created_at: r.created_at,
+    fix_status: fixStatus,
+  };
+}
+
+export function serializeTask(p: PlanWithRepo, repoStatuses: TaskRepoStatusRow[]): ApiPlan {
+  // SAFETY: plans.questions is written only by the planner (planner.ts) as a
+  // serialized question array matching ApiPlanQuestion.
+  const questions = p.questions ? (JSON.parse(p.questions) as ApiPlanQuestion[]) : [];
+  // SAFETY: plans.acceptance is written only by the planner as a serialized string[].
+  const acceptance = p.acceptance ? (JSON.parse(p.acceptance) as string[]) : [];
+  // SAFETY: plans.attachments is written only by POST /todos/:id/start as a
+  // serialized {key, name, content_type}[] — name is the only field read back.
+  const attachments = p.attachments ? (JSON.parse(p.attachments) as { name: string }[]) : [];
+  return {
+    id: p.id,
+    title: p.title,
+    status: p.status,
+    error: p.error,
+    created_at: p.created_at,
+    questions,
+    acceptance,
+    plan: p.plan,
+    archived: p.archived === 1,
+    model: p.runner_model ?? DEFAULT_RUNNER_MODEL,
+    attachments: attachments.map((a) => ({ name: a.name })),
+    repos: repoStatuses
+      .filter((r) => r.plan_id === p.id)
+      .map((r) => ({
+        repository_id: r.repository_id,
+        owner: r.owner,
+        name: r.name,
+        feature_id: r.feature_id,
+        pr_number: r.pr_number,
+        feature_status: r.feature_status,
+        feature_error: r.feature_error,
+        verification: verificationSummary(r.verification_status, r.verification_results),
+      })),
+  };
+}
+
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,30}$/;
+// Gateway-only model ids: cloudflare/<provider>/<model>.
+const MODEL_RE = /^cloudflare\/[\w.-]+\/[\w.:-]+$/;
+
+export interface AgentFormValues {
+  name: string;
+  slug: string;
+  description: string;
+  instructions: string;
+  model: string;
+}
+
+export function readAgentPayload(body: JsonObject): AgentFormValues {
+  const get = (k: string) => {
+    const v = body[k];
+    return isString(v) ? v.trim() : '';
+  };
+  return {
+    name: get('name'),
+    slug: get('slug').toLowerCase(),
+    description: get('description'),
+    instructions: get('instructions'),
+    model: get('model') || DEFAULT_MODEL,
+  };
+}
+
+export function validateAgent(v: AgentFormValues, checkSlug: boolean): string | null {
+  if (!v.name) return 'name is required';
+  if (checkSlug && !SLUG_RE.test(v.slug))
+    return 'slug must be 2-31 chars: lowercase letters, digits, dashes';
+  if (checkSlug && RESERVED_AGENT_SLUGS.has(v.slug)) return `"${v.slug}" is a reserved word`;
+  if (!v.instructions) return 'instructions are required';
+  if (!MODEL_RE.test(v.model))
+    return 'model must be an AI Gateway id like cloudflare/anthropic/claude-sonnet-5';
+  return null;
+}
+
+export interface SkillFormValues {
+  name: string;
+  slug: string;
+  description: string;
+  instructions: string;
+}
+
+export function readSkillPayload(body: JsonObject): SkillFormValues {
+  const get = (k: string) => {
+    const v = body[k];
+    return isString(v) ? v.trim() : '';
+  };
+  return {
+    name: get('name'),
+    slug: get('slug').toLowerCase(),
+    description: get('description'),
+    instructions: get('instructions'),
+  };
+}
+
+export function validateSkill(v: SkillFormValues, checkSlug: boolean): string | null {
+  if (!v.name) return 'name is required';
+  if (checkSlug && !SLUG_RE.test(v.slug))
+    return 'slug must be 2-31 chars: lowercase letters, digits, dashes';
+  if (!v.instructions) return 'instructions are required';
+  return null;
+}
+
+const TIME_OF_DAY_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+const SCHEDULE_KINDS = new Set(['hourly', 'daily', 'weekly']);
+
+export function readAutomationPayload(body: JsonObject): AutomationFields {
+  const get = (k: string) => {
+    const v = body[k];
+    return isString(v) ? v.trim() : '';
+  };
+  const timeOfDay = get('time_of_day');
+  const dayOfWeek = body.day_of_week;
+  return {
+    name: get('name'),
+    prompt: get('prompt'),
+    schedule_kind: get('schedule_kind'),
+    time_of_day: timeOfDay || null,
+    day_of_week: isNumber(dayOfWeek) && Number.isInteger(dayOfWeek) ? dayOfWeek : null,
+  };
+}
+
+export function validateAutomation(v: AutomationFields): string | null {
+  if (!v.name) return 'name is required';
+  if (!v.prompt) return 'prompt is required';
+  if (!SCHEDULE_KINDS.has(v.schedule_kind)) {
+    return 'schedule_kind must be hourly, daily, or weekly';
+  }
+  if (v.schedule_kind === 'hourly') {
+    if (v.time_of_day !== null) return 'hourly automations cannot set a time of day';
+  } else if (!v.time_of_day || !TIME_OF_DAY_RE.test(v.time_of_day)) {
+    return 'time_of_day is required (HH:MM, 24h UTC)';
+  }
+  if (v.schedule_kind === 'weekly') {
+    if (v.day_of_week === null || v.day_of_week < 0 || v.day_of_week > 6) {
+      return 'day_of_week is required for weekly automations (0-6)';
+    }
+  } else if (v.day_of_week !== null) {
+    return 'day_of_week is only valid for weekly automations';
+  }
+  return null;
+}
+
+export function serializeAutomation(
+  a: AutomationRow,
+  repo: { id: number; owner: string; name: string },
+  lastRun: { id: number; status: string; created_at: string } | null,
+): ApiAutomationSummary {
+  return {
+    id: a.id,
+    name: a.name,
+    repository: { id: repo.id, owner: repo.owner, name: repo.name },
+    // SAFETY: automations.schedule_kind passes validateAutomation's SCHEDULE_KINDS
+    // ('hourly' | 'daily' | 'weekly') membership check before every insert/update.
+    schedule_kind: a.schedule_kind as ApiAutomationSummary['schedule_kind'],
+    time_of_day: a.time_of_day,
+    day_of_week: a.day_of_week,
+    enabled: a.enabled === 1,
+    next_run_at: a.next_run_at,
+    last_run: lastRun,
+  };
+}
+
+export const CONNECTION_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,30}$/;
+
+export function validConnectionUrl(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    if (url.protocol === 'https:') return true;
+    // Plain http only for local development targets.
+    return url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+export function currentMonth(): string {
+  return new Date().toISOString().slice(0, 7);
+}
+
+export type ApiEnv = { Variables: { user: AuthedUser } };
+
+// Load the plan named by the :id param only if the caller may manage the repo
+// it belongs to (its installation is in the user's set). Null otherwise.
+export async function authorizedPlan(c: Context<ApiEnv>): Promise<PlanRow | null> {
+  const id = Number(c.req.param('id'));
+  const plan = Number.isInteger(id) ? await getPlan(id) : null;
+  if (!plan) return null;
+  const repo = await getRepoById(plan.repository_id);
+  if (!repo || !c.get('user').installationIds.includes(repo.installation_id)) return null;
+  return plan;
+}
+
+export async function authorizedAgent(c: Context<ApiEnv>): Promise<AgentRow | null> {
+  const id = Number(c.req.param('id'));
+  const agent = Number.isInteger(id) ? await getAgentById(id) : null;
+  if (!agent || !c.get('user').installationIds.includes(agent.installation_id)) return null;
+  return agent;
+}
+
+export async function authorizedSkill(c: Context<ApiEnv>): Promise<SkillRow | null> {
+  const id = Number(c.req.param('id'));
+  const skill = Number.isInteger(id) ? await getSkillById(id) : null;
+  if (!skill || !c.get('user').installationIds.includes(skill.installation_id)) return null;
+  return skill;
+}
+
+export async function authorizedRepo(c: Context<ApiEnv>): Promise<RepositoryRow | null> {
+  const id = Number(c.req.param('id'));
+  const repo = Number.isInteger(id) ? await getRepoById(id) : null;
+  if (!repo || !c.get('user').installationIds.includes(repo.installation_id)) return null;
+  return repo;
+}
+
+// Ownership runs through the automation's fixed repository_id — an
+// automation has no installation_id of its own.
+export async function authorizedAutomation(c: Context<ApiEnv>): Promise<AutomationRow | null> {
+  const id = Number(c.req.param('id'));
+  const automation = Number.isInteger(id) ? await getAutomationById(id) : null;
+  if (!automation) return null;
+  const repo = await getRepoById(automation.repository_id);
+  if (!repo || !c.get('user').installationIds.includes(repo.installation_id)) return null;
+  return automation;
+}
+
+// Resolves the :installationId param to its linked organization, only when
+// the caller's installationIds already covers it (the same GitHub-derived
+// baseline every other authorizedX helper checks) and the installation
+// actually has one (personal installations never do — 404, not 403: there's
+// nothing here to manage regardless of role).
+export async function authorizedOrg(
+  c: Context<ApiEnv>,
+): Promise<{ installationId: number; orgId: string } | null> {
+  const installationId = Number(c.req.param('installationId'));
+  if (
+    !Number.isInteger(installationId) ||
+    !c.get('user').installationIds.includes(installationId)
+  ) {
+    return null;
+  }
+  const org = await orgForInstallation(installationId);
+  if (!org) return null;
+  return { installationId, orgId: org.id };
+}
+
+// Agents/skills are generic across installations (one create/edit fans out
+// to every installation the caller belongs to) — so unlike the single-repo
+// routes above, gating "settings" capability here means narrowing the fan-out
+// target list rather than a single allow/deny. An installation drops out of
+// the result if the caller's role there doesn't carry 'settings' (e.g. a
+// 'member' on that installation's organization), even though installationIds
+// itself already includes it.
+export async function capableInstallationIds(
+  c: Context<ApiEnv>,
+  installationIds: number[],
+): Promise<number[]> {
+  const checked = await Promise.all(
+    installationIds.map(async (id) => ((await requireCapability(c, id, 'settings')) ? null : id)),
+  );
+  return checked.filter((id): id is number => id !== null);
+}
+
+// Push (write) permission on the repo, verified against GitHub with the
+// caller's own token. Installation membership (the read gate on every route)
+// is deliberately weaker: GitHub reports an org installation to read-only
+// members too, and the write routes below act with the App installation
+// token — which carries the App's permissions, not the caller's. Anything
+// that writes to the repo or changes how code reaches it re-checks the
+// caller's real GitHub permission first. Null when allowed; the 403 to
+// return otherwise.
+export async function requireRepoPush(
+  c: Context<ApiEnv>,
+  repo: { owner: string; name: string },
+  canPush: typeof userCanPushToRepo,
+): Promise<Response | null> {
+  if (await canPush(c.get('user'), repo.owner, repo.name)) return null;
+  return c.json({ error: 'push access to the repository is required for this action' }, 403);
+}

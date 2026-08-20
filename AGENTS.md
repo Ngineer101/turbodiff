@@ -6,16 +6,14 @@ Workers at <https://turbodiff.dev> (repo: <https://github.com/Ngineer101/turbodi
 
 ## Layout
 
-- `src/agents/` — agent modules. A module whose first line is the `'use agent'` directive exports agents: every exported capitalized function is one, and the function name is its durable identity. `PrReviewer` is the one generic reviewer: every configured agent (built-in persona or user-created row in the `agents` table) runs through it, config delivered per dispatch as a `review.request` signal and read at render time via `useDelivery()`. Instance ids are `<agent-slug>--<owner>--<repo>--<pr>`.
-- `src/lib/personas.ts` — built-in personas (review/security/a11y/o11y) seeded lazily per installation; `review` is the default agent and defaults on per repo, others default off (see `resolveAgentEnabled` in db.ts).
-- `src/tools/github.ts` — the agent's GitHub tools (`fetch_pr`, `fetch_file`, `post_review`); all calls use per-installation App tokens. `post_review` also marks the review row completed in D1.
-- `src/routes/webhooks.ts` — GitHub App webhook receiver: mirrors installations/repos into D1 and drives the factory's review/fix loop — auto-dispatches the repo-enabled agents when a factory-generated PR opens or gets pushed to (daily cap per installation), and enqueues a fix run when one of turbodiff's own blocking reviews lands. Human-opened PRs are never reviewed (the standalone auto-review product was retired; reviews gate factory output only).
-- `src/routes/landing.tsx` — signed-out home page, server-rendered with hono/jsx (`jsxImportSource: hono/jsx` in tsconfig; no client-side React). The CSS and Three.js client script are plain strings injected via `dangerouslySetInnerHTML`; the script string must not contain backticks or `${` sequences.
-- `src/routes/ui.ts` — OAuth sign-in and the HTML shell for the signed-in SPA; logged-out `/` serves the landing page. `DEV_FAKE_INSTALLATIONS` in .dev.vars fakes sign-in locally (never set in prod).
-- `src/routes/api.ts` — session-cookie-authed JSON API under `/api/*` that the SPA consumes (kanban board + todos/tasks, usage metrics, factory cockpit, agents, the installation-level integrations registry, per-repo settings). Response shapes live in `src/shared/api-types.ts`, type-checked in both the worker and client programs.
+- `src/ai/` — the generic `PrReviewer` agent, GitHub tools, review dispatch/metering, sandbox runners, runtime support, and durable Workflows. `runtime/` owns shared runner authentication, sandbox access, redaction, skill mounting, and repository-workspace mechanics; stage orchestration stays explicit in `runners/` and `workflows/`. A module whose first line is `'use agent'` exports durable agent identities. Review instance ids are `<agent-slug>--<owner>--<repo>--<pr>`.
+- `src/domain/` — pure policies and value logic: personas, scheduling, attribution, prompt security, and skill rendering.
+- `src/data/` — D1-only persistence. `db.ts` is the stable facade; queries and row types are split across repositories, factory, agents, connections, reviews, usage, credentials, board, and automations.
+- `src/services/` — application use cases and authorization. The GitHub webhook service mirrors installations/repos and drives review/fix policy without depending on Hono. Queue producers use the typed `factory-queue.ts` gateway.
+- `src/integrations/` — GitHub, better-auth, MCP, notification, and cryptographic adapters. External protocol and credential-refresh details belong here or in a coordinating service, never in D1 queries. GitHub REST JSON and pagination go through `integrations/github/client.ts`.
+- `src/http/` — Hono routes, middleware adapters, and server-rendered views. `api.ts` is the session-cookie JSON API; `api-support.ts` owns its presentation, validation, and resource-authorization helpers. The landing page's injected script string must not contain backticks or `${` sequences.
 - `src/client/` — the signed-in SPA: TanStack Router (code-based routes in `main.tsx`), TanStack Query (loaders + polling while agents run), Tailwind v4 tokens in `styles.css`, shared primitives in `components/ui/`, one file per page in `pages/`. Built by `vite.client.config.ts` into `public/app` (fixed entry names `app.js`/`app.css`, referenced by the shell in ui.ts); the `@pierre/diffs` cockpit is a lazy route. `npm run build:app` builds it; `dev`/`build`/`deploy` run it first.
-- `src/lib/` — D1 access (`db.ts`), GitHub App auth (`github-app.ts`), sign-in sessions (`better-auth.ts` — better-auth on D1, 30-day sliding sessions, tables in migration 0026; the handler is mounted at `/api/auth/*` and the GitHub App's registered `/auth/callback` is rewritten into it by ui.ts). `auth.ts` layers per-request installation authorization on top with cached GitHub checks that degrade instead of signing the user out; the better-auth github `account` row is the single store for a user's OAuth token pair — nothing else may refresh it (GitHub rotates the refresh token on every use).
-- `src/app.ts` — the route map; every route is mounted here explicitly, plus `dispatchReviewAgent` (programmatic `dispatch()`, records the review row). `/internal/*` (agent conversation reads — debugging: GET `/internal/pr-reviewer/<instance-id>`) requires `Authorization: Bearer $REVIEW_SECRET`; the signed-in UI owns `/agents`.
+- `src/app.ts` — the HTTP composition root; provider setup and route mounting only. `/internal/*` is implemented in `src/http/internal.ts` and requires `Authorization: Bearer $REVIEW_SECRET`.
 - `src/cloudflare.ts` — Worker-level exports and non-HTTP handlers.
 - `migrations/` — D1 schema (`installations`, `repositories`, `reviews` with lifecycle status). Apply with `npx wrangler d1 migrations apply turbodiff [--local | --remote]`.
 - `public/` — static assets (logo), auto-served by the Cloudflare Vite plugin.
@@ -41,11 +39,11 @@ package.json script names, which is why dev/build/deploy exist only as tasks).
   quotes in `vite.config.ts`).
 - `vp exec <bin>` — escape hatch for anything a `vp` subcommand doesn't cover
   (e.g. `vp exec wrangler ...`).
-- `npx flue run src/agents/hello.ts --message "Hi"` — run an agent locally, no server.
+- `npx flue run src/ai/agents/pr-reviewer.ts --message "Hi"` — run the reviewer agent locally, no server.
 - `npx flue docs search <query>` — search the Flue docs from the terminal (then `flue docs read <path>`).
 
 ## Conventions
 
 - Reviews are tracked in D1: dispatched rows insert as `running`; `post_review` flips them to `completed`. A row still `running` after ~20 min renders as `stalled` on `/reviews`.
-- The reviewer model is set in `src/agents/pr-reviewer.ts` (`cloudflare/anthropic/claude-sonnet-5`, `thinkingLevel: 'off'` — see the comment there before changing it).
+- The reviewer model is set in `src/ai/agents/pr-reviewer.ts` (`thinkingLevel: 'off'` — see the comment there before changing it).
 - No provider API keys live in the Worker: model calls go through the `env.AI` binding into the named AI Gateway (`AI_GATEWAY_ID` in wrangler.jsonc).

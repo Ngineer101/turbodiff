@@ -167,22 +167,24 @@ rejected at the proxy.
 
 ## Code map
 
-- [src/agents/pr-reviewer.ts](src/agents/pr-reviewer.ts) — the review agent.
-- [src/tools/github.ts](src/tools/github.ts) — its tools (`fetch_pr`,
+- [src/ai/agents/pr-reviewer.ts](src/ai/agents/pr-reviewer.ts) — the review agent.
+- [src/ai/tools/github.ts](src/ai/tools/github.ts) — its tools (`fetch_pr`,
   `fetch_file`, `fetch_review_threads`, `post_review`).
-- [src/lib/planner.ts](src/lib/planner.ts) /
-  [generator.ts](src/lib/generator.ts) / [fixer.ts](src/lib/fixer.ts) /
-  [verifier.ts](src/lib/verifier.ts) — the factory pipeline stages, each a
+- [src/ai/runners/planner.ts](src/ai/runners/planner.ts) /
+  [generation workflow](src/ai/workflows/generation.ts) /
+  [fixer.ts](src/ai/runners/fixer.ts) /
+  [verifier.ts](src/ai/runners/verifier.ts) — the factory pipeline stages, each a
   sandboxed agent run.
 - [src/cloudflare.ts](src/cloudflare.ts) — the factory queue consumer and the
   sandbox container export.
-- [src/routes/webhooks.ts](src/routes/webhooks.ts) — GitHub App webhooks:
+- [src/http/webhooks.ts](src/http/webhooks.ts) and
+  [src/services/github-webhooks.ts](src/services/github-webhooks.ts) — GitHub App webhooks:
   installation sync, review auto-dispatch, auto-fix trigger.
-- [src/routes/settings.ts](src/routes/settings.ts) — the signed-in UI:
-  dashboard, factory (submit/answer/approve), reviews, agents, per-repo
-  settings.
-- [src/app.ts](src/app.ts) — routing, operator endpoints (`/review`,
-  `/internal/*`), and the public artifact route for verification screenshots.
+- [src/http/api.ts](src/http/api.ts) — the signed-in JSON API for the dashboard,
+  factory, reviews, agents, integrations, and per-repo settings.
+- [src/app.ts](src/app.ts) — the HTTP composition root; operator endpoints live
+  in [src/http/internal.ts](src/http/internal.ts).
+- [docs/architecture.md](docs/architecture.md) — layer boundaries and dependency rules.
 - [migrations/](migrations/) — D1 schema: installations, repositories, reviews,
   agents, fix attempts, features, plans, verifications.
 

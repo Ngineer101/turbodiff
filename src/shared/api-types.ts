@@ -1,4 +1,4 @@
-// The JSON contract between the Worker's /api routes (src/routes/api.ts) and
+// The JSON contract between the Worker's /api routes (src/http/api.ts) and
 // the SPA (src/client). Keep this file dependency-free: it is type-checked in
 // both the worker and client TypeScript programs.
 
