@@ -29,7 +29,8 @@ import { resolveRunnerAuth, runnerEnvironment } from '../runtime/runner-auth.ts'
 import { runnerSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
 import { prepareCachedWorktree } from '../runtime/repository-workspace.ts';
-import { installationToken, sandboxGitToken } from '../../integrations/github/app.ts';
+import { installationToken } from '../../integrations/github/app.ts';
+import { resolveWorkspaceRemote } from '../../integrations/git/provider.ts';
 import { NPM_CACHE_ENV } from '../runtime/sandbox-deps.ts';
 import { UNTRUSTED_CONTENT_RULES } from '../../domain/prompt-security.ts';
 
@@ -209,8 +210,8 @@ async function verify(
   const token = await installationToken(repo.installation_id);
   const auth = resolveRunnerAuth();
   // Verifier sandboxes never push: single-repo, contents READ-ONLY token.
-  const gitToken = await sandboxGitToken(repo.installation_id, repo.name, 'read');
-  const scrub = (s: string) => redactSecrets(s, [token, gitToken]);
+  const remote = await resolveWorkspaceRemote(repo, 'read');
+  const scrub = (s: string) => redactSecrets(s, [token, remote.token]);
   const full = `${repo.owner}/${repo.name}`;
 
   // Same container id as generation: verify usually follows a generation on
@@ -230,9 +231,8 @@ async function verify(
       sandbox,
       cacheDir: CACHE_DIR,
       workDir: WORK,
-      repository: full,
+      remote,
       base: feature.branch!,
-      gitToken,
       secrets: [token],
     });
 

@@ -18,13 +18,21 @@ import { resolveRunnerAuth, runnerEnvironment } from '../runtime/runner-auth.ts'
 import { runnerSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
 import { mountSkills } from '../runtime/skills.ts';
-import { prepareCachedWorktree, worktreeChanged } from '../runtime/repository-workspace.ts';
+import {
+  prepareCachedWorktree,
+  pushHeadCommand,
+  worktreeChanged,
+} from '../runtime/repository-workspace.ts';
+import {
+  remoteSourceOf,
+  resolveWorkspaceRemote,
+  type RemoteSource,
+} from '../../integrations/git/provider.ts';
 import { NPM_CACHE_ENV } from '../runtime/sandbox-deps.ts';
 import {
   authorizesWorkflowFiles,
   describePushFailure,
   installationToken,
-  sandboxGitToken,
 } from '../../integrations/github/app.ts';
 import { UNTRUSTED_CONTENT_RULES } from '../../domain/prompt-security.ts';
 
@@ -106,6 +114,9 @@ type RunContext = {
   // The user-authored prompt mentions .github/workflows — the push token may
   // carry the App's workflows permission (see sandboxGitToken).
   workflows: boolean;
+  // Provider-resolved git identity (git/provider.ts) so steps can mint
+  // run-scoped credentials without re-reading the repo row.
+  remoteSource: RemoteSource;
 };
 
 const QUICK = {
@@ -153,6 +164,7 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
             automationName: automation.name,
             prompt: automation.prompt,
             workflows: authorizesWorkflowFiles(automation.prompt),
+            remoteSource: remoteSourceOf(repo),
           };
         },
       );
@@ -166,16 +178,15 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
         'prepare working copy',
         { retries: { limit: 3, delay: '1 minute', backoff: 'exponential' }, timeout: '8 minutes' },
         async () => {
-          const gitToken = await sandboxGitToken(ctx.installationId, ctx.name, 'write');
+          const remote = await resolveWorkspaceRemote(ctx.remoteSource, 'write');
           const sandbox = sandboxFor(ctx);
           await prepareCachedWorktree({
             sandbox,
             cacheDir: CACHE_DIR,
             workDir: WORK,
-            repository: full,
+            remote,
             base: ctx.base,
             branch: ctx.branch,
-            gitToken,
           });
         },
       );
@@ -284,17 +295,17 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
       }
 
       await step.do('push branch', QUICK, async () => {
-        const gitToken = await sandboxGitToken(ctx.installationId, ctx.name, 'write', {
+        const remote = await resolveWorkspaceRemote(ctx.remoteSource, 'write', {
           workflows: ctx.workflows,
         });
         const sandbox = sandboxFor(ctx);
-        const push = await sandbox.exec(
-          `git -C ${WORK} push "https://x-access-token:$GIT_TOKEN@github.com/${full}.git" HEAD:"$AUTOMATION_BRANCH"`,
-          { env: { GIT_TOKEN: gitToken, AUTOMATION_BRANCH: ctx.branch }, timeout: 3 * 60_000 },
-        );
+        const push = await sandbox.exec(pushHeadCommand(remote, WORK), {
+          env: { ...remote.env, PUSH_BRANCH: ctx.branch },
+          timeout: 3 * 60_000,
+        });
         if (!push.success) {
           throw new Error(
-            describePushFailure(redactSecrets(push.stderr, [gitToken]).slice(0, 500)),
+            describePushFailure(redactSecrets(push.stderr, [remote.token]).slice(0, 500)),
           );
         }
       });

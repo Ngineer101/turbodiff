@@ -20,6 +20,12 @@ import {
 import { timingSafeEqual } from '../integrations/security/crypto.ts';
 import { isString } from '../shared/json.ts';
 import { enqueueFactoryMessage, enqueueFactoryMessages } from '../services/factory-queue.ts';
+import { factoryUnsupportedReason } from '../integrations/git/provider.ts';
+import {
+  createArtifactsProject,
+  mintArtifactsCloneToken,
+  PROJECT_SEGMENT,
+} from '../services/artifacts.ts';
 
 // Shared-secret operator surface. This transport owns validation and queue
 // admission; durable AI work remains in runners/workflows.
@@ -40,6 +46,75 @@ export function createInternalRoutes() {
   routes.use('/*', requireSecret);
 
   routes.route('/pr-reviewer', reviewer);
+
+  // Artifacts-hosted project provisioning (docs/artifacts-provider.md):
+  //   POST /projects { "owner": "...", "name": "...", "description"?: "..." }
+  // Creates the Artifacts repo in turbodiff's namespace, seeds an initial
+  // commit, and records the synthetic-tenancy D1 rows. The request stays
+  // open for the provisioning (first call pays a container boot).
+  routes.post('/projects', async (c) => {
+    const payload = await c.req
+      .json<{ owner?: string; name?: string; description?: string }>()
+      .catch(() => null);
+    if (
+      !payload ||
+      !isString(payload.owner) ||
+      !PROJECT_SEGMENT.test(payload.owner) ||
+      !isString(payload.name) ||
+      !PROJECT_SEGMENT.test(payload.name)
+    ) {
+      return c.json(
+        { error: 'body must be {"owner": "...", "name": "...", "description"?: "..."}' },
+        400,
+      );
+    }
+    const existing = await getRepoByFullName(payload.owner, payload.name);
+    if (existing) return c.json({ error: `${payload.owner}/${payload.name} already exists` }, 409);
+    try {
+      const project = await createArtifactsProject({
+        owner: payload.owner,
+        name: payload.name,
+        description: isString(payload.description) ? payload.description : undefined,
+      });
+      return c.json({
+        ok: true,
+        repository_id: project.repo.id,
+        repo: `${project.repo.owner}/${project.repo.name}`,
+        provider: project.repo.provider,
+        artifacts_repo: project.repo.artifacts_repo,
+        default_branch: project.repo.default_branch,
+        remote: project.remote,
+      });
+    } catch (err) {
+      console.error('turbodiff: project provisioning failed:', err);
+      return c.json({ error: err instanceof Error ? err.message : 'provisioning failed' }, 502);
+    }
+  });
+
+  // Clone credential for an Artifacts-hosted repo — the deploy-key
+  // replacement that lets a user clone/push with plain git:
+  //   POST /repos/clone-token { "repo": "<owner>/<name>", "scope"?: "read" | "write", "ttl_seconds"?: n }
+  routes.post('/repos/clone-token', async (c) => {
+    const payload = await c.req
+      .json<{ repo?: string; scope?: string; ttl_seconds?: number }>()
+      .catch(() => null);
+    const match = payload?.repo?.match(/^([\w.-]+)\/([\w.-]+)$/);
+    if (!match) return c.json({ error: 'body must be {"repo": "<owner>/<name>", ...}' }, 400);
+    const scope = payload?.scope === 'write' ? 'write' : 'read';
+    const requestedTtl = payload?.ttl_seconds;
+    const ttl =
+      requestedTtl !== undefined && Number.isInteger(requestedTtl)
+        ? Math.min(Math.max(requestedTtl, 60), 30 * 24 * 3600)
+        : 24 * 3600;
+    const repo = await getRepoByFullName(match[1], match[2]);
+    if (!repo) return c.json({ error: `unknown repository ${payload?.repo}` }, 404);
+    try {
+      return c.json(await mintArtifactsCloneToken(repo, scope, ttl));
+    } catch (err) {
+      console.error('turbodiff: clone-token mint failed:', err);
+      return c.json({ error: err instanceof Error ? err.message : 'token mint failed' }, 502);
+    }
+  });
 
   // Software-factory fix loop, Phase 1 spike (docs/software-factory-design.md):
   //   POST /fix { "pr_url": "...", "findings"?: "...", "auth_mode"?: "...", "test_command"?: "..." }
@@ -77,6 +152,8 @@ export function createInternalRoutes() {
     const repo = await getRepoByFullName(match[1], match[2]);
     if (!repo) return c.json({ error: `Turbodiff is not installed on ${payload.repo}` }, 404);
     if (!repo.enabled) return c.json({ error: 'reviews are disabled for this repository' }, 409);
+    const generateUnsupported = factoryUnsupportedReason(repo);
+    if (generateUnsupported) return c.json({ error: generateUnsupported }, 409);
 
     const featureId = await createFeature(repo.id, payload.title.trim(), payload.spec.trim());
     await enqueueFactoryMessage({ kind: 'generate', featureId });
@@ -106,6 +183,8 @@ export function createInternalRoutes() {
     const repo = await getRepoByFullName(match[1], match[2]);
     if (!repo) return c.json({ error: `Turbodiff is not installed on ${payload.repo}` }, 404);
     if (!repo.enabled) return c.json({ error: 'reviews are disabled for this repository' }, 409);
+    const planUnsupported = factoryUnsupportedReason(repo);
+    if (planUnsupported) return c.json({ error: planUnsupported }, 409);
 
     const planId = await createPlan([repo.id], payload.title.trim(), payload.requirements.trim());
     await enqueueFactoryMessage({ kind: 'plan_analyze', planId });
@@ -275,6 +354,8 @@ export function createInternalRoutes() {
     if (!repo) {
       return c.json({ error: `Turbodiff is not installed on ${owner}/${repoName}` }, 404);
     }
+    const fixUnsupported = factoryUnsupportedReason(repo);
+    if (fixUnsupported) return c.json({ error: fixUnsupported }, 409);
     try {
       const outcome = await runFix({
         owner: repo.owner,

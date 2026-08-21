@@ -32,6 +32,12 @@
   // here and are served publicly via GET /artifacts/*. Create once per account:
   //   npx wrangler r2 bucket create turbodiff-artifacts
   "r2_buckets": [{ "binding": "ARTIFACTS", "bucket_name": "turbodiff-artifacts" }],
+  // Git hosting for turbodiff-owned projects (docs/artifacts-provider.md).
+  // Named GIT_ARTIFACTS because ARTIFACTS is the R2 evidence bucket. The
+  // namespace must match ARTIFACTS_NAMESPACE in src/integrations/git/provider.ts
+  // and the triggers.events filters below. Requires the Artifacts closed beta
+  // on this account.
+  "artifacts": [{ "binding": "GIT_ARTIFACTS", "namespace": "turbodiff-repos" }],
   "vars": {
     // The name of your existing Cloudflare AI Gateway.
     "AI_GATEWAY_ID": "default",
@@ -105,6 +111,11 @@
       "name": "turbodiff-resolve-conflict",
       "class_name": "ConflictResolveWorkflow",
     },
+    {
+      "binding": "ARTIFACTS_EVENTS_WORKFLOW",
+      "name": "turbodiff-artifacts-events",
+      "class_name": "ArtifactsEventsWorkflow",
+    },
   ],
   // Decouples factory runs (minutes) from the requests that trigger them
   // (seconds). One queue for both fix and generation messages, discriminated
@@ -129,7 +140,25 @@
   // aren't expressible as static Cron Triggers, so this fires often and the
   // handler itself finds and claims whatever's due — schedule precision is
   // bounded by this interval.
-  "triggers": { "crons": ["*/15 * * * *"] },
+  "triggers": {
+    "crons": ["*/15 * * * *"],
+    // Artifacts event ingestion (docs/artifacts-provider.md): the platform
+    // starts one ArtifactsEventsWorkflow instance per matching event. No
+    // repo_name filter — one entry covers every repo in the namespace,
+    // including repos created after this deploy.
+    "events": [
+      {
+        "type": "cf.artifacts.repo.pushed",
+        "filter": { "namespace": "turbodiff-repos" },
+        "targets": [{ "type": "workflow", "workflow_name": "turbodiff-artifacts-events" }],
+      },
+      {
+        "type": "cf.artifacts.repo.deleted",
+        "filter": { "namespace": "turbodiff-repos" },
+        "targets": [{ "type": "workflow", "workflow_name": "turbodiff-artifacts-events" }],
+      },
+    ],
+  },
   // Every agent generates a Durable Object class named after its identity
   // (PrReviewer -> FluePrReviewerAgent), and Cloudflare requires a migration
   // entry for each one. Append a new tag when you add an agent:

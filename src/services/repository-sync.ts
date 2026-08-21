@@ -17,6 +17,10 @@ const SYNC_INTERVAL_MS = 60_000;
 const lastSyncAt = new Map<number, number>();
 
 export async function syncInstallationRepos(installationId: number): Promise<void> {
+  // Synthetic Artifacts installations (negative ids, docs/artifacts-provider.md)
+  // have no GitHub side to reconcile against — asking GitHub about them would
+  // 404 and, worse, delete every repo row as "stale".
+  if (installationId < 0) return;
   const last = lastSyncAt.get(installationId) ?? 0;
   if (Date.now() - last < SYNC_INTERVAL_MS) return;
   lastSyncAt.set(installationId, Date.now());

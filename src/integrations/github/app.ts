@@ -135,6 +135,11 @@ async function mintToken(
   installationId: number,
   scope?: { repositories: string[]; permissions: Record<string, string> },
 ): Promise<{ token: string; expires_at: string }> {
+  // Negative ids are synthetic Artifacts installations (git/provider.ts) —
+  // a caller reaching GitHub with one is a provider-dispatch bug upstream.
+  if (installationId < 0) {
+    throw new Error(`installation ${installationId} is Artifacts-hosted, not a GitHub App install`);
+  }
   return githubJson<{ token: string; expires_at: string }>(
     await appJwt(),
     `/app/installations/${installationId}/access_tokens`,

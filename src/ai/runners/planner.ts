@@ -16,7 +16,8 @@ import { persistAgentLog } from '../runtime/agent-runs.ts';
 import { resolveRunnerAuth, runnerEnvironment } from '../runtime/runner-auth.ts';
 import { runnerSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
-import { installationToken, sandboxGitToken } from '../../integrations/github/app.ts';
+import { installationToken } from '../../integrations/github/app.ts';
+import { resolveWorkspaceRemote } from '../../integrations/git/provider.ts';
 import { UNTRUSTED_CONTENT_RULES } from '../../domain/prompt-security.ts';
 import { notifyPlanUsers } from '../../services/push-notifications.ts';
 
@@ -42,7 +43,7 @@ async function clonePlanRepos(
 ): Promise<{
   sandbox: Sandbox;
   scrub: (s: string) => string;
-  dirs: { repo: RepositoryRow; dir: string }[];
+  dirs: { repo: RepositoryRow; dir: string; cleanUrl: string }[];
 }> {
   const tokens: string[] = [];
   const scrub = (s: string) => redactSecrets(s, tokens);
@@ -50,12 +51,12 @@ async function clonePlanRepos(
   const sandbox = runnerSandbox(`plan--${planId}`, { sleepAfter: '10m' });
   await sandbox.exec(`rm -rf ${CLONE_DIR} ${OUT_DIR} && mkdir -p ${OUT_DIR}`);
 
-  const dirs: { repo: RepositoryRow; dir: string }[] = [];
+  const dirs: { repo: RepositoryRow; dir: string; cleanUrl: string }[] = [];
   for (const repo of repos) {
     const token = await installationToken(repo.installation_id);
     // Planner sandboxes never push: contents READ-ONLY token.
-    const gitToken = await sandboxGitToken(repo.installation_id, repo.name, 'read');
-    tokens.push(token, gitToken);
+    const remote = await resolveWorkspaceRemote(repo, 'read');
+    tokens.push(token, remote.token);
     const full = `${repo.owner}/${repo.name}`;
     // SAFETY: GitHub's GET /repos/:owner/:repo REST schema always includes
     // default_branch.
@@ -63,14 +64,14 @@ async function clonePlanRepos(
     const dir = repos.length === 1 ? CLONE_DIR : `${CLONE_DIR}/${repo.owner}--${repo.name}`;
     if (repos.length > 1) await sandbox.exec(`mkdir -p ${dir}`);
     const clone = await sandbox.exec(
-      `git clone --depth 50 --single-branch --branch "$GEN_BASE" ` +
-        `"https://x-access-token:$GIT_TOKEN@github.com/${full}.git" ${dir}`,
-      { env: { GIT_TOKEN: gitToken, GEN_BASE: info.default_branch }, timeout: 3 * 60_000 },
+      `git ${remote.configFlags} clone --depth 50 --single-branch --branch "$GEN_BASE" ` +
+        `"${remote.authUrl}" ${dir}`,
+      { env: { ...remote.env, GEN_BASE: info.default_branch }, timeout: 3 * 60_000 },
     );
     if (!clone.success) {
       throw new Error(`git clone failed for ${full}: ${scrub(clone.stderr).slice(0, 500)}`);
     }
-    dirs.push({ repo, dir });
+    dirs.push({ repo, dir, cleanUrl: remote.cleanUrl });
   }
   return { sandbox, scrub, dirs };
 }
@@ -354,7 +355,7 @@ export async function runPlanAnalyze(planId: number): Promise<void> {
   }
   const full = repos.map((r) => `${r.owner}/${r.name}`).join(', ');
   let sandbox: Sandbox | undefined;
-  let dirs: { repo: RepositoryRow; dir: string }[] = [];
+  let dirs: { repo: RepositoryRow; dir: string; cleanUrl: string }[] = [];
   try {
     const booted = await clonePlanRepos(repos, planId);
     sandbox = booted.sandbox;
@@ -418,12 +419,8 @@ export async function runPlanAnalyze(planId: number): Promise<void> {
   } finally {
     if (sandbox) {
       await Promise.all(
-        dirs.map(({ repo, dir }) =>
-          sandbox!
-            .exec(
-              `git -C ${dir} remote set-url origin "https://github.com/${repo.owner}/${repo.name}.git"`,
-            )
-            .catch(() => {}),
+        dirs.map(({ dir, cleanUrl }) =>
+          sandbox!.exec(`git -C ${dir} remote set-url origin "${cleanUrl}"`).catch(() => {}),
         ),
       );
     }
@@ -465,7 +462,7 @@ export async function runPlanRefine(planId: number): Promise<void> {
       : '';
 
   let sandbox: Sandbox | undefined;
-  let dirs: { repo: RepositoryRow; dir: string }[] = [];
+  let dirs: { repo: RepositoryRow; dir: string; cleanUrl: string }[] = [];
   try {
     const booted = await clonePlanRepos(repos, planId);
     sandbox = booted.sandbox;
@@ -501,12 +498,8 @@ export async function runPlanRefine(planId: number): Promise<void> {
   } finally {
     if (sandbox) {
       await Promise.all(
-        dirs.map(({ repo, dir }) =>
-          sandbox!
-            .exec(
-              `git -C ${dir} remote set-url origin "https://github.com/${repo.owner}/${repo.name}.git"`,
-            )
-            .catch(() => {}),
+        dirs.map(({ dir, cleanUrl }) =>
+          sandbox!.exec(`git -C ${dir} remote set-url origin "${cleanUrl}"`).catch(() => {}),
         ),
       );
     }

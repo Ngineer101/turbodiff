@@ -9,6 +9,7 @@ export interface InstallationRow {
   account_id: number;
   account_type: string;
   suspended: number;
+  provider: string; // 'github' | 'artifacts' (synthetic tenancy rows)
 }
 
 export interface RepositoryRow {
@@ -16,6 +17,10 @@ export interface RepositoryRow {
   installation_id: number;
   owner: string;
   name: string;
+  provider: string; // 'github' | 'artifacts'
+  artifacts_repo: string | null; // repo name in turbodiff's Artifacts namespace
+  default_branch: string | null; // stored for Artifacts repos; NULL for GitHub
+  last_push_at: string | null; // maintained by Artifacts event ingestion
   enabled: number;
   review_on_push: number; // re-dispatch tiered agents on pushes to open PRs
   blocking_reviews: number; // P1 → REQUEST_CHANGES, clean → APPROVE
@@ -108,6 +113,71 @@ export async function getInstallation(id: number): Promise<InstallationRow | nul
   return env.DB.prepare('SELECT * FROM installations WHERE id = ?1')
     .bind(id)
     .first<InstallationRow>();
+}
+
+// ── Artifacts-hosted projects (docs/artifacts-provider.md) ─────────────────
+// Artifacts rows reuse the installation-scoped access model via synthetic
+// rows allocated in the negative id range: GitHub installation and repo ids
+// are always positive, so the spaces can never collide. Allocation is a
+// single INSERT..SELECT so no separate read can race the id choice.
+
+export async function getArtifactsInstallationByLogin(
+  accountLogin: string,
+): Promise<InstallationRow | null> {
+  return env.DB.prepare(
+    `SELECT * FROM installations WHERE account_login = ?1 AND provider = 'artifacts'`,
+  )
+    .bind(accountLogin)
+    .first<InstallationRow>();
+}
+
+export async function createArtifactsInstallation(accountLogin: string): Promise<InstallationRow> {
+  const row = await env.DB.prepare(
+    `INSERT INTO installations (id, account_login, account_id, account_type, provider)
+		 SELECT COALESCE(MIN(id), 0) - 1, ?1, COALESCE(MIN(id), 0) - 1, 'Organization', 'artifacts'
+		 FROM installations WHERE id < 0
+		 RETURNING *`,
+  )
+    .bind(accountLogin)
+    .first<InstallationRow>();
+  if (!row) throw new Error('artifacts installation insert returned no row');
+  return row;
+}
+
+export async function createArtifactsRepository(input: {
+  installationId: number;
+  owner: string;
+  name: string;
+  artifactsRepo: string;
+  defaultBranch: string;
+}): Promise<RepositoryRow> {
+  const row = await env.DB.prepare(
+    `INSERT INTO repositories (id, installation_id, owner, name, provider, artifacts_repo, default_branch)
+		 SELECT COALESCE(MIN(id), 0) - 1, ?1, ?2, ?3, 'artifacts', ?4, ?5
+		 FROM repositories WHERE id < 0
+		 RETURNING *`,
+  )
+    .bind(input.installationId, input.owner, input.name, input.artifactsRepo, input.defaultBranch)
+    .first<RepositoryRow>();
+  if (!row) throw new Error('artifacts repository insert returned no row');
+  return row;
+}
+
+export async function getRepoByArtifactsName(artifactsRepo: string): Promise<RepositoryRow | null> {
+  return env.DB.prepare('SELECT * FROM repositories WHERE artifacts_repo = ?1')
+    .bind(artifactsRepo)
+    .first<RepositoryRow>();
+}
+
+export async function recordArtifactsPush(
+  artifactsRepo: string,
+  pushedAt: string,
+): Promise<RepositoryRow | null> {
+  return env.DB.prepare(
+    'UPDATE repositories SET last_push_at = ?2 WHERE artifacts_repo = ?1 RETURNING *',
+  )
+    .bind(artifactsRepo, pushedAt)
+    .first<RepositoryRow>();
 }
 
 export async function listInstallationsWithRepos(

@@ -18,7 +18,8 @@ import {
 import { resolveRunnerAuth, runnerEnvironment } from '../runtime/runner-auth.ts';
 import { runnerSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
-import { prepareFreshClone } from '../runtime/repository-workspace.ts';
+import { prepareFreshClone, pushHeadCommand } from '../runtime/repository-workspace.ts';
+import { githubWorkspaceRemote } from '../../integrations/git/provider.ts';
 import { mountSkills } from '../runtime/skills.ts';
 import {
   describePushFailure,
@@ -194,13 +195,15 @@ async function runConflictResolve(
     { sleepAfter: '20m' },
   );
 
-  const gitEnv = { GIT_TOKEN: gitToken, FIX_BRANCH: headRef, BASE_REF: baseRef };
+  // Conflict resolution is a GitHub-only flow (PR head may live on a fork),
+  // so the remote is constructed for the head repo directly.
+  const remote = githubWorkspaceRemote(headRepo, gitToken);
+  const gitEnv = { ...remote.env, FIX_BRANCH: headRef, BASE_REF: baseRef };
   const pushMerge = async (): Promise<string> => {
-    const push = await sandbox.exec(
-      `git -C ${CLONE_DIR} push ` +
-        `"https://x-access-token:$GIT_TOKEN@github.com/${headRepo}.git" HEAD:"$FIX_BRANCH"`,
-      { env: gitEnv, timeout: 2 * 60_000 },
-    );
+    const push = await sandbox.exec(pushHeadCommand(remote, CLONE_DIR), {
+      env: { ...gitEnv, PUSH_BRANCH: headRef },
+      timeout: 2 * 60_000,
+    });
     if (!push.success) {
       throw new Error(describePushFailure(scrub(push.stderr).slice(0, 500)));
     }
@@ -211,9 +214,8 @@ async function runConflictResolve(
   await prepareFreshClone({
     sandbox,
     cloneDir: CLONE_DIR,
-    repository: headRepo,
+    remote,
     branch: headRef,
-    gitToken,
     secrets: [token],
   });
 
@@ -221,8 +223,7 @@ async function runConflictResolve(
     // Explicit refspec into refs/remotes/origin so `merge origin/<base>`
     // resolves regardless of the single-branch clone's configured refspec.
     const fetchBase = await sandbox.exec(
-      `git -C ${CLONE_DIR} fetch --depth 50 ` +
-        `"https://x-access-token:$GIT_TOKEN@github.com/${headRepo}.git" ` +
+      `git ${remote.configFlags} -C ${CLONE_DIR} fetch --depth 50 "${remote.authUrl}" ` +
         `"+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"`,
       { env: gitEnv, timeout: 3 * 60_000 },
     );
@@ -318,9 +319,7 @@ async function runConflictResolve(
     // Belt and braces: the remote was already scrubbed right after clone,
     // but an idle sandbox (sleepAfter keeps it warm) must never hold a
     // usable credential, so re-assert it on every exit path.
-    await sandbox.exec(
-      `git -C ${CLONE_DIR} remote set-url origin "https://github.com/${headRepo}.git"`,
-    );
+    await sandbox.exec(`git -C ${CLONE_DIR} remote set-url origin "${remote.cleanUrl}"`);
   }
 }
 
