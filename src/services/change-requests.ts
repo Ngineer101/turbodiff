@@ -201,6 +201,28 @@ export async function maybeAutoMergeCr(
   }
 }
 
+// Consumer-side wrapper for cockpit-initiated merges: idempotent for
+// already-merged CRs, and a failure surfaces as a CR comment (the UI polls
+// the CR — a silent queue failure would read as an infinite spinner).
+export async function runQueuedCrMerge(changeRequestId: number, actor: string): Promise<void> {
+  const cr = await getChangeRequest(changeRequestId);
+  if (!cr || cr.status !== 'open') return;
+  try {
+    await mergeNativeChangeRequest(changeRequestId, actor);
+  } catch (err) {
+    console.error(`turbodiff: queued merge of CR ${changeRequestId} failed:`, err);
+    await addCrComment({
+      changeRequestId,
+      file: null,
+      line: null,
+      author: CR_BOT_AUTHOR,
+      kind: 'comment',
+      severity: null,
+      body: `Merge failed: ${err instanceof Error ? err.message.slice(0, 300) : 'unknown error'} — fix and retry from the cockpit.`,
+    }).catch(() => {});
+  }
+}
+
 export interface CrFilePatch {
   path: string;
   patch: string;

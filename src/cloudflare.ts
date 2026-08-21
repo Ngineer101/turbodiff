@@ -19,6 +19,7 @@ import { startGeneration } from './ai/workflows/generation.ts';
 import { sweepFactoryPrConflicts } from './services/merge-conflicts.ts';
 import { runPlanAnalyze, runPlanRefine } from './ai/runners/planner.ts';
 import { dispatchNativeCrReviews } from './ai/review/native-dispatch.ts';
+import { runQueuedCrMerge } from './services/change-requests.ts';
 import { startVerification, VerificationWorkflow } from './ai/workflows/verification.ts';
 
 // The fixer sandbox container (docs/software-factory-design.md). Declared in
@@ -69,6 +70,13 @@ export default {
           // A new message kind must not silently fall into the `default`
           // (fix) branch and mis-dispatch.
           await startResolveConflict(body);
+          break;
+        case 'cr_merge':
+          // Native merges run sandbox git and can queue behind long agent
+          // execs in the same container — never inside an HTTP request
+          // (live finding: a cockpit merge took 2+ minutes server-side and
+          // the response timed out while the merge itself succeeded).
+          await runQueuedCrMerge(body.changeRequestId, body.actor);
           break;
         case 'cr_review':
           // Native change-request review (docs/artifacts-provider.md):

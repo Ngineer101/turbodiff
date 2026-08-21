@@ -1231,19 +1231,25 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         orgAdmin,
       );
       if (deniedCapability) return deniedCapability;
-      try {
-        await mergeNativeChangeRequest(
-          feature.change_request_id,
-          c.get('user').session.login || 'cockpit',
-        );
-      } catch (err) {
-        console.error(`turbodiff: native merge failed for feature ${id}:`, err);
+      const cr = await getChangeRequest(feature.change_request_id);
+      if (!cr) return c.json({ error: 'unknown change request' }, 409);
+      if (cr.status === 'merged') return c.json({ ok: true }); // idempotent re-click
+      if (cr.status !== 'open') return c.json({ error: `change request is ${cr.status}` }, 409);
+      if (cr.mergeable === 0) {
         return c.json(
-          { error: err instanceof Error ? err.message : 'merge failed', conflict: true },
+          { error: 'merge blocked — the change request has conflicts', conflict: true },
           409,
         );
       }
-      return c.json({ ok: true });
+      // Sandbox git work happens on the queue, not in this request (it can
+      // wait minutes behind agent execs in the same container); the cockpit's
+      // poll shows the CR flip to merged.
+      await enqueueFactoryMessage({
+        kind: 'cr_merge',
+        changeRequestId: cr.id,
+        actor: c.get('user').session.login || 'cockpit',
+      });
+      return c.json({ ok: true, queued: true });
     }
     const denied = await requireRepoPush(c, repo, canPushToRepo);
     if (denied) return denied;

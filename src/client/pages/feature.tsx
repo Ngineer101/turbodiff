@@ -486,12 +486,16 @@ export default function FeaturePage() {
 
   const merge = useMutation({
     mutationFn: () =>
-      api.post<{ ok: boolean; conflict?: boolean; resolving?: boolean }>(
+      api.post<{ ok: boolean; conflict?: boolean; resolving?: boolean; queued?: boolean }>(
         `/api/factory/features/${id}/merge`,
       ),
     onSuccess: (result) => {
       toast.success(
-        result.resolving ? 'Merge conflict detected — auto-resolving…' : 'Pull request merged',
+        result.resolving
+          ? 'Merge conflict detected — auto-resolving…'
+          : result.queued
+            ? 'Merge started — this page updates when it lands'
+            : 'Pull request merged',
       );
       refresh();
     },

@@ -47,6 +47,12 @@ export interface CrReviewQueueMessage {
   changeRequestId: number;
 }
 
+export interface CrMergeQueueMessage {
+  kind: 'cr_merge';
+  changeRequestId: number;
+  actor: string;
+}
+
 export type FactoryMessage =
   | GenerateQueueMessage
   | PlanQueueMessage
@@ -54,4 +60,5 @@ export type FactoryMessage =
   | AutomationQueueMessage
   | FixQueueMessage
   | ConflictResolveQueueMessage
-  | CrReviewQueueMessage;
+  | CrReviewQueueMessage
+  | CrMergeQueueMessage;
