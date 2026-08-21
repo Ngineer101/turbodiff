@@ -53,20 +53,31 @@ async function clonePlanRepos(
 
   const dirs: { repo: RepositoryRow; dir: string; cleanUrl: string }[] = [];
   for (const repo of repos) {
-    const token = await installationToken(repo.installation_id);
     // Planner sandboxes never push: contents READ-ONLY token.
     const remote = await resolveWorkspaceRemote(repo, 'read');
-    tokens.push(token, remote.token);
+    tokens.push(remote.token);
     const full = `${repo.owner}/${repo.name}`;
-    // SAFETY: GitHub's GET /repos/:owner/:repo REST schema always includes
-    // default_branch.
-    const info = (await (await gh(token, `/repos/${full}`)).json()) as { default_branch: string };
+    let base: string;
+    if (repo.provider === 'artifacts') {
+      // Artifacts repos carry their default branch in D1 — no forge API to
+      // ask, and installationToken rejects synthetic installation ids.
+      base = repo.default_branch ?? 'main';
+    } else {
+      const token = await installationToken(repo.installation_id);
+      tokens.push(token);
+      // SAFETY: GitHub's GET /repos/:owner/:repo REST schema always includes
+      // default_branch.
+      const info = (await (await gh(token, `/repos/${full}`)).json()) as {
+        default_branch: string;
+      };
+      base = info.default_branch;
+    }
     const dir = repos.length === 1 ? CLONE_DIR : `${CLONE_DIR}/${repo.owner}--${repo.name}`;
     if (repos.length > 1) await sandbox.exec(`mkdir -p ${dir}`);
     const clone = await sandbox.exec(
       `git ${remote.configFlags} clone --depth 50 --single-branch --branch "$GEN_BASE" ` +
         `"${remote.authUrl}" ${dir}`,
-      { env: { ...remote.env, GEN_BASE: info.default_branch }, timeout: 3 * 60_000 },
+      { env: { ...remote.env, GEN_BASE: base }, timeout: 3 * 60_000 },
     );
     if (!clone.success) {
       throw new Error(`git clone failed for ${full}: ${scrub(clone.stderr).slice(0, 500)}`);
