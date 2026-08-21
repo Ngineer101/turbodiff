@@ -86,13 +86,18 @@ The forge layer itself, no GitHub underneath:
   Runs in the same warm per-repo container as generation.
 - **Loop** — generation on an Artifacts repo pushes its branch and opens a
   native CR (summary comment, check outcome, queued review) instead of a
-  GitHub PR. The native reviewer (`src/ai/runners/cr-reviewer.ts`) reads the
-  cached diff in the sandbox; findings land as `cr_comments`, the verdict on
-  the CR (P1 blocks when `blocking_reviews` is on). Verification posts its
-  evidence report to the CR and records the `verify` check. Auto-merge
-  (`maybeAutoMergeCr`) mirrors the GitHub gates on native data. Merging
-  refreshes every sibling open CR — the conflict ripple. Push events refresh
-  affected CRs and re-review on `review_on_push`.
+  GitHub PR. Reviews run through the SAME configured reviewer agents as
+  GitHub PRs — same `PrReviewer`, personas, risk tiers, model overrides, and
+  reviews-table accounting — with the four GitHub tools swapped for
+  CR-backed equivalents of identical names/shapes
+  (`src/ai/tools/change-requests.ts`): diff from the R2 cache, file reads
+  via `git show` in the synced sandbox workspace (Artifacts has no contents
+  API), review posted to `cr_comments` + the CR verdict (P1 blocks under
+  `blocking_reviews`). Verification posts its evidence report to the CR and
+  records the `verify` check. Auto-merge (`maybeAutoMergeCr`) mirrors the
+  GitHub gates on native data. Merging refreshes every sibling open CR — the
+  conflict ripple. Push events refresh affected CRs and re-review on
+  `review_on_push`.
 - **Cockpit** — the feature page renders native CRs through the same
   `ApiFeatureDetail` shape: per-file patches come from the R2 diff instead
   of GitHub `/files`, the review verdict from the CR row, plus a native
@@ -107,7 +112,8 @@ The forge layer itself, no GitHub underneath:
 
 Still GitHub-only (intakes reject with a clear error): automations and the
 PR-based fix loop (including cockpit comment → fix dispatch on native CRs).
-Native reviews don't yet count toward the `reviews`-table daily cap.
+Native reviews record `reviews` rows (usage/dashboard parity) but the
+webhook path's push-debounce heuristics don't apply to them yet.
 Multi-installation orgs (GitHub org that also hosts Artifacts projects under
 one cockpit org) remain deferred.
 

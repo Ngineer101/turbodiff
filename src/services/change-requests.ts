@@ -163,7 +163,9 @@ export async function maybeAutoMergeCr(
   repo: RepositoryRow,
   changeRequestId: number,
 ): Promise<void> {
-  if (repo.auto_merge !== 1) return;
+  // Same pairing as services/auto-merge.ts: auto-merge only means anything
+  // when reviews can actually block.
+  if (repo.auto_merge !== 1 || repo.blocking_reviews !== 1) return;
   const cr = await getChangeRequest(changeRequestId);
   if (!cr || cr.status !== 'open') return;
   if (cr.review_status !== 'approved' || cr.mergeable !== 1) return;

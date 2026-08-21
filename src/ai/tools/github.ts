@@ -19,7 +19,7 @@ import { REVIEW_NOISE_PATTERNS } from '../../domain/review-diff.ts';
 // which has no dispatch attributes to pin from.
 export type RepoPin = { owner: string; repo: string } | null;
 
-function assertPinned(pin: RepoPin, owner: string, repo: string): void {
+export function assertPinned(pin: RepoPin, owner: string, repo: string): void {
   if (!pin) return;
   if (
     owner.toLowerCase() !== pin.owner.toLowerCase() ||
@@ -31,8 +31,8 @@ function assertPinned(pin: RepoPin, owner: string, repo: string): void {
   }
 }
 
-const MAX_DIFF_CHARS = 300_000;
-const MAX_FILE_CHARS = 60_000;
+export const MAX_DIFF_CHARS = 300_000;
+export const MAX_FILE_CHARS = 60_000;
 
 // Every GitHub call authenticates as the App installation that owns the repo.
 // The repo -> installation mapping lives in D1 (synced by the webhook handler),
@@ -48,7 +48,7 @@ async function tokenFor(owner: string, repo: string): Promise<string> {
   return installationToken(row.installation_id);
 }
 
-function truncate(text: string, max: number, label: string): string {
+export function truncate(text: string, max: number, label: string): string {
   if (text.length <= max) return text;
   return `${text.slice(0, max)}\n\n[turbodiff: ${label} truncated at ${max} characters of ${text.length}]`;
 }
@@ -76,7 +76,7 @@ function isGeneratedSegment(path: string, segment: string): boolean {
 // Replaces each noise file's segment of the unified diff with a one-line
 // marker, so the model knows the file changed without reading it and the
 // MAX_DIFF_CHARS budget goes to reviewable code. Runs before truncation.
-function filterDiffNoise(diff: string): string {
+export function filterDiffNoise(diff: string): string {
   return diff
     .split(/^(?=diff --git )/m)
     .map((segment) => {
@@ -267,7 +267,7 @@ export const makeFetchReviewThreads = (pin: RepoPin) =>
     },
   });
 
-const findingSchema = v.object({
+export const findingSchema = v.object({
   path: v.pipe(v.string(), v.minLength(1)),
   // Line number in the file's NEW version (side RIGHT) or OLD version (side
   // LEFT). Must be a line that appears in the diff, or GitHub rejects it.
@@ -285,7 +285,7 @@ const findingSchema = v.object({
 // same fact. A finding counts as P1 when either says so — a mislabel can then
 // only escalate (a spurious REQUEST_CHANGES a re-review clears), never
 // silently APPROVE past a real P1 — and disagreements are logged.
-function findingSeverity(f: v.InferOutput<typeof findingSchema>): 'P1' | 'P2' {
+export function findingSeverity(f: v.InferOutput<typeof findingSchema>): 'P1' | 'P2' {
   const bodyTagged = f.body.includes('**P1**') || f.body.includes('\u{1F534}');
   if (bodyTagged !== (f.severity === 'P1')) {
     console.warn(

@@ -20,6 +20,7 @@ import {
   type RepositoryRow,
 } from '../data/db.ts';
 import { maybeAutoMergeCr, splitPatchByFile } from './change-requests.ts';
+import { computeRiskTierFromFiles } from './review-policy.ts';
 
 type TestEnv = Cloudflare.Env & { TEST_MIGRATIONS: D1Migration[] };
 // SAFETY: vitest.worker.config.ts defines the test-only TEST_MIGRATIONS
@@ -167,5 +168,34 @@ describe('splitPatchByFile', () => {
       '-bye',
     ].join('\n');
     expect(splitPatchByFile(patch)[0].path).toBe('gone.ts');
+  });
+});
+
+describe('computeRiskTierFromFiles (native CR path)', () => {
+  it('classifies by reviewable size with the same thresholds as GitHub PRs', () => {
+    expect(computeRiskTierFromFiles([{ filename: 'a.ts', additions: 3, deletions: 2 }])).toBe(
+      'trivial',
+    );
+    expect(computeRiskTierFromFiles([{ filename: 'a.ts', additions: 60, deletions: 10 }])).toBe(
+      'lite',
+    );
+    expect(computeRiskTierFromFiles([{ filename: 'a.ts', additions: 300, deletions: 0 }])).toBe(
+      'full',
+    );
+  });
+
+  it('escalates sensitive paths regardless of size', () => {
+    expect(
+      computeRiskTierFromFiles([{ filename: 'src/services/auth.ts', additions: 1, deletions: 0 }]),
+    ).toBe('full');
+  });
+
+  it('ignores noise files when sizing', () => {
+    expect(
+      computeRiskTierFromFiles([
+        { filename: 'pnpm-lock.yaml', additions: 5000, deletions: 4000 },
+        { filename: 'src/a.ts', additions: 2, deletions: 1 },
+      ]),
+    ).toBe('trivial');
   });
 });
