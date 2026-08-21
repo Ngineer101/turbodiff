@@ -28,6 +28,9 @@ export { Sandbox } from '@cloudflare/sandbox';
 // (bindings GEN_WORKFLOW / VERIFY_WORKFLOW / AUTOMATION_WORKFLOW in
 // wrangler.jsonc): memoized steps, bounded retries, no wall-clock kills.
 export { GenerationWorkflow } from './ai/workflows/generation.ts';
+// Started by the platform itself on Artifacts events — see the
+// `triggers.events` entries in wrangler.jsonc (docs/artifacts-provider.md).
+export { ArtifactsEventsWorkflow } from './ai/workflows/artifacts-events.ts';
 export { VerificationWorkflow };
 export { FixWorkflow };
 export { AutomationWorkflow };

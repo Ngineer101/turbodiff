@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 // HTTP JSON transport for the signed-in SPA.
 import { Hono, type Context } from 'hono';
+import { factoryUnsupportedReason } from '../integrations/git/provider.ts';
 import {
   agentUsageForMonth,
   automationUsageForMonth,
@@ -521,6 +522,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (repos.length === 0) {
       return c.json({ error: 'select at least one repository first' }, 400);
     }
+    const unsupported = repos.map(factoryUnsupportedReason).find(Boolean);
+    if (unsupported) return c.json({ error: unsupported }, 409);
     const body = await c.req
       .json<{
         title?: string;
@@ -1427,6 +1430,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (!repo || !installationIds.includes(repo.installation_id) || repo.enabled !== 1) {
       return c.json({ error: 'unknown or disabled repository' }, 404);
     }
+    const automationUnsupported = factoryUnsupportedReason(repo);
+    if (automationUnsupported) return c.json({ error: automationUnsupported }, 409);
     const deniedCapability = await requireCapability(c, repo.installation_id, 'settings', orgAdmin);
     if (deniedCapability) return deniedCapability;
     const nextRunAt = computeNextRunAt(
