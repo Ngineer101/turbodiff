@@ -8,7 +8,9 @@
 // https://flueframework.com/docs/guide/cloudflare-target/#extending-cloudflarets-entrypoint
 
 import { startAutomationRun, AutomationWorkflow } from './ai/workflows/automation.ts';
+import { recordArtifactsEvent } from './services/artifacts-events.ts';
 import { pollAutomations } from './services/automation-poll.ts';
+import { isArtifactsQueueEvent, type ArtifactsQueueEvent } from './shared/artifacts-events.ts';
 import {
   ConflictResolveWorkflow,
   startResolveConflict,
@@ -38,9 +40,20 @@ export { ConflictResolveWorkflow };
 // Both processors never throw (failures land in fix_attempts / features), so
 // every message acks — a broken run is not retried into repeat token spend.
 export default {
-  async queue(batch: MessageBatch<FactoryMessage>): Promise<void> {
+  async queue(batch: MessageBatch<FactoryMessage | ArtifactsQueueEvent>): Promise<void> {
     for (const message of batch.messages) {
       const body = message.body;
+      // Cloudflare Artifacts event subscriptions deliver onto this queue too
+      // (a second consumer hangs the local dev plugin — see wrangler.jsonc);
+      // events carry `type`, factory messages carry `kind`. Phase-0 spike is
+      // capture-only (docs/artifacts-spike.md) and must never block the ack.
+      if (isArtifactsQueueEvent(body)) {
+        await recordArtifactsEvent(body).catch((err) => {
+          console.error('turbodiff: failed to record artifacts event:', err);
+        });
+        message.ack();
+        continue;
+      }
       switch (body.kind) {
         case 'generate':
           // Just creates a durable workflow instance (sub-second) — the

@@ -32,6 +32,12 @@
   // here and are served publicly via GET /artifacts/*. Create once per account:
   //   npx wrangler r2 bucket create turbodiff-artifacts
   "r2_buckets": [{ "binding": "ARTIFACTS", "bucket_name": "turbodiff-artifacts" }],
+  // Cloudflare Artifacts (closed beta) — git repo hosting for the provider
+  // spike (docs/artifacts-spike.md). Named GIT_ARTIFACTS because ARTIFACTS is
+  // taken by the R2 evidence bucket above. Repos created through this binding
+  // live in the "turbodiff-spike" namespace so throwaway spike repos never mix
+  // with a future production namespace scheme.
+  "artifacts": [{ "binding": "GIT_ARTIFACTS", "namespace": "turbodiff-spike" }],
   "vars": {
     // The name of your existing Cloudflare AI Gateway.
     "AI_GATEWAY_ID": "default",

@@ -20,6 +20,7 @@ import {
 import { timingSafeEqual } from '../integrations/security/crypto.ts';
 import { isString } from '../shared/json.ts';
 import { enqueueFactoryMessage, enqueueFactoryMessages } from '../services/factory-queue.ts';
+import { createArtifactsSpikeRoutes } from './artifacts-spike.ts';
 
 // Shared-secret operator surface. This transport owns validation and queue
 // admission; durable AI work remains in runners/workflows.
@@ -40,6 +41,9 @@ export function createInternalRoutes() {
   routes.use('/*', requireSecret);
 
   routes.route('/pr-reviewer', reviewer);
+
+  // Cloudflare Artifacts provider spike, Phase 0 (docs/artifacts-spike.md).
+  routes.route('/artifacts-spike', createArtifactsSpikeRoutes());
 
   // Software-factory fix loop, Phase 1 spike (docs/software-factory-design.md):
   //   POST /fix { "pr_url": "...", "findings"?: "...", "auth_mode"?: "...", "test_command"?: "..." }
