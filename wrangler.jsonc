@@ -11,7 +11,9 @@
   "preview_urls": true,
   // Workers Traces shows each agent response as a trace with agent-level
   // spans: https://flueframework.com/docs/guide/observability/#cloudflare
-  "observability": { "traces": { "enabled": true } },
+  // Traces for agent spans; invocation logs persisted for debugging (Workers
+  // Logs — queryable in the dash after incidents, unlike live-only tail).
+  "observability": { "enabled": true, "traces": { "enabled": true } },
   // Workers AI binding — model calls dispatch through env.AI into the named
   // AI Gateway (see setProvider in src/app.ts).
   "ai": { "binding": "AI" },
@@ -82,7 +84,12 @@
       // "standard-1" over "lite": fix runs clone repos, run the agent CLI,
       // and execute test suites — they need the memory/CPU headroom.
       "instance_type": "standard-1",
-      "max_instances": 5,
+      // Every sandbox id (per-repo gen--, plan--, fix--, provision--, ...)
+      // holds one instance for its whole sleepAfter keep-warm window, so the
+      // cap must cover concurrent runs PLUS warm idlers. 5 deadlocked in
+      // production: five healthy-idle containers starved a new plan run into
+      // an opaque sandbox 500.
+      "max_instances": 15,
     },
   ],
   "durable_objects": {
