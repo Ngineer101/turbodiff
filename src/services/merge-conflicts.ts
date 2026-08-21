@@ -93,6 +93,9 @@ export async function maybeResolveConflict(
   opts?: { retryOnUnknown?: boolean },
 ): Promise<void> {
   if (repo.enabled !== 1) return;
+  // Conflict state for Artifacts CRs is native (engine dry-runs + the
+  // post-merge ripple) — this GitHub mergeable_state path never applies.
+  if (repo.provider !== 'github') return;
   const label = `${repo.owner}/${repo.name}#${prNumber}`;
   try {
     const feature = await getFeatureByRepoPr(repo.id, prNumber);

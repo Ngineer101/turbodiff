@@ -370,7 +370,8 @@ export async function listOpenFactoryPrConflictCandidates(): Promise<
 		 FROM features f
 		 JOIN repositories r ON r.id = f.repository_id
 		 WHERE f.pr_number IS NOT NULL AND f.status = 'pr_opened'
-		   AND r.enabled = 1 AND r.auto_resolve_conflicts = 1`,
+		   AND r.enabled = 1 AND r.auto_resolve_conflicts = 1
+		   AND r.provider = 'github'`,
   ).all<RepositoryRow & { factory_pr_number: number }>();
   return res.results.map(({ factory_pr_number, ...repo }) => ({
     repo,
