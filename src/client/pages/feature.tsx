@@ -600,14 +600,20 @@ export default function FeaturePage() {
       <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-mute sm:text-[0.85rem]">
         <span className="truncate font-mono">{data.repo}</span>
         <span>·</span>
-        <a
-          href={data.pr.html_url}
-          target="_blank"
-          rel="noopener"
-          className="font-mono text-accent-bright hover:underline"
-        >
-          PR #{data.feature.pr_number}
-        </a>
+        {data.pr.html_url ? (
+          <a
+            href={data.pr.html_url}
+            target="_blank"
+            rel="noopener"
+            className="font-mono text-accent-bright hover:underline"
+          >
+            PR #{data.feature.pr_number}
+          </a>
+        ) : (
+          <span className="font-mono text-ink-dim">
+            CR #{data.cr_number ?? data.feature.pr_number}
+          </span>
+        )}
         <span>·</span>
         <span>
           {data.pr.changed_files} files{' '}
@@ -615,6 +621,26 @@ export default function FeaturePage() {
           <span className="text-danger">−{data.pr.deletions}</span>
         </span>
       </p>
+      {data.checks.length > 0 && (
+        <p className="mt-2 flex flex-wrap items-center gap-2">
+          {data.checks.map((check) => (
+            <Pill
+              key={check.name}
+              tone={
+                check.status === 'passed'
+                  ? 'on'
+                  : check.status === 'running'
+                    ? 'running'
+                    : check.status === 'failed' || check.status === 'error'
+                      ? 'red'
+                      : 'neutral'
+              }
+            >
+              {check.name}: {check.status}
+            </Pill>
+          ))}
+        </p>
+      )}
       <div className="mt-4 max-w-xl">
         <GoNoGoBoard data={data} />
       </div>
@@ -628,7 +654,11 @@ export default function FeaturePage() {
             <ConfirmButton
               className="guarded relative w-full font-mono text-[11px] font-bold tracking-[0.18em] uppercase sm:w-auto"
               title="Merge pull request?"
-              description={`This merges PR #${data.feature.pr_number} into ${data.repo} on GitHub.`}
+              description={
+                data.provider === 'artifacts'
+                  ? `This merges CR #${data.cr_number ?? data.feature.pr_number} into ${data.repo} on turbodiff.`
+                  : `This merges PR #${data.feature.pr_number} into ${data.repo} on GitHub.`
+              }
               confirmLabel="Merge"
               onConfirm={() => merge.mutate()}
               busy={merge.isPending}

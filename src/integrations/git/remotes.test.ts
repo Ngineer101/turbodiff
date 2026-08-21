@@ -67,6 +67,6 @@ describe('factoryUnsupportedReason', () => {
   it('names the repo when rejecting an Artifacts repo', () => {
     const reason = factoryUnsupportedReason({ provider: 'artifacts', owner: 'acme', name: 'api' });
     expect(reason).toContain('acme/api');
-    expect(reason).toContain('Phase 2');
+    expect(reason).toContain('GitHub pull requests');
   });
 });

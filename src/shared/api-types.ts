@@ -121,6 +121,7 @@ export interface ApiTaskRepo {
   repository_id: number;
   owner: string;
   name: string;
+  provider: string; // 'github' | 'artifacts'
   feature_id: number | null;
   pr_number: number | null;
   feature_status: string | null;
@@ -204,11 +205,17 @@ export interface ApiFeatureDetail {
     pr_number: number | null;
   };
   repo: string; // "owner/name"
+  provider: string; // 'github' | 'artifacts'
+  // Native change-request number for Artifacts repos ("CR #3").
+  cr_number: number | null;
+  // Native check runs (Artifacts repos): repo check, review verdict, verify.
+  checks: { name: string; status: string; summary: string | null }[];
   plan: string | null;
   // Null while generation hasn't opened a PR yet.
   pr: {
     state: 'open' | 'merged' | 'closed' | (string & {});
-    html_url: string;
+    // Null for native change requests — they have no external page.
+    html_url: string | null;
     additions: number;
     deletions: number;
     changed_files: number;
@@ -288,6 +295,7 @@ export interface ApiRepoSettings {
   id: number;
   owner: string;
   name: string;
+  provider: string; // 'github' | 'artifacts'
   enabled: boolean;
   review_on_push: boolean;
   blocking_reviews: boolean;
@@ -452,4 +460,21 @@ export interface ApiAutomationRunDetail {
   run: ApiAutomationRunSummary;
   automation: { id: number; name: string; repo: string };
   runs: ApiAgentRun[]; // reuse <AgentRunLog> as-is
+}
+
+// --- Artifacts-hosted projects (docs/artifacts-provider.md) ---
+
+export interface ApiCreatedProject {
+  ok: boolean;
+  repository_id: number;
+  repo: string; // "owner/name"
+  default_branch: string | null;
+  remote: string;
+}
+
+export interface ApiCloneCredential {
+  remote: string;
+  token: string;
+  scope: 'read' | 'write';
+  expiresAt: string;
 }

@@ -18,9 +18,19 @@ export async function dispatchReviewAgent(
   prNumber: number,
   prUrl: string,
   trigger: string,
-  opts: { riskTier?: string; modelOverride?: string } = {},
+  opts: {
+    riskTier?: string;
+    modelOverride?: string;
+    // Present for native change requests (docs/artifacts-provider.md): the
+    // same agent runs, with CR-backed tools swapped in by the pin.
+    changeRequest?: { id: number; number: number };
+  } = {},
 ): Promise<boolean> {
-  const instanceId = `${agent.slug}--${repo.owner}--${repo.name}--${prNumber}`.toLowerCase();
+  const instanceId = (
+    opts.changeRequest
+      ? `${agent.slug}--${repo.owner}--${repo.name}--cr-${opts.changeRequest.number}`
+      : `${agent.slug}--${repo.owner}--${repo.name}--${prNumber}`
+  ).toLowerCase();
   const reviewId = await tryRecordReview(
     repo.id,
     repo.installation_id,
@@ -37,7 +47,12 @@ export async function dispatchReviewAgent(
     agent_slug: agent.slug,
     agent_name: agent.name,
     model: opts.modelOverride ?? agent.model,
-    pull_request: `${repo.owner}/${repo.name}#${prNumber}`,
+    ...(opts.changeRequest
+      ? {
+          change_request: `${repo.owner}/${repo.name}#${opts.changeRequest.number}`,
+          change_request_id: String(opts.changeRequest.id),
+        }
+      : { pull_request: `${repo.owner}/${repo.name}#${prNumber}` }),
     trigger,
   };
   const attributes =
@@ -54,7 +69,9 @@ export async function dispatchReviewAgent(
         tagName: 'review-request',
         attributes,
         body:
-          `Review pull request #${prNumber} in ${repo.owner}/${repo.name} (${prUrl}) and post your review to GitHub.\n\n` +
+          (opts.changeRequest
+            ? `Review change request #${opts.changeRequest.number} in ${repo.owner}/${repo.name} (${prUrl}) and post your review with the post_review tool.\n\n`
+            : `Review pull request #${prNumber} in ${repo.owner}/${repo.name} (${prUrl}) and post your review to GitHub.\n\n`) +
           `Agent focus — ${agent.name}:\n${agent.instructions}`,
       },
     });

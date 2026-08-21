@@ -5,10 +5,15 @@ import { factoryUnsupportedReason } from '../integrations/git/provider.ts';
 import {
   agentUsageForMonth,
   automationUsageForMonth,
+  closeChangeRequest,
   countReviews,
   createAgent,
   createAutomation,
   createCockpitComment,
+  getChangeRequest,
+  getRepoByFullName,
+  listCrChecks,
+  listCrComments,
   createConnection,
   createPlanForTodo,
   createSkill,
@@ -106,6 +111,18 @@ import { APIError } from 'better-auth';
 import { auth } from '../integrations/auth/better-auth.ts';
 import { certificateUrl } from '../services/certificates.ts';
 import { memberRole } from '../services/access-control.ts';
+import {
+  CR_BOT_AUTHOR,
+  getCrDiffPatch,
+  mergeNativeChangeRequest,
+  parseCrFiles,
+  splitPatchByFile,
+} from '../services/change-requests.ts';
+import {
+  createArtifactsProject,
+  mintArtifactsCloneToken,
+  PROJECT_SEGMENT,
+} from '../services/artifacts.ts';
 import { syncInstallationRepos } from '../services/repository-sync.ts';
 import { approvePlan } from '../ai/runners/planner.ts';
 import {
@@ -154,6 +171,7 @@ import type {
   ApiSkillsList,
   ApiTaskDetail,
   ApiUsage,
+  ApiCreatedProject,
 } from '../shared/api-types.ts';
 
 // JSON API for the SPA (src/client). Session-cookie authed — the same
@@ -522,8 +540,6 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (repos.length === 0) {
       return c.json({ error: 'select at least one repository first' }, 400);
     }
-    const unsupported = repos.map(factoryUnsupportedReason).find(Boolean);
-    if (unsupported) return c.json({ error: unsupported }, 409);
     const body = await c.req
       .json<{
         title?: string;
@@ -699,6 +715,82 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     return c.body(object.body, 200, { 'content-type': 'application/x-ndjson' });
   });
 
+  // --- Artifacts-hosted projects (docs/artifacts-provider.md) ---
+
+  // Create a turbodiff-hosted project: Artifacts repo + synthetic tenancy +
+  // an organization the creator owns. Access is keyed to the GitHub identity
+  // (member rows join on githubId), so a GitHub-connected session is
+  // required even though the project itself never touches GitHub.
+  app.post('/projects', async (c) => {
+    const user = c.get('user');
+    if (!user.githubConnected || user.session.userId === 0) {
+      return c.json(
+        { error: 'connect a GitHub account first — turbodiff access is keyed to it' },
+        409,
+      );
+    }
+    const body = await c.req
+      .json<{ owner?: string; name?: string; description?: string }>()
+      .catch(() => null);
+    const owner = body?.owner?.trim().toLowerCase() ?? '';
+    const name = body?.name?.trim() ?? '';
+    if (!PROJECT_SEGMENT.test(owner) || !PROJECT_SEGMENT.test(name)) {
+      return c.json(
+        { error: 'owner and name must be 1-80 letters, digits, dots, dashes, or underscores' },
+        400,
+      );
+    }
+    if (await getRepoByFullName(owner, name)) {
+      return c.json({ error: `${owner}/${name} already exists` }, 409);
+    }
+    try {
+      const project = await createArtifactsProject({
+        owner,
+        name,
+        description: isString(body?.description) ? body.description : undefined,
+        creatorGithubId: user.session.userId,
+      });
+      const response: ApiCreatedProject = {
+        ok: true,
+        repository_id: project.repo.id,
+        repo: `${project.repo.owner}/${project.repo.name}`,
+        default_branch: project.repo.default_branch,
+        remote: project.remote,
+      };
+      return c.json(response);
+    } catch (err) {
+      console.error('turbodiff: project creation failed:', err);
+      return c.json({ error: err instanceof Error ? err.message : 'project creation failed' }, 502);
+    }
+  });
+
+  // Clone credential for an Artifacts-hosted repo — lets the user work with
+  // plain git. Read tokens for any member; write tokens need 'settings'.
+  app.post('/repos/:id/clone-token', async (c) => {
+    const repoId = Number(c.req.param('id'));
+    const repo = Number.isInteger(repoId) ? await getRepoById(repoId) : null;
+    if (!repo || !c.get('user').installationIds.includes(repo.installation_id)) {
+      return c.json({ error: 'unknown repository' }, 404);
+    }
+    const body = await c.req.json<{ scope?: string }>().catch(() => null);
+    const scope = body?.scope === 'write' ? 'write' : 'read';
+    if (scope === 'write') {
+      const deniedCapability = await requireCapability(
+        c,
+        repo.installation_id,
+        'settings',
+        orgAdmin,
+      );
+      if (deniedCapability) return deniedCapability;
+    }
+    try {
+      return c.json(await mintArtifactsCloneToken(repo, scope, 24 * 3600));
+    } catch (err) {
+      console.error('turbodiff: clone-token mint failed:', err);
+      return c.json({ error: err instanceof Error ? err.message : 'token mint failed' }, 502);
+    }
+  });
+
   // --- Factory PR cockpit ---
 
   app.get('/factory/features/:id', async (c) => {
@@ -720,6 +812,9 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         pr_number: feature.pr_number,
       },
       repo: `${repo.owner}/${repo.name}`,
+      provider: repo.provider,
+      cr_number: null,
+      checks: [],
       plan: null,
       pr: null,
       files: [],
@@ -738,68 +833,127 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (!feature.pr_number) return c.json(base);
     base.certificate_url = await certificateUrl(feature.id);
 
-    const [plan, verification, token, cockpitComments] = await Promise.all([
+    const [plan, verification, cockpitComments] = await Promise.all([
       getPlanByFeatureId(feature.id),
       latestVerificationForFeature(feature.id),
-      installationToken(repo.installation_id),
       listCockpitComments(feature.id),
     ]);
-    const ghBase = `/repos/${repo.owner}/${repo.name}`;
-    const [prMeta, prFiles, prReviews] = await Promise.all([
-      gh(token, `${ghBase}/pulls/${feature.pr_number}`).then((r) =>
-        r.json<{
-          state: string;
-          merged: boolean;
-          html_url: string;
-          additions: number;
-          deletions: number;
-          changed_files: number;
-          mergeable_state: string | null;
-        }>(),
-      ),
-      gh(token, `${ghBase}/pulls/${feature.pr_number}/files?per_page=100`).then((r) =>
-        r.json<
-          {
-            filename: string;
-            status: string;
+    const MAX_FILES = 50;
+    if (repo.provider === 'artifacts') {
+      // Native change request: same response shape as the GitHub path,
+      // sourced from the CR row and the R2 diff cache.
+      const cr = feature.change_request_id
+        ? await getChangeRequest(feature.change_request_id)
+        : null;
+      if (cr) {
+        base.cr_number = cr.number;
+        const patchByPath = new Map(
+          splitPatchByFile(await getCrDiffPatch(cr)).map((f) => [f.path, f.patch]),
+        );
+        const crFiles = parseCrFiles(cr);
+        base.files = crFiles.slice(0, MAX_FILES).map((f) => {
+          const filePatch = patchByPath.get(f.path);
+          return {
+            filename: f.path,
+            status: f.status,
+            additions: f.additions ?? 0,
+            deletions: f.deletions ?? 0,
+            patch: filePatch && filePatch.length < 100_000 ? filePatch : null,
+          };
+        });
+        base.more_files = Math.max(0, crFiles.length - MAX_FILES);
+        base.pr = {
+          state: cr.status,
+          html_url: null,
+          additions: crFiles.reduce((sum, f) => sum + (f.additions ?? 0), 0),
+          deletions: crFiles.reduce((sum, f) => sum + (f.deletions ?? 0), 0),
+          changed_files: crFiles.length,
+          mergeable_state: cr.mergeable === 0 ? 'dirty' : cr.mergeable === 1 ? 'clean' : null,
+        };
+        const crComments = await listCrComments(cr.id);
+        const findings = crComments.filter((comment) => comment.kind === 'finding');
+        const reviewSummary = crComments.filter((comment) => comment.kind === 'summary').at(-1);
+        if (cr.review_status) {
+          const findingLines = findings
+            .map(
+              (f) =>
+                `- **${f.severity ?? 'P3'}** ` +
+                (f.file ? `\`${f.file}${f.line ? `:${f.line}` : ''}\` — ` : '') +
+                f.body,
+            )
+            .join('\n');
+          base.reviews = [
+            {
+              state: cr.review_status === 'approved' ? 'APPROVED' : 'CHANGES_REQUESTED',
+              body: (reviewSummary?.body ?? '') + (findingLines ? `\n\n${findingLines}` : ''),
+              author: CR_BOT_AUTHOR,
+            },
+          ];
+        }
+        base.checks = (await listCrChecks(cr.id)).map((check) => ({
+          name: check.name,
+          status: check.status,
+          summary: check.summary,
+        }));
+      }
+    } else {
+      const token = await installationToken(repo.installation_id);
+      const ghBase = `/repos/${repo.owner}/${repo.name}`;
+      const [prMeta, prFiles, prReviews] = await Promise.all([
+        gh(token, `${ghBase}/pulls/${feature.pr_number}`).then((r) =>
+          r.json<{
+            state: string;
+            merged: boolean;
+            html_url: string;
             additions: number;
             deletions: number;
-            patch?: string;
-          }[]
-        >(),
-      ),
-      gh(token, `${ghBase}/pulls/${feature.pr_number}/reviews?per_page=100`).then((r) =>
-        r.json<{ state: string; body: string; user: { login: string } | null }[]>(),
-      ),
-    ]);
+            changed_files: number;
+            mergeable_state: string | null;
+          }>(),
+        ),
+        gh(token, `${ghBase}/pulls/${feature.pr_number}/files?per_page=100`).then((r) =>
+          r.json<
+            {
+              filename: string;
+              status: string;
+              additions: number;
+              deletions: number;
+              patch?: string;
+            }[]
+          >(),
+        ),
+        gh(token, `${ghBase}/pulls/${feature.pr_number}/reviews?per_page=100`).then((r) =>
+          r.json<{ state: string; body: string; user: { login: string } | null }[]>(),
+        ),
+      ]);
 
-    // GitHub's per-file patch lacks git headers, so wrap it into a minimal
-    // single-file patch for @pierre/diffs (rendered client-side).
-    const MAX_FILES = 50;
-    base.files = prFiles.slice(0, MAX_FILES).map((f) => ({
-      filename: f.filename,
-      status: f.status,
-      additions: f.additions,
-      deletions: f.deletions,
-      patch:
-        f.patch && f.patch.length < 100_000
-          ? `diff --git a/${f.filename} b/${f.filename}\n--- a/${f.filename}\n+++ b/${f.filename}\n${f.patch}\n`
-          : null,
-    }));
-    base.more_files = Math.max(0, prFiles.length - MAX_FILES);
-    base.pr = {
-      state: prMeta.merged ? 'merged' : prMeta.state,
-      html_url: prMeta.html_url,
-      additions: prMeta.additions,
-      deletions: prMeta.deletions,
-      changed_files: prMeta.changed_files,
-      mergeable_state: prMeta.mergeable_state,
-    };
-    base.reviews = prReviews.map((r) => ({
-      state: r.state,
-      body: r.body,
-      author: r.user?.login ?? null,
-    }));
+      // GitHub's per-file patch lacks git headers, so wrap it into a minimal
+      // single-file patch for @pierre/diffs (rendered client-side).
+      base.files = prFiles.slice(0, MAX_FILES).map((f) => ({
+        filename: f.filename,
+        status: f.status,
+        additions: f.additions,
+        deletions: f.deletions,
+        patch:
+          f.patch && f.patch.length < 100_000
+            ? `diff --git a/${f.filename} b/${f.filename}\n--- a/${f.filename}\n+++ b/${f.filename}\n${f.patch}\n`
+            : null,
+      }));
+      base.more_files = Math.max(0, prFiles.length - MAX_FILES);
+      base.pr = {
+        state: prMeta.merged ? 'merged' : prMeta.state,
+        html_url: prMeta.html_url,
+        additions: prMeta.additions,
+        deletions: prMeta.deletions,
+        changed_files: prMeta.changed_files,
+        mergeable_state: prMeta.mergeable_state,
+      };
+      base.reviews = prReviews.map((r) => ({
+        state: r.state,
+        body: r.body,
+        author: r.user?.login ?? null,
+      }));
+    }
     base.comments = cockpitComments.map(serializeCockpitComment);
     base.plan = plan?.plan ?? null;
 
@@ -887,6 +1041,12 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       return c.json({ error: 'unknown feature' }, 404);
     }
     if (!feature.pr_number) return c.json({ error: 'no pull request yet' }, 409);
+    if (repo.provider === 'artifacts') {
+      return c.json(
+        { error: 'the fix loop for Artifacts change requests is not available yet' },
+        409,
+      );
+    }
     if (!repo.auto_fix) {
       return c.json({ error: 'enable auto-fix for this repo before submitting comments' }, 409);
     }
@@ -1059,6 +1219,32 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       return c.json({ error: 'unknown feature' }, 404);
     }
     if (!feature.pr_number) return c.json({ error: 'no pull request yet' }, 409);
+    if (repo.provider === 'artifacts') {
+      // Native merge (docs/artifacts-provider.md): org 'settings' capability
+      // replaces the GitHub push-permission bar; the engine's merge fails on
+      // conflicts rather than pushing a broken tree.
+      if (!feature.change_request_id) return c.json({ error: 'no change request yet' }, 409);
+      const deniedCapability = await requireCapability(
+        c,
+        repo.installation_id,
+        'settings',
+        orgAdmin,
+      );
+      if (deniedCapability) return deniedCapability;
+      try {
+        await mergeNativeChangeRequest(
+          feature.change_request_id,
+          c.get('user').session.login || 'cockpit',
+        );
+      } catch (err) {
+        console.error(`turbodiff: native merge failed for feature ${id}:`, err);
+        return c.json(
+          { error: err instanceof Error ? err.message : 'merge failed', conflict: true },
+          409,
+        );
+      }
+      return c.json({ ok: true });
+    }
     const denied = await requireRepoPush(c, repo, canPushToRepo);
     if (denied) return denied;
     const appToken = await installationToken(repo.installation_id);
@@ -1116,6 +1302,21 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       return c.json({ error: 'unknown feature' }, 404);
     }
     if (!feature.pr_number) return c.json({ error: 'no pull request yet' }, 409);
+    if (repo.provider === 'artifacts') {
+      if (!feature.change_request_id) return c.json({ error: 'no change request yet' }, 409);
+      const deniedCapability = await requireCapability(
+        c,
+        repo.installation_id,
+        'settings',
+        orgAdmin,
+      );
+      if (deniedCapability) return deniedCapability;
+      await closeChangeRequest(feature.change_request_id);
+      await updateFeature(feature.id, { status: 'abandoned' });
+      // The source branch stays on the remote — Artifacts branch GC is a
+      // provisioning follow-up, and a closed CR's branch is inert.
+      return c.json({ ok: true, branch_deleted: false });
+    }
     // Same bar as Merge: closing PRs and deleting branches via the App-token
     // fallback must not exceed what GitHub lets the caller do directly.
     const denied = await requireRepoPush(c, repo, canPushToRepo);
@@ -1885,6 +2086,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
             id: r.id,
             owner: r.owner,
             name: r.name,
+            provider: r.provider,
             enabled: r.enabled === 1,
             review_on_push: r.review_on_push === 1,
             blocking_reviews: r.blocking_reviews === 1,

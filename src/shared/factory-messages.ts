@@ -42,10 +42,16 @@ export interface ConflictResolveQueueMessage {
   prNumber: number;
 }
 
+export interface CrReviewQueueMessage {
+  kind: 'cr_review';
+  changeRequestId: number;
+}
+
 export type FactoryMessage =
   | GenerateQueueMessage
   | PlanQueueMessage
   | VerifyQueueMessage
   | AutomationQueueMessage
   | FixQueueMessage
-  | ConflictResolveQueueMessage;
+  | ConflictResolveQueueMessage
+  | CrReviewQueueMessage;

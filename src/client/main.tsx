@@ -38,6 +38,7 @@ import {
 } from './lib/queries.ts';
 import { AgentEditPage } from './pages/agent-edit.tsx';
 import { AgentNewPage } from './pages/agent-new.tsx';
+import { ProjectNewPage } from './pages/project-new.tsx';
 import { AgentsPage } from './pages/agents.tsx';
 import { AutomationEditPage } from './pages/automation-edit.tsx';
 import { AutomationNewPage } from './pages/automation-new.tsx';
@@ -186,6 +187,14 @@ const agentNewRoute = createRoute({
   component: AgentNewPage,
 });
 
+// Turbodiff-hosted (Cloudflare Artifacts) project creation —
+// docs/artifacts-provider.md.
+const projectNewRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: '/projects/new',
+  component: ProjectNewPage,
+});
+
 const agentEditRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/agents/$agentId/edit',
@@ -281,6 +290,7 @@ const routeTree = rootRoute.addChildren([
     skillNewRoute,
     skillEditRoute,
     settingsRoute,
+    projectNewRoute,
     configRoute,
     membersRoute,
     automationsRoute,

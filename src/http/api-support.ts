@@ -261,6 +261,7 @@ export function serializeTask(p: PlanWithRepo, repoStatuses: TaskRepoStatusRow[]
         repository_id: r.repository_id,
         owner: r.owner,
         name: r.name,
+        provider: r.provider,
         feature_id: r.feature_id,
         pr_number: r.pr_number,
         feature_status: r.feature_status,

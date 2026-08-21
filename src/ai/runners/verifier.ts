@@ -10,10 +10,12 @@ import {
 import { githubRequest as gh } from '../../integrations/github/client.ts';
 import { claudeCliResultText, parseClaudeCliUsage, type CliUsage } from '../runtime/cli-usage.ts';
 import {
+  addCrComment,
   createVerification,
   finishVerification,
   getFeature,
   getRepoById,
+  upsertCrCheck,
   type FeatureRow,
   type RepositoryRow,
   setRepoRunCommand,
@@ -22,11 +24,13 @@ import {
 import { persistAgentLog } from '../runtime/agent-runs.ts';
 import { maybeAutoMerge } from '../../services/auto-merge.ts';
 import { maybeResolveConflict } from '../../services/merge-conflicts.ts';
+import { CR_BOT_AUTHOR, maybeAutoMergeCr } from '../../services/change-requests.ts';
 import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
 import { certificateUrl } from '../../services/certificates.ts';
+import { cockpitFeatureUrl } from '../../services/urls.ts';
 import { signArtifactKey } from '../../integrations/security/crypto.ts';
 import { resolveRunnerAuth, runnerEnvironment } from '../runtime/runner-auth.ts';
-import { runnerSandbox } from '../runtime/sandbox.ts';
+import { generationSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
 import { prepareCachedWorktree } from '../runtime/repository-workspace.ts';
 import { installationToken } from '../../integrations/github/app.ts';
@@ -207,7 +211,9 @@ async function verify(
   demo?: DemoInfo;
   usage: CliUsage | null;
 }> {
-  const token = await installationToken(repo.installation_id);
+  // Artifacts repos have no GitHub side; every GitHub call below is gated on
+  // provider, and the empty token is inert in the scrub list.
+  const token = repo.provider === 'github' ? await installationToken(repo.installation_id) : '';
   const auth = resolveRunnerAuth();
   // Verifier sandboxes never push: single-repo, contents READ-ONLY token.
   const remote = await resolveWorkspaceRemote(repo, 'read');
@@ -216,9 +222,7 @@ async function verify(
 
   // Same container id as generation: verify usually follows a generation on
   // the same repo, so the container, repo cache, and package caches are warm.
-  const sandbox = runnerSandbox(`gen--${repo.owner}--${repo.name}`.toLowerCase(), {
-    sleepAfter: '45m',
-  });
+  const sandbox = generationSandbox(repo);
   const WORK = cloneDir(feature.id);
   const OUT = outDir(feature.id);
 
@@ -289,17 +293,54 @@ async function verify(
     }
 
     const failed = results.filter((r) => r.verdict === 'fail');
-    await postReport(token, repo, feature, criteria, results, shots, summary, demo);
-    // Conflict detection runs on every verification completion — not only the
-    // auto-merge-eligible path — so auto_resolve_conflicts works standalone.
-    await maybeResolveConflict(repo, feature.pr_number!);
-    if (failed.length === 0) {
-      await maybeAutoMerge(repo, feature.pr_number!);
+    if (repo.provider === 'artifacts') {
+      // Native tail (docs/artifacts-provider.md): the report lands on the
+      // change request, the 'verify' check records the outcome, and native
+      // auto-merge takes over from the GitHub one. Conflict state is already
+      // maintained by the CR engine's dry-runs.
+      if (feature.change_request_id) {
+        const cert = failed.length === 0 ? await certificateUrl(feature.id) : null;
+        await addCrComment({
+          changeRequestId: feature.change_request_id,
+          file: null,
+          line: null,
+          author: CR_BOT_AUTHOR,
+          kind: 'comment',
+          severity: null,
+          body: reportBody(
+            repo,
+            feature,
+            criteria,
+            results,
+            shots,
+            summary,
+            demo,
+            failed.length,
+            cert,
+          ),
+        }).catch((err) => console.error('turbodiff: CR verification report failed:', err));
+        await upsertCrCheck(
+          feature.change_request_id,
+          'verify',
+          failed.length === 0 ? 'passed' : 'failed',
+          `${results.length - failed.length}/${results.length} criteria met`,
+        );
+        if (failed.length === 0) await maybeAutoMergeCr(repo, feature.change_request_id);
+      }
+    } else {
+      await postReport(token, repo, feature, criteria, results, shots, summary, demo);
+      // Conflict detection runs on every verification completion — not only the
+      // auto-merge-eligible path — so auto_resolve_conflicts works standalone.
+      await maybeResolveConflict(repo, feature.pr_number!);
+      if (failed.length === 0) {
+        await maybeAutoMerge(repo, feature.pr_number!);
+      }
     }
 
     // Conformance gate: unmet criteria feed the existing fix loop (toggle and
     // cap are re-validated by the consumer, exactly like review-driven fixes).
-    if (failed.length > 0 && repo.auto_fix === 1) {
+    // PR-based fix runs are GitHub-only until the native fix loop lands.
+    if (failed.length > 0 && repo.auto_fix === 1 && repo.provider === 'github') {
       await enqueueFactoryMessage({
         kind: 'fix',
         repoId: repo.id,
@@ -445,17 +486,41 @@ async function postReport(
   demo?: DemoInfo,
 ): Promise<void> {
   const failed = results.filter((r) => r.verdict === 'fail').length;
-  const cockpit = `${env.PUBLIC_BASE_URL}/factory/features/${feature.id}`;
   const cert = failed === 0 ? await certificateUrl(feature.id) : null;
+  const body = reportBody(repo, feature, criteria, results, shots, summary, demo, failed, cert);
+  try {
+    await gh(token, `/repos/${repo.owner}/${repo.name}/issues/${feature.pr_number}/comments`, {
+      method: 'POST',
+      body: JSON.stringify({ body }),
+    });
+  } catch (err) {
+    console.error('turbodiff: verification report comment failed:', err);
+  }
+}
+
+// The evidence report markdown, shared by the GitHub PR comment and the
+// native CR comment.
+function reportBody(
+  repo: RepositoryRow,
+  feature: FeatureRow,
+  criteria: string[],
+  results: CriterionResult[],
+  shots: Map<string, string>,
+  summary: string | undefined,
+  demo: DemoInfo | undefined,
+  failed: number,
+  cert: string | null,
+): string {
+  const cockpit = cockpitFeatureUrl(feature.id);
   const lines = [
     `## 🔍 Turbodiff verification — ${failed === 0 ? 'all criteria met' : `${failed} criteria not met`}`,
     '',
     ...(demo
       ? [
-          `🎬 **[Watch the demo & review this PR in Turbodiff](${cockpit})** — ${demo.caption ?? 'screen recording of the feature in action'} ([raw video](${demo.url}))`,
+          `🎬 **[Watch the demo & review this change in Turbodiff](${cockpit})** — ${demo.caption ?? 'screen recording of the feature in action'} ([raw video](${demo.url}))`,
           '',
         ]
-      : [`🔎 **[Review this PR in Turbodiff](${cockpit})**`, '']),
+      : [`🔎 **[Review this change in Turbodiff](${cockpit})**`, '']),
     ...(cert
       ? [`📜 **[Proof of build](${cert})** — shareable certificate of this evidence`, '']
       : []),
@@ -478,15 +543,8 @@ async function postReport(
     }
   }
   if (summary) lines.push('', '### How it works', '', summary.slice(0, 3_000));
-  if (failed > 0 && repo.auto_fix === 1) {
+  if (failed > 0 && repo.auto_fix === 1 && repo.provider === 'github') {
     lines.push('', '_The unmet criteria have been handed to the fix agent._');
   }
-  try {
-    await gh(token, `/repos/${repo.owner}/${repo.name}/issues/${feature.pr_number}/comments`, {
-      method: 'POST',
-      body: JSON.stringify({ body: lines.join('\n') }),
-    });
-  } catch (err) {
-    console.error('turbodiff: verification report comment failed:', err);
-  }
+  return lines.join('\n');
 }

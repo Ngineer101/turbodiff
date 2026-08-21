@@ -95,7 +95,8 @@ or is existing turbodiff logic re-pointed at a `GitProvider` interface
   synthetic tenancy in D1, Artifacts project provisioning + clone tokens,
   declarative push/delete event ingestion, and capability gates on every
   PR-bound factory intake — `docs/artifacts-provider.md`.
-- **Phase 2**: native CR layer in production (D1 schema, diff cache from the
-  Phase-0.5 engine, cockpit CR view via `@pierre/diffs`).
-- **Phase 3**: reviews, checks, merges on native CRs; the Phase-1 gates lift
-  flow by flow and GitHub becomes import-only.
+- **Phases 2-3 (this PR)**: the native CR layer in production — D1 records,
+  the sandbox diff/merge engine, native reviews/checks/verification/merges,
+  the cockpit rendering CRs through the existing diff surface, and a
+  create-project UI. Remaining GitHub-only flows: automations, the PR fix
+  loop, and GitHub import (`import()`) as the migration path.

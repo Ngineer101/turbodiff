@@ -67,6 +67,23 @@ export async function ensureOrganizationForInstallation(
 // 'member' (never locked out) until their first sign-in, at which point an
 // existing owner/admin can promote them via
 // PATCH /organizations/:installationId/members/:memberId.
+// Synthetic Artifacts installations a user can reach via an explicit member
+// row (docs/artifacts-provider.md). GitHub installations come from GitHub's
+// own answer (auth.ts); these have no GitHub side, so membership in the
+// linked organization IS the access grant. Uncached on purpose: a freshly
+// created project must appear on the next request.
+export async function syntheticInstallationIds(githubId: number): Promise<number[]> {
+  const rows = await env.DB.prepare(
+    `SELECT o."installationId" AS id FROM "member" m
+		 JOIN "organization" o ON o.id = m."organizationId"
+		 JOIN "user" u ON u.id = m."userId"
+		 WHERE u."githubId" = ?1 AND o."installationId" < 0`,
+  )
+    .bind(githubId)
+    .all<{ id: number }>();
+  return rows.results.map((r) => r.id);
+}
+
 export async function ensureOwnerMember(
   organizationId: string,
   installerGithubId: number,

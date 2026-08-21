@@ -21,7 +21,7 @@ import {
   type SkillRow,
 } from '../../data/db.ts';
 import { resolveRunnerAuth, runnerEnvironment } from '../runtime/runner-auth.ts';
-import { runnerSandbox } from '../runtime/sandbox.ts';
+import { generationSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
 import { mountSkills } from '../runtime/skills.ts';
 import {
@@ -42,6 +42,7 @@ import {
 import { UNTRUSTED_CONTENT_RULES } from '../../domain/prompt-security.ts';
 import { installDependencies, NPM_CACHE_ENV } from '../runtime/sandbox-deps.ts';
 import { mintUserToken } from '../../services/user-tokens.ts';
+import { openNativeChangeRequest } from '../../services/change-requests.ts';
 import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
 
 // Phase 2 of the software factory, re-architected as a Cloudflare Workflow.
@@ -165,9 +166,7 @@ ${UNTRUSTED_CONTENT_RULES}
 }
 
 function sandboxFor(repo: { owner: string; name: string }): Sandbox {
-  return runnerSandbox(`gen--${repo.owner}--${repo.name}`.toLowerCase(), {
-    sleepAfter: '45m',
-  });
+  return generationSandbox(repo);
 }
 
 // Serializable context threaded between steps (a type alias, not an
@@ -226,12 +225,21 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
             });
             return null;
           }
-          const token = await installationToken(repo.installation_id);
-          // SAFETY: GitHub's get-repository endpoint always includes
-          // default_branch in its success response.
-          const info = (await (await gh(token, `/repos/${repo.owner}/${repo.name}`)).json()) as {
-            default_branch: string;
-          };
+          let base: string;
+          if (repo.provider === 'artifacts') {
+            // Artifacts repos carry their default branch in D1 — there is no
+            // forge API to ask, and installationToken would reject the
+            // synthetic installation id.
+            base = repo.default_branch ?? 'main';
+          } else {
+            const token = await installationToken(repo.installation_id);
+            // SAFETY: GitHub's get-repository endpoint always includes
+            // default_branch in its success response.
+            const info = (await (await gh(token, `/repos/${repo.owner}/${repo.name}`)).json()) as {
+              default_branch: string;
+            };
+            base = info.default_branch;
+          }
           const skills = await listEnabledSkillsForRepo(repo.id);
           await updateFeature(featureId, { status: 'generating', runStartedAt: 'now' });
           return {
@@ -240,7 +248,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
             name: repo.name,
             installationId: repo.installation_id,
             repositoryId: repo.id,
-            base: info.default_branch,
+            base,
             branch: branchName(feature),
             checkCommand: repo.check_command,
             runnerModel: feature.runner_model,
@@ -539,6 +547,35 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
           .readFile(specFile(featureId))
           .then((f) => f.content.split('## Implementation notes')[1]?.trim())
           .catch(() => undefined);
+        if (ctx.remoteSource.provider === 'artifacts') {
+          // Native change request instead of a GitHub PR
+          // (docs/artifacts-provider.md): the CR service computes the diff,
+          // records it, and queues the native review. Reaching this step
+          // means the repo check command (when set) already passed.
+          const repo = await getRepoById(ctx.repositoryId);
+          if (!repo) throw new NonRetryableError(`repository ${ctx.repositoryId} vanished`);
+          const cr = await openNativeChangeRequest({
+            repo,
+            featureId,
+            title: ctx.title,
+            sourceBranch: ctx.branch,
+            targetBranch: ctx.base,
+            openedBy: 'factory',
+            summary:
+              (summary ?? `${ctx.title} — generated change; see the diff.`) +
+              (notes ? `\n\n**Implementation notes**\n\n${notes}` : ''),
+            checkOutcome: ctx.checkCommand ? 'passed' : undefined,
+          });
+          await updateFeature(featureId, {
+            status: 'pr_opened',
+            branch: ctx.branch,
+            prNumber: cr.number,
+            changeRequestId: cr.id,
+            usage: totalUsage ?? undefined,
+          });
+          if (ctx.acceptance) await enqueueFactoryMessage({ kind: 'verify', featureId });
+          return cr.number;
+        }
         const createPr = async (authToken: string) =>
           // SAFETY: GitHub's create-pull-request endpoint returns the created
           // PR object, which always carries its number.

@@ -11,18 +11,24 @@ import {
   type RepositoryRow,
 } from '../data/db.ts';
 import { artifactsWorkspaceRemote, deriveArtifactsRepoName } from '../integrations/git/provider.ts';
+import { ensureOrganizationForInstallation, ensureOwnerMember } from './access-control.ts';
 import {
   isArtifactsPushedEvent,
   ARTIFACTS_REPO_DELETED,
   type ArtifactsEvent,
 } from '../shared/artifacts-events.ts';
+import { listChangeRequestsForRepo } from '../data/db.ts';
+import { refreshChangeRequest } from './change-requests.ts';
+import { enqueueFactoryMessage } from './factory-queue.ts';
 
 // Artifacts-hosted project lifecycle (docs/artifacts-provider.md):
 // provisioning (repo + synthetic tenancy + initial commit), user clone
 // tokens, and event application for the ArtifactsEventsWorkflow.
 
 // Same identifier grammar the GitHub routes accept for owner/name segments.
-export const PROJECT_SEGMENT = /^[\w.-]{1,80}$/;
+import { PROJECT_SEGMENT } from '../shared/projects.ts';
+import type { ApiCloneCredential } from '../shared/api-types.ts';
+export { PROJECT_SEGMENT };
 
 export interface CreatedProject {
   repo: RepositoryRow;
@@ -42,6 +48,9 @@ export async function createArtifactsProject(input: {
   owner: string;
   name: string;
   description?: string;
+  // GitHub id of the creating user; when present they become the linked
+  // organization's owner (member rows join on githubId).
+  creatorGithubId?: number;
 }): Promise<CreatedProject> {
   if (!PROJECT_SEGMENT.test(input.owner) || !PROJECT_SEGMENT.test(input.name)) {
     throw new Error(`owner and name must match ${PROJECT_SEGMENT}`);
@@ -67,6 +76,11 @@ export async function createArtifactsProject(input: {
     const installation =
       (await getArtifactsInstallationByLogin(input.owner)) ??
       (await createArtifactsInstallation(input.owner));
+    // Every project gets its organization at creation (dashboard visibility
+    // and capabilities hang off it), regardless of which route provisioned
+    // it; the creator becomes owner when their GitHub identity is known.
+    const organizationId = await ensureOrganizationForInstallation(installation.id, input.owner);
+    if (input.creatorGithubId) await ensureOwnerMember(organizationId, input.creatorGithubId);
     const repo = await createArtifactsRepository({
       installationId: installation.id,
       owner: input.owner,
@@ -127,20 +141,14 @@ async function seedInitialCommit(
   await sandbox.exec(`rm -rf ${dir}`).catch(() => {});
 }
 
-export interface CloneCredential {
-  remote: string;
-  token: string;
-  scope: 'read' | 'write';
-  expiresAt: string;
-}
-
 // A user-facing clone credential: the "deploy key" replacement that lets
 // anyone with access clone their turbodiff-hosted repo with plain git.
+// Returns the shared HTTP contract directly — the routes serve it verbatim.
 export async function mintArtifactsCloneToken(
   repo: RepositoryRow,
   scope: 'read' | 'write',
   ttlSeconds: number,
-): Promise<CloneCredential> {
+): Promise<ApiCloneCredential> {
   if (repo.provider !== 'artifacts' || !repo.artifacts_repo) {
     throw new Error(`${repo.owner}/${repo.name} is not an Artifacts-hosted repo`);
   }
@@ -158,7 +166,25 @@ export async function applyArtifactsEvent(event: ArtifactsEvent): Promise<string
       event.eventTimestamp ?? new Date().toISOString(),
     );
     if (!row) return `push to untracked repo ${event.repoName} ignored`;
-    return `recorded push to ${row.owner}/${row.name} (${event.ref})`;
+    // Native CR upkeep — the PR-synchronize webhook replacement: a moved
+    // source branch refreshes its CR (and re-reviews when the repo opted
+    // into review-on-push); a moved target branch (e.g. a merge landed)
+    // refreshes every open CR against it.
+    const branch = event.ref.replace(/^refs\/heads\//, '');
+    let refreshed = 0;
+    for (const cr of await listChangeRequestsForRepo(row.id, 'open')) {
+      if (cr.source_branch !== branch && cr.target_branch !== branch) continue;
+      try {
+        await refreshChangeRequest(row, cr);
+        refreshed += 1;
+        if (cr.source_branch === branch && row.review_on_push === 1) {
+          await enqueueFactoryMessage({ kind: 'cr_review', changeRequestId: cr.id });
+        }
+      } catch (err) {
+        console.error(`turbodiff: push-triggered refresh of CR ${cr.id} failed:`, err);
+      }
+    }
+    return `recorded push to ${row.owner}/${row.name} (${event.ref}); ${refreshed} CR(s) refreshed`;
   }
   if (event.type === ARTIFACTS_REPO_DELETED) {
     const row = await getRepoByArtifactsName(event.repoName);

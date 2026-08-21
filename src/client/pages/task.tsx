@@ -489,7 +489,7 @@ export function TaskPage() {
                       Open in cockpit
                     </Link>
                   ) : null}
-                  {r.pr_number ? (
+                  {r.pr_number && r.provider !== 'artifacts' ? (
                     <a
                       href={`https://github.com/${r.owner}/${r.name}/pull/${r.pr_number}`}
                       target="_blank"
@@ -501,6 +501,11 @@ export function TaskPage() {
                     >
                       PR #{r.pr_number} on GitHub
                     </a>
+                  ) : null}
+                  {r.pr_number && r.provider === 'artifacts' ? (
+                    <span className="inline-flex items-center px-2 text-xs text-mute">
+                      CR #{r.pr_number} · hosted on turbodiff
+                    </span>
                   ) : null}
                 </div>
               </div>

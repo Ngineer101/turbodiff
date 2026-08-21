@@ -68,6 +68,13 @@ export function OnboardingPage() {
               <GitHubMark className="size-4" />
               Install the GitHub App
             </a>
+            <p className="text-xs text-mute">
+              Or skip GitHub entirely:{' '}
+              <a href="/projects/new" className="text-accent-bright hover:underline">
+                create a turbodiff-hosted project
+              </a>{' '}
+              — the factory builds, reviews, and merges it natively.
+            </p>
           </>
         ) : (
           <>

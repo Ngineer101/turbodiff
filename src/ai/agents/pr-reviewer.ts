@@ -18,6 +18,13 @@ import {
   makePostReview,
   type RepoPin,
 } from '../tools/github.ts';
+import {
+  makeFetchCr,
+  makeFetchCrComments,
+  makeFetchCrFile,
+  makePostCrReview,
+  type CrPin,
+} from '../tools/change-requests.ts';
 
 // Turbodiff's one generic reviewer: every configured agent (built-in persona
 // or user-created) runs through this function. One instance per agent × PR
@@ -43,12 +50,28 @@ function parseConnections(raw: string | undefined): ConnectionSnapshot[] {
   }
 }
 
-// The dispatched PR ("owner/name#123" attribute) — pins every GitHub tool to
+// The dispatched target ("owner/name#123" attribute) — pins every tool to
 // that one repository, so a prompt-injected model can't point them elsewhere
-// in the installation.
+// in the installation. One matcher for both pin kinds.
+function parseOwnerRepoNumber(
+  raw: string | undefined,
+): { owner: string; repo: string; number: number } | null {
+  const match = raw?.match(/^([\w.-]+)\/([\w.-]+)#(\d+)$/);
+  return match ? { owner: match[1], repo: match[2], number: Number(match[3]) } : null;
+}
+
 function parsePin(raw: string | undefined): RepoPin {
-  const match = raw?.match(/^([\w.-]+)\/([\w.-]+)#\d+$/);
-  return match ? { owner: match[1], repo: match[2] } : null;
+  const parsed = parseOwnerRepoNumber(raw);
+  return parsed ? { owner: parsed.owner, repo: parsed.repo } : null;
+}
+
+// Native change-request dispatches ("owner/name#3" + a CR row id) swap the
+// GitHub tool set for the CR-backed one; the agent itself is identical.
+function parseCrPin(raw: string | undefined, rawId: string | undefined): CrPin | null {
+  const parsed = parseOwnerRepoNumber(raw);
+  const id = Number(rawId);
+  if (!parsed || !Number.isInteger(id) || id <= 0) return null;
+  return { ...parsed, changeRequestId: id };
 }
 
 function deliveryConfig() {
@@ -59,12 +82,19 @@ function deliveryConfig() {
       model: delivery.attributes.model || DEFAULT_MODEL,
       connections: parseConnections(delivery.attributes.connections),
       pin: parsePin(delivery.attributes.pull_request),
+      crPin: parseCrPin(delivery.attributes.change_request, delivery.attributes.change_request_id),
     };
   }
   // Pre-multi-agent conversations and manual test prompts arrive as plain
   // user messages; run them as the default reviewer. No dispatch attributes
   // to pin from — this path is operator-only (REVIEW_SECRET on /internal).
-  return { agentName: 'Code Review', model: DEFAULT_MODEL, connections: [], pin: null };
+  return {
+    agentName: 'Code Review',
+    model: DEFAULT_MODEL,
+    connections: [],
+    pin: null,
+    crPin: null,
+  };
 }
 
 // Step 0 finding (@flue/runtime 2.0.3's node_modules/.../types-*.d.mts):
@@ -101,12 +131,23 @@ export function PrReviewer(props: AgentProps) {
   // pi-ai bump adds adaptive thinking.
   useModel(cfg.model, { thinkingLevel: 'off' });
 
-  useTool(makeFetchPr(cfg.pin));
-  useTool(makeFetchFile(cfg.pin));
-  useTool(makeFetchReviewThreads(cfg.pin));
-  // post_review closes over the instance id so completing the D1 review row
-  // can never hit another agent's concurrent review of the same PR.
-  useTool(makePostReview(props.id, cfg.pin));
+  // The tool set is chosen by the dispatch pin — GitHub PRs and native CRs
+  // present the same four tool names, so agent personas work on both. The
+  // branch is stable per instance (an instance is always one PR or one CR),
+  // matching the connections loop below.
+  if (cfg.crPin) {
+    useTool(makeFetchCr(cfg.crPin));
+    useTool(makeFetchCrFile(cfg.crPin));
+    useTool(makeFetchCrComments(cfg.crPin));
+    useTool(makePostCrReview(props.id, cfg.crPin));
+  } else {
+    useTool(makeFetchPr(cfg.pin));
+    useTool(makeFetchFile(cfg.pin));
+    useTool(makeFetchReviewThreads(cfg.pin));
+    // post_review closes over the instance id so completing the D1 review row
+    // can never hit another agent's concurrent review of the same PR.
+    useTool(makePostReview(props.id, cfg.pin));
+  }
 
   // The agent's configured external MCP servers (e.g. an Executor catalog).
   // Tokens stay sealed in D1: the auth resolver decrypts per request, so

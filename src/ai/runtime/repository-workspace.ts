@@ -113,6 +113,31 @@ export async function prepareFreshClone({
   );
 }
 
+// Full-history, all-branches mirror for the change-request engine
+// (ai/runtime/cr-engine.ts): merge-base and cross-branch diffs need shared
+// history the shallow single-branch caches above deliberately avoid. Clone
+// on first touch, fetch after; the first exec on a cold container
+// additionally pays the boot, hence the generous timeout.
+export async function prepareFullMirror(
+  sandbox: Sandbox,
+  dir: string,
+  remote: WorkspaceRemote,
+): Promise<void> {
+  const git = `git ${remote.configFlags}`;
+  const sync = await sandbox.exec(
+    `if [ -d ${dir}/.git ]; then ` +
+      `${git} -C ${dir} fetch -q --prune "${remote.authUrl}" "+refs/heads/*:refs/remotes/origin/*"; ` +
+      `else ${git} clone -q "${remote.authUrl}" ${dir} && ` +
+      `git -C ${dir} remote set-url origin "${remote.cleanUrl}" && ${botIdentity(dir)}; fi`,
+    { env: remote.env, timeout: 5 * 60_000 },
+  );
+  if (!sync.success) {
+    throw new Error(
+      `mirror sync failed: ${redactSecrets(sync.stderr || sync.stdout, [remote.token]).slice(0, 500)}`,
+    );
+  }
+}
+
 // The push counterpart of the prepare helpers: HEAD of `dir` to the branch
 // named by `$PUSH_BRANCH` (env-supplied by the caller alongside remote.env).
 export function pushHeadCommand(remote: WorkspaceRemote, dir: string): string {

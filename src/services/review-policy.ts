@@ -3,6 +3,7 @@ import { githubRequest as gh } from '../integrations/github/client.ts';
 import { REVIEW_NOISE_PATTERNS } from '../domain/review-diff.ts';
 import { installationToken } from '../integrations/github/app.ts';
 import { DEFAULT_AGENT_SLUG } from '../domain/personas.ts';
+import { reviewCountLastDay } from '../data/db.ts';
 
 // Risk-tiered dispatch, after Cloudflare's AI code review setup: small
 // mechanical changes get one generalist pass, mid-size changes a reduced
@@ -26,10 +27,23 @@ const SENSITIVE_PATH =
 // Built-in slugs that still run on a mid-size ("lite") PR.
 const LITE_SLUGS = new Set([DEFAULT_AGENT_SLUG, 'security']);
 
-interface PrFileEntry {
+export interface RiskFileEntry {
   filename: string;
   additions: number;
   deletions: number;
+}
+
+// The pure classification — shared by the GitHub path (files from the PR
+// API) and native change requests (files from the CR record).
+export function computeRiskTierFromFiles(files: RiskFileEntry[]): RiskTier {
+  if (files.length >= FULL_MIN_FILES) return 'full';
+  if (files.some((f) => SENSITIVE_PATH.test(f.filename))) return 'full';
+
+  const lines = files
+    .filter((f) => !REVIEW_NOISE_PATTERNS.some((n) => n.pattern.test(f.filename)))
+    .reduce((n, f) => n + f.additions + f.deletions, 0);
+  if (lines <= TRIVIAL_MAX_LINES) return 'trivial';
+  return lines <= LITE_MAX_LINES ? 'lite' : 'full';
 }
 
 export async function computeRiskTier(
@@ -45,16 +59,8 @@ export async function computeRiskTier(
   // SAFETY: gh() throws on non-2xx, and GitHub's "list pull request files"
   // response is an array whose items always carry filename, additions, and
   // deletions.
-  const files = (await res.json()) as PrFileEntry[];
-
-  if (files.length >= FULL_MIN_FILES) return 'full';
-  if (files.some((f) => SENSITIVE_PATH.test(f.filename))) return 'full';
-
-  const lines = files
-    .filter((f) => !REVIEW_NOISE_PATTERNS.some((n) => n.pattern.test(f.filename)))
-    .reduce((n, f) => n + f.additions + f.deletions, 0);
-  if (lines <= TRIVIAL_MAX_LINES) return 'trivial';
-  return lines <= LITE_MAX_LINES ? 'lite' : 'full';
+  const files = (await res.json()) as RiskFileEntry[];
+  return computeRiskTierFromFiles(files);
 }
 
 // The subset of enabled agents a tier dispatches. Installations running only
@@ -72,4 +78,22 @@ export function agentsForTier<T extends { slug: string }>(tier: RiskTier, enable
 // trivial reviews run each agent's configured model.
 export function tierModelOverride(tier: RiskTier): string | undefined {
   return tier === 'trivial' && env.TRIVIAL_MODEL ? env.TRIVIAL_MODEL : undefined;
+}
+
+// Agent-runs left under the installation's rolling daily cap — the shared
+// admission control for review dispatch, GitHub webhooks and native change
+// requests alike (each selected agent consumes one unit).
+export async function remainingDailyBudget(
+  installationId: number,
+  accountLabel: string,
+): Promise<number> {
+  const limit = Number(env.REVIEW_DAILY_LIMIT) || 50;
+  const used = await reviewCountLastDay(installationId);
+  const remaining = limit - used;
+  if (remaining <= 0) {
+    console.warn(
+      `turbodiff: daily review cap (${limit}) reached for installation ${installationId} (${accountLabel})`,
+    );
+  }
+  return remaining;
 }
