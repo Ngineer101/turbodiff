@@ -27,9 +27,10 @@ import { maybeResolveConflict } from '../../services/merge-conflicts.ts';
 import { CR_BOT_AUTHOR, maybeAutoMergeCr } from '../../services/change-requests.ts';
 import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
 import { certificateUrl } from '../../services/certificates.ts';
+import { cockpitFeatureUrl } from '../../services/urls.ts';
 import { signArtifactKey } from '../../integrations/security/crypto.ts';
 import { resolveRunnerAuth, runnerEnvironment } from '../runtime/runner-auth.ts';
-import { runnerSandbox } from '../runtime/sandbox.ts';
+import { generationSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
 import { prepareCachedWorktree } from '../runtime/repository-workspace.ts';
 import { installationToken } from '../../integrations/github/app.ts';
@@ -221,9 +222,7 @@ async function verify(
 
   // Same container id as generation: verify usually follows a generation on
   // the same repo, so the container, repo cache, and package caches are warm.
-  const sandbox = runnerSandbox(`gen--${repo.owner}--${repo.name}`.toLowerCase(), {
-    sleepAfter: '45m',
-  });
+  const sandbox = generationSandbox(repo);
   const WORK = cloneDir(feature.id);
   const OUT = outDir(feature.id);
 
@@ -512,7 +511,7 @@ function reportBody(
   failed: number,
   cert: string | null,
 ): string {
-  const cockpit = `${env.PUBLIC_BASE_URL}/factory/features/${feature.id}`;
+  const cockpit = cockpitFeatureUrl(feature.id);
   const lines = [
     `## 🔍 Turbodiff verification — ${failed === 0 ? 'all criteria met' : `${failed} criteria not met`}`,
     '',

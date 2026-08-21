@@ -10,6 +10,7 @@ import { Field, Input, Textarea } from '../components/ui/input.tsx';
 import { Lamp } from '../components/identity.tsx';
 import { Muted, PageTitle, SectionHeading } from '../components/section.tsx';
 import { cn } from '../lib/utils.ts';
+import { cloneCommand, PROJECT_SEGMENT } from '../../shared/projects.ts';
 
 // Create a turbodiff-hosted project (docs/artifacts-provider.md): the repo
 // lives on Cloudflare Artifacts in turbodiff's account — no GitHub App, no
@@ -28,8 +29,6 @@ interface CloneCredential {
   token: string;
   expiresAt: string;
 }
-
-const SEGMENT = /^[\w.-]{1,80}$/;
 
 export function ProjectNewPage() {
   const navigate = useNavigate();
@@ -63,7 +62,7 @@ export function ProjectNewPage() {
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (!SEGMENT.test(owner.trim()) || !SEGMENT.test(name.trim())) {
+    if (!PROJECT_SEGMENT.test(owner.trim()) || !PROJECT_SEGMENT.test(name.trim())) {
       setError('Owner and name must be 1-80 letters, digits, dots, dashes, or underscores.');
       return;
     }
@@ -140,9 +139,7 @@ function ProjectCreated({ project }: { project: CreatedProject }) {
       toast.error(err instanceof ApiError ? err.message : 'Could not mint a clone token'),
   });
 
-  const cloneCommand = credential
-    ? `git -c http.extraHeader="Authorization: Bearer ${credential.token}" clone ${credential.remote}`
-    : null;
+  const command = credential ? cloneCommand(credential.remote, credential.token) : null;
 
   return (
     <>
@@ -161,17 +158,17 @@ function ProjectCreated({ project }: { project: CreatedProject }) {
         </p>
         <div className="space-y-2">
           <p className="text-[0.85rem] text-ink-dim">Work with it using plain git:</p>
-          {cloneCommand ? (
+          {command ? (
             <div className="space-y-2">
               <pre className="overflow-x-auto rounded-xl bg-surface-2/60 p-3 text-xs text-ink-dim">
-                {cloneCommand}
+                {command}
               </pre>
               <div className="flex items-center gap-3">
                 <Button
                   size="sm"
                   variant="secondary"
                   onClick={() => {
-                    void navigator.clipboard.writeText(cloneCommand);
+                    void navigator.clipboard.writeText(command);
                     toast.success('Clone command copied');
                   }}
                 >

@@ -112,6 +112,7 @@ import { auth } from '../integrations/auth/better-auth.ts';
 import { certificateUrl } from '../services/certificates.ts';
 import { memberRole } from '../services/access-control.ts';
 import {
+  CR_BOT_AUTHOR,
   getCrDiffPatch,
   mergeNativeChangeRequest,
   splitPatchByFile,
@@ -885,7 +886,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
             {
               state: cr.review_status === 'approved' ? 'APPROVED' : 'CHANGES_REQUESTED',
               body: (reviewSummary?.body ?? '') + (findingLines ? `\n\n${findingLines}` : ''),
-              author: 'turbodiff[bot]',
+              author: CR_BOT_AUTHOR,
             },
           ];
         }

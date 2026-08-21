@@ -21,7 +21,7 @@ import {
   type SkillRow,
 } from '../../data/db.ts';
 import { resolveRunnerAuth, runnerEnvironment } from '../runtime/runner-auth.ts';
-import { runnerSandbox } from '../runtime/sandbox.ts';
+import { generationSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
 import { mountSkills } from '../runtime/skills.ts';
 import {
@@ -166,9 +166,7 @@ ${UNTRUSTED_CONTENT_RULES}
 }
 
 function sandboxFor(repo: { owner: string; name: string }): Sandbox {
-  return runnerSandbox(`gen--${repo.owner}--${repo.name}`.toLowerCase(), {
-    sleepAfter: '45m',
-  });
+  return generationSandbox(repo);
 }
 
 // Serializable context threaded between steps (a type alias, not an

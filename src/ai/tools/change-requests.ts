@@ -1,5 +1,4 @@
 import { defineTool } from '@flue/runtime';
-import { env } from 'cloudflare:workers';
 import * as v from 'valibot';
 import {
   addCrComment,
@@ -13,7 +12,8 @@ import {
   type RepositoryRow,
 } from '../../data/db.ts';
 import { CR_BOT_AUTHOR, getCrDiffPatch, maybeAutoMergeCr } from '../../services/change-requests.ts';
-import { runnerSandbox } from '../runtime/sandbox.ts';
+import { generationSandbox } from '../runtime/sandbox.ts';
+import { cockpitFeatureUrl } from '../../services/urls.ts';
 import {
   filterDiffNoise,
   findingSchema,
@@ -125,9 +125,7 @@ export const makeFetchCrFile = (pin: CrPin) =>
       // Artifacts has no contents API; the CR engine keeps a synced clone in
       // the per-repo sandbox, so file reads are `git show ref:path` there.
       // Ref and path travel via env — never interpolated into the command.
-      const sandbox = runnerSandbox(`gen--${repo.owner}--${repo.name}`.toLowerCase(), {
-        sleepAfter: '45m',
-      });
+      const sandbox = generationSandbox(repo);
       const ref = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,80}$/.test(data.ref) ? data.ref : '';
       if (!ref) throw new Error(`unusable ref ${data.ref}`);
       const result = await sandbox.exec(
@@ -239,7 +237,7 @@ export const makePostCrReview = (agentInstanceId: string, pin: CrPin) =>
         blocking ? 'failed' : 'passed',
         `${data.findings.length} finding(s)` + (blocking ? ' — P1 blocks merge' : ''),
       );
-      const url = cr.feature_id ? `${env.PUBLIC_BASE_URL}/factory/features/${cr.feature_id}` : null;
+      const url = cr.feature_id ? cockpitFeatureUrl(cr.feature_id) : null;
       await completeReview(agentInstanceId, url, data.findings.length);
       if (!blocking) await maybeAutoMergeCr(repo, cr.id);
       return { output: { posted: true, inline: data.findings.length, url, fallback: null } };

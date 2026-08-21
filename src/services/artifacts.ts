@@ -26,7 +26,8 @@ import { enqueueFactoryMessage } from './factory-queue.ts';
 // tokens, and event application for the ArtifactsEventsWorkflow.
 
 // Same identifier grammar the GitHub routes accept for owner/name segments.
-export const PROJECT_SEGMENT = /^[\w.-]{1,80}$/;
+import { PROJECT_SEGMENT } from '../shared/projects.ts';
+export { PROJECT_SEGMENT };
 
 export interface CreatedProject {
   repo: RepositoryRow;

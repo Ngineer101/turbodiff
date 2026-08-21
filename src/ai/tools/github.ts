@@ -9,7 +9,7 @@ import {
   githubGraphql as ghGraphql,
   githubRequest as gh,
 } from '../../integrations/github/client.ts';
-import { REVIEW_NOISE_PATTERNS } from '../../domain/review-diff.ts';
+import { REVIEW_NOISE_PATTERNS, splitDiffSegments } from '../../domain/review-diff.ts';
 
 // The repository a review dispatch is scoped to. The model supplies
 // owner/repo as tool arguments, and tokenFor resolves a full installation
@@ -80,13 +80,14 @@ export function filterDiffNoise(diff: string): string {
   return diff
     .split(/^(?=diff --git )/m)
     .map((segment) => {
-      const header = segment.match(/^diff --git "?a\/.+?"? "?b\/(.+?)"?$/m);
-      if (!header) return segment;
-      const path = header[1];
+      const [entry] = splitDiffSegments(segment);
+      if (!entry) return segment;
       const reason =
-        REVIEW_NOISE_PATTERNS.find((n) => n.pattern.test(path))?.reason ??
-        (isGeneratedSegment(path, segment) ? 'generated file' : null);
-      return reason === null ? segment : `[turbodiff: diff for ${path} omitted — ${reason}]\n`;
+        REVIEW_NOISE_PATTERNS.find((n) => n.pattern.test(entry.path))?.reason ??
+        (isGeneratedSegment(entry.path, segment) ? 'generated file' : null);
+      return reason === null
+        ? segment
+        : `[turbodiff: diff for ${entry.path} omitted — ${reason}]\n`;
     })
     .join('');
 }

@@ -15,6 +15,7 @@ import {
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import type { ApiRepoSettings, ApiSettings } from '../../shared/api-types.ts';
+import { cloneCommand } from '../../shared/projects.ts';
 import { api, ApiError } from '../lib/api.ts';
 import { pushSupported, subscribeToPush, unsubscribeFromPush } from '../lib/push.ts';
 import { meQuery, settingsQuery } from '../lib/queries.ts';
@@ -198,9 +199,7 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
         },
       ),
     onSuccess: (credential) => {
-      void navigator.clipboard.writeText(
-        `git -c http.extraHeader="Authorization: Bearer ${credential.token}" clone ${credential.remote}`,
-      );
+      void navigator.clipboard.writeText(cloneCommand(credential.remote, credential.token));
       toast.success('Clone command copied to clipboard (token valid 24h)');
     },
     onError: onApiError,

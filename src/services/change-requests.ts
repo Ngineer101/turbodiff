@@ -19,6 +19,7 @@ import {
 } from '../data/db.ts';
 import { enqueueFactoryMessage } from './factory-queue.ts';
 import { autoMergeDecline } from '../domain/merge-policy.ts';
+import { splitDiffSegments } from '../domain/review-diff.ts';
 
 // Native change-request orchestration (docs/artifacts-provider.md): the
 // forge layer for Artifacts-hosted repos. Rows in D1 (data/change-requests),
@@ -199,24 +200,11 @@ export interface CrFilePatch {
 
 // Splits a unified diff into per-file patches — the shape the cockpit's
 // @pierre/diffs viewer consumes (the GitHub path builds the same thing from
-// /pulls/:n/files).
+// /pulls/:n/files). File boundaries come from the shared splitter in
+// domain/review-diff.ts, the same one the reviewer's noise filter uses.
 export function splitPatchByFile(patch: string): CrFilePatch[] {
-  return patch
-    .split(/\n(?=diff --git )/)
-    .filter((section) => section.trim())
-    .map((section) => {
-      const lines = section.split('\n');
-      let oldPath = '';
-      let newPath = '';
-      for (const line of lines.slice(0, 6)) {
-        if (line.startsWith('--- ')) oldPath = line.slice(4);
-        if (line.startsWith('+++ ')) newPath = line.slice(4);
-      }
-      const path =
-        newPath && newPath !== '/dev/null'
-          ? newPath.replace(/^b\//, '')
-          : oldPath.replace(/^a\//, '');
-      return { path, patch: section.endsWith('\n') ? section : `${section}\n` };
-    })
-    .filter((file) => file.path);
+  return splitDiffSegments(patch).map(({ path, segment }) => ({
+    path,
+    patch: segment.endsWith('\n') ? segment : `${segment}\n`,
+  }));
 }

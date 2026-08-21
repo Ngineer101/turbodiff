@@ -3,6 +3,7 @@
 // cert/<id> is the only credential, mirroring the /artifacts/* scheme, so
 // links are shareable but not enumerable.
 import { env } from 'cloudflare:workers';
+import { cockpitFeatureUrl } from './urls.ts';
 import { signArtifactKey } from '../integrations/security/crypto.ts';
 import { parseUtc } from '../shared/time.ts';
 import {
@@ -77,7 +78,7 @@ export async function loadCertificateData(featureId: number): Promise<Certificat
     // Native CRs live in the cockpit; GitHub PRs keep their external URL.
     prUrl:
       repo.provider === 'artifacts'
-        ? `${env.PUBLIC_BASE_URL}/factory/features/${feature.id}`
+        ? cockpitFeatureUrl(feature.id)
         : `https://github.com/${repo.owner}/${repo.name}/pull/${feature.pr_number}`,
     authorLogin: feature.author_login,
     verifiedAt: verification?.created_at ?? null,

@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { cockpitFeatureUrl } from '../../services/urls.ts';
 import {
   getChangeRequest,
   getInstallation,
@@ -53,9 +54,7 @@ export async function dispatchNativeCrReviews(changeRequestId: number): Promise<
   const budget = await remainingDailyBudget(repo.installation_id, installation.account_login);
   if (budget <= 0) return;
   const agents = agentsForTier(tier, enabled).slice(0, budget);
-  const cockpitUrl = cr.feature_id
-    ? `${env.PUBLIC_BASE_URL}/factory/features/${cr.feature_id}`
-    : `${env.PUBLIC_BASE_URL}/`;
+  const cockpitUrl = cr.feature_id ? cockpitFeatureUrl(cr.feature_id) : `${env.PUBLIC_BASE_URL}/`;
 
   for (const agent of agents) {
     await dispatchReviewAgent(agent, repo, cr.number, cockpitUrl, 'cr_opened', {

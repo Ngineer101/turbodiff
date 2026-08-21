@@ -4,7 +4,7 @@ import { resolveWorkspaceRemote } from '../../integrations/git/provider.ts';
 import type { WorkspaceRemote } from '../../integrations/git/remotes.ts';
 import { redactSecrets } from './redaction.ts';
 import { prepareFullMirror } from './repository-workspace.ts';
-import { runnerSandbox } from './sandbox.ts';
+import { generationSandbox } from './sandbox.ts';
 
 // The native change-request engine (docs/artifacts-provider.md): the forge
 // capabilities GitHub normally provides, computed with real git in the
@@ -60,7 +60,7 @@ function assertBranches(...branches: string[]): void {
 }
 
 function crSandbox(repo: RepositoryRow): Sandbox {
-  return runnerSandbox(`gen--${repo.owner}--${repo.name}`.toLowerCase(), { sleepAfter: '45m' });
+  return generationSandbox(repo);
 }
 
 async function git(ctx: GitContext, command: string, timeoutMs = 2 * 60_000): Promise<string> {
