@@ -8,6 +8,7 @@
 // https://flueframework.com/docs/guide/cloudflare-target/#extending-cloudflarets-entrypoint
 
 import { startAutomationRun, AutomationWorkflow } from './ai/workflows/automation.ts';
+import { refreshCrsForPushedEvent } from './services/artifacts-crs.ts';
 import { recordArtifactsEvent } from './services/artifacts-events.ts';
 import { pollAutomations } from './services/automation-poll.ts';
 import { isArtifactsQueueEvent, type ArtifactsQueueEvent } from './shared/artifacts-events.ts';
@@ -51,6 +52,15 @@ export default {
         await recordArtifactsEvent(body).catch((err) => {
           console.error('turbodiff: failed to record artifacts event:', err);
         });
+        // Phase-0.5 (docs/artifacts-cr-spike.md): a push to a CR's source or
+        // target branch recomputes that CR — the native replacement for
+        // GitHub's PR-synchronize webhook. Best-effort like the capture
+        // above; a failed recompute must never block the ack.
+        if (body.type === 'cf.artifacts.repo.pushed') {
+          await refreshCrsForPushedEvent(body).catch((err) => {
+            console.error('turbodiff: failed to refresh CRs for pushed event:', err);
+          });
+        }
         message.ack();
         continue;
       }

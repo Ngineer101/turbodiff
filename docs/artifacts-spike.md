@@ -3,8 +3,10 @@
 Throwaway probe validating that Cloudflare Artifacts (closed beta) can carry
 the factory's git provider loop before we invest in the provider abstraction:
 create repo → mint scoped tokens → clone/commit/push from the sandbox
-container → receive push events. Background and the full phased plan live in
-the provider-scoping discussion; this doc is the runbook for the spike itself.
+container → receive push events. **Read `docs/artifacts-vision.md` first** —
+it explains the end state these primitives build toward (turbodiff as its own
+forge, GitHub as import-only) and maps each spike step to a leg of that loop.
+This doc is the runbook for the spike itself.
 
 ## What's in the spike
 
