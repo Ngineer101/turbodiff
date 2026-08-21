@@ -25,6 +25,21 @@ export {
 // that pushes at the end; far below the 24h default.
 const ARTIFACTS_TOKEN_TTL_SECONDS = 4 * 3600;
 
+// Remote URLs are derived from config, not read off the repo handle: the
+// closed-beta binding's handle neither serializes its `remote` property
+// (RpcProperty) nor serves it as an RPC fetch ("receiver does not implement
+// the method"). The format is deterministic per namespace.
+export function artifactsRemoteUrl(artifactsRepo: string): string {
+  const base = (env.ARTIFACTS_REMOTE_BASE ?? '').trim().replace(/\/+$/, '');
+  if (!base) {
+    throw new Error(
+      'ARTIFACTS_REMOTE_BASE is not configured — set it in wrangler.jsonc vars ' +
+        '(see: npx wrangler artifacts repos get)',
+    );
+  }
+  return `${base}/${artifactsRepo}.git`;
+}
+
 // The subset of RepositoryRow the resolver needs; workflow RunContexts carry
 // this shape so a step can resolve a remote without re-reading the repo row.
 export interface RemoteSource {
@@ -48,12 +63,7 @@ export async function resolveWorkspaceRemote(
     }
     const handle = await env.GIT_ARTIFACTS.get(repo.artifacts_repo);
     const token = await handle.createToken(scope, ARTIFACTS_TOKEN_TTL_SECONDS);
-    // Workers RPC: stub properties are lazy thenables despite the generated
-    // string type — an unawaited one poisons any later serialization
-    // boundary ("Could not serialize object of type RpcProperty").
-    // Promise.resolve assimilates the thenable without tripping lint.
-    const remoteUrl = await Promise.resolve(handle.remote);
-    return artifactsWorkspaceRemote(remoteUrl, token.plaintext);
+    return artifactsWorkspaceRemote(artifactsRemoteUrl(repo.artifacts_repo), token.plaintext);
   }
   const token = await sandboxGitToken(repo.installation_id, repo.name, scope, opts);
   return githubWorkspaceRemote(`${repo.owner}/${repo.name}`, token);

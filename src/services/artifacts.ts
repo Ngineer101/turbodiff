@@ -10,7 +10,11 @@ import {
   removeRepositories,
   type RepositoryRow,
 } from '../data/db.ts';
-import { artifactsWorkspaceRemote, deriveArtifactsRepoName } from '../integrations/git/provider.ts';
+import {
+  artifactsRemoteUrl,
+  artifactsWorkspaceRemote,
+  deriveArtifactsRepoName,
+} from '../integrations/git/provider.ts';
 import { ensureOrganizationForInstallation, ensureOwnerMember } from './access-control.ts';
 import {
   isArtifactsPushedEvent,
@@ -154,10 +158,12 @@ export async function mintArtifactsCloneToken(
   }
   const handle = await env.GIT_ARTIFACTS.get(repo.artifacts_repo);
   const token = await handle.createToken(scope, ttlSeconds);
-  // Workers RPC: stub properties are lazy thenables — await before embedding
-  // (see resolveWorkspaceRemote).
-  const remote = await Promise.resolve(handle.remote);
-  return { remote, token: token.plaintext, scope, expiresAt: token.expiresAt };
+  return {
+    remote: artifactsRemoteUrl(repo.artifacts_repo),
+    token: token.plaintext,
+    scope,
+    expiresAt: token.expiresAt,
+  };
 }
 
 // Applies one Artifacts event to D1. Runs inside the ArtifactsEventsWorkflow;

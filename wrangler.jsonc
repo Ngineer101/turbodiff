@@ -39,6 +39,13 @@
   // on this account.
   "artifacts": [{ "binding": "GIT_ARTIFACTS", "namespace": "turbodiff-repos" }],
   "vars": {
+    // Git remote base for the GIT_ARTIFACTS namespace above — repo remotes
+    // are `<base>/<artifacts_repo>.git`. Read from config because the beta
+    // binding's repo handle does not implement the `remote` property over
+    // RPC despite the generated types declaring it ("The RPC receiver does
+    // not implement the method \"remote\""). Value from:
+    //   npx wrangler artifacts repos get <name> --namespace turbodiff-repos
+    "ARTIFACTS_REMOTE_BASE": "https://ecc47d4dfbdb95d267139b409e343a13.artifacts.cloudflare.net/git/turbodiff-repos",
     // The name of your existing Cloudflare AI Gateway.
     "AI_GATEWAY_ID": "default",
     // Public origin of this deployment — used to build absolute artifact URLs
