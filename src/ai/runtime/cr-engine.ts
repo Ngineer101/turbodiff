@@ -44,7 +44,7 @@ const PATCH_CAP = 512 * 1024;
 // Rides the same per-repo container as generation/verification, so the
 // container is usually warm when a CR needs computing; its own directory
 // keeps CR state out of the shared repo cache.
-const CR_DIR = '/workspace/cr-workspace';
+export const CR_DIR = '/workspace/cr-workspace';
 
 interface GitContext {
   sandbox: Sandbox;
@@ -129,6 +129,10 @@ export async function computeCrState(
   };
 }
 
+async function resetMergeState(ctx: GitContext): Promise<void> {
+  await git(ctx, `cd ${CR_DIR} && (git merge --abort 2>/dev/null || true) && git reset -q --hard`);
+}
+
 async function mergeDryRun(
   ctx: GitContext,
   sourceRef: string,
@@ -145,7 +149,7 @@ async function mergeDryRun(
     conflictFiles = unmerged.trim().split('\n').filter(Boolean);
   }
   // A clean --no-commit merge and a conflicted one both leave merge state.
-  await git(ctx, `cd ${CR_DIR} && (git merge --abort 2>/dev/null || true) && git reset -q --hard`);
+  await resetMergeState(ctx);
   if (!attempt.success && conflictFiles.length === 0) {
     // The merge failed for some reason other than content conflicts.
     throw new Error(
@@ -189,11 +193,7 @@ export async function mergeCr(
     return { mergedHead };
   } catch (err) {
     // Leave no half-merged state behind for the next engine call.
-    await ctx.sandbox
-      .exec(`cd ${CR_DIR} && (git merge --abort 2>/dev/null || true) && git reset -q --hard`, {
-        env: ctx.remote.env,
-      })
-      .catch(() => {});
+    await resetMergeState(ctx).catch(() => {});
     throw err;
   }
 }

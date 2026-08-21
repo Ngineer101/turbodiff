@@ -461,3 +461,20 @@ export interface ApiAutomationRunDetail {
   automation: { id: number; name: string; repo: string };
   runs: ApiAgentRun[]; // reuse <AgentRunLog> as-is
 }
+
+// --- Artifacts-hosted projects (docs/artifacts-provider.md) ---
+
+export interface ApiCreatedProject {
+  ok: boolean;
+  repository_id: number;
+  repo: string; // "owner/name"
+  default_branch: string | null;
+  remote: string;
+}
+
+export interface ApiCloneCredential {
+  remote: string;
+  token: string;
+  scope: 'read' | 'write';
+  expiresAt: string;
+}

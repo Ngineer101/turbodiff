@@ -50,21 +50,28 @@ function parseConnections(raw: string | undefined): ConnectionSnapshot[] {
   }
 }
 
-// The dispatched PR ("owner/name#123" attribute) — pins every GitHub tool to
+// The dispatched target ("owner/name#123" attribute) — pins every tool to
 // that one repository, so a prompt-injected model can't point them elsewhere
-// in the installation.
+// in the installation. One matcher for both pin kinds.
+function parseOwnerRepoNumber(
+  raw: string | undefined,
+): { owner: string; repo: string; number: number } | null {
+  const match = raw?.match(/^([\w.-]+)\/([\w.-]+)#(\d+)$/);
+  return match ? { owner: match[1], repo: match[2], number: Number(match[3]) } : null;
+}
+
 function parsePin(raw: string | undefined): RepoPin {
-  const match = raw?.match(/^([\w.-]+)\/([\w.-]+)#\d+$/);
-  return match ? { owner: match[1], repo: match[2] } : null;
+  const parsed = parseOwnerRepoNumber(raw);
+  return parsed ? { owner: parsed.owner, repo: parsed.repo } : null;
 }
 
 // Native change-request dispatches ("owner/name#3" + a CR row id) swap the
 // GitHub tool set for the CR-backed one; the agent itself is identical.
 function parseCrPin(raw: string | undefined, rawId: string | undefined): CrPin | null {
-  const match = raw?.match(/^([\w.-]+)\/([\w.-]+)#(\d+)$/);
+  const parsed = parseOwnerRepoNumber(raw);
   const id = Number(rawId);
-  if (!match || !Number.isInteger(id) || id <= 0) return null;
-  return { owner: match[1], repo: match[2], number: Number(match[3]), changeRequestId: id };
+  if (!parsed || !Number.isInteger(id) || id <= 0) return null;
+  return { ...parsed, changeRequestId: id };
 }
 
 function deliveryConfig() {

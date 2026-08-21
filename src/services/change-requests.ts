@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { computeCrState, mergeCr } from '../ai/runtime/cr-engine.ts';
+import { computeCrState, mergeCr, type CrFileChange } from '../ai/runtime/cr-engine.ts';
 import {
   addCrComment,
   createChangeRequest,
@@ -106,6 +106,14 @@ export async function openNativeChangeRequest(input: {
   const refreshed = await refreshChangeRequest(input.repo, cr);
   await enqueueFactoryMessage({ kind: 'cr_review', changeRequestId: cr.id });
   return refreshed;
+}
+
+// The one reader of change_requests.files — every consumer goes through
+// this instead of re-parsing (and re-justifying) the column inline.
+export function parseCrFiles(cr: Pick<ChangeRequestRow, 'files'>): CrFileChange[] {
+  // SAFETY: the column is written only by refreshChangeRequest above, as
+  // serialized CrFileChange[].
+  return cr.files ? (JSON.parse(cr.files) as CrFileChange[]) : [];
 }
 
 export async function getCrDiffPatch(cr: ChangeRequestRow): Promise<string> {

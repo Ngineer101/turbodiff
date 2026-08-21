@@ -115,6 +115,7 @@ import {
   CR_BOT_AUTHOR,
   getCrDiffPatch,
   mergeNativeChangeRequest,
+  parseCrFiles,
   splitPatchByFile,
 } from '../services/change-requests.ts';
 import {
@@ -122,7 +123,6 @@ import {
   mintArtifactsCloneToken,
   PROJECT_SEGMENT,
 } from '../services/artifacts.ts';
-import type { CrFileChange } from '../ai/runtime/cr-engine.ts';
 import { syncInstallationRepos } from '../services/repository-sync.ts';
 import { approvePlan } from '../ai/runners/planner.ts';
 import {
@@ -171,6 +171,7 @@ import type {
   ApiSkillsList,
   ApiTaskDetail,
   ApiUsage,
+  ApiCreatedProject,
 } from '../shared/api-types.ts';
 
 // JSON API for the SPA (src/client). Session-cookie authed — the same
@@ -749,13 +750,14 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         description: isString(body?.description) ? body.description : undefined,
         creatorGithubId: user.session.userId,
       });
-      return c.json({
+      const response: ApiCreatedProject = {
         ok: true,
         repository_id: project.repo.id,
         repo: `${project.repo.owner}/${project.repo.name}`,
         default_branch: project.repo.default_branch,
         remote: project.remote,
-      });
+      };
+      return c.json(response);
     } catch (err) {
       console.error('turbodiff: project creation failed:', err);
       return c.json({ error: err instanceof Error ? err.message : 'project creation failed' }, 502);
@@ -848,9 +850,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         const patchByPath = new Map(
           splitPatchByFile(await getCrDiffPatch(cr)).map((f) => [f.path, f.patch]),
         );
-        // SAFETY: change_requests.files is written only by refreshChangeRequest
-        // as serialized CrFileChange[].
-        const crFiles = cr.files ? (JSON.parse(cr.files) as CrFileChange[]) : [];
+        const crFiles = parseCrFiles(cr);
         base.files = crFiles.slice(0, MAX_FILES).map((f) => {
           const filePatch = patchByPath.get(f.path);
           return {

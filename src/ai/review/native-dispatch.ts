@@ -13,6 +13,7 @@ import {
   tierModelOverride,
   type RiskFileEntry,
 } from '../../services/review-policy.ts';
+import { parseCrFiles } from '../../services/change-requests.ts';
 import { dispatchReviewAgent } from './dispatch.ts';
 
 // Native change-request review dispatch (docs/artifacts-provider.md): the
@@ -32,16 +33,7 @@ export async function dispatchNativeCrReviews(changeRequestId: number): Promise<
   const enabled = (await listAgentsForRepo(repo)).filter((a) => a.enabled);
   if (enabled.length === 0) return;
 
-  // SAFETY: change_requests.files is written only by refreshChangeRequest as
-  // serialized CrFileChange[].
-  const crFiles = cr.files
-    ? (JSON.parse(cr.files) as {
-        path: string;
-        additions: number | null;
-        deletions: number | null;
-      }[])
-    : [];
-  const files: RiskFileEntry[] = crFiles.map((f) => ({
+  const files: RiskFileEntry[] = parseCrFiles(cr).map((f) => ({
     filename: f.path,
     additions: f.additions ?? 0,
     deletions: f.deletions ?? 0,

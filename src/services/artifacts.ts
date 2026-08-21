@@ -27,6 +27,7 @@ import { enqueueFactoryMessage } from './factory-queue.ts';
 
 // Same identifier grammar the GitHub routes accept for owner/name segments.
 import { PROJECT_SEGMENT } from '../shared/projects.ts';
+import type { ApiCloneCredential } from '../shared/api-types.ts';
 export { PROJECT_SEGMENT };
 
 export interface CreatedProject {
@@ -140,20 +141,14 @@ async function seedInitialCommit(
   await sandbox.exec(`rm -rf ${dir}`).catch(() => {});
 }
 
-export interface CloneCredential {
-  remote: string;
-  token: string;
-  scope: 'read' | 'write';
-  expiresAt: string;
-}
-
 // A user-facing clone credential: the "deploy key" replacement that lets
 // anyone with access clone their turbodiff-hosted repo with plain git.
+// Returns the shared HTTP contract directly — the routes serve it verbatim.
 export async function mintArtifactsCloneToken(
   repo: RepositoryRow,
   scope: 'read' | 'write',
   ttlSeconds: number,
-): Promise<CloneCredential> {
+): Promise<ApiCloneCredential> {
   if (repo.provider !== 'artifacts' || !repo.artifacts_repo) {
     throw new Error(`${repo.owner}/${repo.name} is not an Artifacts-hosted repo`);
   }

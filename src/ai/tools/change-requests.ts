@@ -11,10 +11,17 @@ import {
   type ChangeRequestRow,
   type RepositoryRow,
 } from '../../data/db.ts';
-import { CR_BOT_AUTHOR, getCrDiffPatch, maybeAutoMergeCr } from '../../services/change-requests.ts';
+import {
+  CR_BOT_AUTHOR,
+  getCrDiffPatch,
+  maybeAutoMergeCr,
+  parseCrFiles,
+} from '../../services/change-requests.ts';
+import { CR_BRANCH_NAME, CR_DIR } from '../runtime/cr-engine.ts';
 import { generationSandbox } from '../runtime/sandbox.ts';
 import { cockpitFeatureUrl } from '../../services/urls.ts';
 import {
+  assertPinned,
   filterDiffNoise,
   findingSchema,
   findingSeverity,
@@ -42,14 +49,7 @@ export interface CrPin {
 }
 
 function assertCrPinned(pin: CrPin, owner: string, repo: string): void {
-  if (
-    owner.toLowerCase() !== pin.owner.toLowerCase() ||
-    repo.toLowerCase() !== pin.repo.toLowerCase()
-  ) {
-    throw new Error(
-      `this review is scoped to ${pin.owner}/${pin.repo} — refusing to access ${owner}/${repo}`,
-    );
-  }
+  assertPinned({ owner: pin.owner, repo: pin.repo }, owner, repo);
 }
 
 async function pinnedCr(pin: CrPin): Promise<{ cr: ChangeRequestRow; repo: RepositoryRow }> {
@@ -83,11 +83,7 @@ export const makeFetchCr = (pin: CrPin) =>
       const comments = await listCrComments(cr.id);
       const summary = comments.find((c) => c.kind === 'summary' && c.author === CR_BOT_AUTHOR);
       const diff = await getCrDiffPatch(cr);
-      // SAFETY: change_requests.files is written only by refreshChangeRequest
-      // as serialized CrFileChange[].
-      const files = cr.files
-        ? (JSON.parse(cr.files) as { additions: number | null; deletions: number | null }[])
-        : [];
+      const files = parseCrFiles(cr);
       return {
         output: {
           title: cr.title,
@@ -126,12 +122,11 @@ export const makeFetchCrFile = (pin: CrPin) =>
       // the per-repo sandbox, so file reads are `git show ref:path` there.
       // Ref and path travel via env — never interpolated into the command.
       const sandbox = generationSandbox(repo);
-      const ref = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,80}$/.test(data.ref) ? data.ref : '';
-      if (!ref) throw new Error(`unusable ref ${data.ref}`);
+      if (!CR_BRANCH_NAME.test(data.ref)) throw new Error(`unusable ref ${data.ref}`);
       const result = await sandbox.exec(
-        `git -C /workspace/cr-workspace show "$CR_REF:$CR_PATH" 2>/dev/null || ` +
-          `git -C /workspace/cr-workspace show "refs/remotes/origin/$CR_REF:$CR_PATH"`,
-        { env: { CR_REF: ref, CR_PATH: data.path }, timeout: 60_000 },
+        `git -C ${CR_DIR} show "$CR_REF:$CR_PATH" 2>/dev/null || ` +
+          `git -C ${CR_DIR} show "refs/remotes/origin/$CR_REF:$CR_PATH"`,
+        { env: { CR_REF: data.ref, CR_PATH: data.path }, timeout: 60_000 },
       );
       if (!result.success) {
         throw new Error(

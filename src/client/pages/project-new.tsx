@@ -11,24 +11,12 @@ import { Lamp } from '../components/identity.tsx';
 import { Muted, PageTitle, SectionHeading } from '../components/section.tsx';
 import { cn } from '../lib/utils.ts';
 import { cloneCommand, PROJECT_SEGMENT } from '../../shared/projects.ts';
+import type { ApiCloneCredential, ApiCreatedProject } from '../../shared/api-types.ts';
 
 // Create a turbodiff-hosted project (docs/artifacts-provider.md): the repo
 // lives on Cloudflare Artifacts in turbodiff's account — no GitHub App, no
 // external forge. The factory loop (tasks → change requests → review →
 // merge) runs natively against it.
-
-interface CreatedProject {
-  repository_id: number;
-  repo: string;
-  default_branch: string | null;
-  remote: string;
-}
-
-interface CloneCredential {
-  remote: string;
-  token: string;
-  expiresAt: string;
-}
 
 export function ProjectNewPage() {
   const navigate = useNavigate();
@@ -38,11 +26,11 @@ export function ProjectNewPage() {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [created, setCreated] = useState<CreatedProject | null>(null);
+  const [created, setCreated] = useState<ApiCreatedProject | null>(null);
 
   const create = useMutation({
     mutationFn: () =>
-      api.post<CreatedProject, { owner: string; name: string; description?: string }>(
+      api.post<ApiCreatedProject, { owner: string; name: string; description?: string }>(
         '/api/projects',
         {
           owner: owner.trim().toLowerCase(),
@@ -124,11 +112,11 @@ export function ProjectNewPage() {
   );
 }
 
-function ProjectCreated({ project }: { project: CreatedProject }) {
-  const [credential, setCredential] = useState<CloneCredential | null>(null);
+function ProjectCreated({ project }: { project: ApiCreatedProject }) {
+  const [credential, setCredential] = useState<ApiCloneCredential | null>(null);
   const mint = useMutation({
     mutationFn: () =>
-      api.post<CloneCredential, { scope: string }>(
+      api.post<ApiCloneCredential, { scope: string }>(
         `/api/repos/${project.repository_id}/clone-token`,
         {
           scope: 'read',

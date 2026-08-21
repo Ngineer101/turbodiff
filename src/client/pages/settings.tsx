@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { toast } from 'sonner';
-import type { ApiRepoSettings, ApiSettings } from '../../shared/api-types.ts';
+import type { ApiCloneCredential, ApiRepoSettings, ApiSettings } from '../../shared/api-types.ts';
 import { cloneCommand } from '../../shared/projects.ts';
 import { api, ApiError } from '../lib/api.ts';
 import { pushSupported, subscribeToPush, unsubscribeFromPush } from '../lib/push.ts';
