@@ -18,6 +18,7 @@ import {
   type RepositoryRow,
 } from '../data/db.ts';
 import { enqueueFactoryMessage } from './factory-queue.ts';
+import { autoMergeDecline } from '../domain/merge-policy.ts';
 
 // Native change-request orchestration (docs/artifacts-provider.md): the
 // forge layer for Artifacts-hosted repos. Rows in D1 (data/change-requests),
@@ -155,28 +156,34 @@ export async function mergeNativeChangeRequest(
   return merged;
 }
 
-// Native auto-merge, mirroring services/auto-merge.ts gates on native data:
-// opted in, review approved, all checks green, verification passed when the
-// feature has acceptance criteria, and a clean dry-run. Failures log rather
-// than throw — auto-merge is a convenience, never a crash.
+// Native auto-merge: the same policy as the GitHub path
+// (domain/merge-policy.ts), with the facts gathered from native data.
+// Failures log rather than throw — auto-merge is a convenience, never a
+// crash.
 export async function maybeAutoMergeCr(
   repo: RepositoryRow,
   changeRequestId: number,
 ): Promise<void> {
-  // Same pairing as services/auto-merge.ts: auto-merge only means anything
-  // when reviews can actually block.
-  if (repo.auto_merge !== 1 || repo.blocking_reviews !== 1) return;
+  if (repo.auto_merge !== 1) return; // cheap pre-check before any I/O
   const cr = await getChangeRequest(changeRequestId);
   if (!cr || cr.status !== 'open') return;
-  if (cr.review_status !== 'approved' || cr.mergeable !== 1) return;
+  const feature = cr.feature_id ? await getFeature(cr.feature_id) : null;
+  const verification = feature?.acceptance ? await latestVerificationForFeature(feature.id) : null;
   const checks = await listCrChecks(cr.id);
-  if (checks.some((check) => check.status !== 'passed')) return;
-  if (cr.feature_id) {
-    const feature = await getFeature(cr.feature_id);
-    if (feature?.acceptance) {
-      const verification = await latestVerificationForFeature(cr.feature_id);
-      if (verification?.status !== 'passed') return;
-    }
+
+  const decline = autoMergeDecline({
+    optedIn: repo.auto_merge === 1,
+    blockingReviews: repo.blocking_reviews === 1,
+    hasAcceptanceCriteria: Boolean(feature?.acceptance),
+    verificationPassed: verification?.status === 'passed',
+    reviewed: cr.review_status !== null,
+    anyBlockingReview: cr.review_status === 'changes_requested',
+    checksGreen: checks.length > 0 && checks.every((check) => check.status === 'passed'),
+    hasConflict: cr.mergeable !== 1,
+  });
+  if (decline) {
+    console.log(`turbodiff: auto-merge declined for CR ${cr.id} (${decline})`);
+    return;
   }
   try {
     await mergeNativeChangeRequest(cr.id, 'auto-merge');

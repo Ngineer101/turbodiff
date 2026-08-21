@@ -10,7 +10,6 @@ import {
   createAgent,
   createAutomation,
   createCockpitComment,
-  getArtifactsInstallationByLogin,
   getChangeRequest,
   getRepoByFullName,
   listCrChecks,
@@ -111,11 +110,7 @@ import { requireUser, userCanPushToRepo, userIsGithubOrgAdmin } from '../service
 import { APIError } from 'better-auth';
 import { auth } from '../integrations/auth/better-auth.ts';
 import { certificateUrl } from '../services/certificates.ts';
-import {
-  ensureOrganizationForInstallation,
-  ensureOwnerMember,
-  memberRole,
-} from '../services/access-control.ts';
+import { memberRole } from '../services/access-control.ts';
 import {
   getCrDiffPatch,
   mergeNativeChangeRequest,
@@ -751,12 +746,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         owner,
         name,
         description: isString(body?.description) ? body.description : undefined,
+        creatorGithubId: user.session.userId,
       });
-      const installation = await getArtifactsInstallationByLogin(owner);
-      if (installation) {
-        const orgId = await ensureOrganizationForInstallation(installation.id, owner);
-        await ensureOwnerMember(orgId, user.session.userId);
-      }
       return c.json({
         ok: true,
         repository_id: project.repo.id,

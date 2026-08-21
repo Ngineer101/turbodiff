@@ -10,7 +10,6 @@ import {
   hasActiveReview,
   listAgentsForRepo,
   removeRepositories,
-  reviewCountLastDay,
   reviewedRecently,
   setInstallationSuspended,
   updateFeature,
@@ -26,6 +25,7 @@ import {
   computeRiskTier,
   tierModelOverride,
   type RiskTier,
+  remainingDailyBudget,
 } from './review-policy.ts';
 import type { JsonValue } from '../shared/json.ts';
 
@@ -445,17 +445,4 @@ async function handleWorkflowRun(
     workflowRunId: p.workflow_run.id,
   });
   return { body: { ok: true, fix_enqueued: `${p.repository.full_name}#${prNumber}` } };
-}
-
-// Agent-runs left under the installation's daily cap.
-async function remainingDailyBudget(installationId: number, accountLogin: string): Promise<number> {
-  const limit = Number(env.REVIEW_DAILY_LIMIT) || 50;
-  const used = await reviewCountLastDay(installationId);
-  const remaining = limit - used;
-  if (remaining <= 0) {
-    console.warn(
-      `turbodiff: daily review cap (${limit}) reached for installation ${installationId} (${accountLogin})`,
-    );
-  }
-  return remaining;
 }

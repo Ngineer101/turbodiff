@@ -11,6 +11,7 @@ import {
   type RepositoryRow,
 } from '../data/db.ts';
 import { artifactsWorkspaceRemote, deriveArtifactsRepoName } from '../integrations/git/provider.ts';
+import { ensureOrganizationForInstallation, ensureOwnerMember } from './access-control.ts';
 import {
   isArtifactsPushedEvent,
   ARTIFACTS_REPO_DELETED,
@@ -45,6 +46,9 @@ export async function createArtifactsProject(input: {
   owner: string;
   name: string;
   description?: string;
+  // GitHub id of the creating user; when present they become the linked
+  // organization's owner (member rows join on githubId).
+  creatorGithubId?: number;
 }): Promise<CreatedProject> {
   if (!PROJECT_SEGMENT.test(input.owner) || !PROJECT_SEGMENT.test(input.name)) {
     throw new Error(`owner and name must match ${PROJECT_SEGMENT}`);
@@ -70,6 +74,11 @@ export async function createArtifactsProject(input: {
     const installation =
       (await getArtifactsInstallationByLogin(input.owner)) ??
       (await createArtifactsInstallation(input.owner));
+    // Every project gets its organization at creation (dashboard visibility
+    // and capabilities hang off it), regardless of which route provisioned
+    // it; the creator becomes owner when their GitHub identity is known.
+    const organizationId = await ensureOrganizationForInstallation(installation.id, input.owner);
+    if (input.creatorGithubId) await ensureOwnerMember(organizationId, input.creatorGithubId);
     const repo = await createArtifactsRepository({
       installationId: installation.id,
       owner: input.owner,

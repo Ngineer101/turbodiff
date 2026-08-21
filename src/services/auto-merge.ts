@@ -7,6 +7,7 @@ import {
 } from '../data/db.ts';
 import { installationToken } from '../integrations/github/app.ts';
 import { checkMergeability, maybeResolveConflict } from './merge-conflicts.ts';
+import { autoMergeDecline } from '../domain/merge-policy.ts';
 
 // The one merge protocol call for factory PRs (merge_method: 'merge' is the
 // factory's policy everywhere), shared by auto-merge and the cockpit Merge
@@ -40,18 +41,13 @@ export async function mergePullRequest(
 // leaves the merge to a human. Never applies to human-authored PRs (those have
 // no feature row).
 export async function maybeAutoMerge(repo: RepositoryRow, prNumber: number): Promise<void> {
-  // Auto-merge is only meaningful when the review gate exists at all.
-  if (repo.auto_merge !== 1 || repo.blocking_reviews !== 1) return;
+  if (repo.auto_merge !== 1) return; // cheap pre-check before any I/O
   const label = `${repo.owner}/${repo.name}#${prNumber}`;
   try {
     const feature = await getFeatureByRepoPr(repo.id, prNumber);
-    if (!feature || !feature.acceptance) return; // not a factory PR / nothing verified
+    if (!feature) return; // never auto-merge human-authored PRs
 
-    const verification = await latestVerificationForFeature(feature.id);
-    if (verification?.status !== 'passed') {
-      console.log(`turbodiff: auto-merge waiting on verification for ${label}`);
-      return;
-    }
+    const verification = feature.acceptance ? await latestVerificationForFeature(feature.id) : null;
 
     const token = await installationToken(repo.installation_id);
     // SAFETY: gh() throws on non-2xx, and GitHub's "list reviews for a pull
@@ -64,28 +60,27 @@ export async function maybeAutoMerge(repo: RepositoryRow, prNumber: number): Pro
     // (CodeRabbit, Copilot, …) must not stand in for our review having run.
     const ourLogin = `${env.GITHUB_APP_SLUG || 'turbodiff'}[bot]`;
     const botReviews = reviews.filter((r) => r.user?.type === 'Bot' && r.user.login === ourLogin);
-    if (botReviews.length === 0) {
-      console.log(`turbodiff: auto-merge waiting on review for ${label}`);
-      return;
-    }
-    // Conservative: ANY blocking-intent review — even one later superseded by
-    // a clean re-review — declines the auto-merge in favor of a human look.
-    const anyBlocking = botReviews.some(
-      (r) =>
-        r.state === 'CHANGES_REQUESTED' ||
-        (r.state === 'COMMENTED' && r.body.startsWith('**Verdict: REQUEST_CHANGES**')),
-    );
-    if (anyBlocking) {
-      console.log(`turbodiff: auto-merge declined for ${label} (a review requested changes)`);
-      return;
-    }
-
     const mergeability = await checkMergeability(token, repo.owner, repo.name, prNumber, {
       retryOnUnknown: true,
     });
-    if (mergeability.hasConflict) {
-      console.log(`turbodiff: auto-merge declined for ${label} (merge conflict)`);
-      await maybeResolveConflict(repo, prNumber);
+
+    const decline = autoMergeDecline({
+      optedIn: repo.auto_merge === 1,
+      blockingReviews: repo.blocking_reviews === 1,
+      hasAcceptanceCriteria: Boolean(feature.acceptance),
+      verificationPassed: verification?.status === 'passed',
+      reviewed: botReviews.length > 0,
+      anyBlockingReview: botReviews.some(
+        (r) =>
+          r.state === 'CHANGES_REQUESTED' ||
+          (r.state === 'COMMENTED' && r.body.startsWith('**Verdict: REQUEST_CHANGES**')),
+      ),
+      checksGreen: true, // GitHub CI signals arrive via the fix loop, not this gate
+      hasConflict: mergeability.hasConflict,
+    });
+    if (decline) {
+      console.log(`turbodiff: auto-merge declined for ${label} (${decline})`);
+      if (mergeability.hasConflict) await maybeResolveConflict(repo, prNumber);
       return;
     }
 

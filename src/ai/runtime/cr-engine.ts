@@ -3,6 +3,7 @@ import type { RepositoryRow } from '../../data/db.ts';
 import { resolveWorkspaceRemote } from '../../integrations/git/provider.ts';
 import type { WorkspaceRemote } from '../../integrations/git/remotes.ts';
 import { redactSecrets } from './redaction.ts';
+import { prepareFullMirror } from './repository-workspace.ts';
 import { runnerSandbox } from './sandbox.ts';
 
 // The native change-request engine (docs/artifacts-provider.md): the forge
@@ -75,21 +76,10 @@ async function git(ctx: GitContext, command: string, timeoutMs = 2 * 60_000): Pr
   return result.stdout;
 }
 
-// Clone on first touch, fetch after. Unshallow on purpose: merge-base needs
-// shared history, and turbodiff-born repos are small. The first exec on a
-// cold container additionally pays the boot, hence the generous timeout.
+// Workspace sync lives with the other credential-bearing command shapes in
+// repository-workspace.ts; the engine only owns diff/merge mechanics.
 async function syncWorkspace(ctx: GitContext): Promise<void> {
-  const { configFlags, authUrl, cleanUrl } = ctx.remote;
-  await git(
-    ctx,
-    `if [ -d ${CR_DIR}/.git ]; then ` +
-      `git ${configFlags} -C ${CR_DIR} fetch -q --prune "${authUrl}" "+refs/heads/*:refs/remotes/origin/*"; ` +
-      `else git ${configFlags} clone -q "${authUrl}" ${CR_DIR} && ` +
-      `git -C ${CR_DIR} remote set-url origin "${cleanUrl}" && ` +
-      `git -C ${CR_DIR} config user.name "turbodiff[bot]" && ` +
-      `git -C ${CR_DIR} config user.email "turbodiff[bot]@users.noreply.github.com"; fi`,
-    5 * 60_000,
-  );
+  await prepareFullMirror(ctx.sandbox, CR_DIR, ctx.remote);
 }
 
 // Everything a CR record shows about its diff: heads, merge-base, per-file

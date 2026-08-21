@@ -3,6 +3,7 @@ import { githubRequest as gh } from '../integrations/github/client.ts';
 import { REVIEW_NOISE_PATTERNS } from '../domain/review-diff.ts';
 import { installationToken } from '../integrations/github/app.ts';
 import { DEFAULT_AGENT_SLUG } from '../domain/personas.ts';
+import { reviewCountLastDay } from '../data/db.ts';
 
 // Risk-tiered dispatch, after Cloudflare's AI code review setup: small
 // mechanical changes get one generalist pass, mid-size changes a reduced
@@ -77,4 +78,22 @@ export function agentsForTier<T extends { slug: string }>(tier: RiskTier, enable
 // trivial reviews run each agent's configured model.
 export function tierModelOverride(tier: RiskTier): string | undefined {
   return tier === 'trivial' && env.TRIVIAL_MODEL ? env.TRIVIAL_MODEL : undefined;
+}
+
+// Agent-runs left under the installation's rolling daily cap — the shared
+// admission control for review dispatch, GitHub webhooks and native change
+// requests alike (each selected agent consumes one unit).
+export async function remainingDailyBudget(
+  installationId: number,
+  accountLabel: string,
+): Promise<number> {
+  const limit = Number(env.REVIEW_DAILY_LIMIT) || 50;
+  const used = await reviewCountLastDay(installationId);
+  const remaining = limit - used;
+  if (remaining <= 0) {
+    console.warn(
+      `turbodiff: daily review cap (${limit}) reached for installation ${installationId} (${accountLabel})`,
+    );
+  }
+  return remaining;
 }
