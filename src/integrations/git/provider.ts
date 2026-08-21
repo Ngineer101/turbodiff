@@ -48,7 +48,12 @@ export async function resolveWorkspaceRemote(
     }
     const handle = await env.GIT_ARTIFACTS.get(repo.artifacts_repo);
     const token = await handle.createToken(scope, ARTIFACTS_TOKEN_TTL_SECONDS);
-    return artifactsWorkspaceRemote(handle.remote, token.plaintext);
+    // Workers RPC: stub properties are lazy thenables despite the generated
+    // string type — an unawaited one poisons any later serialization
+    // boundary ("Could not serialize object of type RpcProperty").
+    // Promise.resolve assimilates the thenable without tripping lint.
+    const remoteUrl = await Promise.resolve(handle.remote);
+    return artifactsWorkspaceRemote(remoteUrl, token.plaintext);
   }
   const token = await sandboxGitToken(repo.installation_id, repo.name, scope, opts);
   return githubWorkspaceRemote(`${repo.owner}/${repo.name}`, token);
