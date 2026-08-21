@@ -1,5 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { auth } from '../integrations/auth/better-auth.ts';
+import { syntheticInstallationIds } from './access-control.ts';
 import {
   fetchUserCanPush,
   fetchUserInstallationIds,
@@ -178,9 +179,12 @@ export async function requireUser(request: Request): Promise<AuthedUser | null> 
   const ghToken = await githubToken(user.id);
   const ids = await installationIds(user.id, ghToken);
   if (ids === null) return null;
+  // Artifacts-hosted projects ride on synthetic negative-id installations;
+  // GitHub can't know about them, so membership-derived ids are unioned in.
+  const synthetic = await syntheticInstallationIds(githubId);
   return {
     session: { userId: githubId, login, ghToken },
-    installationIds: ids,
+    installationIds: [...new Set([...ids, ...synthetic])],
     githubConnected: true,
     name: login,
   };

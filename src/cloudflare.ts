@@ -18,6 +18,7 @@ import type { FactoryMessage } from './shared/factory-messages.ts';
 import { startGeneration } from './ai/workflows/generation.ts';
 import { sweepFactoryPrConflicts } from './services/merge-conflicts.ts';
 import { runPlanAnalyze, runPlanRefine } from './ai/runners/planner.ts';
+import { runCrReview } from './ai/runners/cr-reviewer.ts';
 import { startVerification, VerificationWorkflow } from './ai/workflows/verification.ts';
 
 // The fixer sandbox container (docs/software-factory-design.md). Declared in
@@ -68,6 +69,12 @@ export default {
           // A new message kind must not silently fall into the `default`
           // (fix) branch and mis-dispatch.
           await startResolveConflict(body);
+          break;
+        case 'cr_review':
+          // Native change-request review (docs/artifacts-provider.md). Runs
+          // in the consumer like plan analysis — minutes, within the wall
+          // clock — and records its own failures on the CR's review check.
+          await runCrReview(body.changeRequestId);
           break;
         default:
           // Fix runs get the same no-wall-clock treatment as generation

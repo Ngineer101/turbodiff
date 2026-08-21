@@ -51,10 +51,10 @@ export function artifactsWorkspaceRemote(remoteUrl: string, token: string): Work
   };
 }
 
-// Factory flows that end in a GitHub pull request (generation, plans,
-// automations, PR fix/verify loops) still assume GitHub. Native change
-// requests for Artifacts repos land in Phase 2; until then intake rejects
-// up front instead of stranding a run at the PR step.
+// Generation, plans, reviews, verification, and merges run natively on
+// Artifacts change requests. What still assumes GitHub pull requests:
+// automations and the PR-based fix loop — those intakes reject up front
+// instead of stranding a run mid-flow.
 export function factoryUnsupportedReason(repo: {
   provider: string;
   owner: string;
@@ -62,8 +62,8 @@ export function factoryUnsupportedReason(repo: {
 }): string | null {
   if (repo.provider === 'github') return null;
   return (
-    `${repo.owner}/${repo.name} is hosted on Cloudflare Artifacts; factory runs need the ` +
-    'native change-request layer (Phase 2) and are not yet available for Artifacts repos'
+    `${repo.owner}/${repo.name} is hosted on Cloudflare Artifacts; this flow still assumes ` +
+    'GitHub pull requests (automations and PR-based fixes on native change requests are next)'
   );
 }
 

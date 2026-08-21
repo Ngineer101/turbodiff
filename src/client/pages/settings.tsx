@@ -189,16 +189,47 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
   });
 
+  const cloneToken = useMutation({
+    mutationFn: () =>
+      api.post<{ remote: string; token: string }, { scope: string }>(
+        `/api/repos/${repo.id}/clone-token`,
+        {
+          scope: 'read',
+        },
+      ),
+    onSuccess: (credential) => {
+      void navigator.clipboard.writeText(
+        `git -c http.extraHeader="Authorization: Bearer ${credential.token}" clone ${credential.remote}`,
+      );
+      toast.success('Clone command copied to clipboard (token valid 24h)');
+    },
+    onError: onApiError,
+  });
+
   return (
     <Card className="mt-2">
       <div className="flex items-center justify-between gap-3">
         <span
-          className="min-w-0 truncate font-mono font-medium"
+          className="flex min-w-0 items-center gap-2 truncate font-mono font-medium"
           title={`${repo.owner}/${repo.name}`}
         >
-          <span className="text-mute">{repo.owner}/</span>
-          {repo.name}
+          <span className="truncate">
+            <span className="text-mute">{repo.owner}/</span>
+            {repo.name}
+          </span>
+          {repo.provider === 'artifacts' && <Pill tone="on">Artifacts</Pill>}
         </span>
+        {repo.provider === 'artifacts' && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="shrink-0"
+            loading={cloneToken.isPending}
+            onClick={() => cloneToken.mutate()}
+          >
+            Clone
+          </Button>
+        )}
         <label className="flex shrink-0 cursor-pointer items-center gap-2 text-xs text-mute">
           Factory
           <Switch
@@ -401,12 +432,17 @@ export function SettingsPage() {
     <>
       <PageTitle
         aside={
-          <a
-            href={`https://github.com/apps/${data.github_app_slug}/installations/new`}
-            className="text-[0.85rem] text-accent-bright hover:underline"
-          >
-            Add or manage repositories on GitHub &rarr;
-          </a>
+          <span className="flex items-center gap-4">
+            <Link to="/projects/new" className="text-[0.85rem] text-accent-bright hover:underline">
+              New turbodiff-hosted project &rarr;
+            </Link>
+            <a
+              href={`https://github.com/apps/${data.github_app_slug}/installations/new`}
+              className="text-[0.85rem] text-accent-bright hover:underline"
+            >
+              Add or manage repositories on GitHub &rarr;
+            </a>
+          </span>
         }
       >
         Settings

@@ -152,8 +152,6 @@ export function createInternalRoutes() {
     const repo = await getRepoByFullName(match[1], match[2]);
     if (!repo) return c.json({ error: `Turbodiff is not installed on ${payload.repo}` }, 404);
     if (!repo.enabled) return c.json({ error: 'reviews are disabled for this repository' }, 409);
-    const generateUnsupported = factoryUnsupportedReason(repo);
-    if (generateUnsupported) return c.json({ error: generateUnsupported }, 409);
 
     const featureId = await createFeature(repo.id, payload.title.trim(), payload.spec.trim());
     await enqueueFactoryMessage({ kind: 'generate', featureId });
@@ -183,8 +181,6 @@ export function createInternalRoutes() {
     const repo = await getRepoByFullName(match[1], match[2]);
     if (!repo) return c.json({ error: `Turbodiff is not installed on ${payload.repo}` }, 404);
     if (!repo.enabled) return c.json({ error: 'reviews are disabled for this repository' }, 409);
-    const planUnsupported = factoryUnsupportedReason(repo);
-    if (planUnsupported) return c.json({ error: planUnsupported }, 409);
 
     const planId = await createPlan([repo.id], payload.title.trim(), payload.requirements.trim());
     await enqueueFactoryMessage({ kind: 'plan_analyze', planId });

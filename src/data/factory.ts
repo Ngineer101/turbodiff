@@ -183,6 +183,7 @@ export interface TaskRepoStatusRow {
   feature_status: string | null;
   feature_error: string | null;
   pr_number: number | null;
+  provider: string;
   verification_status: string | null;
   verification_results: string | null;
 }
@@ -194,7 +195,7 @@ export async function getTaskRepoStatuses(planIds: number[]): Promise<TaskRepoSt
   if (planIds.length === 0) return [];
   const placeholders = placeholderList(planIds.length);
   const res = await env.DB.prepare(
-    `SELECT pr.plan_id, pr.repository_id, r.owner, r.name,
+    `SELECT pr.plan_id, pr.repository_id, r.owner, r.name, r.provider,
 		        f.id AS feature_id, f.status AS feature_status, f.error AS feature_error,
 		        f.pr_number AS pr_number,
 		        v.status AS verification_status, v.results AS verification_results
@@ -483,6 +484,7 @@ export interface FeatureRow {
   acceptance: string | null; // JSON array of acceptance criteria strings
   branch: string | null;
   pr_number: number | null;
+  change_request_id: number | null; // native CR the feature opened (Artifacts)
   status: string;
   error: string | null;
   created_at: string;
@@ -652,6 +654,8 @@ export async function updateFeature(
     // overwrites rather than accumulates (COALESCE keeps a status-only update
     // from zeroing out a previously recorded cost).
     usage?: CliUsage;
+    // Native change request the feature opened (Artifacts repos).
+    changeRequestId?: number;
   },
 ): Promise<void> {
   await env.DB.prepare(
@@ -666,7 +670,8 @@ export async function updateFeature(
 		 cache_read_tokens = COALESCE(?9, cache_read_tokens),
 		 cache_write_tokens = COALESCE(?10, cache_write_tokens),
 		 cost_usd = COALESCE(?11, cost_usd),
-		 model = COALESCE(?12, model)
+		 model = COALESCE(?12, model),
+		 change_request_id = COALESCE(?13, change_request_id)
 		 WHERE id = ?1`,
   )
     .bind(
@@ -682,6 +687,7 @@ export async function updateFeature(
       fields.usage?.cacheWriteTokens ?? null,
       fields.usage?.costUsd ?? null,
       fields.usage?.model ?? null,
+      fields.changeRequestId ?? null,
     )
     .run();
 }

@@ -72,11 +72,53 @@ curl -sX POST https://turbodiff.dev/internal/repos/clone-token -H "$AUTH" \
 # push something; ~a minute later the repo row's last_push_at is stamped.
 ```
 
-## What Phase 2 builds on this
+## Phases 2-3: native change requests (shipped)
 
-Native change requests: CR tables in D1, diff compute/cache via the sandbox
-engine prototyped in Phase 0.5, cockpit CR view (the app already ships
-`@pierre/diffs`), reviews/checks/merges — at which point the
-`factoryUnsupportedReason` gates lift one flow at a time. Multi-installation
-organizations (a GitHub org that _also_ hosts Artifacts projects under the
-same cockpit org) are deferred with them.
+The forge layer itself, no GitHub underneath:
+
+- **Records** — `change_requests` / `cr_comments` / `cr_checks` (migration
+  `0036`), diffs cached in R2 under the private `crs/` prefix. Data layer in
+  `src/data/change-requests.ts`, orchestration in
+  `src/services/change-requests.ts`.
+- **Engine** — `src/ai/runtime/cr-engine.ts` (production port of the
+  Phase-0.5 spike): merge-base + diff for the record, `merge --no-commit`
+  dry-run for mergeability, `--no-ff` merge + push for the merge button.
+  Runs in the same warm per-repo container as generation.
+- **Loop** — generation on an Artifacts repo pushes its branch and opens a
+  native CR (summary comment, check outcome, queued review) instead of a
+  GitHub PR. The native reviewer (`src/ai/runners/cr-reviewer.ts`) reads the
+  cached diff in the sandbox; findings land as `cr_comments`, the verdict on
+  the CR (P1 blocks when `blocking_reviews` is on). Verification posts its
+  evidence report to the CR and records the `verify` check. Auto-merge
+  (`maybeAutoMergeCr`) mirrors the GitHub gates on native data. Merging
+  refreshes every sibling open CR — the conflict ripple. Push events refresh
+  affected CRs and re-review on `review_on_push`.
+- **Cockpit** — the feature page renders native CRs through the same
+  `ApiFeatureDetail` shape: per-file patches come from the R2 diff instead
+  of GitHub `/files`, the review verdict from the CR row, plus a native
+  checks strip. Merge/Abandon buttons drive the native paths (org `settings`
+  capability instead of GitHub push permission).
+- **Projects UI** — `/projects/new` creates a turbodiff-hosted project
+  (Artifacts repo + synthetic tenancy + an organization the creator owns);
+  the creator's access comes from `member` rows unioned into
+  `installationIds` (`syntheticInstallationIds`). Settings shows an
+  Artifacts pill and a one-click clone-command copy (token minted via
+  `POST /api/repos/:id/clone-token`).
+
+Still GitHub-only (intakes reject with a clear error): automations and the
+PR-based fix loop (including cockpit comment → fix dispatch on native CRs).
+Native reviews don't yet count toward the `reviews`-table daily cap.
+Multi-installation orgs (GitHub org that also hosts Artifacts projects under
+one cockpit org) remain deferred.
+
+## Trying it end to end
+
+1. Sign in (GitHub-connected), open **Settings → New turbodiff-hosted
+   project** (or `/projects/new`), create `you/demo`.
+2. Board → new task on that project → answer questions → approve the plan.
+3. Generation pushes a branch and opens CR #1; the cockpit feature page shows
+   the native diff, review verdict + findings, and the checks strip.
+4. Merge from the cockpit (or enable auto-merge and let the gates do it);
+   verification evidence and the build certificate attach as before.
+5. Clone locally any time: Settings → repo row → **Clone** (copies a
+   `git -c http.extraHeader=... clone` command with a 24h read token).

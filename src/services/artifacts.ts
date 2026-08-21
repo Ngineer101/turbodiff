@@ -16,6 +16,9 @@ import {
   ARTIFACTS_REPO_DELETED,
   type ArtifactsEvent,
 } from '../shared/artifacts-events.ts';
+import { listChangeRequestsForRepo } from '../data/db.ts';
+import { refreshChangeRequest } from './change-requests.ts';
+import { enqueueFactoryMessage } from './factory-queue.ts';
 
 // Artifacts-hosted project lifecycle (docs/artifacts-provider.md):
 // provisioning (repo + synthetic tenancy + initial commit), user clone
@@ -158,7 +161,25 @@ export async function applyArtifactsEvent(event: ArtifactsEvent): Promise<string
       event.eventTimestamp ?? new Date().toISOString(),
     );
     if (!row) return `push to untracked repo ${event.repoName} ignored`;
-    return `recorded push to ${row.owner}/${row.name} (${event.ref})`;
+    // Native CR upkeep — the PR-synchronize webhook replacement: a moved
+    // source branch refreshes its CR (and re-reviews when the repo opted
+    // into review-on-push); a moved target branch (e.g. a merge landed)
+    // refreshes every open CR against it.
+    const branch = event.ref.replace(/^refs\/heads\//, '');
+    let refreshed = 0;
+    for (const cr of await listChangeRequestsForRepo(row.id, 'open')) {
+      if (cr.source_branch !== branch && cr.target_branch !== branch) continue;
+      try {
+        await refreshChangeRequest(row, cr);
+        refreshed += 1;
+        if (cr.source_branch === branch && row.review_on_push === 1) {
+          await enqueueFactoryMessage({ kind: 'cr_review', changeRequestId: cr.id });
+        }
+      } catch (err) {
+        console.error(`turbodiff: push-triggered refresh of CR ${cr.id} failed:`, err);
+      }
+    }
+    return `recorded push to ${row.owner}/${row.name} (${event.ref}); ${refreshed} CR(s) refreshed`;
   }
   if (event.type === ARTIFACTS_REPO_DELETED) {
     const row = await getRepoByArtifactsName(event.repoName);

@@ -74,7 +74,11 @@ export async function loadCertificateData(featureId: number): Promise<Certificat
     featureTitle: feature.title,
     repoFullName: `${repo.owner}/${repo.name}`,
     prNumber: feature.pr_number,
-    prUrl: `https://github.com/${repo.owner}/${repo.name}/pull/${feature.pr_number}`,
+    // Native CRs live in the cockpit; GitHub PRs keep their external URL.
+    prUrl:
+      repo.provider === 'artifacts'
+        ? `${env.PUBLIC_BASE_URL}/factory/features/${feature.id}`
+        : `https://github.com/${repo.owner}/${repo.name}/pull/${feature.pr_number}`,
     authorLogin: feature.author_login,
     verifiedAt: verification?.created_at ?? null,
     criteria: criteria.map((text, i) => ({ text, verdict: verdicts[i] })),
