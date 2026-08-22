@@ -2304,8 +2304,14 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (!repo) return c.json({ error: 'unknown repository' }, 404);
     const deniedCapability = await requireCapability(c, repo.installation_id, 'settings', orgAdmin);
     if (deniedCapability) return deniedCapability;
-    const denied = await requireRepoPush(c, repo, canPushToRepo);
-    if (denied) return denied;
+    // GitHub repos additionally demand verified push permission (these
+    // toggles automate pushes and merges). Artifacts repos have no GitHub
+    // side to ask — the org 'settings' capability above IS the authority,
+    // same bar as the native merge.
+    if (repo.provider !== 'artifacts') {
+      const denied = await requireRepoPush(c, repo, canPushToRepo);
+      if (denied) return denied;
+    }
     const body = await c.req
       .json<{
         enabled?: boolean;
@@ -2337,8 +2343,14 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (!repo) return c.json({ error: 'unknown repository' }, 404);
     const deniedCapability = await requireCapability(c, repo.installation_id, 'settings', orgAdmin);
     if (deniedCapability) return deniedCapability;
-    const denied = await requireRepoPush(c, repo, canPushToRepo);
-    if (denied) return denied;
+    // GitHub repos additionally demand verified push permission (these
+    // toggles automate pushes and merges). Artifacts repos have no GitHub
+    // side to ask — the org 'settings' capability above IS the authority,
+    // same bar as the native merge.
+    if (repo.provider !== 'artifacts') {
+      const denied = await requireRepoPush(c, repo, canPushToRepo);
+      if (denied) return denied;
+    }
     const agentId = Number(c.req.param('agentId'));
     const agent = Number.isInteger(agentId) ? await getAgentById(agentId) : null;
     if (!agent || agent.installation_id !== repo.installation_id) {
@@ -2358,8 +2370,14 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (!repo) return c.json({ error: 'unknown repository' }, 404);
     const deniedCapability = await requireCapability(c, repo.installation_id, 'settings', orgAdmin);
     if (deniedCapability) return deniedCapability;
-    const denied = await requireRepoPush(c, repo, canPushToRepo);
-    if (denied) return denied;
+    // GitHub repos additionally demand verified push permission (these
+    // toggles automate pushes and merges). Artifacts repos have no GitHub
+    // side to ask — the org 'settings' capability above IS the authority,
+    // same bar as the native merge.
+    if (repo.provider !== 'artifacts') {
+      const denied = await requireRepoPush(c, repo, canPushToRepo);
+      if (denied) return denied;
+    }
     const skillId = Number(c.req.param('skillId'));
     const skill = Number.isInteger(skillId) ? await getSkillById(skillId) : null;
     if (!skill || skill.installation_id !== repo.installation_id) {
