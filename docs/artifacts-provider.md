@@ -110,10 +110,14 @@ The forge layer itself, no GitHub underneath:
   Artifacts pill and a one-click clone-command copy (token minted via
   `POST /api/repos/:id/clone-token`).
 
+The fix loop runs natively too: cockpit comments → fix dispatch, blocking
+review verdicts, and failed verifications all enqueue the fix agent against
+the CR's source branch, with reports and the attempt-cap handoff landing as
+CR comments and an immediate refresh + re-review after each fix push.
 Still GitHub-only (intakes reject with a clear error): automations and the
-PR-based fix loop (including cockpit comment → fix dispatch on native CRs).
-Native reviews record `reviews` rows (usage/dashboard parity) but the
-webhook path's push-debounce heuristics don't apply to them yet.
+operator PR-URL `/internal/fix` endpoint. Native reviews record `reviews`
+rows (usage/dashboard parity) but the webhook path's push-debounce
+heuristics don't apply to them yet.
 Multi-installation orgs (GitHub org that also hosts Artifacts projects under
 one cockpit org) remain deferred.
 
