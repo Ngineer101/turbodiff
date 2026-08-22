@@ -86,6 +86,15 @@ export async function getChangeRequest(id: number): Promise<ChangeRequestRow | n
     .first<ChangeRequestRow>();
 }
 
+export async function getChangeRequestByRepoNumber(
+  repositoryId: number,
+  number: number,
+): Promise<ChangeRequestRow | null> {
+  return env.DB.prepare('SELECT * FROM change_requests WHERE repository_id = ?1 AND number = ?2')
+    .bind(repositoryId, number)
+    .first<ChangeRequestRow>();
+}
+
 export async function getOpenChangeRequest(
   repositoryId: number,
   sourceBranch: string,

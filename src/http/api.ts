@@ -1051,20 +1051,24 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       return c.json({ error: 'unknown feature' }, 404);
     }
     if (!feature.pr_number) return c.json({ error: 'no pull request yet' }, 409);
-    if (repo.provider === 'artifacts') {
-      return c.json(
-        { error: 'the fix loop for Artifacts change requests is not available yet' },
-        409,
-      );
-    }
     if (!repo.auto_fix) {
       return c.json({ error: 'enable auto-fix for this repo before submitting comments' }, 409);
     }
-    // The fix run pushes commits to the PR branch with a write-scoped token
-    // and executes the repo's check command — dispatching it requires the
-    // same push permission GitHub would demand to push those commits.
-    const denied = await requireRepoPush(c, repo, canPushToRepo);
-    if (denied) return denied;
+    // The fix run pushes commits to the source branch — Artifacts repos gate
+    // on the org 'settings' capability (same bar as Merge); GitHub repos on
+    // the push permission GitHub itself would demand for those commits.
+    if (repo.provider === 'artifacts') {
+      const deniedCapability = await requireCapability(
+        c,
+        repo.installation_id,
+        'settings',
+        orgAdmin,
+      );
+      if (deniedCapability) return deniedCapability;
+    } else {
+      const denied = await requireRepoPush(c, repo, canPushToRepo);
+      if (denied) return denied;
+    }
     const claimed = await dispatchOpenCockpitComments(feature.id);
     if (claimed.length === 0) {
       return c.json({ error: 'no pending comments to submit' }, 400);

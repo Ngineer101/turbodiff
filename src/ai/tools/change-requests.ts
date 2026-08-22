@@ -18,6 +18,7 @@ import {
   parseCrFiles,
 } from '../../services/change-requests.ts';
 import { CR_BRANCH_NAME, CR_DIR } from '../runtime/cr-engine.ts';
+import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
 import { generationSandbox } from '../runtime/sandbox.ts';
 import { cockpitFeatureUrl } from '../../services/urls.ts';
 import {
@@ -234,6 +235,16 @@ export const makePostCrReview = (agentInstanceId: string, pin: CrPin) =>
       );
       const url = cr.feature_id ? cockpitFeatureUrl(cr.feature_id) : null;
       await completeReview(agentInstanceId, url, data.findings.length);
+      if (blocking && repo.auto_fix === 1) {
+        // Native verdicts fire no webhook, so the blocking-review fix
+        // dispatch happens here (the consumer re-validates toggle and cap).
+        await enqueueFactoryMessage({
+          kind: 'fix',
+          repoId: repo.id,
+          prNumber: cr.number,
+          trigger: 'blocking_review',
+        });
+      }
       if (!blocking) await maybeAutoMergeCr(repo, cr.id);
       return { output: { posted: true, inline: data.findings.length, url, fallback: null } };
     },

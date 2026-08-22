@@ -10,6 +10,7 @@ import {
   latestVerificationForFeature,
   listChangeRequestsForRepo,
   listCrChecks,
+  listCrComments,
   markChangeRequestMerged,
   updateChangeRequestState,
   updateFeature,
@@ -199,6 +200,22 @@ export async function maybeAutoMergeCr(
   } catch (err) {
     console.error(`turbodiff: auto-merge of CR ${cr.id} failed:`, err);
   }
+}
+
+// The native counterpart of the fixer's latestBlockingFindings: the last
+// review summary plus every line-anchored finding, as one markdown work
+// order for the fix agent.
+export async function latestNativeReviewFindings(changeRequestId: number): Promise<string | null> {
+  const comments = await listCrComments(changeRequestId);
+  const findings = comments.filter((comment) => comment.kind === 'finding');
+  if (findings.length === 0) return null;
+  const summary = comments.filter((comment) => comment.kind === 'summary').at(-1);
+  const inline = findings.map(
+    (f) =>
+      `### ${f.file ?? 'general'}${f.line ? `:${f.line}` : ''}\n` +
+      `${f.severity ? `**${f.severity}** ` : ''}${f.body}`,
+  );
+  return [summary?.body, ...inline].filter(Boolean).join('\n\n');
 }
 
 // Consumer-side wrapper for cockpit-initiated merges: idempotent for

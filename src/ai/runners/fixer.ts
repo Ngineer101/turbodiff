@@ -18,6 +18,8 @@ import {
   linkCommentsToFixAttempt,
   listEnabledSkillsForRepo,
   tryRecordFixAttempt,
+  addCrComment,
+  getChangeRequestByRepoNumber,
 } from '../../data/db.ts';
 import {
   describePushFailure,
@@ -36,7 +38,13 @@ import {
 import { runnerSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
 import { prepareFreshClone, pushHeadCommand } from '../runtime/repository-workspace.ts';
-import { githubWorkspaceRemote } from '../../integrations/git/provider.ts';
+import { githubWorkspaceRemote, resolveWorkspaceRemote } from '../../integrations/git/provider.ts';
+import type { WorkspaceRemote } from '../../integrations/git/remotes.ts';
+import {
+  CR_BOT_AUTHOR,
+  latestNativeReviewFindings,
+  refreshChangeRequest,
+} from '../../services/change-requests.ts';
 import { mountSkills } from '../runtime/skills.ts';
 import {
   fetchPushablePrHead,
@@ -248,30 +256,57 @@ export async function sandboxSmoke(checkAuth = false): Promise<Record<string, st
 
 export async function runFix(params: FixParams): Promise<FixOutcome> {
   const { owner, repo, prNumber } = params;
-  const token = await installationToken(params.installationId);
+  // Provider dispatch: Artifacts fixes target the change request's source
+  // branch on the repo's own remote; GitHub fixes target the PR head (which
+  // may live on a fork) with an installation-scoped token.
+  const repoRow = await getRepoById(params.repositoryId);
+  const cr =
+    repoRow?.provider === 'artifacts'
+      ? await getChangeRequestByRepoNumber(params.repositoryId, prNumber)
+      : null;
+  if (repoRow?.provider === 'artifacts' && (!cr || cr.status !== 'open')) {
+    throw new Error(`change request #${prNumber} is not open`);
+  }
+  const token = cr ? '' : await installationToken(params.installationId);
   const auth = resolveRunnerAuth(params.authMode, params.runnerModel);
-  // Any surfaced output must never leak a token. The sandbox only ever sees
-  // gitToken — scoped to this one repository with contents access only (plus
-  // workflows when the PR already touches .github/workflows/) — so a
-  // prompt-injected agent run cannot touch other repos or App permissions.
-  const gitToken = await sandboxGitToken(params.installationId, repo, 'write', {
-    workflows: await prTouchesWorkflowFiles(token, owner, repo, prNumber),
-  });
-  const scrub = (s: string) => redactSecrets(s, [token, gitToken]);
 
   const findings =
     params.findings?.trim() ||
-    (params.workflowRunId !== undefined
-      ? await ciFailureFindings(token, owner, repo, params.workflowRunId)
-      : await latestBlockingFindings(token, owner, repo, prNumber));
+    (cr
+      ? await latestNativeReviewFindings(cr.id)
+      : params.workflowRunId !== undefined
+        ? await ciFailureFindings(token, owner, repo, params.workflowRunId)
+        : await latestBlockingFindings(token, owner, repo, prNumber));
   if (!findings) {
     throw new Error(
       params.workflowRunId !== undefined
         ? `workflow run ${params.workflowRunId} has no failed jobs with retrievable logs`
-        : 'no findings supplied and no blocking bot review found on the PR',
+        : 'no findings supplied and no blocking review found',
     );
   }
-  const { headRef, headRepo } = await fetchPushablePrHead(token, owner, repo, prNumber);
+
+  let remote: WorkspaceRemote;
+  let headRef: string;
+  let headRepo: string;
+  if (cr && repoRow) {
+    remote = await resolveWorkspaceRemote(repoRow, 'write');
+    headRef = cr.source_branch;
+    headRepo = `${owner}/${repo}`;
+  } else {
+    // Any surfaced output must never leak a token. The sandbox only ever
+    // sees the git credential — scoped to this one repository with contents
+    // access only (plus workflows when the PR already touches
+    // .github/workflows/) — so a prompt-injected agent run cannot touch
+    // other repos or App permissions.
+    const gitToken = await sandboxGitToken(params.installationId, repo, 'write', {
+      workflows: await prTouchesWorkflowFiles(token, owner, repo, prNumber),
+    });
+    const head = await fetchPushablePrHead(token, owner, repo, prNumber);
+    headRef = head.headRef;
+    headRepo = head.headRepo;
+    remote = githubWorkspaceRemote(headRepo, gitToken);
+  }
+  const scrub = (s: string) => redactSecrets(s, [token, remote.token]);
 
   const sandbox = runnerSandbox(`fix--${owner}--${repo}--${prNumber}`.toLowerCase(), {
     sleepAfter: '20m',
@@ -280,10 +315,6 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
   // Fresh checkout per run; the branch name and token travel via env so the
   // command string stays free of secrets and shell-hostile ref names. The
   // push below supplies the token via env to an explicit-URL command.
-  // PR fixes are a GitHub-only flow (PR head may live on a fork), so the
-  // remote is constructed for the head repo directly rather than resolved
-  // from the repo row.
-  const remote = githubWorkspaceRemote(headRepo, gitToken);
   const gitEnv = { ...remote.env, FIX_BRANCH: headRef };
   await sandbox.exec(`rm -rf ${NOTES_FILE} /workspace/fix-repair-*.md`);
   await prepareFreshClone({
@@ -353,7 +384,7 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
 
     const status = await sandbox.exec(`git -C ${CLONE_DIR} status --porcelain`);
     if (!status.stdout.trim()) {
-      await postFixComment(token, params, { changed: false, notes });
+      await postFixComment(token, params, { changed: false, notes, crId: cr?.id });
       return {
         status: 'no_changes',
         authMode: auth.mode,
@@ -466,7 +497,16 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
       commit,
       notes,
       tested: !!params.testCommand,
+      crId: cr?.id,
     });
+    // A fixed native CR has a stale diff and verdict: recompute and
+    // re-review immediately rather than waiting on the push event.
+    if (cr && repoRow) {
+      await refreshChangeRequest(repoRow, cr).catch((err) =>
+        console.error(`turbodiff: post-fix refresh of CR ${cr.id} failed:`, err),
+      );
+      await enqueueFactoryMessage({ kind: 'cr_review', changeRequestId: cr.id });
+    }
     return {
       status: 'fixed',
       authMode: auth.mode,
@@ -530,13 +570,27 @@ export async function processFixMessage(
       return;
     }
     console.warn(`turbodiff: fix cap reached for ${label}`);
-    await postFixHandoffComment(
-      repo.installation_id,
-      repo.owner,
-      repo.name,
-      msg.prNumber,
-      FIX_MAX_ATTEMPTS,
-    );
+    if (feature.change_request_id) {
+      await addCrComment({
+        changeRequestId: feature.change_request_id,
+        file: null,
+        line: null,
+        author: CR_BOT_AUTHOR,
+        kind: 'comment',
+        severity: null,
+        body:
+          `🔧 ${FIX_MAX_ATTEMPTS} automated fix attempts have run on this change request — ` +
+          'handing off to a human. Review the remaining findings and push directly, or merge as-is.',
+      }).catch(() => {});
+    } else {
+      await postFixHandoffComment(
+        repo.installation_id,
+        repo.owner,
+        repo.name,
+        msg.prNumber,
+        FIX_MAX_ATTEMPTS,
+      );
+    }
     return;
   }
   if (msg.commentIds?.length) {
@@ -585,7 +639,14 @@ export async function processFixMessage(
 async function postFixComment(
   token: string,
   params: FixParams,
-  result: { changed: boolean; commit?: string; notes?: string; tested?: boolean },
+  result: {
+    changed: boolean;
+    commit?: string;
+    notes?: string;
+    tested?: boolean;
+    // Native change request to comment on instead of the GitHub PR.
+    crId?: number;
+  },
 ): Promise<void> {
   const lines = result.changed
     ? [
@@ -594,6 +655,18 @@ async function postFixComment(
       ]
     : ['🔧 Turbodiff fix agent ran but made no code changes.'];
   if (result.notes) lines.push('', '**Findings left unaddressed:**', result.notes);
+  if (result.crId) {
+    await addCrComment({
+      changeRequestId: result.crId,
+      file: null,
+      line: null,
+      author: CR_BOT_AUTHOR,
+      kind: 'comment',
+      severity: null,
+      body: lines.filter((l) => l !== undefined).join('\n'),
+    }).catch((err) => console.error('turbodiff: CR fix comment failed:', err));
+    return;
+  }
   try {
     await gh(token, `/repos/${params.owner}/${params.repo}/issues/${params.prNumber}/comments`, {
       method: 'POST',

@@ -51,10 +51,10 @@ export function artifactsWorkspaceRemote(remoteUrl: string, token: string): Work
   };
 }
 
-// Generation, plans, reviews, verification, and merges run natively on
-// Artifacts change requests. What still assumes GitHub pull requests:
-// automations and the PR-based fix loop — those intakes reject up front
-// instead of stranding a run mid-flow.
+// Generation, plans, reviews, verification, fixes, and merges run natively
+// on Artifacts change requests. What still assumes GitHub pull requests:
+// automations and the operator PR-URL fix endpoint — those intakes reject
+// up front instead of stranding a run mid-flow.
 export function factoryUnsupportedReason(repo: {
   provider: string;
   owner: string;
@@ -63,7 +63,7 @@ export function factoryUnsupportedReason(repo: {
   if (repo.provider === 'github') return null;
   return (
     `${repo.owner}/${repo.name} is hosted on Cloudflare Artifacts; this flow still assumes ` +
-    'GitHub pull requests (automations and PR-based fixes on native change requests are next)'
+    'GitHub pull requests (automations on native change requests are next)'
   );
 }
 

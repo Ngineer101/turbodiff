@@ -339,8 +339,7 @@ async function verify(
 
     // Conformance gate: unmet criteria feed the existing fix loop (toggle and
     // cap are re-validated by the consumer, exactly like review-driven fixes).
-    // PR-based fix runs are GitHub-only until the native fix loop lands.
-    if (failed.length > 0 && repo.auto_fix === 1 && repo.provider === 'github') {
+    if (failed.length > 0 && repo.auto_fix === 1) {
       await enqueueFactoryMessage({
         kind: 'fix',
         repoId: repo.id,
@@ -543,7 +542,7 @@ function reportBody(
     }
   }
   if (summary) lines.push('', '### How it works', '', summary.slice(0, 3_000));
-  if (failed > 0 && repo.auto_fix === 1 && repo.provider === 'github') {
+  if (failed > 0 && repo.auto_fix === 1) {
     lines.push('', '_The unmet criteria have been handed to the fix agent._');
   }
   return lines.join('\n');
