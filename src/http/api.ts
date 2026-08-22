@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 // HTTP JSON transport for the signed-in SPA.
 import { Hono, type Context } from 'hono';
 import { factoryUnsupportedReason } from '../integrations/git/provider.ts';
+import { parseUtc } from '../shared/time.ts';
 import {
   agentUsageForMonth,
   automationUsageForMonth,
@@ -114,7 +115,6 @@ import { memberRole } from '../services/access-control.ts';
 import {
   CR_BOT_AUTHOR,
   getCrDiffPatch,
-  mergeNativeChangeRequest,
   parseCrFiles,
   splitPatchByFile,
 } from '../services/change-requests.ts';
@@ -890,11 +890,21 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
             },
           ];
         }
-        base.checks = (await listCrChecks(cr.id)).map((check) => ({
-          name: check.name,
-          status: check.status,
-          summary: check.summary,
-        }));
+        const REVIEW_STALL_MS = 15 * 60_000;
+        base.checks = (await listCrChecks(cr.id)).map((check) => {
+          // Only post_review resolves the review check; an agent that died
+          // mid-processing (e.g. model-gateway failure) leaves it 'running'
+          // forever — surface that honestly instead of eternal polling.
+          const stalled =
+            check.name === 'review' &&
+            check.status === 'running' &&
+            Date.now() - parseUtc(check.updated_at) > REVIEW_STALL_MS;
+          return {
+            name: check.name,
+            status: stalled ? 'error' : check.status,
+            summary: stalled ? 'review stalled — re-run from the cockpit' : check.summary,
+          };
+        });
       }
     } else {
       const token = await installationToken(repo.installation_id);
@@ -1211,6 +1221,30 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   // attributes the merge to them, not turbodiff[bot]; falls back to the App
   // installation token when the user token can't merge (missing push
   // permission, SSO enforcement, or the empty dev-fake session token).
+  // Dispatch (or re-dispatch) the native review for an Artifacts change
+  // request — the recovery path for stalled/failed reviews and the manual
+  // trigger after config changes. Same capability bar as merge: reviews
+  // spend model budget.
+  app.post('/factory/features/:id/review', async (c) => {
+    const id = Number(c.req.param('id'));
+    const feature = Number.isInteger(id) ? await getFeature(id) : null;
+    const repo = feature ? await getRepoById(feature.repository_id) : null;
+    if (!feature || !repo || !c.get('user').installationIds.includes(repo.installation_id)) {
+      return c.json({ error: 'unknown feature' }, 404);
+    }
+    if (repo.provider !== 'artifacts' || !feature.change_request_id) {
+      return c.json({ error: 'native reviews apply to Artifacts change requests only' }, 409);
+    }
+    const deniedCapability = await requireCapability(c, repo.installation_id, 'settings', orgAdmin);
+    if (deniedCapability) return deniedCapability;
+    const cr = await getChangeRequest(feature.change_request_id);
+    if (!cr || cr.status !== 'open') {
+      return c.json({ error: 'the change request is not open' }, 409);
+    }
+    await enqueueFactoryMessage({ kind: 'cr_review', changeRequestId: cr.id });
+    return c.json({ ok: true });
+  });
+
   app.post('/factory/features/:id/merge', async (c) => {
     const id = Number(c.req.param('id'));
     const feature = Number.isInteger(id) ? await getFeature(id) : null;

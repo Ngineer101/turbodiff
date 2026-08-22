@@ -501,6 +501,14 @@ export default function FeaturePage() {
     },
     onError: onApiError,
   });
+  const rereview = useMutation({
+    mutationFn: () => api.post(`/api/factory/features/${id}/review`),
+    onSuccess: () => {
+      toast.success('Review dispatched — the verdict lands here when it completes');
+      refresh();
+    },
+    onError: onApiError,
+  });
   const abandon = useMutation({
     mutationFn: () =>
       api.post<{ ok: boolean; branchDeleted?: boolean }>(`/api/factory/features/${id}/abandon`),
@@ -669,6 +677,19 @@ export default function FeaturePage() {
             >
               Merge
             </ConfirmButton>
+          ) : null}
+          {prState === 'open' && data.provider === 'artifacts' ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              className="w-full sm:w-auto"
+              loading={rereview.isPending}
+              onClick={() => rereview.mutate()}
+            >
+              {data.reviews.length > 0 || data.checks.some((ch) => ch.name === 'review')
+                ? 'Re-run review'
+                : 'Run review'}
+            </Button>
           ) : null}
           {prState === 'open' ? (
             <ConfirmButton

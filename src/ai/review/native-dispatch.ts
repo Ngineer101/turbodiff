@@ -5,6 +5,7 @@ import {
   getInstallation,
   getRepoById,
   listAgentsForRepo,
+  upsertCrCheck,
 } from '../../data/db.ts';
 import {
   agentsForTier,
@@ -48,11 +49,24 @@ export async function dispatchNativeCrReviews(changeRequestId: number): Promise<
   const agents = agentsForTier(tier, enabled).slice(0, budget);
   const cockpitUrl = cr.feature_id ? cockpitFeatureUrl(cr.feature_id) : `${env.PUBLIC_BASE_URL}/`;
 
+  // Visible from the moment of dispatch — a review that dies before
+  // post_review must not read as forever-polling in the cockpit.
+  await upsertCrCheck(cr.id, 'review', 'running', `${agents.length} agent(s) dispatched`);
+  let dispatched = 0;
   for (const agent of agents) {
-    await dispatchReviewAgent(agent, repo, cr.number, cockpitUrl, 'cr_opened', {
+    const ok = await dispatchReviewAgent(agent, repo, cr.number, cockpitUrl, 'cr_opened', {
       riskTier: tier,
       modelOverride,
       changeRequest: { id: cr.id, number: cr.number },
     });
+    if (ok) dispatched += 1;
+  }
+  if (dispatched === 0) {
+    await upsertCrCheck(
+      cr.id,
+      'review',
+      'error',
+      'review dispatch failed — re-run from the cockpit',
+    );
   }
 }
