@@ -112,8 +112,16 @@ function stationsFor(data: ApiFeatureDetail): Station[] {
 // diverged from the approved acceptance criteria, and the factory refused to
 // auto-revert. The human either rewrites the contract or restores the plan —
 // nothing proceeds until they say which.
-function CriteriaConflictCard({ featureId, criteria }: { featureId: number; criteria: string[] }) {
-  const [draft, setDraft] = useState(criteria.join('\n'));
+function CriteriaConflictCard({
+  featureId,
+  criteria,
+  proposed,
+}: {
+  featureId: number;
+  criteria: string[];
+  proposed: string[] | null;
+}) {
+  const [draft, setDraft] = useState((proposed ?? criteria).join('\n'));
   const queryClient = useQueryClient();
   const update = useMutation({
     mutationFn: () =>
@@ -158,7 +166,11 @@ function CriteriaConflictCard({ featureId, criteria }: { featureId: number; crit
         onChange={(e) => setDraft(e.target.value)}
         aria-label="Acceptance criteria, one per line"
       />
-      <p className="mt-1 text-xs text-mute">One criterion per line.</p>
+      <p className="mt-1 text-xs text-mute">
+        {proposed
+          ? 'Proposed rewrite drafted from your comments — edit freely, one criterion per line.'
+          : 'One criterion per line.'}
+      </p>
       <div className="mt-3 flex flex-col gap-2 sm:flex-row">
         <Button size="sm" loading={update.isPending} onClick={() => update.mutate()}>
           Update criteria &amp; re-verify
@@ -726,6 +738,7 @@ export default function FeaturePage() {
         <CriteriaConflictCard
           featureId={data.feature.id}
           criteria={data.criteria.map((criterion) => criterion.text)}
+          proposed={data.feature.proposed_criteria}
         />
       ) : null}
       <div className="mt-4 max-w-xl">

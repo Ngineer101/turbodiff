@@ -22,6 +22,8 @@ import {
   setRepoLaunchable,
   latestFixedAttempt,
   setFeatureCriteriaConflict,
+  listCockpitComments,
+  setProposedAcceptance,
 } from '../../data/db.ts';
 import { persistAgentLog } from '../runtime/agent-runs.ts';
 import { maybeAutoMerge } from '../../services/auto-merge.ts';
@@ -33,7 +35,7 @@ import { cockpitFeatureUrl } from '../../services/urls.ts';
 import { formatUnmetCriteriaFindings, type CriterionResult } from '../../domain/verification.ts';
 import { parseUtc } from '../../shared/time.ts';
 import { signArtifactKey } from '../../integrations/security/crypto.ts';
-import { resolveRunnerAuth, runnerEnvironment } from '../runtime/runner-auth.ts';
+import { resolveRunnerAuth, runnerEnvironment, type RunnerAuth } from '../runtime/runner-auth.ts';
 import { generationSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
 import { prepareCachedWorktree } from '../runtime/repository-workspace.ts';
@@ -350,6 +352,9 @@ async function verify(
           parseUtc(feature.acceptance_updated_at) < parseUtc(lastFixed.created_at));
       if (lastFixed?.trigger === 'cockpit_comment' && criteriaPredateFix) {
         await setFeatureCriteriaConflict(feature.id, true);
+        await proposeUpdatedCriteria(sandbox, auth, feature, criteria, results).catch((err) =>
+          console.warn('turbodiff: criteria proposal drafting failed (card falls back):', err),
+        );
         await postCriteriaConflictNotice(token, repo, feature, criteria, results);
         console.log(
           `turbodiff: criteria conflict flagged for feature ${feature.id} — awaiting decision`,
@@ -506,6 +511,51 @@ async function postReport(
   } catch (err) {
     console.error('turbodiff: verification report comment failed:', err);
   }
+}
+
+// Drafts the criteria rewrite the human is being asked to approve: keep
+// still-valid criteria, restate the failing ones to describe the direction
+// their comments took the code. Best-effort — the decision card falls back
+// to the current criteria when this produces nothing usable.
+async function proposeUpdatedCriteria(
+  sandbox: Sandbox,
+  auth: RunnerAuth,
+  feature: FeatureRow,
+  criteria: string[],
+  results: CriterionResult[],
+): Promise<void> {
+  const comments = (await listCockpitComments(feature.id))
+    .map((c) => `- ${c.path}:${c.line} — ${c.body}`)
+    .join('\n');
+  const evidence = results
+    .map((r) => `${r.verdict.toUpperCase()} — ${criteria[r.index]}\n  Observed: ${r.note}`)
+    .join('\n');
+  const PROPOSAL_FILE = `/workspace/criteria-proposal-${feature.id}.json`;
+  const prompt = `A reviewer's comments changed this feature's direction, and the approved
+acceptance criteria no longer match the implemented behavior.
+
+Reviewer comments:
+${comments || '(none recorded)'}
+
+Current criteria with the latest verification evidence:
+${evidence}
+
+Rewrite the acceptance criteria to describe the implemented direction the
+comments asked for. Keep criteria that still hold verbatim; restate the ones
+that conflict; each criterion must be empirically checkable against the
+running app. Write ONLY a JSON array of criterion strings to ${PROPOSAL_FILE}.
+`;
+  await sandbox.writeFile(`/workspace/criteria-prompt-${feature.id}.md`, prompt);
+  const run = await sandbox.exec(
+    `claude -p --model haiku --dangerously-skip-permissions --output-format text < /workspace/criteria-prompt-${feature.id}.md`,
+    { timeout: 90_000, env: runnerEnvironment(auth) },
+  );
+  if (!run.success) throw new Error(`proposal agent exited ${run.exitCode}`);
+  const raw = await sandbox.readFile(PROPOSAL_FILE).then((f) => f.content);
+  const parsed = parseJson(raw);
+  const proposal = Array.isArray(parsed) ? parsed.filter(isString).filter(Boolean) : [];
+  if (proposal.length === 0) throw new Error('proposal file held no criteria');
+  await setProposedAcceptance(feature.id, proposal);
 }
 
 // The criteria-conflict notice: names the failed criteria and spells out the

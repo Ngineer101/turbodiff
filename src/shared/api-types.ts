@@ -206,6 +206,9 @@ export interface ApiFeatureDetail {
     // Awaiting a human decision: a cockpit-comment fix diverged from the
     // approved acceptance criteria (update criteria vs restore behavior).
     criteria_conflict: boolean;
+    // Machine-drafted criteria rewrite awaiting approval (prefills the
+    // decision card); null when drafting failed or no conflict.
+    proposed_criteria: string[] | null;
   };
   repo: string; // "owner/name"
   provider: string; // 'github' | 'artifacts'

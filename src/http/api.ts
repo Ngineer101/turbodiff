@@ -814,6 +814,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         error: feature.error,
         pr_number: feature.pr_number,
         criteria_conflict: feature.criteria_conflict === 1,
+        // SAFETY: proposed_acceptance is written only by setProposedAcceptance
+        // as serialized string[].
+        proposed_criteria: feature.proposed_acceptance
+          ? (JSON.parse(feature.proposed_acceptance) as string[])
+          : null,
       },
       repo: `${repo.owner}/${repo.name}`,
       provider: repo.provider,

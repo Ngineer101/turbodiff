@@ -488,6 +488,7 @@ export interface FeatureRow {
   change_request_id: number | null; // native CR the feature opened (Artifacts)
   criteria_conflict: number; // 1 = awaiting a human criteria-vs-comment decision
   acceptance_updated_at: string | null; // last human edit of the criteria (conflict guard)
+  proposed_acceptance: string | null; // JSON string[]: drafted criteria awaiting approval
   status: string;
   error: string | null;
   created_at: string;
@@ -701,12 +702,18 @@ export async function setFeatureCriteriaConflict(id: number, conflict: boolean):
     .run();
 }
 
+export async function setProposedAcceptance(id: number, criteria: string[] | null): Promise<void> {
+  await env.DB.prepare('UPDATE features SET proposed_acceptance = ?2 WHERE id = ?1')
+    .bind(id, criteria ? JSON.stringify(criteria) : null)
+    .run();
+}
+
 // Rewrites the acceptance criteria wholesale (the criteria-conflict "update"
 // resolution — the user edited the contract) and clears the conflict flag.
 export async function updateFeatureAcceptance(id: number, criteria: string[]): Promise<void> {
   await env.DB.prepare(
     `UPDATE features SET acceptance = ?2, criteria_conflict = 0,
-		   acceptance_updated_at = datetime('now')
+		   acceptance_updated_at = datetime('now'), proposed_acceptance = NULL
 		 WHERE id = ?1`,
   )
     .bind(id, JSON.stringify(criteria))
