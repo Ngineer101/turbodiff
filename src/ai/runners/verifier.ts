@@ -36,7 +36,7 @@ import { formatUnmetCriteriaFindings, type CriterionResult } from '../../domain/
 import { parseUtc } from '../../shared/time.ts';
 import { signArtifactKey } from '../../integrations/security/crypto.ts';
 import { resolveRunnerAuth, runnerEnvironment, type RunnerAuth } from '../runtime/runner-auth.ts';
-import { generationSandbox } from '../runtime/sandbox.ts';
+import { generationSandbox, isSandboxTransportError } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
 import { prepareCachedWorktree } from '../runtime/repository-workspace.ts';
 import { installationToken } from '../../integrations/github/app.ts';
@@ -196,6 +196,10 @@ export async function runVerification(featureId: number): Promise<void> {
     const message = err instanceof Error ? err.message : String(err);
     await finishVerification(verificationId, 'error', { error: message.slice(0, 500) });
     console.error(`turbodiff: verification errored for ${label}:`, err);
+    // Container-layer 500s are weather, not verdicts: rethrow so the
+    // workflow step's retry re-runs the verification (a fresh row supersedes
+    // this errored one). Business errors stay recorded-and-final.
+    if (isSandboxTransportError(err)) throw err;
   }
 }
 

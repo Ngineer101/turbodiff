@@ -97,7 +97,9 @@ function stationsFor(data: ApiFeatureDetail): Station[] {
       ? { label: 'Verify', verdict: 'GO', tone: 'go' }
       : v.status === 'running'
         ? { label: 'Verify', verdict: 'POLLING', tone: 'hold', pulse: true }
-        : { label: 'Verify', verdict: `${v.failed} UNMET`, tone: 'abort' };
+        : v.status === 'error'
+          ? { label: 'Verify', verdict: 'ERRORED', tone: 'abort' }
+          : { label: 'Verify', verdict: `${v.failed} UNMET`, tone: 'abort' };
   const ship: Station = merged
     ? { label: 'Ship', verdict: 'MERGED', tone: 'go' }
     : conflict
