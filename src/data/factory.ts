@@ -486,6 +486,7 @@ export interface FeatureRow {
   branch: string | null;
   pr_number: number | null;
   change_request_id: number | null; // native CR the feature opened (Artifacts)
+  criteria_conflict: number; // 1 = awaiting a human criteria-vs-comment decision
   status: string;
   error: string | null;
   created_at: string;
@@ -691,6 +692,35 @@ export async function updateFeature(
       fields.changeRequestId ?? null,
     )
     .run();
+}
+
+export async function setFeatureCriteriaConflict(id: number, conflict: boolean): Promise<void> {
+  await env.DB.prepare('UPDATE features SET criteria_conflict = ?2 WHERE id = ?1')
+    .bind(id, conflict ? 1 : 0)
+    .run();
+}
+
+// Rewrites the acceptance criteria wholesale (the criteria-conflict "update"
+// resolution — the user edited the contract) and clears the conflict flag.
+export async function updateFeatureAcceptance(id: number, criteria: string[]): Promise<void> {
+  await env.DB.prepare('UPDATE features SET acceptance = ?2, criteria_conflict = 0 WHERE id = ?1')
+    .bind(id, JSON.stringify(criteria))
+    .run();
+}
+
+// The most recent fix that actually pushed — its trigger tells whether the
+// current code state embodies a human instruction (cockpit_comment).
+export async function latestFixedAttempt(
+  repositoryId: number,
+  prNumber: number,
+): Promise<{ id: number; trigger: string } | null> {
+  return env.DB.prepare(
+    `SELECT id, trigger FROM fix_attempts
+		 WHERE repository_id = ?1 AND pr_number = ?2 AND status = 'fixed'
+		 ORDER BY id DESC LIMIT 1`,
+  )
+    .bind(repositoryId, prNumber)
+    .first<{ id: number; trigger: string }>();
 }
 
 // --- plans (Phase 3: requirements → questions → plan → approve → feature) ---

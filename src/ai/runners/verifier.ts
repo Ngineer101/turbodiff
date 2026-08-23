@@ -20,6 +20,8 @@ import {
   type RepositoryRow,
   setRepoRunCommand,
   setRepoLaunchable,
+  latestFixedAttempt,
+  setFeatureCriteriaConflict,
 } from '../../data/db.ts';
 import { persistAgentLog } from '../runtime/agent-runs.ts';
 import { maybeAutoMerge } from '../../services/auto-merge.ts';
@@ -28,6 +30,7 @@ import { CR_BOT_AUTHOR, maybeAutoMergeCr } from '../../services/change-requests.
 import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
 import { certificateUrl } from '../../services/certificates.ts';
 import { cockpitFeatureUrl } from '../../services/urls.ts';
+import { formatUnmetCriteriaFindings, type CriterionResult } from '../../domain/verification.ts';
 import { signArtifactKey } from '../../integrations/security/crypto.ts';
 import { resolveRunnerAuth, runnerEnvironment } from '../runtime/runner-auth.ts';
 import { generationSandbox } from '../runtime/sandbox.ts';
@@ -57,13 +60,6 @@ const shotsDir = (featureId: number) => `${outDir(featureId)}/screenshots`;
 // Verification runs inside a Workflow step (no wall clock), so the agent can
 // afford launch discovery + screenshots + a recording.
 const AGENT_TIMEOUT_MS = 20 * 60_000;
-
-interface CriterionResult {
-  index: number;
-  verdict: 'pass' | 'fail' | 'skip';
-  note: string;
-  screenshot?: string;
-}
 
 function verifyPrompt(feature: FeatureRow, repo: RepositoryRow, criteria: string[]): string {
   const OUT_DIR = outDir(feature.id);
@@ -339,19 +335,26 @@ async function verify(
 
     // Conformance gate: unmet criteria feed the existing fix loop (toggle and
     // cap are re-validated by the consumer, exactly like review-driven fixes).
+    // EXCEPT when the code's latest fix came from a human cockpit comment —
+    // auto-"fixing" then means silently reverting a human's explicit
+    // instruction. Flag the conflict and wait for their decision instead.
     if (failed.length > 0 && repo.auto_fix === 1) {
-      await enqueueFactoryMessage({
-        kind: 'fix',
-        repoId: repo.id,
-        prNumber: feature.pr_number!,
-        trigger: 'verification_failed',
-        findings: failed
-          .map(
-            (f) =>
-              `**P1** — Acceptance criterion not met: ${criteria[f.index]}\n\nEvidence: ${f.note}`,
-          )
-          .join('\n\n'),
-      });
+      const lastFixed = await latestFixedAttempt(repo.id, feature.pr_number!);
+      if (lastFixed?.trigger === 'cockpit_comment') {
+        await setFeatureCriteriaConflict(feature.id, true);
+        await postCriteriaConflictNotice(token, repo, feature, criteria, results);
+        console.log(
+          `turbodiff: criteria conflict flagged for feature ${feature.id} — awaiting decision`,
+        );
+      } else {
+        await enqueueFactoryMessage({
+          kind: 'fix',
+          repoId: repo.id,
+          prNumber: feature.pr_number!,
+          trigger: 'verification_failed',
+          findings: formatUnmetCriteriaFindings(criteria, results),
+        });
+      }
     }
     return { status: failed.length > 0 ? 'failed' : 'passed', results, summary, demo, usage };
   } finally {
@@ -494,6 +497,53 @@ async function postReport(
     });
   } catch (err) {
     console.error('turbodiff: verification report comment failed:', err);
+  }
+}
+
+// The criteria-conflict notice: names the failed criteria and spells out the
+// two resolutions. Clear communication IS the feature here — the factory is
+// refusing to act without the human.
+async function postCriteriaConflictNotice(
+  token: string,
+  repo: RepositoryRow,
+  feature: FeatureRow,
+  criteria: string[],
+  results: CriterionResult[],
+): Promise<void> {
+  const failedLines = results
+    .filter((r) => r.verdict === 'fail')
+    .map((r) => `- ${criteria[r.index]}\n  _Evidence: ${r.note.slice(0, 300)}_`);
+  const body = [
+    '⚖️ **Your requested change conflicts with the approved acceptance criteria.**',
+    '',
+    'The latest code follows your review comment, but these planned criteria now fail:',
+    '',
+    ...failedLines,
+    '',
+    'The factory will NOT auto-revert your change. Decide in the cockpit:',
+    `**[Resolve in Turbodiff](${cockpitFeatureUrl(feature.id)})** — either update the criteria to match the new direction (then re-verify), or restore the planned behavior.`,
+  ].join('\n');
+  if (repo.provider === 'artifacts') {
+    if (feature.change_request_id) {
+      await addCrComment({
+        changeRequestId: feature.change_request_id,
+        file: null,
+        line: null,
+        author: CR_BOT_AUTHOR,
+        kind: 'comment',
+        severity: null,
+        body,
+      }).catch((err) => console.error('turbodiff: conflict notice failed:', err));
+    }
+    return;
+  }
+  try {
+    await gh(token, `/repos/${repo.owner}/${repo.name}/issues/${feature.pr_number}/comments`, {
+      method: 'POST',
+      body: JSON.stringify({ body }),
+    });
+  } catch (err) {
+    console.error('turbodiff: conflict notice comment failed:', err);
   }
 }
 

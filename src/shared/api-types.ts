@@ -203,6 +203,9 @@ export interface ApiFeatureDetail {
     status: string;
     error: string | null;
     pr_number: number | null;
+    // Awaiting a human decision: a cockpit-comment fix diverged from the
+    // approved acceptance criteria (update criteria vs restore behavior).
+    criteria_conflict: boolean;
   };
   repo: string; // "owner/name"
   provider: string; // 'github' | 'artifacts'

@@ -33,6 +33,7 @@ import {
 import { Button } from '../components/ui/button.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 import { Table, Td } from '../components/ui/table.tsx';
+import { Card } from '../components/ui/card.tsx';
 import { Textarea } from '../components/ui/input.tsx';
 
 // The factory PR cockpit: one screen for reviewing a factory PR without
@@ -105,6 +106,74 @@ function stationsFor(data: ApiFeatureDetail): Station[] {
         ? { label: 'Ship', verdict: 'READY', tone: 'hold' }
         : { label: 'Ship', verdict: 'HOLD', tone: 'off' };
   return [build, review, verify, ship];
+}
+
+// The criteria-conflict decision (see verifier.ts): a cockpit-comment fix
+// diverged from the approved acceptance criteria, and the factory refused to
+// auto-revert. The human either rewrites the contract or restores the plan —
+// nothing proceeds until they say which.
+function CriteriaConflictCard({ featureId, criteria }: { featureId: number; criteria: string[] }) {
+  const [draft, setDraft] = useState(criteria.join('\n'));
+  const queryClient = useQueryClient();
+  const update = useMutation({
+    mutationFn: () =>
+      api.post(`/api/factory/features/${featureId}/criteria`, {
+        criteria: draft
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean),
+      }),
+    onSuccess: () => {
+      toast.success('Criteria updated — re-verifying against the new contract');
+      void queryClient.invalidateQueries({ queryKey: ['feature', featureId] });
+    },
+    onError: onApiError,
+  });
+  const keep = useMutation({
+    mutationFn: () => api.post(`/api/factory/features/${featureId}/criteria/keep`),
+    onSuccess: () => {
+      toast.success('Restoring the planned behavior — the fix agent is on it');
+      void queryClient.invalidateQueries({ queryKey: ['feature', featureId] });
+    },
+    onError: onApiError,
+  });
+  return (
+    <Card className="mt-4 max-w-xl border-warn/50">
+      <div className="flex items-center gap-2">
+        <Lamp tone="hold" />
+        <span className="font-mono text-[11px] font-bold tracking-[0.18em] text-warn uppercase">
+          Criteria conflict — your call
+        </span>
+      </div>
+      <p className="mt-2 text-[0.85rem] text-ink-dim">
+        Your review comment steered the code away from the approved acceptance criteria, and
+        verification now fails against them. The factory won&rsquo;t revert your change without
+        asking. Either edit the criteria below to match the new direction, or restore the planned
+        behavior.
+      </p>
+      <Textarea
+        className="mt-3 font-mono text-xs"
+        rows={Math.min(8, Math.max(3, criteria.length + 1))}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        aria-label="Acceptance criteria, one per line"
+      />
+      <p className="mt-1 text-xs text-mute">One criterion per line.</p>
+      <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+        <Button size="sm" loading={update.isPending} onClick={() => update.mutate()}>
+          Update criteria &amp; re-verify
+        </Button>
+        <Button
+          size="sm"
+          variant="secondary"
+          loading={keep.isPending}
+          onClick={() => keep.mutate()}
+        >
+          Keep criteria — revert my change
+        </Button>
+      </div>
+    </Card>
+  );
 }
 
 function GoNoGoBoard({ data }: { data: ApiFeatureDetail }) {
@@ -653,6 +722,12 @@ export default function FeaturePage() {
           ))}
         </p>
       )}
+      {data.feature.criteria_conflict ? (
+        <CriteriaConflictCard
+          featureId={data.feature.id}
+          criteria={data.criteria.map((criterion) => criterion.text)}
+        />
+      ) : null}
       <div className="mt-4 max-w-xl">
         <GoNoGoBoard data={data} />
       </div>

@@ -3,6 +3,7 @@ import { env } from 'cloudflare:workers';
 import { Hono, type Context } from 'hono';
 import { factoryUnsupportedReason } from '../integrations/git/provider.ts';
 import { parseUtc } from '../shared/time.ts';
+import { formatUnmetCriteriaFindings, type CriterionResult } from '../domain/verification.ts';
 import {
   agentUsageForMonth,
   automationUsageForMonth,
@@ -96,6 +97,8 @@ import {
   upsertPushSubscription,
   type ConnectionRow,
   type VerificationRow,
+  setFeatureCriteriaConflict,
+  updateFeatureAcceptance,
 } from '../data/db.ts';
 import {
   completeOAuthConnect,
@@ -810,6 +813,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         status: feature.status,
         error: feature.error,
         pr_number: feature.pr_number,
+        criteria_conflict: feature.criteria_conflict === 1,
       },
       repo: `${repo.owner}/${repo.name}`,
       provider: repo.provider,
@@ -1247,6 +1251,66 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     }
     await enqueueFactoryMessage({ kind: 'cr_review', changeRequestId: cr.id });
     return c.json({ ok: true });
+  });
+
+  // Criteria-conflict resolution (see verifier.ts postCriteriaConflictNotice):
+  // the human decides. "update" rewrites the acceptance criteria to the
+  // user's edited text and re-verifies; "keep" explicitly authorizes the fix
+  // that restores the planned behavior.
+  app.post('/factory/features/:id/criteria', async (c) => {
+    const id = Number(c.req.param('id'));
+    const feature = Number.isInteger(id) ? await getFeature(id) : null;
+    const repo = feature ? await getRepoById(feature.repository_id) : null;
+    if (!feature || !repo || !c.get('user').installationIds.includes(repo.installation_id)) {
+      return c.json({ error: 'unknown feature' }, 404);
+    }
+    const deniedCapability = await requireCapability(c, repo.installation_id, 'settings', orgAdmin);
+    if (deniedCapability) return deniedCapability;
+    const body = await c.req.json<{ criteria?: unknown }>().catch(() => null);
+    const criteria = Array.isArray(body?.criteria)
+      ? body.criteria
+          .filter(isString)
+          .map((text) => text.trim())
+          .filter(Boolean)
+      : null;
+    if (!criteria || criteria.length === 0) {
+      return c.json({ error: 'body must be {"criteria": ["...", ...]} with at least one' }, 400);
+    }
+    await updateFeatureAcceptance(feature.id, criteria);
+    await enqueueFactoryMessage({ kind: 'verify', featureId: feature.id });
+    return c.json({ ok: true, reverifying: true });
+  });
+
+  app.post('/factory/features/:id/criteria/keep', async (c) => {
+    const id = Number(c.req.param('id'));
+    const feature = Number.isInteger(id) ? await getFeature(id) : null;
+    const repo = feature ? await getRepoById(feature.repository_id) : null;
+    if (!feature || !repo || !c.get('user').installationIds.includes(repo.installation_id)) {
+      return c.json({ error: 'unknown feature' }, 404);
+    }
+    const deniedCapability = await requireCapability(c, repo.installation_id, 'settings', orgAdmin);
+    if (deniedCapability) return deniedCapability;
+    if (feature.criteria_conflict !== 1 || !feature.pr_number) {
+      return c.json({ error: 'no criteria conflict to resolve' }, 409);
+    }
+    const verification = await latestVerificationForFeature(feature.id);
+    // SAFETY: verifications.results is written only by the verify pipeline as
+    // serialized CriterionResult[].
+    const results: CriterionResult[] = verification?.results
+      ? (JSON.parse(verification.results) as CriterionResult[])
+      : [];
+    const criteria: string[] = feature.acceptance ? JSON.parse(feature.acceptance) : [];
+    await setFeatureCriteriaConflict(feature.id, false);
+    // The explicit authorization the automatic path refused to assume: the
+    // user chose the planned behavior over their comment's direction.
+    await enqueueFactoryMessage({
+      kind: 'fix',
+      repoId: repo.id,
+      prNumber: feature.pr_number,
+      trigger: 'verification_failed',
+      findings: formatUnmetCriteriaFindings(criteria, results),
+    });
+    return c.json({ ok: true, restoring: true });
   });
 
   app.post('/factory/features/:id/merge', async (c) => {
