@@ -736,6 +736,9 @@ export default function FeaturePage() {
       )}
       {data.feature.criteria_conflict ? (
         <CriteriaConflictCard
+          // Remount when the underlying text changes: the draft is captured
+          // at mount, and a stale page must never post yesterday's contract.
+          key={(data.feature.proposed_criteria ?? data.criteria.map((c) => c.text)).join('\u0000')}
           featureId={data.feature.id}
           criteria={data.criteria.map((criterion) => criterion.text)}
           proposed={data.feature.proposed_criteria}

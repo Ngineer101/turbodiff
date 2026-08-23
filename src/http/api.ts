@@ -1281,6 +1281,19 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (!criteria || criteria.length === 0) {
       return c.json({ error: 'body must be {"criteria": ["...", ...]} with at least one' }, 400);
     }
+    // A same-text "update" keeps the same contract and re-fails identically —
+    // the two ways that happens are a stale page or an unedited textarea,
+    // and both deserve words, not a silent loop.
+    if (feature.acceptance && JSON.stringify(criteria) === feature.acceptance) {
+      return c.json(
+        {
+          error:
+            'these criteria are identical to the current ones — verification would fail the same way. ' +
+            'Edit them to describe the intended behavior, or choose "Keep criteria" to restore the planned behavior.',
+        },
+        409,
+      );
+    }
     await updateFeatureAcceptance(feature.id, criteria);
     await enqueueFactoryMessage({ kind: 'verify', featureId: feature.id });
     return c.json({ ok: true, reverifying: true });
