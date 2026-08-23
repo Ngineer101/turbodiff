@@ -31,6 +31,7 @@ import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
 import { certificateUrl } from '../../services/certificates.ts';
 import { cockpitFeatureUrl } from '../../services/urls.ts';
 import { formatUnmetCriteriaFindings, type CriterionResult } from '../../domain/verification.ts';
+import { parseUtc } from '../../shared/time.ts';
 import { signArtifactKey } from '../../integrations/security/crypto.ts';
 import { resolveRunnerAuth, runnerEnvironment } from '../runtime/runner-auth.ts';
 import { generationSandbox } from '../runtime/sandbox.ts';
@@ -340,7 +341,14 @@ async function verify(
     // instruction. Flag the conflict and wait for their decision instead.
     if (failed.length > 0 && repo.auto_fix === 1) {
       const lastFixed = await latestFixedAttempt(repo.id, feature.pr_number!);
-      if (lastFixed?.trigger === 'cockpit_comment') {
+      // The guard fires only while the contract is UN-resolved: a criteria
+      // edit after the comment-driven fix means the human already chose —
+      // failures then feed the normal fix path toward their new criteria.
+      const criteriaPredateFix =
+        !feature.acceptance_updated_at ||
+        (lastFixed !== null &&
+          parseUtc(feature.acceptance_updated_at) < parseUtc(lastFixed.created_at));
+      if (lastFixed?.trigger === 'cockpit_comment' && criteriaPredateFix) {
         await setFeatureCriteriaConflict(feature.id, true);
         await postCriteriaConflictNotice(token, repo, feature, criteria, results);
         console.log(
