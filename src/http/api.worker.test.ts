@@ -321,6 +321,20 @@ describe('organization member management', () => {
     }
   }
 
+  // A second human in org1 — the sole-member owner promotion must not fire
+  // when the caller is not the organization's only member row.
+  async function seedCoOwner(): Promise<void> {
+    await testEnv.DB.prepare(
+      `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt", login, "githubId")
+				 VALUES ('u2', 'hubot', 'hubot@example.test', 1, '2026-01-01T00:00:00.000Z',
+				         '2026-01-01T00:00:00.000Z', 'hubot', 3002)`,
+    ).run();
+    await testEnv.DB.prepare(
+      `INSERT INTO "member" (id, "organizationId", "userId", role, "createdAt")
+				 VALUES ('m2', 'org1', 'u2', 'owner', '2026-01-01T00:00:00.000Z')`,
+    ).run();
+  }
+
   it('is readable by any installation member, including one with no explicit member row', async () => {
     await seedOrg(null);
     // orgAdmin false: a plain GitHub member stays an implicit 'member'
@@ -353,6 +367,7 @@ describe('organization member management', () => {
 
   it('rejects invite, remove, and role-change requests from a member-role caller', async () => {
     await seedOrg('member');
+    await seedCoOwner();
     const app = authenticatedApi();
 
     const invite = await app.request('https://turbodiff.test/api/organizations/1001/invitations', {
@@ -380,6 +395,7 @@ describe('organization member management', () => {
 
   it('gates repo/agent configuration mutations on settings capability, independent of GitHub push permission', async () => {
     await seedOrg('member');
+    await seedCoOwner();
     const app = authenticatedApi(async () => true); // push permission granted; org role should still block
 
     const repoDenied = await app.request('https://turbodiff.test/api/repos/101', {
@@ -465,6 +481,7 @@ describe('organization member management', () => {
 
   it('never re-elevates a caller who already has an explicit member row', async () => {
     await seedOrg('member');
+    await seedCoOwner();
     const response = await authenticatedApi(undefined, async () => true).request(
       'https://turbodiff.test/api/organizations/1001/members',
     );
@@ -501,6 +518,75 @@ describe('organization member management', () => {
       body: JSON.stringify({ enabled: false }),
     });
     expect(allowed.status).toBe(200);
+  });
+
+  it('promotes the sole member of an organization to owner, persistently', async () => {
+    await seedOrg('member');
+    // orgAdmin false: the sole-member promotion needs nothing from GitHub.
+    const app = authenticatedApi(undefined, async () => false);
+    const first = await app.request('https://turbodiff.test/api/organizations/1001/members');
+    expect(first.status).toBe(200);
+    expect(await first.json()).toMatchObject({
+      my_role: 'owner',
+      members: [expect.objectContaining({ id: 'm1', role: 'owner' })],
+    });
+    const row = await testEnv.DB.prepare(`SELECT role FROM "member" WHERE id = 'm1'`).first<{
+      role: string;
+    }>();
+    expect(row?.role).toBe('owner');
+
+    const second = await app.request('https://turbodiff.test/api/organizations/1001/members');
+    expect(second.status).toBe(200);
+    expect(await second.json()).toMatchObject({ my_role: 'owner' });
+    const count = await testEnv.DB.prepare(
+      `SELECT COUNT(*) AS n FROM "member" WHERE "organizationId" = 'org1'`,
+    ).first<{ n: number }>();
+    expect(count?.n).toBe(1);
+  });
+
+  it('normalizes a sole admin member to owner', async () => {
+    await seedOrg('admin');
+    const response = await authenticatedApi(undefined, async () => false).request(
+      'https://turbodiff.test/api/organizations/1001/members',
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ my_role: 'owner' });
+    const row = await testEnv.DB.prepare(`SELECT role FROM "member" WHERE id = 'm1'`).first<{
+      role: string;
+    }>();
+    expect(row?.role).toBe('owner');
+  });
+
+  it('opens the capability gates for a sole member without touching GitHub', async () => {
+    await seedOrg('member');
+    // This exact shape returned 403 before the promotion — see the settings
+    // capability test above. A 200 here proves the heal runs on the
+    // capabilityDenied choke point, not just the members GET.
+    const response = await authenticatedApi(
+      async () => true,
+      async () => false,
+    ).request('https://turbodiff.test/api/repos/101', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(response.status).toBe(200);
+  });
+
+  it("never promotes a caller who is not the organization's sole member row", async () => {
+    await seedOrg(null);
+    await seedCoOwner();
+    // org1's only member row now belongs to u2, not the caller.
+    await testEnv.DB.prepare(`UPDATE "member" SET role = 'member' WHERE id = 'm2'`).run();
+    const response = await authenticatedApi(undefined, async () => false).request(
+      'https://turbodiff.test/api/organizations/1001/members',
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ my_role: 'member' });
+    const row = await testEnv.DB.prepare(`SELECT role FROM "member" WHERE id = 'm2'`).first<{
+      role: string;
+    }>();
+    expect(row?.role).toBe('member');
   });
 });
 

@@ -66,7 +66,9 @@ export async function ensureOrganizationForInstallation(
 // auto-provisioning fallback in memberRole treats them as an implicit
 // 'member' (never locked out) until their first sign-in, at which point an
 // existing owner/admin can promote them via
-// PATCH /organizations/:installationId/members/:memberId.
+// PATCH /organizations/:installationId/members/:memberId — or, if they end
+// up the org's only member, the sole-member heal in
+// orgForInstallationWithHeal promotes them itself.
 // Synthetic Artifacts installations a user can reach via an explicit member
 // row (docs/artifacts-provider.md). GitHub installations come from GitHub's
 // own answer (auth.ts); these have no GitHub side, so membership in the
@@ -147,11 +149,37 @@ async function ensureGithubAdminOwner(
   await ensureOwnerMember(organizationId, user.session.userId);
 }
 
+// Sole-member promotion: an organization whose only explicit member row
+// belongs to the caller implicitly makes them its owner — the shapes that
+// produce a sole non-owner row (an artifacts org whose creator had no user
+// row when ensureOwnerMember ran; a GitHub org whose bootstrapped owner
+// left; a failed GitHub admin check) all leave a lone human with no way to
+// invite anyone. better-auth's last-owner guard means a sole 'member'/'admin'
+// row can never result from a legitimate in-app demotion, so this never
+// reverses an intentional decision. Persistent on purpose: better-auth's
+// invitation/member endpoints re-check the stored row internally. Deliberately
+// requires the caller to BE the sole row — a caller with no row on a zero-row
+// org must keep going through the GitHub-admin bootstrap above.
+async function ensureSoleMemberOwner(user: AuthedUser, organizationId: string): Promise<void> {
+  if (user.devFake) return;
+  await env.DB.prepare(
+    `UPDATE "member" SET role = 'owner'
+     WHERE "organizationId" = ?1
+       AND role <> 'owner'
+       AND "userId" IN (SELECT id FROM "user" WHERE "githubId" = ?2)
+       AND (SELECT COUNT(*) FROM "member" m2 WHERE m2."organizationId" = ?1) = 1`,
+  )
+    .bind(organizationId, user.session.userId)
+    .run();
+}
+
 // Resolve an installation to its linked organization, provisioning the row
 // if the webhook that should have created it was missed (installations that
 // predate migrations/0031_organizations.sql, or dropped deliveries). Also
-// bootstraps the first owner from GitHub: see ensureGithubAdminOwner. Null
-// for personal (User-type) installations and unknown installation ids.
+// bootstraps the first owner from GitHub: see ensureGithubAdminOwner. Also
+// normalizes a sole member row belonging to the caller to 'owner': see
+// ensureSoleMemberOwner. Null for personal (User-type) installations and
+// unknown installation ids.
 // A pre-existing org row keeps gating even if the installations row is
 // missing or odd — orgForInstallation is consulted before the account_type
 // gate.
@@ -175,6 +203,12 @@ export async function orgForInstallationWithHeal(
     // trigger it.
     await ensureGithubAdminOwner(user, org.id, installation.account_login, isOrgAdmin);
   }
+  // Outside the `if (installation)` guard: the sole-member rule needs nothing
+  // from GitHub, and a pre-existing org row keeps gating even when the
+  // installations row is missing (see the comment above). Runs after the
+  // GitHub bootstrap, which only inserts (as 'owner') when the caller has no
+  // row — so a freshly bootstrapped admin makes this a no-op.
+  await ensureSoleMemberOwner(user, org.id);
   return org;
 }
 
