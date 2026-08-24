@@ -259,6 +259,19 @@
   overflow: hidden;
   background: var(--color-surface);
   font-family: var(--font-mono);
+  /* manipulation is deliberate: iOS Safari treats the rapid taps used to
+     pick a line range as double-tap-to-zoom. This suppresses that (and tap
+     delay) on diff surfaces only; pinch-zoom and scrolling still work. */
+  touch-action: manipulation;
+}
+
+/* iOS: long-pressing/dragging over line numbers pops the text-selection
+   callout and magnifier, fighting range selection. [data-column-number] is
+   the pierre line-number cell; the unlayered user-select restates the
+   library's layered rule so it can't be lost. */
+.diffs-scope [data-column-number] {
+  -webkit-touch-callout: none;
+  user-select: none;
 }
 
 /* Rendered markdown (plans, PR reviews, comments) — a deliberate step up from
