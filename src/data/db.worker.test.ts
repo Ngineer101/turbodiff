@@ -7,6 +7,7 @@ import { applyD1Migrations } from 'cloudflare:test';
 import { beforeAll, beforeEach, describe, expect, it } from 'vite-plus/test';
 import type { D1Migration } from '@cloudflare/vitest-pool-workers';
 import {
+  addAssistantChatMessage,
   approvePlanFeatures,
   claimAutomation,
   createAutomation,
@@ -15,13 +16,21 @@ import {
   createPlan,
   createPlanForTodo,
   createTodo,
+  createUserChatMessage,
   deletePushSubscriptionByEndpoint,
   deletePushSubscriptionById,
   dispatchOpenCockpitComments,
   finishFixAttempt,
+  getChatMessage,
+  getFeature,
+  hasPendingChatTurn,
+  listChatMessages,
   listPushSubscriptionsForUser,
   listReposForPlan,
   pipelineCostByMonth,
+  recentChatHistory,
+  setChatMessageStatus,
+  setChatSessionId,
   tryRecordAutomationRun,
   tryRecordFixAttempt,
   tryRecordReview,
@@ -56,6 +65,7 @@ beforeEach(async () => {
   const tables = [
     'push_subscriptions',
     'agent_runs',
+    'chat_messages',
     'cockpit_comments',
     'verifications',
     'fix_attempts',
@@ -126,6 +136,79 @@ describe('fix attempt invariants', () => {
       .first<{ status: string; error: string }>();
     expect(old).toMatchObject({ status: 'failed' });
     expect(old?.error).toContain('stale');
+  });
+
+  it('never counts chat turns against the automated fix cap', async () => {
+    // Three finished chat turns — with FIX_MAX_ATTEMPTS = 3 they would
+    // exhaust the cap if they counted.
+    for (let i = 0; i < 3; i++) {
+      const chat = await tryRecordFixAttempt(101, 7, 'chat', Number.MAX_SAFE_INTEGER, 'chat');
+      expect(chat).not.toBeNull();
+      await finishFixAttempt(chat!, 'fixed');
+    }
+
+    const fix = await tryRecordFixAttempt(101, 7, 'blocking_review', 3);
+    expect(fix).not.toBeNull();
+  });
+
+  it('single-flights chat turns against fixes and other chat turns', async () => {
+    const chat = await tryRecordFixAttempt(101, 7, 'chat', Number.MAX_SAFE_INTEGER, 'chat');
+    expect(chat).not.toBeNull();
+    expect(await tryRecordFixAttempt(101, 7, 'blocking_review', 3)).toBeNull();
+    expect(await tryRecordFixAttempt(101, 7, 'chat', Number.MAX_SAFE_INTEGER, 'chat')).toBeNull();
+    await finishFixAttempt(chat!, 'fixed');
+
+    const fix = await tryRecordFixAttempt(101, 7, 'blocking_review', 3);
+    expect(fix).not.toBeNull();
+    expect(await tryRecordFixAttempt(101, 7, 'chat', Number.MAX_SAFE_INTEGER, 'chat')).toBeNull();
+  });
+});
+
+describe('cockpit chat messages', () => {
+  it('round-trips a turn: queued user row, status transitions, assistant reply', async () => {
+    const featureId = await createFeature(101, 'Feature', 'Spec');
+    const userId = await createUserChatMessage(featureId, 'Rename the button', 'octocat', 1);
+    expect(await getChatMessage(userId)).toMatchObject({
+      feature_id: featureId,
+      role: 'user',
+      body: 'Rename the button',
+      author: 'octocat',
+      author_id: 1,
+      status: 'queued',
+    });
+    expect(await hasPendingChatTurn(featureId)).toBe(true);
+
+    await setChatMessageStatus(userId, 'running');
+    expect(await hasPendingChatTurn(featureId)).toBe(true);
+    await addAssistantChatMessage(featureId, 'Done — renamed it.', 'changed', 'abc1234');
+    await setChatMessageStatus(userId, 'done');
+    expect(await hasPendingChatTurn(featureId)).toBe(false);
+
+    const messages = await listChatMessages(featureId);
+    expect(messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+    expect(messages[1]).toMatchObject({
+      status: 'done',
+      outcome: 'changed',
+      commit_sha: 'abc1234',
+    });
+  });
+
+  it('returns recent history oldest-first and persists the chat session id', async () => {
+    const featureId = await createFeature(101, 'Feature', 'Spec');
+    for (let i = 0; i < 25; i++) {
+      await createUserChatMessage(featureId, `msg ${i}`, 'octocat', 1);
+    }
+    const history = await recentChatHistory(featureId, 20);
+    expect(history).toHaveLength(20);
+    expect(history[0].body).toBe('msg 5');
+    expect(history.at(-1)?.body).toBe('msg 24');
+
+    await setChatSessionId(featureId, 'aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb');
+    expect((await getFeature(featureId))?.chat_session_id).toBe(
+      'aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb',
+    );
+    await setChatSessionId(featureId, null);
+    expect((await getFeature(featureId))?.chat_session_id).toBeNull();
   });
 });
 

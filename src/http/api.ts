@@ -12,6 +12,9 @@ import {
   createAgent,
   createAutomation,
   createCockpitComment,
+  createUserChatMessage,
+  hasPendingChatTurn,
+  listChatMessages,
   getChangeRequest,
   getRepoByFullName,
   listCrChecks,
@@ -159,6 +162,7 @@ import type {
   ApiAutomationRunsList,
   ApiAutomationsList,
   ApiBoard,
+  ApiChatList,
   ApiConnectionTest,
   ApiFeatureDetail,
   ApiIntegrations,
@@ -199,6 +203,7 @@ import {
   requireRepoPush,
   serializeAgentRun,
   serializeAutomation,
+  serializeChatMessage,
   serializeCockpitComment,
   serializeFeatureUsage,
   serializeReview,
@@ -215,6 +220,8 @@ export interface ApiRouteDependencies {
   authenticate?: typeof requireUser;
   canPushToRepo?: typeof userCanPushToRepo;
   orgAdmin?: typeof userIsGithubOrgAdmin;
+  // Injectable for tests (the worker-test fixture has no queue binding).
+  enqueueFactory?: typeof enqueueFactoryMessage;
 }
 
 export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
@@ -222,6 +229,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   const authenticate = dependencies.authenticate ?? requireUser;
   const canPushToRepo = dependencies.canPushToRepo ?? userCanPushToRepo;
   const orgAdmin = dependencies.orgAdmin ?? userIsGithubOrgAdmin;
+  const enqueueFactory = dependencies.enqueueFactory ?? enqueueFactoryMessage;
 
   // CSRF gate for the cookie-authed data plane: browsers attach Origin to
   // every POST (same-origin and cross-site alike), so a mismatched Origin is
@@ -1100,6 +1108,65 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       commentIds: claimed.map((cm) => cm.id),
     });
     return c.json({ ok: true, submitted: claimed.length });
+  });
+
+  // Chat history for the cockpit's agent chat panel, chronological.
+  app.get('/factory/features/:id/chat', async (c) => {
+    const id = Number(c.req.param('id'));
+    const feature = Number.isInteger(id) ? await getFeature(id) : null;
+    const repo = feature ? await getRepoById(feature.repository_id) : null;
+    if (!feature || !repo || !c.get('user').installationIds.includes(repo.installation_id)) {
+      return c.json({ error: 'unknown feature' }, 404);
+    }
+    return c.json({
+      messages: (await listChatMessages(feature.id)).map(serializeChatMessage),
+    } satisfies ApiChatList);
+  });
+
+  // One chat turn: records the user message ('queued') and enqueues the
+  // durable chat workflow. The reply lands as an assistant row the panel
+  // picks up by polling.
+  app.post('/factory/features/:id/chat', async (c) => {
+    const id = Number(c.req.param('id'));
+    const feature = Number.isInteger(id) ? await getFeature(id) : null;
+    const repo = feature ? await getRepoById(feature.repository_id) : null;
+    if (!feature || !repo || !c.get('user').installationIds.includes(repo.installation_id)) {
+      return c.json({ error: 'unknown feature' }, 404);
+    }
+    const payload = await c.req.json<{ body?: string }>().catch(() => null);
+    const body = payload?.body?.trim();
+    if (!body) return c.json({ error: 'body must be {body}' }, 400);
+    if (!feature.pr_number || feature.status !== 'pr_opened') {
+      return c.json({ error: 'no open pull request for this feature' }, 409);
+    }
+    // Chat turns push commits to the source branch — same gate as
+    // /comments/submit. Deliberately NO repo.auto_fix check: chat is
+    // human-supervised, not part of the automated fix loop.
+    if (repo.provider === 'artifacts') {
+      const deniedCapability = await requireCapability(
+        c,
+        repo.installation_id,
+        'settings',
+        orgAdmin,
+      );
+      if (deniedCapability) return deniedCapability;
+    } else {
+      const denied = await requireRepoPush(c, repo, canPushToRepo);
+      if (denied) return denied;
+    }
+    // One turn in flight at a time — matches the disabled input client-side.
+    if (await hasPendingChatTurn(feature.id)) {
+      return c.json({ error: 'a chat turn is already running — wait for the reply' }, 409);
+    }
+    const { session } = c.get('user');
+    const chatMessageId = await createUserChatMessage(
+      feature.id,
+      body,
+      session.login,
+      session.userId,
+    );
+    await enqueueFactory({ kind: 'chat', featureId: feature.id, chatMessageId });
+    return c.json({ ok: true, message_id: chatMessageId });
   });
 
   // Re-enqueue generation for a failed feature. The feature row (and its

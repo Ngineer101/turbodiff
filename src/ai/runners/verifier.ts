@@ -64,6 +64,12 @@ const shotsDir = (featureId: number) => `${outDir(featureId)}/screenshots`;
 // afford launch discovery + screenshots + a recording.
 const AGENT_TIMEOUT_MS = 20 * 60_000;
 
+// Fix triggers that embody an explicit human instruction (a cockpit review
+// comment or a chat turn) — auto-"fixing" a verification failure after one
+// would silently revert what the human asked for, so the conflict guard
+// below halts for their decision instead.
+const HUMAN_FIX_TRIGGERS = new Set(['cockpit_comment', 'chat']);
+
 function verifyPrompt(feature: FeatureRow, repo: RepositoryRow, criteria: string[]): string {
   const OUT_DIR = outDir(feature.id);
   const SHOTS_DIR = shotsDir(feature.id);
@@ -342,9 +348,10 @@ async function verify(
 
     // Conformance gate: unmet criteria feed the existing fix loop (toggle and
     // cap are re-validated by the consumer, exactly like review-driven fixes).
-    // EXCEPT when the code's latest fix came from a human cockpit comment —
-    // auto-"fixing" then means silently reverting a human's explicit
-    // instruction. Flag the conflict and wait for their decision instead.
+    // EXCEPT when the code's latest fix came from a human instruction (a
+    // cockpit comment or a chat turn) — auto-"fixing" then means silently
+    // reverting a human's explicit instruction. Flag the conflict and wait
+    // for their decision instead.
     if (failed.length > 0 && repo.auto_fix === 1) {
       const lastFixed = await latestFixedAttempt(repo.id, feature.pr_number!);
       // The guard fires only while the contract is UN-resolved: a criteria
@@ -354,7 +361,7 @@ async function verify(
         !feature.acceptance_updated_at ||
         (lastFixed !== null &&
           parseUtc(feature.acceptance_updated_at) < parseUtc(lastFixed.created_at));
-      if (lastFixed?.trigger === 'cockpit_comment' && criteriaPredateFix) {
+      if (lastFixed && HUMAN_FIX_TRIGGERS.has(lastFixed.trigger) && criteriaPredateFix) {
         await setFeatureCriteriaConflict(feature.id, true);
         await proposeUpdatedCriteria(sandbox, auth, feature, criteria, results).catch((err) =>
           console.warn('turbodiff: criteria proposal drafting failed (card falls back):', err),

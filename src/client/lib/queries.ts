@@ -8,6 +8,7 @@ import type {
   ApiAutomationRunsList,
   ApiAutomationsList,
   ApiBoard,
+  ApiChatList,
   ApiFeatureDetail,
   ApiIntegrations,
   ApiMe,
@@ -97,6 +98,22 @@ export const featureQuery = (id: number) =>
       if (fixInFlight) return LIVE_POLL_MS;
       return false;
     },
+  });
+
+// A user chat message in one of these states has a turn in flight — the
+// panel polls and the input stays disabled until the reply lands.
+export const CHAT_TURN_PENDING = new Set(['queued', 'running']);
+
+export const chatQuery = (featureId: number) =>
+  queryOptions({
+    queryKey: ['chat', featureId],
+    queryFn: () => api.get<ApiChatList>(`/api/factory/features/${featureId}/chat`),
+    refetchInterval: (query) =>
+      query.state.data?.messages.some(
+        (m) => m.role === 'user' && CHAT_TURN_PENDING.has(m.status),
+      )
+        ? LIVE_POLL_MS
+        : false,
   });
 
 // Full transcript for one agent-session run — fetched lazily (enabled: open)
