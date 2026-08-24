@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
-import { Link } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
 import {
   Archive,
   Check,
@@ -12,7 +12,8 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useHotkeys } from 'react-hotkeys-hook';
 import { toast } from 'sonner';
 import type { ApiBoard, ApiPlan, ApiTodo } from '../../shared/api-types.ts';
 import { isJsonObject, isString } from '../../shared/json.ts';
@@ -21,7 +22,9 @@ import { api, ApiError } from '../lib/api.ts';
 import { useDictation } from '../lib/dictation.ts';
 import { ago, fmtUsd } from '../lib/format.ts';
 import { boardQuery } from '../lib/queries.ts';
+import { nextIndex, noOverlayOpen, onListboxKeyDown } from '../lib/shortcuts.ts';
 import { taskColumn, taskStages, taskState } from '../lib/task-state.ts';
+import { useIsDesktop } from '../lib/use-is-desktop.ts';
 import { cn } from '../lib/utils.ts';
 import { ConfirmButton } from '../components/confirm-button.tsx';
 import {
@@ -56,18 +59,13 @@ function QuickAdd({ board }: { board: ApiBoard }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState('');
   const [installationId, setInstallationId] = useState(board.installations[0]?.id ?? 0);
-  // Power-user affordance: "/" focuses the quick-add from anywhere on the board.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
-      const tag = e.target instanceof HTMLElement ? e.target.tagName : undefined;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-      e.preventDefault();
-      inputRef.current?.focus();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  // Power-user affordance: "/" focuses the quick-add from anywhere on the
+  // board (form-tag suppression is the library default).
+  useHotkeys('/', () => inputRef.current?.focus(), {
+    useKey: true,
+    preventDefault: true,
+    enabled: noOverlayOpen,
+  });
   const add = useMutation({
     mutationFn: () => api.post('/api/todos', { installation_id: installationId, title }),
     onSuccess: () => {
@@ -328,7 +326,7 @@ function RepoPickerPopover({ todo, board }: { todo: ApiTodo; board: ApiBoard }) 
           {todo.repos.length === 0 ? 'Repos' : 'Edit'}
         </button>
       </PopoverTrigger>
-      <PopoverContent>
+      <PopoverContent onKeyDown={onListboxKeyDown}>
         {available.length > 6 ? (
           <div className="relative mb-1.5">
             <Search
@@ -412,13 +410,32 @@ function TodoCard({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
     onError: onApiError,
   });
   return (
-    <Card className="animate-rise p-3">
+    <Card
+      className="animate-rise p-3"
+      tabIndex={-1}
+      data-board-card
+      data-column="todo"
+      aria-label={todo.title}
+      onKeyDown={(e) => {
+        // Only when the card itself is focused — keys on inner buttons/links
+        // must not double-fire.
+        if (e.target !== e.currentTarget) return;
+        if (e.key === 'Enter' || e.key === 's') {
+          e.preventDefault();
+          setStarting(true);
+        } else if (e.key === 'd') {
+          e.preventDefault();
+          e.currentTarget.querySelector<HTMLButtonElement>('[data-card-action="delete"]')?.click();
+        }
+      }}
+    >
       <div className="flex items-start justify-between gap-2">
         <span className="text-[0.85rem] font-medium break-words">{todo.title}</span>
         <ConfirmButton
           variant="ghost"
           size="icon"
           className="size-6 shrink-0 text-mute hover:text-danger"
+          data-card-action="delete"
           title="Delete this todo?"
           description="It hasn't been started, so nothing else is lost."
           confirmLabel="Delete"
@@ -448,8 +465,10 @@ function TodoCard({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
 
 function TaskCard({ task }: { task: ApiPlan }) {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const state = taskState(task);
-  const done = taskColumn(task) === 'done';
+  const column = taskColumn(task);
+  const done = column === 'done';
   const archive = useMutation({
     mutationFn: () => api.post(`/api/tasks/${task.id}/archive`, { archived: true }),
     onSuccess: () => {
@@ -459,7 +478,25 @@ function TaskCard({ task }: { task: ApiPlan }) {
     onError: onApiError,
   });
   return (
-    <Card className="animate-rise p-3 transition-colors hover:border-accent/30">
+    <Card
+      className="animate-rise p-3 transition-colors hover:border-accent/30"
+      tabIndex={-1}
+      data-board-card
+      data-column={column}
+      aria-label={task.title}
+      onKeyDown={(e) => {
+        // Only when the card itself is focused — keys on inner buttons/links
+        // must not double-fire.
+        if (e.target !== e.currentTarget) return;
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          void navigate({ to: '/tasks/$taskId', params: { taskId: String(task.id) } });
+        } else if (e.key === 'e') {
+          e.preventDefault();
+          e.currentTarget.querySelector<HTMLButtonElement>('[data-card-action="archive"]')?.click();
+        }
+      }}
+    >
       <div className="flex items-baseline justify-between gap-2">
         <Serial n={task.id} />
         <span className="flex items-center gap-2">
@@ -468,6 +505,7 @@ function TaskCard({ task }: { task: ApiPlan }) {
             variant="ghost"
             size="icon"
             className="size-6 shrink-0 text-mute"
+            data-card-action="archive"
             title="Archive this task?"
             description="Started tasks are never deleted — archiving hides it from the board. The plan, PR, and history stay."
             confirmLabel="Archive"
@@ -608,7 +646,7 @@ function RepoFilter({
           <ChevronDown className="size-3.5 shrink-0 opacity-60" aria-hidden />
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end">
+      <PopoverContent align="end" onKeyDown={onListboxKeyDown}>
         {repos.length > 6 ? (
           <div className="relative mb-1.5">
             <Search
@@ -670,8 +708,57 @@ function RepoFilter({
   );
 }
 
+// Roving j/k/h/l focus across the board cards, driven by the DOM rather than
+// React state. The lanes render twice (desktop grid + mobile list); filtering
+// on offsetParent keeps focus inside whichever tree is actually visible.
+function moveBoardFocus(key: string) {
+  const cards = [...document.querySelectorAll<HTMLElement>('[data-board-card]')].filter(
+    (el) => el.offsetParent !== null,
+  );
+  if (cards.length === 0) return;
+  // Group into non-empty columns, preserving DOM order.
+  const byColumn = new Map<string, HTMLElement[]>();
+  for (const el of cards) {
+    const col = el.dataset.column ?? '';
+    let list = byColumn.get(col);
+    if (!list) byColumn.set(col, (list = []));
+    list.push(el);
+  }
+  const columns = [...byColumn.values()];
+  const current = document.activeElement?.closest<HTMLElement>('[data-board-card]');
+  let target: HTMLElement | undefined;
+  if (!current || !cards.includes(current)) {
+    target = cards[0];
+  } else {
+    const colIndex = columns.findIndex((list) => list.includes(current));
+    const column = columns[colIndex]!;
+    const row = column.indexOf(current);
+    if (key === 'j' || key === 'arrowdown') target = column[nextIndex(row, column.length, 1)];
+    else if (key === 'k' || key === 'arrowup') target = column[nextIndex(row, column.length, -1)];
+    else {
+      const dir = key === 'l' || key === 'arrowright' ? 1 : -1;
+      const next = columns[colIndex + dir];
+      if (!next) return;
+      target = next[Math.min(row, next.length - 1)];
+    }
+  }
+  if (!target) return;
+  target.focus();
+  target.scrollIntoView({ block: 'nearest' });
+}
+
 export function BoardPage() {
   const { data } = useSuspenseQuery(boardQuery);
+  const isDesktop = useIsDesktop();
+  useHotkeys(
+    'j,k,down,up,h,l,left,right',
+    (e, hk) => {
+      moveBoardFocus(hk.keys?.join('') ?? '');
+      e.preventDefault();
+    },
+    { enabled: () => isDesktop && noOverlayOpen() },
+    [isDesktop],
+  );
   const [filter, setFilter] = useState<ColumnKey | 'all'>('all');
   const [repoId, setRepoId] = useState<number | null>(null);
 
