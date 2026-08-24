@@ -1,4 +1,4 @@
-import { Link, useRouterState } from '@tanstack/react-router';
+import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
 import {
   BarChart2,
   Bot,
@@ -10,9 +10,14 @@ import {
   Sparkles,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
+import { useHotkeys } from 'react-hotkeys-hook';
 import type { ApiMe } from '../../shared/api-types.ts';
+import { navShortcuts, noOverlayOpen } from '../lib/shortcuts.ts';
+import { useIsDesktop } from '../lib/use-is-desktop.ts';
 import { cn } from '../lib/utils.ts';
 import { Lamp } from './identity.tsx';
+import { ShortcutHelp } from './shortcut-help.tsx';
+import { Kbd } from './ui/kbd.tsx';
 
 // Control-room nav: every destination is a station with a distinct icon,
 // lit where you are, dark elsewhere. Settings is the single admin
@@ -20,7 +25,7 @@ import { Lamp } from './identity.tsx';
 // mobile bottom bar has six slots, so Usage yields its slot there and rides
 // as a link row inside Settings instead. `short` fits the bottom bar's
 // slots without truncation.
-const SIDEBAR_NAV = [
+export const SIDEBAR_NAV = [
   { to: '/', label: 'Board', exact: true, icon: LayoutDashboard },
   { to: '/agents', label: 'Agents', icon: Bot },
   { to: '/skills', label: 'Skills', icon: Sparkles },
@@ -61,7 +66,7 @@ function SidebarNav() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   return (
     <nav aria-label="Main" className="flex flex-col gap-0.5">
-      {SIDEBAR_NAV.map(({ to, label, icon: Icon, ...item }) => {
+      {SIDEBAR_NAV.map(({ to, label, icon: Icon, ...item }, i) => {
         const active = isActive(pathname, to, 'exact' in item && item.exact);
         return (
           <Link
@@ -77,6 +82,7 @@ function SidebarNav() {
           >
             <Icon className="size-3.5" aria-hidden />
             {label}
+            <Kbd className="ml-auto">{i + 1}</Kbd>
           </Link>
         );
       })}
@@ -141,8 +147,22 @@ function UserBlock({ me }: { me: ApiMe }) {
 // Desktop: fixed sidebar. Small screens: sticky top bar with the same nav.
 // The cockpit's diff pane needs room, so that route gets a much wider
 // container than the reading-width default.
+// Digit shortcuts derive from the sidebar order, so the two can't drift apart.
+const NAV_SHORTCUTS = navShortcuts(SIDEBAR_NAV);
+
 export function AppShell({ me, children }: { me: ApiMe; children: ReactNode }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const navigate = useNavigate();
+  const isDesktop = useIsDesktop();
+  useHotkeys(
+    NAV_SHORTCUTS.map((s) => s.key).join(','),
+    (_e, hk) => {
+      const hit = NAV_SHORTCUTS.find((s) => s.key === hk.keys?.join(''));
+      if (hit) void navigate({ to: hit.to });
+    },
+    { enabled: () => isDesktop && noOverlayOpen(), preventDefault: true },
+    [isDesktop],
+  );
   const wide = pathname.startsWith('/factory/features/');
   // The board's three lanes need more room than the reading-width default.
   const board = pathname === '/';
@@ -186,6 +206,7 @@ export function AppShell({ me, children }: { me: ApiMe; children: ReactNode }) {
       </main>
 
       <BottomTabs />
+      <ShortcutHelp nav={SIDEBAR_NAV} />
     </div>
   );
 }
