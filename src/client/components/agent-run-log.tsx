@@ -15,6 +15,7 @@ const KIND_LABEL = {
   generate: 'Generate',
   verify: 'Verify',
   fix: 'Fix',
+  chat: 'Chat',
   automation: 'Automation',
   resolve_conflict: 'Resolve conflict',
 } satisfies Record<ApiAgentRun['kind'], string>;

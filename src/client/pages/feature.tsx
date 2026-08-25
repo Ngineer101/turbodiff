@@ -17,6 +17,7 @@ import { sentence } from '../lib/format.ts';
 import { featureQuery, FIX_TERMINAL, GENERATION_STOPPED } from '../lib/queries.ts';
 import { cn } from '../lib/utils.ts';
 import { AgentRunLog } from '../components/agent-run-log.tsx';
+import { ChatPanel } from '../components/chat-panel.tsx';
 import { ConfirmButton } from '../components/confirm-button.tsx';
 import { ensureDiffStyles } from '../components/diff-styles.ts';
 import { CertStrip, Lamp, Serial, Stamp, type LampTone } from '../components/identity.tsx';
@@ -829,6 +830,8 @@ export default function FeaturePage() {
           </CertStrip>
         </a>
       ) : null}
+
+      <ChatPanel featureId={data.feature.id} canWrite={prState === 'open'} />
 
       <div
         className={cn(

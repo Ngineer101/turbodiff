@@ -4,6 +4,11 @@
 
 export const FIX_MAX_ATTEMPTS = 3;
 
+// Chat turns blocked by another in-flight sandbox run on the same PR
+// re-enqueue themselves with a delay rather than failing outright.
+export const CHAT_BUSY_RETRIES = 10;
+export const CHAT_BUSY_DELAY_SECONDS = 30;
+
 export interface GenerateQueueMessage {
   kind: 'generate';
   featureId: number;
@@ -36,6 +41,15 @@ export interface FixQueueMessage {
   workflowRunId?: number;
 }
 
+export interface ChatQueueMessage {
+  kind: 'chat';
+  featureId: number;
+  chatMessageId: number;
+  // Busy-retry counter: bumped each time the turn found another sandbox run
+  // in flight and re-enqueued itself with a delay.
+  attempt?: number;
+}
+
 export interface ConflictResolveQueueMessage {
   kind: 'resolve_conflict';
   repoId: number;
@@ -59,6 +73,7 @@ export type FactoryMessage =
   | VerifyQueueMessage
   | AutomationQueueMessage
   | FixQueueMessage
+  | ChatQueueMessage
   | ConflictResolveQueueMessage
   | CrReviewQueueMessage
   | CrMergeQueueMessage;

@@ -332,8 +332,11 @@ export async function tryRecordFixAttempt(
   cap: number,
   // When set, only attempts with this trigger count against the cap — so a
   // PR that burned its fix attempts on review-driven fixes can still get
-  // conflict resolutions (and vice versa). The running-attempt guard stays
-  // global regardless: never two sandbox runs on one PR.
+  // conflict resolutions (and vice versa). When null, every attempt counts
+  // EXCEPT 'chat' turns: those are human-supervised, so they never consume
+  // the automated-fix cap. The running-attempt guard stays global
+  // regardless: never two sandbox runs on one PR — chat turns both honor
+  // and hold that lock like any other attempt.
   capTrigger?: string,
 ): Promise<number | null> {
   await env.DB.prepare(
@@ -348,7 +351,8 @@ export async function tryRecordFixAttempt(
 		 SELECT ?1, ?2, ?3
 		 WHERE (SELECT COUNT(*) FROM fix_attempts
 		        WHERE repository_id = ?1 AND pr_number = ?2
-		          AND (?5 IS NULL OR "trigger" = ?5)) < ?4
+		          AND ((?5 IS NOT NULL AND "trigger" = ?5)
+		            OR (?5 IS NULL AND "trigger" <> 'chat'))) < ?4
 		   AND NOT EXISTS (
 		     SELECT 1 FROM fix_attempts
 		     WHERE repository_id = ?1 AND pr_number = ?2 AND status = 'running'
@@ -387,6 +391,7 @@ export type AgentRunKind =
   | 'generate'
   | 'verify'
   | 'fix'
+  | 'chat'
   | 'automation'
   | 'resolve_conflict';
 
@@ -505,6 +510,7 @@ export interface FeatureRow {
   cost_usd: number;
   model: string | null;
   runner_model: string | null; // requested model for this feature's runs; null = default
+  chat_session_id: string | null; // resumable Claude CLI session for cockpit chat
 }
 
 export async function createFeature(

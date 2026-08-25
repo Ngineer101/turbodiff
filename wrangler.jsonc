@@ -116,6 +116,11 @@
       "class_name": "FixWorkflow",
     },
     {
+      "binding": "CHAT_WORKFLOW",
+      "name": "turbodiff-chat",
+      "class_name": "ChatWorkflow",
+    },
+    {
       "binding": "AUTOMATION_WORKFLOW",
       "name": "turbodiff-automation",
       "class_name": "AutomationWorkflow",

@@ -13,6 +13,7 @@ import {
   ConflictResolveWorkflow,
   startResolveConflict,
 } from './ai/workflows/conflict-resolution.ts';
+import { startChatTurn, ChatWorkflow } from './ai/workflows/chat.ts';
 import { startFix, FixWorkflow } from './ai/workflows/fix.ts';
 import type { FactoryMessage } from './shared/factory-messages.ts';
 import { startGeneration } from './ai/workflows/generation.ts';
@@ -35,6 +36,7 @@ export { GenerationWorkflow } from './ai/workflows/generation.ts';
 export { ArtifactsEventsWorkflow } from './ai/workflows/artifacts-events.ts';
 export { VerificationWorkflow };
 export { FixWorkflow };
+export { ChatWorkflow };
 export { AutomationWorkflow };
 export { ConflictResolveWorkflow };
 
@@ -65,6 +67,11 @@ export default {
           break;
         case 'automation':
           await startAutomationRun(body.automationId);
+          break;
+        case 'chat':
+          // Chat turns get the same no-wall-clock treatment as fixes: the
+          // consumer just creates the durable workflow instance.
+          await startChatTurn(body);
           break;
         case 'resolve_conflict':
           // A new message kind must not silently fall into the `default`

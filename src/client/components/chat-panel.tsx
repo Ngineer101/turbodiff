@@ -1,0 +1,151 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
+import type { ApiChatMessage } from '../../shared/api-types.ts';
+import { api, ApiError } from '../lib/api.ts';
+import { useDictation } from '../lib/dictation.ts';
+import { ago } from '../lib/format.ts';
+import { CHAT_TURN_PENDING, chatQuery } from '../lib/queries.ts';
+import { Markdown } from './markdown.tsx';
+import { MicButton } from './mic-button.tsx';
+import { Muted, SectionHeading } from './section.tsx';
+import { Button } from './ui/button.tsx';
+import { Textarea } from './ui/input.tsx';
+import { Pill } from './ui/pill.tsx';
+
+// The cockpit's agent chat: converse with a coding agent that has the PR
+// head branch checked out, for small iterative changes. Each user message is
+// one turn — the agent's reply (and its branch outcome) lands as an
+// assistant row via the 5s live poll while a turn is in flight.
+
+function onApiError<T>(err: T) {
+  toast.error(err instanceof ApiError ? err.message : 'Request failed');
+}
+
+function OutcomePill({ message }: { message: ApiChatMessage }) {
+  if (message.outcome === 'changed') {
+    return <Pill tone="on">Pushed {message.commit_sha?.slice(0, 7)}</Pill>;
+  }
+  if (message.outcome === 'no_changes') return <Pill tone="neutral">No changes</Pill>;
+  if (message.outcome === 'tests_failed') {
+    return <Pill tone="warn">Checks failed — not pushed</Pill>;
+  }
+  return null;
+}
+
+function ChatMessage({ message }: { message: ApiChatMessage }) {
+  if (message.role === 'user') {
+    return (
+      <div className="ml-auto max-w-[85%] rounded-md border border-line-2 border-r-2 border-r-accent bg-surface px-3 py-2 text-[0.82rem]">
+        <div className="mb-1 flex items-center gap-1.5 text-xs text-mute">
+          <strong>@{message.author}</strong>
+          <span>{ago(message.created_at)}</span>
+          {message.status === 'failed' ? <Pill tone="red">Failed</Pill> : null}
+        </div>
+        <p className="whitespace-pre-wrap">{message.body}</p>
+        {message.status === 'failed' && message.error ? (
+          <p className="mt-1 text-xs text-danger">{message.error}</p>
+        ) : null}
+      </div>
+    );
+  }
+  return (
+    <div className="max-w-[85%] rounded-md border border-line-2 border-l-2 border-l-accent bg-surface px-3 py-2 text-[0.82rem]">
+      <div className="mb-1 flex items-center gap-1.5 text-xs text-mute">
+        <strong>Agent</strong>
+        <span>{ago(message.created_at)}</span>
+        <OutcomePill message={message} />
+      </div>
+      <Markdown className="markdown-body--compact">{message.body}</Markdown>
+    </div>
+  );
+}
+
+export function ChatPanel({ featureId, canWrite }: { featureId: number; canWrite: boolean }) {
+  const queryClient = useQueryClient();
+  const { data } = useQuery(chatQuery(featureId));
+  const messages = data?.messages ?? [];
+  const pending = messages.some((m) => m.role === 'user' && CHAT_TURN_PENDING.has(m.status));
+
+  // A completed turn may have pushed a new commit — refresh the feature
+  // (diff, runs, verification) when the poll flips pending → done, so the
+  // new state appears without a manual reload.
+  const prevPending = useRef(pending);
+  useEffect(() => {
+    if (prevPending.current && !pending) {
+      void queryClient.invalidateQueries({ queryKey: ['feature', featureId] });
+    }
+    prevPending.current = pending;
+  }, [pending, featureId, queryClient]);
+
+  const [body, setBody] = useState('');
+  const dictation = useDictation((text) =>
+    setBody((prev) => (prev.trim() ? `${prev}\n\n${text}` : text)),
+  );
+  const send = useMutation({
+    mutationFn: () => api.post(`/api/factory/features/${featureId}/chat`, { body: body.trim() }),
+    onSuccess: () => {
+      setBody('');
+      void queryClient.invalidateQueries({ queryKey: ['chat', featureId] });
+    },
+    onError: onApiError,
+  });
+
+  // A merged/closed PR with no history has nothing to show; existing
+  // history stays visible read-only.
+  if (!canWrite && messages.length === 0) return null;
+
+  return (
+    <div className="mt-4 max-w-3xl">
+      <SectionHeading>Agent chat</SectionHeading>
+      {messages.length === 0 ? (
+        <Muted className="block">
+          Ask the agent to tweak this PR — small iterative changes, one message at a time. Each
+          change is committed as you and pushed to the branch.
+        </Muted>
+      ) : (
+        <div className="mt-3 flex flex-col gap-3">
+          {messages.map((m) => (
+            <ChatMessage key={m.id} message={m} />
+          ))}
+        </div>
+      )}
+      {pending ? (
+        <p className="mt-3">
+          <Pill tone="running">
+            Agent is working — replies land here, usually within a few minutes
+          </Pill>
+        </p>
+      ) : null}
+      {canWrite ? (
+        <div className="mt-3">
+          <Textarea
+            className="min-h-20"
+            value={
+              dictation.recording
+                ? body.trim()
+                  ? `${body}\n\n${dictation.interim}`
+                  : dictation.interim
+                : body
+            }
+            onChange={(e) => setBody(e.target.value)}
+            disabled={dictation.recording || pending}
+            placeholder="What should the agent change?"
+            aria-label="Message to the chat agent"
+          />
+          <div className="mt-2 flex gap-2">
+            <MicButton dictation={dictation} />
+            <Button
+              size="sm"
+              onClick={() => body.trim() && send.mutate()}
+              disabled={!body.trim() || pending || send.isPending}
+              loading={send.isPending}
+            >
+              {send.isPending ? 'Sending…' : 'Send'}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}

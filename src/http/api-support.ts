@@ -9,6 +9,7 @@ import {
   type AgentRunRow,
   type AutomationFields,
   type AutomationRow,
+  type ChatMessageRow,
   type CockpitCommentRow,
   type FeatureUsageRow,
   type FixAttemptRow,
@@ -30,6 +31,7 @@ import { parseUtc, STALL_AFTER_MS } from '../shared/time.ts';
 import type {
   ApiAgentRun,
   ApiAutomationSummary,
+  ApiChatMessage,
   ApiCockpitComment,
   ApiFeatureUsage,
   ApiFeatureUsageSession,
@@ -231,6 +233,24 @@ export function serializeCockpitComment(r: CockpitCommentRow): ApiCockpitComment
     status: r.status,
     created_at: r.created_at,
     fix_status: fixStatus,
+  };
+}
+
+export function serializeChatMessage(r: ChatMessageRow): ApiChatMessage {
+  return {
+    id: r.id,
+    // SAFETY: chat_messages.role is written only by createUserChatMessage
+    // ('user') and addAssistantChatMessage ('assistant').
+    role: r.role as ApiChatMessage['role'],
+    body: r.body,
+    author: r.author,
+    status: r.status,
+    // SAFETY: chat_messages.outcome is written only by the chat runner via
+    // addAssistantChatMessage with a ChatOutcome value; null on user rows.
+    outcome: r.outcome as ApiChatMessage['outcome'],
+    commit_sha: r.commit_sha,
+    error: r.error,
+    created_at: r.created_at,
   };
 }
 

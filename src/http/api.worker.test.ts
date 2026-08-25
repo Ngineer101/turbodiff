@@ -87,6 +87,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   const tables = [
     'push_subscriptions',
+    'chat_messages',
     'todo_repositories',
     'todos',
     'repo_agents',
@@ -587,6 +588,128 @@ describe('organization member management', () => {
       role: string;
     }>();
     expect(row?.role).toBe('member');
+  });
+});
+
+describe('cockpit chat', () => {
+  type EnqueueFactory = NonNullable<ApiRouteDependencies['enqueueFactory']>;
+
+  async function seedFeature(
+    repoId: number,
+    status = 'pr_opened',
+    prNumber: number | null = 42,
+  ): Promise<number> {
+    const row = await testEnv.DB.prepare(
+      `INSERT INTO features (repository_id, title, spec, status, pr_number)
+			 VALUES (?1, 'Feature', 'Spec', ?2, ?3) RETURNING id`,
+    )
+      .bind(repoId, status, prNumber)
+      .first<{ id: number }>();
+    return row!.id;
+  }
+
+  function chatApp(enqueueFactory: EnqueueFactory = async () => {}) {
+    return apiApp({
+      authenticate: async () => acmeUser,
+      canPushToRepo: async () => true,
+      orgAdmin: async () => true,
+      enqueueFactory,
+    });
+  }
+
+  function postChat(app: Hono, featureId: number, body: string) {
+    return app.request(`https://turbodiff.test/api/factory/features/${featureId}/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ body }),
+    });
+  }
+
+  it('conceals a foreign feature from both chat routes', async () => {
+    const foreignId = await seedFeature(202);
+    const app = chatApp();
+    const list = await app.request(
+      `https://turbodiff.test/api/factory/features/${foreignId}/chat`,
+    );
+    expect(list.status).toBe(404);
+    expect((await postChat(app, foreignId, 'hello')).status).toBe(404);
+  });
+
+  it('rejects an empty message body', async () => {
+    const featureId = await seedFeature(101);
+    const response = await postChat(chatApp(), featureId, '   ');
+    expect(response.status).toBe(400);
+  });
+
+  it('409s when the feature has no open pull request', async () => {
+    const noPr = await seedFeature(101, 'generating', null);
+    expect((await postChat(chatApp(), noPr, 'hello')).status).toBe(409);
+
+    const merged = await seedFeature(101, 'merged', 42);
+    expect((await postChat(chatApp(), merged, 'hello')).status).toBe(409);
+  });
+
+  it('records a queued user message, enqueues one chat turn, and lists it back', async () => {
+    const featureId = await seedFeature(101);
+    const enqueueFactory = vi.fn<EnqueueFactory>(async () => {});
+    const app = chatApp(enqueueFactory);
+
+    const response = await postChat(app, featureId, 'Rename the button to Save');
+    expect(response.status).toBe(200);
+    // SAFETY: the 200 body is the route's {ok, message_id} contract this
+    // test exercises.
+    const created = (await response.json()) as { ok: boolean; message_id: number };
+    expect(created.ok).toBe(true);
+    expect(enqueueFactory).toHaveBeenCalledExactlyOnceWith({
+      kind: 'chat',
+      featureId,
+      chatMessageId: created.message_id,
+    });
+    const row = await testEnv.DB.prepare(
+      'SELECT role, body, author, author_id, status FROM chat_messages WHERE id = ?1',
+    )
+      .bind(created.message_id)
+      .first<{ role: string; body: string; author: string; author_id: number; status: string }>();
+    expect(row).toEqual({
+      role: 'user',
+      body: 'Rename the button to Save',
+      author: 'octocat',
+      author_id: 3001,
+      status: 'queued',
+    });
+
+    // A second send while the first turn is still queued is refused.
+    expect((await postChat(app, featureId, 'and one more thing')).status).toBe(409);
+
+    const list = await app.request(
+      `https://turbodiff.test/api/factory/features/${featureId}/chat`,
+    );
+    expect(list.status).toBe(200);
+    // SAFETY: the 200 body is the ApiChatList contract this test exercises.
+    const chat = (await list.json()) as { messages: { id: number; role: string }[] };
+    expect(chat.messages.map((m) => m.id)).toEqual([created.message_id]);
+  });
+
+  it('lists messages in chronological order with turn outcomes', async () => {
+    const featureId = await seedFeature(101);
+    await testEnv.DB.prepare(
+      `INSERT INTO chat_messages (feature_id, role, body, author, author_id, status, outcome, commit_sha)
+			 VALUES (?1, 'user', 'Do it', 'octocat', 3001, 'done', NULL, NULL),
+			        (?1, 'assistant', 'Done.', NULL, NULL, 'done', 'changed', 'abc1234')`,
+    )
+      .bind(featureId)
+      .run();
+
+    const response = await chatApp().request(
+      `https://turbodiff.test/api/factory/features/${featureId}/chat`,
+    );
+    expect(response.status).toBe(200);
+    // SAFETY: the 200 body is the ApiChatList contract this test exercises.
+    const chat = (await response.json()) as {
+      messages: { role: string; outcome: string | null; commit_sha: string | null }[];
+    };
+    expect(chat.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+    expect(chat.messages[1]).toMatchObject({ outcome: 'changed', commit_sha: 'abc1234' });
   });
 });
 

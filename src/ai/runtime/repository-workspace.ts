@@ -113,6 +113,40 @@ export async function prepareFreshClone({
   );
 }
 
+// Incremental refresh of an existing PR checkout to the branch's current
+// remote head (chat turns on a warm sandbox skip the full re-clone).
+// Returns false when the dir is missing/corrupt — caller falls back to
+// prepareFreshClone. Discards any local commits/changes left by a previous
+// run: the pushed branch is the source of truth.
+export async function refreshPrCheckout(
+  sandbox: Sandbox,
+  cloneDir: string,
+  remote: WorkspaceRemote,
+  branch: string,
+  secrets: string[] = [],
+): Promise<boolean> {
+  const existing = await sandbox.exec(`[ -d ${cloneDir}/.git ]`);
+  if (!existing.success) return false;
+  const sync = await sandbox.exec(
+    `git ${remote.configFlags} -C ${cloneDir} fetch --depth 50 "${remote.authUrl}" "$WORK_BRANCH" && ` +
+      `git -C ${cloneDir} checkout -q -B "$WORK_BRANCH" FETCH_HEAD && ` +
+      `git -C ${cloneDir} clean -fd`,
+    { env: { ...remote.env, WORK_BRANCH: branch }, timeout: 5 * 60_000 },
+  );
+  if (!sync.success) {
+    // Never let one corrupted warm checkout wedge future runs.
+    console.warn(
+      `turbodiff: warm PR checkout refresh failed, re-cloning: ${redactSecrets(sync.stderr, [remote.token, ...secrets]).slice(0, 500)}`,
+    );
+    await sandbox.exec(`rm -rf ${cloneDir}`).catch(() => {});
+    return false;
+  }
+  await sandbox.exec(
+    `git -C ${cloneDir} remote set-url origin "${remote.cleanUrl}" && ` + botIdentity(cloneDir),
+  );
+  return true;
+}
+
 // Full-history, all-branches mirror for the change-request engine
 // (ai/runtime/cr-engine.ts): merge-base and cross-branch diffs need shared
 // history the shallow single-branch caches above deliberately avoid. Clone

@@ -167,6 +167,7 @@ export interface ApiAgentRun {
     | 'generate'
     | 'verify'
     | 'fix'
+    | 'chat'
     | 'automation'
     | 'resolve_conflict';
   success: boolean;
@@ -194,6 +195,27 @@ export interface ApiCockpitComment {
   // The linked fix run's status: null before any batch submit; 'running'
   // while it's in flight; a terminal outcome once it resolves.
   fix_status: 'running' | 'fixed' | 'no_changes' | 'tests_failed' | 'failed' | null;
+}
+
+// One cockpit chat message — a user's instruction to the chat agent or the
+// agent's reply for that turn.
+export interface ApiChatMessage {
+  id: number;
+  role: 'user' | 'assistant';
+  body: string;
+  author: string | null; // login for user messages
+  // Turn lifecycle for user messages ('queued' | 'running' | 'done' |
+  // 'failed'); assistant messages are always 'done'.
+  status: string;
+  // Assistant messages: what the turn did to the branch.
+  outcome: 'changed' | 'no_changes' | 'tests_failed' | null;
+  commit_sha: string | null;
+  error: string | null;
+  created_at: string;
+}
+
+export interface ApiChatList {
+  messages: ApiChatMessage[];
 }
 
 export interface ApiFeatureDetail {
