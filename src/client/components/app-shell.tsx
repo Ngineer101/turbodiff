@@ -2,19 +2,22 @@ import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
 import {
   BarChart2,
   Bot,
+  Keyboard,
   LayoutDashboard,
   LogOut,
   Plug,
   Repeat,
+  Search,
   Settings,
   Sparkles,
 } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import type { ApiMe } from '../../shared/api-types.ts';
 import { navShortcuts, noOverlayOpen } from '../lib/shortcuts.ts';
 import { useIsDesktop } from '../lib/use-is-desktop.ts';
 import { cn } from '../lib/utils.ts';
+import { CommandPalette } from './command-palette.tsx';
 import { Lamp } from './identity.tsx';
 import { ShortcutHelp } from './shortcut-help.tsx';
 import { Kbd } from './ui/kbd.tsx';
@@ -168,6 +171,16 @@ export function AppShell({ me, children }: { me: ApiMe; children: ReactNode }) {
     { enabled: () => isDesktop && noOverlayOpen(), preventDefault: true },
     [isDesktop],
   );
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  // ⌘K toggles the palette; while some *other* overlay is open it stays
+  // closed rather than stacking dialogs.
+  useHotkeys(
+    'mod+k',
+    () => setPaletteOpen((prev) => (prev ? false : noOverlayOpen())),
+    { preventDefault: true, enableOnFormTags: true },
+    [],
+  );
   // The cockpit's diff pane and the code browser's editor both need room.
   const wide = pathname.startsWith('/factory/features/') || /^\/repos\/\d+\/code/.test(pathname);
   // The board's three lanes need more room than the reading-width default.
@@ -177,9 +190,31 @@ export function AppShell({ me, children }: { me: ApiMe; children: ReactNode }) {
       <aside className="sticky top-0 hidden h-dvh w-52 shrink-0 flex-col justify-between border-r border-line bg-surface/50 p-4 md:flex">
         <div className="space-y-6">
           <Logo />
-          <SidebarNav />
+          <div className="space-y-3">
+            <button
+              type="button"
+              onClick={() => setPaletteOpen(true)}
+              className="flex w-full cursor-pointer items-center gap-2 rounded-md border border-line-2/70 bg-bg/60 px-2.5 py-1.5 font-mono text-[11px] text-mute transition-colors hover:border-line-2 hover:text-ink"
+            >
+              <Search className="size-3" aria-hidden />
+              Jump to&hellip;
+              <Kbd className="ml-auto">⌘K</Kbd>
+            </button>
+            <SidebarNav />
+          </div>
         </div>
-        <UserBlock me={me} />
+        <div className="space-y-2">
+          <button
+            type="button"
+            onClick={() => setHelpOpen(true)}
+            className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1 font-mono text-[11px] text-mute transition-colors hover:bg-raised/60 hover:text-ink"
+          >
+            <Keyboard className="size-3.5" aria-hidden />
+            Shortcuts
+            <Kbd className="ml-auto">?</Kbd>
+          </button>
+          <UserBlock me={me} />
+        </div>
       </aside>
 
       <div className="sticky top-0 z-40 flex items-center justify-between border-b border-line/60 bg-bg/95 px-4 py-2.5 backdrop-blur md:hidden">
@@ -213,7 +248,13 @@ export function AppShell({ me, children }: { me: ApiMe; children: ReactNode }) {
       </main>
 
       <BottomTabs />
-      <ShortcutHelp nav={SIDEBAR_NAV} />
+      <ShortcutHelp
+        nav={SIDEBAR_NAV}
+        open={helpOpen}
+        onOpenChange={setHelpOpen}
+        onToggle={() => setHelpOpen((prev) => !prev)}
+      />
+      <CommandPalette nav={SIDEBAR_NAV} open={paletteOpen} onOpenChange={setPaletteOpen} />
     </div>
   );
 }

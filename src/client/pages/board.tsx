@@ -41,6 +41,7 @@ import { Button } from '../components/ui/button.tsx';
 import { Card } from '../components/ui/card.tsx';
 import { Dialog, DialogContent, DialogTitle } from '../components/ui/dialog.tsx';
 import { Field, Input, Select, Textarea } from '../components/ui/input.tsx';
+import { Kbd } from '../components/ui/kbd.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover.tsx';
 
@@ -60,12 +61,19 @@ function QuickAdd({ board }: { board: ApiBoard }) {
   const [title, setTitle] = useState('');
   const [installationId, setInstallationId] = useState(board.installations[0]?.id ?? 0);
   // Power-user affordance: "/" focuses the quick-add from anywhere on the
-  // board (form-tag suppression is the library default).
-  useHotkeys('/', () => inputRef.current?.focus(), {
-    useKey: true,
-    preventDefault: true,
-    enabled: noOverlayOpen,
-  });
+  // board (form-tag suppression is the library default). Desktop-gated like
+  // every other board hotkey.
+  const isDesktop = useIsDesktop();
+  useHotkeys(
+    '/',
+    () => inputRef.current?.focus(),
+    {
+      useKey: true,
+      preventDefault: true,
+      enabled: () => isDesktop && noOverlayOpen(),
+    },
+    [isDesktop],
+  );
   const add = useMutation({
     mutationFn: () => api.post('/api/todos', { installation_id: installationId, title }),
     onSuccess: () => {
@@ -80,15 +88,22 @@ function QuickAdd({ board }: { board: ApiBoard }) {
   };
   return (
     <form onSubmit={submit} className="flex flex-col gap-2 sm:flex-row">
-      <Input
-        ref={inputRef}
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        placeholder="Add a todo…  ( / )"
-        aria-label="New todo title"
-        maxLength={200}
-        className="flex-1"
-      />
+      <span className="relative flex-1">
+        <Input
+          ref={inputRef}
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="Add a todo…"
+          aria-label="New todo title"
+          maxLength={200}
+          className="w-full"
+        />
+        {!title ? (
+          <Kbd className="pointer-events-none absolute top-1/2 right-2.5 hidden -translate-y-1/2 md:inline-flex">
+            /
+          </Kbd>
+        ) : null}
+      </span>
       {board.installations.length > 1 ? (
         <Select
           value={installationId}
@@ -412,7 +427,8 @@ function TodoCard({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
   return (
     <Card
       className="animate-rise p-3"
-      tabIndex={-1}
+      // Tab-reachable so the card keys (Enter/s/d) work without j/k.
+      tabIndex={0}
       data-board-card
       data-column="todo"
       aria-label={todo.title}
@@ -480,7 +496,8 @@ function TaskCard({ task }: { task: ApiPlan }) {
   return (
     <Card
       className="animate-rise p-3 transition-colors hover:border-accent/30"
-      tabIndex={-1}
+      // Tab-reachable so the card keys (Enter/e) work without j/k.
+      tabIndex={0}
       data-board-card
       data-column={column}
       aria-label={task.title}
