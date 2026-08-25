@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import { auth } from '../integrations/auth/better-auth.ts';
+import { auth, type AuthUser } from '../integrations/auth/better-auth.ts';
 import { syntheticInstallationIds } from './access-control.ts';
 import {
   fetchUserCanPush,
@@ -164,6 +164,16 @@ export async function requireUser(request: Request): Promise<AuthedUser | null> 
   // additionalFields, so narrow them through guards.
   const login = 'login' in user && isString(user.login) && user.login ? user.login : null;
   const githubId = 'githubId' in user && isNumber(user.githubId) ? user.githubId : null;
+  return resolveAuthedUser({ id: user.id, name: user.name, email: user.email, login, githubId });
+}
+
+// Application authorization for an identified better-auth user — the single
+// path shared by the cookie session (requireUser) and the /mcp OAuth bearer
+// token (requireMcpUser), so installation scoping can never drift between
+// the two transports.
+async function resolveAuthedUser(user: AuthUser): Promise<AuthedUser | null> {
+  const login = user.login ?? null;
+  const githubId = user.githubId ?? null;
   // Email/password sign-up that hasn't linked a GitHub account yet: a valid
   // session with no GitHub reach — empty installations, everything
   // repo-scoped answers empty, push checks fail closed.
@@ -188,4 +198,30 @@ export async function requireUser(request: Request): Promise<AuthedUser | null> 
     githubConnected: true,
     name: login,
   };
+}
+
+// The /mcp bearer counterpart to requireUser: resolves an OAuth 2.1 access
+// token issued by the better-auth mcp plugin (migrations/0041_mcp_oauth.sql)
+// to the same AuthedUser shape, through the same resolveAuthedUser tail —
+// per-isolate token/installation caches and the synthetic-installation union
+// included, so there is no second authorization path to keep in sync. Null
+// for an absent, unknown, or expired token. The user row is read with a
+// direct D1 query (precedent: services/access-control.ts queries better-auth
+// tables directly).
+export async function requireMcpUser(request: Request): Promise<AuthedUser | null> {
+  const session = await auth().api.getMcpSession({ headers: request.headers });
+  if (!session?.userId) return null;
+  const row = await env.DB.prepare(
+    'SELECT "id", "name", "email", "login", "githubId" FROM "user" WHERE "id" = ?1',
+  )
+    .bind(session.userId)
+    .first<{
+      id: string;
+      name: string;
+      email: string;
+      login: string | null;
+      githubId: number | null;
+    }>();
+  if (!row) return null;
+  return resolveAuthedUser(row);
 }
