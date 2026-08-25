@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@cloudflare/sandbox": "^0.12.4",
+    "@codemirror/commands": "^6.11.0",
     "@codemirror/language": "^6.11.3",
     "@codemirror/language-data": "^6.5.1",
     "@codemirror/state": "^6.5.2",

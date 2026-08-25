@@ -8,11 +8,20 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
+  WrapText,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import { useHotkeys } from 'react-hotkeys-hook';
 import { toast } from 'sonner';
 import type { ApiFileSave, ApiRepoCode } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
+import {
+  DIFF_PREVIEW_MAX_LINES,
+  diffLines,
+  diffStats,
+  toHunks,
+  type DiffHunk,
+} from '../lib/line-diff.ts';
 import { repoCodeQuery, repoFileQuery } from '../lib/queries.ts';
 import { cn } from '../lib/utils.ts';
 import { CodeEditor } from '../components/code-editor.tsx';
@@ -22,6 +31,7 @@ import { Button, buttonVariants } from '../components/ui/button.tsx';
 import { Card } from '../components/ui/card.tsx';
 import { Dialog, DialogContent, DialogTitle } from '../components/ui/dialog.tsx';
 import { Field, Input } from '../components/ui/input.tsx';
+import { Kbd } from '../components/ui/kbd.tsx';
 import { OptionCard } from '../components/ui/option-card.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover.tsx';
 
@@ -31,6 +41,8 @@ import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popove
 
 const ROUTE_ID = '/shell/repos/$repoId/code/$';
 const SAVE_MODE_KEY = 'turbodiff:code-save-mode';
+// Soft-wrap preference — workspace layout, like the tree rail.
+const WRAP_KEY = 'turbodiff.codeWrap';
 type SaveMode = 'commit' | 'pr';
 
 function onApiError<T>(err: T) {
@@ -183,6 +195,9 @@ function Browser({
               treeRef={refName}
               activePath={filePath || null}
               onSelectFile={(path) => goTo(path)}
+              fileHref={(path) =>
+                `/repos/${repoId}/code/${path}?ref=${encodeURIComponent(refName)}`
+              }
             />
           </div>
         </aside>
@@ -298,6 +313,11 @@ function FilePane({
   const [buffer, setBuffer] = useState('');
   const [saveOpen, setSaveOpen] = useState(false);
   const [message, setMessage] = useState('');
+  // Snapshot of the file as editing began: the dirty-tracking baseline and
+  // the optimistic-concurrency token for the save. Pinned at edit start so a
+  // background refetch (e.g. window-focus) can't silently shift either under
+  // an active edit — that would defeat the server's 409 conflict check.
+  const editBase = useRef<{ sha: string; text: string } | null>(null);
   // The per-save choice (commit vs branch + PR) is remembered for the
   // session and shown on the Save control itself. PR saves are GitHub-only:
   // Artifacts repos always commit directly, even when sessionStorage holds a
@@ -311,9 +331,14 @@ function FilePane({
     setModeState(next);
     sessionStorage.setItem(SAVE_MODE_KEY, next);
   };
+  const [wrap, setWrapState] = useState(() => localStorage.getItem(WRAP_KEY) === 'on');
+  const setWrap = (next: boolean) => {
+    setWrapState(next);
+    localStorage.setItem(WRAP_KEY, next ? 'on' : 'off');
+  };
 
   const loadedText = file?.text ?? '';
-  const dirty = editing && buffer !== loadedText;
+  const dirty = editing && buffer !== (editBase.current?.text ?? '');
 
   // Tree clicks (and back/forward, and tab close) must not silently drop an
   // edit — the buffer only leaves memory on an explicit discard or save.
@@ -327,6 +352,19 @@ function FilePane({
 
   const reloadFile = () =>
     void queryClient.invalidateQueries({ queryKey: ['repo-file', repoId, refName, path] });
+
+  // 409 recovery: pull the branch's current revision and rebase the edit
+  // session onto it — the buffer (the user's work) is kept, dirty is
+  // recomputed against the fresh text, and the next save carries the fresh
+  // sha instead of bouncing off the same conflict again.
+  const rebaseOntoLatest = () =>
+    void queryClient
+      .fetchQuery({ ...repoFileQuery(repoId, refName, path), staleTime: 0 })
+      .then((latest) => {
+        editBase.current = { sha: latest.sha, text: latest.text ?? '' };
+        toast.success('Reloaded the latest revision — review your edit, then save again.');
+      })
+      .catch(onApiError);
 
   const save = useMutation({
     mutationFn: () =>
@@ -343,7 +381,7 @@ function FilePane({
       >(`/api/repos/${repoId}/file`, {
         path,
         ref: refName,
-        base_sha: file?.sha ?? null,
+        base_sha: editBase.current?.sha ?? file?.sha ?? null,
         content: buffer,
         message,
         mode,
@@ -351,6 +389,7 @@ function FilePane({
     onSuccess: (result) => {
       setSaveOpen(false);
       setEditing(false);
+      editBase.current = null;
       if (result.pr) {
         // The PR carries the edit; this ref's content is unchanged.
         const pr = result.pr;
@@ -374,15 +413,42 @@ function FilePane({
     },
     onError: (err) => {
       if (err instanceof ApiError && err.status === 409) {
-        // Keep the buffer — the user reapplies their edit after reloading.
+        // Keep the buffer — rebasing swaps the baseline under it so the
+        // next save goes through against the branch's current revision.
         toast.error('The file changed on the branch since you opened it.', {
-          action: { label: 'Reload file', onClick: reloadFile },
+          action: { label: 'Load latest', onClick: rebaseOntoLatest },
         });
         return;
       }
       onApiError(err);
     },
   });
+
+  // ⌘S with focus outside the editor (the editor's own keymap covers focus
+  // inside it). Always intercepted while editing so the browser's save-page
+  // dialog never appears mid-edit.
+  useHotkeys(
+    'mod+s',
+    () => {
+      if (dirty) {
+        setMessage(`Update ${path}`);
+        setSaveOpen(true);
+      }
+    },
+    { enabled: editing, preventDefault: true, enableOnFormTags: true },
+    [editing, dirty, path],
+  );
+
+  // The save dialog's change preview — computed only while the dialog is
+  // open; megafiles degrade to a bare summary instead of running the diff.
+  const preview = useMemo(() => {
+    if (!saveOpen || !editBase.current) return null;
+    const base = editBase.current.text;
+    const lines = Math.max(base.split('\n').length, buffer.split('\n').length);
+    if (lines > DIFF_PREVIEW_MAX_LINES) return { tooLarge: true as const };
+    const ops = diffLines(base, buffer);
+    return { tooLarge: false as const, stats: diffStats(ops), hunks: toHunks(ops) };
+  }, [saveOpen, buffer]);
 
   const backButton = (
     <Button variant="ghost" size="sm" className="lg:hidden" onClick={onBack}>
@@ -391,13 +457,20 @@ function FilePane({
   );
 
   if (fileQuery.isPending) {
+    // Editor-shaped skeleton: the frame lands at its final size immediately,
+    // only the text area shimmers — no layout jump when content arrives.
     return (
       <div>
         {backButton}
-        <div className="flex min-h-40 items-center justify-center text-mute" role="status">
-          <span>
-            Loading<span className="animate-cursor text-accent-bright">_</span>
-          </span>
+        <div
+          className="mt-2 h-[calc(100dvh-16rem)] min-h-96 animate-pulse space-y-2.5 overflow-hidden rounded-lg border border-line bg-surface p-4"
+          role="status"
+          aria-label="Loading file"
+        >
+          {[82, 60, 74, 45, 68, 38, 55, 71, 30, 64].map((w, i) => (
+            // SAFETY: widths are a fixed list — index keys are stable.
+            <div key={i} className="h-3 rounded bg-raised/70" style={{ width: `${w}%` }} />
+          ))}
         </div>
       </div>
     );
@@ -412,6 +485,14 @@ function FilePane({
               ? fileQuery.error.message
               : 'Could not load this file.'}
           </p>
+          <Button
+            variant="secondary"
+            size="sm"
+            className="mt-3"
+            onClick={() => void fileQuery.refetch()}
+          >
+            Retry
+          </Button>
         </Card>
       </div>
     );
@@ -454,12 +535,15 @@ function FilePane({
   }
 
   const startEditing = () => {
+    editBase.current = { sha: file.sha, text: file.text ?? '' };
     setBuffer(file.text ?? '');
     setEditing(true);
   };
   const discard = () => {
+    if (dirty && !window.confirm('Discard your unsaved changes?')) return;
     setEditing(false);
     setBuffer('');
+    editBase.current = null;
   };
   const openSave = () => {
     setMessage(`Update ${path}`);
@@ -471,13 +555,34 @@ function FilePane({
       <div className="flex flex-wrap items-center gap-2 pb-2">
         {backButton}
         <span className="ml-auto flex items-center gap-2">
+          {dirty ? (
+            <span className="flex items-center gap-1.5 font-mono text-[11px] text-warn">
+              <span className="size-1.5 rounded-full bg-warn" aria-hidden />
+              Unsaved changes
+            </span>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => setWrap(!wrap)}
+            aria-pressed={wrap}
+            title={wrap ? 'Unwrap long lines' : 'Wrap long lines'}
+            className={cn(
+              'cursor-pointer rounded-md p-1.5 transition-colors',
+              wrap
+                ? 'bg-accent/10 text-accent-bright'
+                : 'text-mute hover:bg-raised/60 hover:text-ink',
+            )}
+          >
+            <WrapText className="size-3.5" aria-hidden />
+          </button>
           {editing ? (
             <>
               <Button variant="ghost" size="sm" onClick={discard}>
                 Discard
               </Button>
-              <Button size="sm" onClick={openSave} disabled={!dirty}>
+              <Button size="sm" onClick={openSave} disabled={!dirty} title="Save (⌘S)">
                 {mode === 'commit' ? `Save · commit to ${refName}` : 'Save · via PR'}
+                <Kbd className="ml-1">⌘S</Kbd>
               </Button>
             </>
           ) : (
@@ -487,20 +592,40 @@ function FilePane({
           )}
         </span>
       </div>
-      <div className="h-[70dvh] min-h-72 overflow-hidden rounded-lg border border-line bg-surface">
+      <div className="h-[calc(100dvh-16rem)] min-h-96 overflow-hidden rounded-lg border border-line bg-surface">
         <CodeEditor
           value={editing ? buffer : loadedText}
           onChange={setBuffer}
           path={path}
           readOnly={!editing}
+          wrap={wrap}
+          onSave={() => {
+            if (editing && dirty) openSave();
+          }}
         />
       </div>
 
       <Dialog open={saveOpen} onOpenChange={setSaveOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-2xl">
           <DialogTitle className="pr-8 text-[0.95rem] font-medium break-words">
             Save {path}
           </DialogTitle>
+          {preview ? (
+            preview.tooLarge ? (
+              <p className="mt-3 text-xs text-mute">
+                File is too large for a change preview — saving still works.
+              </p>
+            ) : (
+              <div className="mt-3">
+                <p className="font-mono text-[11px] tracking-[0.14em] text-mute uppercase">
+                  Changes{' '}
+                  <span className="text-accent-bright">+{preview.stats.additions}</span>{' '}
+                  <span className="text-danger">&minus;{preview.stats.deletions}</span>
+                </p>
+                <DiffPreview hunks={preview.hunks} />
+              </div>
+            )
+          ) : null}
           <Field label="Commit message">
             <Input
               value={message}
@@ -529,6 +654,42 @@ function FilePane({
           </div>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+// Compact hunk view for the save dialog: what's about to land on the
+// branch, with a couple of context lines per hunk.
+function DiffPreview({ hunks }: { hunks: DiffHunk[] }) {
+  if (hunks.length === 0) {
+    return <p className="mt-2 text-xs text-mute">No changes.</p>;
+  }
+  return (
+    <div className="mt-2 max-h-56 overflow-auto rounded-md border border-line bg-bg font-mono text-xs leading-5">
+      {hunks.map((hunk, i) => (
+        <div key={`${hunk.oldStart}:${hunk.newStart}`} className={cn(i > 0 && 'border-t border-line/70')}>
+          <p className="bg-surface/80 px-2 py-0.5 text-[10px] text-mute select-none">
+            @@ line {hunk.oldStart} &rarr; {hunk.newStart}
+          </p>
+          {hunk.ops.map((op, j) => (
+            <p
+              // SAFETY: ops render in fixed order within a static hunk — index keys are stable.
+              key={j}
+              className={cn(
+                'flex px-2 whitespace-pre',
+                op.kind === 'add' && 'bg-accent/10 text-accent-bright',
+                op.kind === 'del' && 'bg-danger/10 text-danger',
+                op.kind === 'same' && 'text-ink-dim',
+              )}
+            >
+              <span className="w-4 shrink-0 select-none">
+                {op.kind === 'add' ? '+' : op.kind === 'del' ? '-' : ' '}
+              </span>
+              {op.text}
+            </p>
+          ))}
+        </div>
+      ))}
     </div>
   );
 }

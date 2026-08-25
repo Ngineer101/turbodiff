@@ -222,6 +222,9 @@ importers:
       '@cloudflare/sandbox':
         specifier: ^0.12.4
         version: 0.12.5
+      '@codemirror/commands':
+        specifier: ^6.11.0
+        version: 6.11.0
       '@codemirror/language':
         specifier: ^6.11.3
         version: 6.12.4
