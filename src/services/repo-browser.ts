@@ -1,6 +1,7 @@
 import type { RepositoryRow } from '../data/db.ts';
 import { githubJson, githubPaginate } from '../integrations/github/client.ts';
 import type { ApiFileSave, ApiRepoFile, ApiRepoTree, ApiTreeEntry } from '../shared/api-types.ts';
+import { isString } from '../shared/json.ts';
 
 // Browser codebase viewer/editor: all repo content is read and written
 // through the GitHub REST API — no clone, no sandbox. Callers mint the token
@@ -132,7 +133,7 @@ export async function readFile(
   };
   // Symlinks/submodules (and any response without base64 content) have no
   // text to show — render as binary rather than erroring.
-  if (typeof data.content !== 'string' || data.encoding !== 'base64') {
+  if (!isString(data.content) || data.encoding !== 'base64') {
     file.binary = true;
     return file;
   }

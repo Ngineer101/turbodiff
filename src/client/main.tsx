@@ -15,6 +15,7 @@ import {
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Toaster } from 'sonner';
+import { isString, type JsonObject } from '../shared/json.ts';
 import { AppShell } from './components/app-shell.tsx';
 import { Button } from './components/ui/button.tsx';
 import { registerServiceWorker } from './lib/push.ts';
@@ -181,8 +182,8 @@ const featureRoute = createRoute({
 const repoCodeRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/repos/$repoId/code/$',
-  validateSearch: (s: Record<string, unknown>): { ref?: string } =>
-    typeof s.ref === 'string' && s.ref ? { ref: s.ref } : {},
+  validateSearch: (s: JsonObject): { ref?: string } =>
+    isString(s.ref) && s.ref ? { ref: s.ref } : {},
   loader: ({ params }) => queryClient.ensureQueryData(repoCodeQuery(Number(params.repoId))),
   component: lazyRouteComponent(() => import('./pages/code.tsx')),
 });
