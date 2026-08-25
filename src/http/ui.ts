@@ -180,6 +180,8 @@ export function createUiRoutes() {
     '/skills/*',
     '/automations',
     '/automations/*',
+    '/repos',
+    '/repos/*',
     '/settings',
     '/settings/*',
     // Retired hub page — the client router redirects it to /settings.

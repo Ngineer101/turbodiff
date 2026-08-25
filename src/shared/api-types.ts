@@ -484,3 +484,43 @@ export interface ApiCloneCredential {
   scope: 'read' | 'write';
   expiresAt: string;
 }
+
+// --- Repo code browser ---
+
+export interface ApiRepoCode {
+  repo: { id: number; owner: string; name: string; provider: string };
+  supported: boolean; // false for provider 'artifacts'
+  default_branch: string | null; // null only when unsupported and unknown
+  branches: string[]; // [] when unsupported
+}
+
+export interface ApiTreeEntry {
+  name: string;
+  path: string;
+  type: 'dir' | 'file' | 'symlink' | 'submodule';
+  size: number | null; // null for dirs
+  sha: string;
+}
+
+export interface ApiRepoTree {
+  path: string;
+  entries: ApiTreeEntry[]; // dirs first, then files, each name-sorted
+}
+
+export interface ApiRepoFile {
+  path: string;
+  ref: string;
+  sha: string; // blob sha — the optimistic-concurrency token for saves
+  size: number;
+  text: string | null; // null when binary or too_large
+  binary: boolean;
+  too_large: boolean; // > 1 MB (GitHub contents-API cap) — viewer shows a notice
+}
+
+export interface ApiFileSave {
+  ok: boolean;
+  content_sha: string; // new blob sha (feeds the next save's base_sha)
+  commit_sha: string;
+  branch: string; // branch the commit landed on
+  pr: { number: number; url: string } | null; // set in 'pr' mode
+}

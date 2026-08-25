@@ -30,6 +30,7 @@ import {
   meQuery,
   orgMembersQuery,
   queryClient,
+  repoCodeQuery,
   settingsQuery,
   skillQuery,
   skillsQuery,
@@ -174,6 +175,18 @@ const featureRoute = createRoute({
   component: lazyRouteComponent(() => import('./pages/feature.tsx')),
 });
 
+// The code browser: splat = file path, ?ref= = branch (a path segment would
+// be ambiguous for branch names containing '/'). CodeMirror rides only in
+// this chunk — same treatment as the cockpit.
+const repoCodeRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: '/repos/$repoId/code/$',
+  validateSearch: (s: Record<string, unknown>): { ref?: string } =>
+    typeof s.ref === 'string' && s.ref ? { ref: s.ref } : {},
+  loader: ({ params }) => queryClient.ensureQueryData(repoCodeQuery(Number(params.repoId))),
+  component: lazyRouteComponent(() => import('./pages/code.tsx')),
+});
+
 const agentsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/agents',
@@ -283,6 +296,7 @@ const routeTree = rootRoute.addChildren([
     usageRoute,
     integrationsRoute,
     featureRoute,
+    repoCodeRoute,
     agentsRoute,
     agentNewRoute,
     agentEditRoute,

@@ -4,6 +4,7 @@ import {
   BarChart2,
   Bell,
   Clapperboard,
+  Code,
   GitCompare,
   GitMerge,
   OctagonMinus,
@@ -20,7 +21,7 @@ import { api, ApiError } from '../lib/api.ts';
 import { pushSupported, subscribeToPush, unsubscribeFromPush } from '../lib/push.ts';
 import { meQuery, settingsQuery } from '../lib/queries.ts';
 import { EmptyState, Muted, PageTitle, SectionHeading } from '../components/section.tsx';
-import { Button } from '../components/ui/button.tsx';
+import { Button, buttonVariants } from '../components/ui/button.tsx';
 import { Card } from '../components/ui/card.tsx';
 import { Input } from '../components/ui/input.tsx';
 import { Pill } from '../components/ui/pill.tsx';
@@ -218,6 +219,15 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
           </span>
           {repo.provider === 'artifacts' && <Pill tone="on">Artifacts</Pill>}
         </span>
+        {/* Shown for artifacts repos too — the code page owns the "not yet
+            supported" message. */}
+        <Link
+          to="/repos/$repoId/code/$"
+          params={{ repoId: String(repo.id), _splat: '' }}
+          className={cn(buttonVariants({ size: 'sm', variant: 'ghost' }), 'shrink-0')}
+        >
+          <Code className="size-3.5" aria-hidden /> Code
+        </Link>
         {repo.provider === 'artifacts' && (
           <Button
             size="sm"
