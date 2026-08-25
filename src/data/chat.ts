@@ -100,10 +100,7 @@ export async function recentChatHistory(featureId: number, limit = 20): Promise<
   return res.results.reverse();
 }
 
-export async function setChatSessionId(
-  featureId: number,
-  sessionId: string | null,
-): Promise<void> {
+export async function setChatSessionId(featureId: number, sessionId: string | null): Promise<void> {
   await env.DB.prepare('UPDATE features SET chat_session_id = ?2 WHERE id = ?1')
     .bind(featureId, sessionId)
     .run();

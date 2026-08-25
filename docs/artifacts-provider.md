@@ -103,6 +103,11 @@ The forge layer itself, no GitHub underneath:
   of GitHub `/files`, the review verdict from the CR row, plus a native
   checks strip. Merge/Abandon buttons drive the native paths (org `settings`
   capability instead of GitHub push permission).
+- **Code browser/editor** — `/repos/:id/code` works on Artifacts repos via
+  real git in the same per-repo sandbox
+  (`src/services/repo-browser-artifacts.ts`): full-mirror reads in
+  `/workspace/code-browse`, direct-commit saves gated on the org `settings`
+  capability. No PR save mode — edits commit straight to the branch.
 - **Projects UI** — `/projects/new` creates a turbodiff-hosted project
   (Artifacts repo + synthetic tenancy + an organization the creator owns);
   the creator's access comes from `member` rows unioned into

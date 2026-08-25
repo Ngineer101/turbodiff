@@ -148,6 +148,12 @@ import {
   RepoBrowserError,
   saveFile,
 } from '../services/repo-browser.ts';
+import {
+  listBranchesAndDefaultArtifacts,
+  readFileArtifacts,
+  readTreeArtifacts,
+  saveFileArtifacts,
+} from '../services/repo-browser-artifacts.ts';
 import { testMcpEndpoint } from '../integrations/mcp/client.ts';
 import { checkMergeability, dispatchConflictResolution } from '../services/merge-conflicts.ts';
 import { mergePullRequest } from '../services/auto-merge.ts';
@@ -815,11 +821,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
 
   // --- Repo code browser ---
 
-  const CODE_NOT_SUPPORTED = 'code browsing is not yet supported for turbodiff-hosted repositories';
-
-  // Branches + default branch for the code page header. Unlike the tree/file
-  // routes, an Artifacts repo answers 200 with supported: false so the page
-  // can render the repo header and the unsupported state from one query.
+  // Branches + default branch for the code page header. GitHub answers off
+  // the REST API; Artifacts off real git in the per-repo sandbox mirror.
   app.get('/repos/:id/code', async (c) => {
     const repo = await authorizedRepo(c);
     if (!repo) return c.json({ error: 'unknown repository' }, 404);
@@ -829,17 +832,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       name: repo.name,
       provider: repo.provider,
     };
-    if (repo.provider !== 'github') {
-      return c.json<ApiRepoCode>({
-        repo: repoSummary,
-        supported: false,
-        default_branch: repo.default_branch,
-        branches: [],
-      });
-    }
     try {
-      const token = await installationToken(repo.installation_id);
-      const { default_branch, branches } = await listBranchesAndDefault(token, repo);
+      const { default_branch, branches } =
+        repo.provider === 'github'
+          ? await listBranchesAndDefault(await installationToken(repo.installation_id), repo)
+          : await listBranchesAndDefaultArtifacts(repo);
       return c.json<ApiRepoCode>({
         repo: repoSummary,
         supported: true,
@@ -857,14 +854,17 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.get('/repos/:id/tree', async (c) => {
     const repo = await authorizedRepo(c);
     if (!repo) return c.json({ error: 'unknown repository' }, 404);
-    if (repo.provider !== 'github') return c.json({ error: CODE_NOT_SUPPORTED }, 400);
     const ref = c.req.query('ref') ?? '';
     const path = c.req.query('path') ?? '';
     if (!isValidRepoRef(ref)) return c.json({ error: 'a valid ref query param is required' }, 400);
     if (!isValidRepoPath(path)) return c.json({ error: 'invalid path' }, 400);
     try {
-      const token = await installationToken(repo.installation_id);
-      return c.json(await readTree(token, repo, ref, path));
+      if (repo.provider === 'github') {
+        const token = await installationToken(repo.installation_id);
+        return c.json(await readTree(token, repo, ref, path));
+      }
+      // Artifacts mints its own credential inside (resolveWorkspaceRemote).
+      return c.json(await readTreeArtifacts(repo, ref, path));
     } catch (err) {
       if (err instanceof RepoBrowserError) return c.json({ error: err.message }, err.status);
       console.error('turbodiff: tree read failed:', err);
@@ -875,14 +875,16 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.get('/repos/:id/file', async (c) => {
     const repo = await authorizedRepo(c);
     if (!repo) return c.json({ error: 'unknown repository' }, 404);
-    if (repo.provider !== 'github') return c.json({ error: CODE_NOT_SUPPORTED }, 400);
     const ref = c.req.query('ref') ?? '';
     const path = c.req.query('path') ?? '';
     if (!isValidRepoRef(ref)) return c.json({ error: 'a valid ref query param is required' }, 400);
     if (!path || !isValidRepoPath(path)) return c.json({ error: 'invalid path' }, 400);
     try {
-      const token = await installationToken(repo.installation_id);
-      return c.json(await readFile(token, repo, ref, path));
+      if (repo.provider === 'github') {
+        const token = await installationToken(repo.installation_id);
+        return c.json(await readFile(token, repo, ref, path));
+      }
+      return c.json(await readFileArtifacts(repo, ref, path));
     } catch (err) {
       if (err instanceof RepoBrowserError) return c.json({ error: err.message }, err.status);
       console.error('turbodiff: file read failed:', err);
@@ -895,7 +897,6 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.put('/repos/:id/file', async (c) => {
     const repo = await authorizedRepo(c);
     if (!repo) return c.json({ error: 'unknown repository' }, 404);
-    if (repo.provider !== 'github') return c.json({ error: CODE_NOT_SUPPORTED }, 400);
     const body = await c.req
       .json<{
         path?: unknown;
@@ -918,26 +919,61 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (mode !== 'commit' && mode !== 'pr') {
       return c.json({ error: 'mode must be "commit" or "pr"' }, 400);
     }
+    if (repo.provider !== 'github' && mode === 'pr') {
+      return c.json(
+        {
+          error:
+            'pull-request saves are not available for turbodiff-hosted repositories — commit directly to the branch',
+        },
+        400,
+      );
+    }
     const message =
       isString(body?.message) && body.message.trim() ? body.message.trim() : `Update ${path}`;
-    // The caller's own GitHub push permission, before any write token exists —
+    // The save pushes a commit to the branch — Artifacts repos gate on the
+    // org 'settings' capability (same bar as Merge); GitHub repos on the
+    // caller's own push permission, before any write token exists —
     // installation membership alone also covers read-only members.
-    const deniedPush = await requireRepoPush(c, repo, canPushToRepo);
-    if (deniedPush) return deniedPush;
+    if (repo.provider === 'artifacts') {
+      const deniedCapability = await requireCapability(
+        c,
+        repo.installation_id,
+        'settings',
+        orgAdmin,
+      );
+      if (deniedCapability) return deniedCapability;
+    } else {
+      const deniedPush = await requireRepoPush(c, repo, canPushToRepo);
+      if (deniedPush) return deniedPush;
+    }
     try {
-      const writeToken = await sandboxGitToken(repo.installation_id, repo.name, 'write');
       const login = c.get('user').session.login || 'turbodiff';
-      const result = await saveFile(writeToken, repo, {
+      const author = { name: login, email: `${login}@users.noreply.github.com` };
+      const base_sha = isString(body?.base_sha) ? body.base_sha : null;
+      if (repo.provider === 'github') {
+        const writeToken = await sandboxGitToken(repo.installation_id, repo.name, 'write');
+        const result = await saveFile(writeToken, repo, {
+          path,
+          ref,
+          base_sha,
+          content,
+          message,
+          mode,
+          author,
+        });
+        return c.json<ApiFileSave>(result);
+      }
+      const result = await saveFileArtifacts(repo, {
         path,
         ref,
-        base_sha: isString(body?.base_sha) ? body.base_sha : null,
+        base_sha,
         content,
         message,
-        mode,
-        author: { name: login, email: `${login}@users.noreply.github.com` },
+        author,
       });
       return c.json<ApiFileSave>(result);
     } catch (err) {
+      if (err instanceof RepoBrowserError) return c.json({ error: err.message }, err.status);
       const detail = err instanceof Error ? err.message : String(err);
       // GitHub answers 409 (or a "does not match" 422) when base_sha is stale.
       if (/GitHub API 409\b/.test(detail) || detail.includes('does not match')) {
