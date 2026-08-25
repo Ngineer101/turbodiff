@@ -54,7 +54,7 @@ function myers(a: string[], b: string[]): DiffOp[] {
   const offset = max;
   // v[k+offset] = furthest x on diagonal k; trace keeps a snapshot per d for
   // backtracking.
-  const v = new Array<number>(2 * max + 1).fill(0);
+  const v = Array.from({ length: 2 * max + 1 }, () => 0);
   const trace: number[][] = [];
   outer: for (let d = 0; d <= max; d++) {
     trace.push([...v]);
@@ -113,7 +113,7 @@ function myers(a: string[], b: string[]): DiffOp[] {
   return ops.reverse();
 }
 
-export function diffStats(ops: DiffOp[]): { additions: number; deletions: number } {
+export function diffStats(ops: DiffOp[]) {
   let additions = 0;
   let deletions = 0;
   for (const op of ops) {
@@ -127,7 +127,7 @@ export function diffStats(ops: DiffOp[]): { additions: number; deletions: number
 // unchanged lines either side; distant unchanged stretches collapse away.
 export function toHunks(ops: DiffOp[], context = 2): DiffHunk[] {
   // Mark which indices survive: every change plus `context` neighbours.
-  const keep = new Array<boolean>(ops.length).fill(false);
+  const keep = Array.from({ length: ops.length }, () => false);
   for (let i = 0; i < ops.length; i++) {
     if (ops[i]!.kind !== 'same') {
       for (let j = Math.max(0, i - context); j <= Math.min(ops.length - 1, i + context); j++) {

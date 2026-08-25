@@ -98,15 +98,15 @@ engine (`src/ai/runtime/cr-engine.ts`).
 
 ## Differences at a glance
 
-|                        | GitHub                              | Artifacts                                |
-| ---------------------- | ----------------------------------- | ---------------------------------------- |
-| Transport              | REST contents API                   | real git in the per-repo sandbox         |
-| Local state            | none                                | full mirror in `/workspace/code-browse`  |
-| Credentials            | minted by the route (installation / `sandboxGitToken`) | minted in the adapter (`resolveWorkspaceRemote`) |
-| Staleness check        | GitHub enforces `sha` precondition  | adapter compares `rev-parse` to `base_sha`, push race → 409 |
-| Save modes             | commit or branch + PR               | commit only                              |
-| Write authorization    | caller's GitHub push permission     | org `settings` capability                |
-| Post-push side effects | GitHub webhooks                     | `ArtifactsEventsWorkflow`                |
+|                        | GitHub                                                 | Artifacts                                                   |
+| ---------------------- | ------------------------------------------------------ | ----------------------------------------------------------- |
+| Transport              | REST contents API                                      | real git in the per-repo sandbox                            |
+| Local state            | none                                                   | full mirror in `/workspace/code-browse`                     |
+| Credentials            | minted by the route (installation / `sandboxGitToken`) | minted in the adapter (`resolveWorkspaceRemote`)            |
+| Staleness check        | GitHub enforces `sha` precondition                     | adapter compares `rev-parse` to `base_sha`, push race → 409 |
+| Save modes             | commit or branch + PR                                  | commit only                                                 |
+| Write authorization    | caller's GitHub push permission                        | org `settings` capability                                   |
+| Post-push side effects | GitHub webhooks                                        | `ArtifactsEventsWorkflow`                                   |
 
 ## Adding a provider or endpoint
 

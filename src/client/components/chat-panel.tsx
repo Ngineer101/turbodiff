@@ -63,7 +63,7 @@ function ChatMessage({ message }: { message: ApiChatMessage }) {
 
 export function ChatPanel({ featureId, canWrite }: { featureId: number; canWrite: boolean }) {
   const queryClient = useQueryClient();
-  const { data } = useQuery(chatQuery(featureId));
+  const { data, isPending: chatLoading } = useQuery(chatQuery(featureId));
   const messages = data?.messages ?? [];
   const pending = messages.some((m) => m.role === 'user' && CHAT_TURN_PENDING.has(m.status));
 
@@ -98,7 +98,14 @@ export function ChatPanel({ featureId, canWrite }: { featureId: number; canWrite
   return (
     <div className="mt-4 max-w-3xl">
       <SectionHeading>Agent chat</SectionHeading>
-      {messages.length === 0 ? (
+      {chatLoading ? (
+        // History-shaped placeholder — the "ask the agent" empty-state copy
+        // must not flash while the real history is still loading.
+        <div className="mt-3 animate-pulse space-y-3" role="status" aria-label="Loading chat">
+          <div className="ml-auto h-12 w-3/5 rounded-lg bg-surface" />
+          <div className="h-16 w-4/5 rounded-lg bg-surface" />
+        </div>
+      ) : messages.length === 0 ? (
         <Muted className="block">
           Ask the agent to tweak this PR — small iterative changes, one message at a time. Each
           change is committed as you and pushed to the branch.

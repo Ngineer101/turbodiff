@@ -618,8 +618,7 @@ function FilePane({
             ) : (
               <div className="mt-3">
                 <p className="font-mono text-[11px] tracking-[0.14em] text-mute uppercase">
-                  Changes{' '}
-                  <span className="text-accent-bright">+{preview.stats.additions}</span>{' '}
+                  Changes <span className="text-accent-bright">+{preview.stats.additions}</span>{' '}
                   <span className="text-danger">&minus;{preview.stats.deletions}</span>
                 </p>
                 <DiffPreview hunks={preview.hunks} />
@@ -667,7 +666,10 @@ function DiffPreview({ hunks }: { hunks: DiffHunk[] }) {
   return (
     <div className="mt-2 max-h-56 overflow-auto rounded-md border border-line bg-bg font-mono text-xs leading-5">
       {hunks.map((hunk, i) => (
-        <div key={`${hunk.oldStart}:${hunk.newStart}`} className={cn(i > 0 && 'border-t border-line/70')}>
+        <div
+          key={`${hunk.oldStart}:${hunk.newStart}`}
+          className={cn(i > 0 && 'border-t border-line/70')}
+        >
           <p className="bg-surface/80 px-2 py-0.5 text-[10px] text-mute select-none">
             @@ line {hunk.oldStart} &rarr; {hunk.newStart}
           </p>
