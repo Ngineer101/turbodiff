@@ -15,11 +15,7 @@ import {
   tryRecordFixAttempt,
   updateFeature,
 } from '../../data/db.ts';
-import {
-  processChatMessage,
-  type ChatProcessorDependencies,
-  type ChatTurnResult,
-} from './chat.ts';
+import { processChatMessage, type ChatProcessorDependencies, type ChatTurnResult } from './chat.ts';
 import { CHAT_BUSY_RETRIES } from '../../shared/factory-messages.ts';
 
 type TestEnv = Cloudflare.Env & { TEST_MIGRATIONS: D1Migration[] };

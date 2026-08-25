@@ -70,6 +70,27 @@ function entryType(type: string): ApiTreeEntry['type'] {
     : 'file';
 }
 
+// The tree panel's display order — dirs first, each group name-sorted.
+// Shared with the Artifacts adapter (repo-browser-artifacts.ts).
+export function sortTreeEntries(entries: ApiTreeEntry[]): void {
+  entries.sort(
+    (a, b) =>
+      (a.type === 'dir' ? 0 : 1) - (b.type === 'dir' ? 0 : 1) || a.name.localeCompare(b.name),
+  );
+}
+
+// Base64 → UTF-8 text; null means the bytes are not valid UTF-8 and the
+// caller should render the file as binary. Shared with the Artifacts adapter.
+export function decodeBase64Text(b64: string): string | null {
+  const bin = atob(b64.replace(/\s+/g, ''));
+  const bytes = Uint8Array.from(bin, (char) => char.charCodeAt(0));
+  try {
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
 // One directory level, lazily fetched per expansion to keep installation-token
 // rate-limit usage sane.
 export async function readTree(
@@ -93,10 +114,7 @@ export async function readTree(
       sha: entry.sha,
     };
   });
-  entries.sort(
-    (a, b) =>
-      (a.type === 'dir' ? 0 : 1) - (b.type === 'dir' ? 0 : 1) || a.name.localeCompare(b.name),
-  );
+  sortTreeEntries(entries);
   return { path, entries };
 }
 
@@ -137,13 +155,9 @@ export async function readFile(
     file.binary = true;
     return file;
   }
-  const bin = atob(data.content.replace(/\s+/g, ''));
-  const bytes = Uint8Array.from(bin, (char) => char.charCodeAt(0));
-  try {
-    file.text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes);
-  } catch {
-    file.binary = true;
-  }
+  const text = decodeBase64Text(data.content);
+  if (text === null) file.binary = true;
+  else file.text = text;
   return file;
 }
 

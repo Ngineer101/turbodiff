@@ -628,9 +628,7 @@ describe('cockpit chat', () => {
   it('conceals a foreign feature from both chat routes', async () => {
     const foreignId = await seedFeature(202);
     const app = chatApp();
-    const list = await app.request(
-      `https://turbodiff.test/api/factory/features/${foreignId}/chat`,
-    );
+    const list = await app.request(`https://turbodiff.test/api/factory/features/${foreignId}/chat`);
     expect(list.status).toBe(404);
     expect((await postChat(app, foreignId, 'hello')).status).toBe(404);
   });
@@ -681,9 +679,7 @@ describe('cockpit chat', () => {
     // A second send while the first turn is still queued is refused.
     expect((await postChat(app, featureId, 'and one more thing')).status).toBe(409);
 
-    const list = await app.request(
-      `https://turbodiff.test/api/factory/features/${featureId}/chat`,
-    );
+    const list = await app.request(`https://turbodiff.test/api/factory/features/${featureId}/chat`);
     expect(list.status).toBe(200);
     // SAFETY: the 200 body is the ApiChatList contract this test exercises.
     const chat = (await list.json()) as { messages: { id: number; role: string }[] };
@@ -787,12 +783,15 @@ describe('push subscriptions', () => {
 
 // GitHub-dependent success paths (tree listing, save, 409 mapping) are left
 // to manual verification: this suite has no outbound-fetch mocking harness,
-// so only the paths that resolve before any GitHub call are covered.
+// so only the paths that resolve before any GitHub call are covered. The
+// Artifacts success paths run real git in the per-repo sandbox, which this
+// worker pool also lacks — those are deployment-smoke territory; only the
+// paths that resolve before the sandbox are covered here.
 describe('repo code browser', () => {
   async function seedArtifactsRepo(): Promise<void> {
     await testEnv.DB.prepare(
-      `INSERT INTO repositories (id, installation_id, owner, name, provider)
-			 VALUES (303, 1001, 'acme', 'hosted', 'artifacts')`,
+      `INSERT INTO repositories (id, installation_id, owner, name, provider, artifacts_repo, default_branch)
+			 VALUES (303, 1001, 'acme', 'hosted', 'artifacts', 'acme--hosted', 'main')`,
     ).run();
   }
 
@@ -834,37 +833,40 @@ describe('repo code browser', () => {
     expect(write.status).toBe(404);
   });
 
-  it('refuses tree and file access for an artifacts-hosted repo', async () => {
+  it('rejects mode "pr" for an artifacts-hosted repo before auth', async () => {
     await seedArtifactsRepo();
-    const app = authenticatedApi();
-    for (const request of [
-      app.request('https://turbodiff.test/api/repos/303/tree?ref=main'),
-      app.request('https://turbodiff.test/api/repos/303/file?ref=main&path=readme.md'),
-      app.request('https://turbodiff.test/api/repos/303/file', {
+    const canPush = vi.fn(async () => true);
+    const response = await authenticatedApi(canPush).request(
+      'https://turbodiff.test/api/repos/303/file',
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...validSave, mode: 'pr' }),
+      },
+    );
+    expect(response.status).toBe(400);
+    const body = parseJson(await response.text());
+    expect(
+      isJsonObject(body) && isString(body.error) && body.error.includes('pull-request saves'),
+    ).toBe(true);
+    expect(canPush).not.toHaveBeenCalled();
+  });
+
+  it('gates artifacts saves on the org settings capability', async () => {
+    await seedArtifactsRepo();
+    // orgAdmin false: the caller has no member row and the org heal denies
+    // elevation, so the 'settings' capability check fails.
+    const canPushSpy = vi.fn(async () => true);
+    const response = await authenticatedApi(canPushSpy, async () => false).request(
+      'https://turbodiff.test/api/repos/303/file',
+      {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(validSave),
-      }),
-    ]) {
-      const response = await request;
-      expect(response.status).toBe(400);
-      const body = parseJson(await response.text());
-      expect(
-        isJsonObject(body) && isString(body.error) && body.error.includes('not yet supported'),
-      ).toBe(true);
-    }
-  });
-
-  it('reports an artifacts-hosted repo as unsupported on /code without touching GitHub', async () => {
-    await seedArtifactsRepo();
-    const response = await authenticatedApi().request('https://turbodiff.test/api/repos/303/code');
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
-      repo: { id: 303, owner: 'acme', name: 'hosted', provider: 'artifacts' },
-      supported: false,
-      default_branch: null,
-      branches: [],
-    });
+      },
+    );
+    expect(response.status).toBe(403);
+    expect(canPushSpy).not.toHaveBeenCalled();
   });
 
   it('requires the caller’s own GitHub push permission before any write', async () => {

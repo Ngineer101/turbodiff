@@ -112,9 +112,7 @@ export const chatQuery = (featureId: number) =>
     queryKey: ['chat', featureId],
     queryFn: () => api.get<ApiChatList>(`/api/factory/features/${featureId}/chat`),
     refetchInterval: (query) =>
-      query.state.data?.messages.some(
-        (m) => m.role === 'user' && CHAT_TURN_PENDING.has(m.status),
-      )
+      query.state.data?.messages.some((m) => m.role === 'user' && CHAT_TURN_PENDING.has(m.status))
         ? LIVE_POLL_MS
         : false,
   });

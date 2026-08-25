@@ -511,9 +511,9 @@ export interface ApiCloneCredential {
 
 export interface ApiRepoCode {
   repo: { id: number; owner: string; name: string; provider: string };
-  supported: boolean; // false for provider 'artifacts'
-  default_branch: string | null; // null only when unsupported and unknown
-  branches: string[]; // [] when unsupported
+  supported: boolean; // always true today (both providers); kept for forward compat
+  default_branch: string | null; // null only when the repo has no branches yet
+  branches: string[];
 }
 
 export interface ApiTreeEntry {
@@ -536,7 +536,7 @@ export interface ApiRepoFile {
   size: number;
   text: string | null; // null when binary or too_large
   binary: boolean;
-  too_large: boolean; // > 1 MB (GitHub contents-API cap) — viewer shows a notice
+  too_large: boolean; // > 1 MB (both providers) — viewer shows a notice
 }
 
 export interface ApiFileSave {
@@ -544,5 +544,5 @@ export interface ApiFileSave {
   content_sha: string; // new blob sha (feeds the next save's base_sha)
   commit_sha: string;
   branch: string; // branch the commit landed on
-  pr: { number: number; url: string } | null; // set in 'pr' mode
+  pr: { number: number; url: string } | null; // set in 'pr' mode; null in commit mode (Artifacts repos are always commit mode)
 }

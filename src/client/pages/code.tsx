@@ -52,15 +52,12 @@ export default function CodePage() {
     </span>
   );
 
-  if (!data.supported || !refName) {
+  if (!refName) {
     return (
       <div className="animate-rise">
         <PageTitle>{title}</PageTitle>
         <Card className="mt-6 max-w-xl">
-          <Muted>
-            Code browsing isn&rsquo;t available for turbodiff-hosted repositories yet — clone the
-            repo locally instead (Settings &rarr; Clone).
-          </Muted>
+          <Muted>This repository has no branches yet.</Muted>
         </Card>
       </div>
     );
@@ -302,10 +299,14 @@ function FilePane({
   const [saveOpen, setSaveOpen] = useState(false);
   const [message, setMessage] = useState('');
   // The per-save choice (commit vs branch + PR) is remembered for the
-  // session and shown on the Save control itself.
-  const [mode, setModeState] = useState<SaveMode>(() =>
+  // session and shown on the Save control itself. PR saves are GitHub-only:
+  // Artifacts repos always commit directly, even when sessionStorage holds a
+  // 'pr' remembered from a GitHub repo.
+  const canPr = repo.provider === 'github';
+  const [modeState, setModeState] = useState<SaveMode>(() =>
     sessionStorage.getItem(SAVE_MODE_KEY) === 'pr' ? 'pr' : 'commit',
   );
+  const mode = canPr ? modeState : 'commit';
   const setMode = (next: SaveMode) => {
     setModeState(next);
     sessionStorage.setItem(SAVE_MODE_KEY, next);
@@ -420,17 +421,23 @@ function FilePane({
       <div>
         {backButton}
         <Card className="mt-2">
-          <Muted>
-            File is larger than 1 MB —{' '}
-            <a
-              href={`https://github.com/${repo.owner}/${repo.name}/blob/${encodeURIComponent(refName)}/${path}`}
-              target="_blank"
-              rel="noopener"
-              className="text-accent-bright hover:underline"
-            >
-              view it on GitHub &rarr;
-            </a>
-          </Muted>
+          {repo.provider === 'github' ? (
+            <Muted>
+              File is larger than 1 MB —{' '}
+              <a
+                href={`https://github.com/${repo.owner}/${repo.name}/blob/${encodeURIComponent(refName)}/${path}`}
+                target="_blank"
+                rel="noopener"
+                className="text-accent-bright hover:underline"
+              >
+                view it on GitHub &rarr;
+              </a>
+            </Muted>
+          ) : (
+            <Muted>
+              File is larger than 1 MB — clone the repo to view it (Settings &rarr; Clone).
+            </Muted>
+          )}
         </Card>
       </div>
     );
@@ -506,9 +513,11 @@ function FilePane({
             <OptionCard selected={mode === 'commit'} onClick={() => setMode('commit')}>
               Commit to <span className="font-mono text-accent-bright">{refName}</span>
             </OptionCard>
-            <OptionCard selected={mode === 'pr'} onClick={() => setMode('pr')}>
-              New branch + pull request
-            </OptionCard>
+            {canPr ? (
+              <OptionCard selected={mode === 'pr'} onClick={() => setMode('pr')}>
+                New branch + pull request
+              </OptionCard>
+            ) : null}
           </div>
           <div className="mt-5 flex justify-end gap-2">
             <Button variant="secondary" size="sm" onClick={() => setSaveOpen(false)}>

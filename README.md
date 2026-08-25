@@ -185,6 +185,8 @@ rejected at the proxy.
 - [src/app.ts](src/app.ts) — the HTTP composition root; operator endpoints live
   in [src/http/internal.ts](src/http/internal.ts).
 - [docs/architecture.md](docs/architecture.md) — layer boundaries and dependency rules.
+- [docs/code-editing.md](docs/code-editing.md) — the in-browser code viewer/editor
+  and how the GitHub and Artifacts storage backends differ.
 - [migrations/](migrations/) — D1 schema: installations, repositories, reviews,
   agents, fix attempts, features, plans, verifications.
 
