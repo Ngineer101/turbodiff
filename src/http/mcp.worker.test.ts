@@ -74,7 +74,7 @@ async function rpcResult(response: Response): Promise<JsonObject> {
 }
 
 // The single text block every tool result carries, parsed back to JSON.
-function toolPayload(result: JsonObject): { text: string; isError: boolean } {
+function toolPayload(result: JsonObject) {
   const content = result.content;
   const first = isJsonArray(content) ? content[0] : undefined;
   if (!isJsonObject(first) || !isString(first.text)) {
@@ -182,7 +182,7 @@ describe('MCP tool surface', () => {
     const tools = result.tools;
     if (!isJsonArray(tools)) throw new Error('tools/list returned no tools array');
     const names = tools.map((t) => (isJsonObject(t) ? t.name : undefined)).filter(isString);
-    expect(names.toSorted()).toEqual(
+    expect(names.sort()).toEqual(
       [
         'list_board',
         'get_task',
@@ -192,7 +192,7 @@ describe('MCP tool surface', () => {
         'create_todo',
         'start_task',
         'send_chat_message',
-      ].toSorted(),
+      ].sort(),
     );
   });
 
