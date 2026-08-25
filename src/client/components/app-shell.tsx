@@ -151,7 +151,12 @@ function UserBlock({ me }: { me: ApiMe }) {
 const NAV_SHORTCUTS = navShortcuts(SIDEBAR_NAV);
 
 export function AppShell({ me, children }: { me: ApiMe; children: ReactNode }) {
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  // Container width follows the *committed* route, not the optimistic
+  // location — during a pending navigation the old page is still mounted,
+  // and reflowing it to the destination's width reads as a broken shell.
+  const pathname = useRouterState({
+    select: (s) => (s.resolvedLocation ?? s.location).pathname,
+  });
   const navigate = useNavigate();
   const isDesktop = useIsDesktop();
   useHotkeys(
@@ -163,7 +168,8 @@ export function AppShell({ me, children }: { me: ApiMe; children: ReactNode }) {
     { enabled: () => isDesktop && noOverlayOpen(), preventDefault: true },
     [isDesktop],
   );
-  const wide = pathname.startsWith('/factory/features/');
+  // The cockpit's diff pane and the code browser's editor both need room.
+  const wide = pathname.startsWith('/factory/features/') || /^\/repos\/\d+\/code/.test(pathname);
   // The board's three lanes need more room than the reading-width default.
   const board = pathname === '/';
   return (
@@ -182,11 +188,12 @@ export function AppShell({ me, children }: { me: ApiMe; children: ReactNode }) {
       </div>
 
       <main className="min-w-0 flex-1">
-        {/* The width change between routes (reading width ↔ wide cockpit)
-            eases instead of snapping while the next page is still pending. */}
+        {/* Width snaps in the same frame the new page commits (pathname above
+            is the resolved location) — animating it would visibly reflow the
+            outgoing page. */}
         <div
           className={cn(
-            'mx-auto px-4 py-5 pb-28 transition-[max-width] duration-300 ease-out sm:py-8 md:px-8 md:pb-8',
+            'mx-auto px-4 py-5 pb-28 sm:py-8 md:px-8 md:pb-8',
             wide ? 'max-w-[96rem]' : board ? 'max-w-7xl' : 'max-w-4xl',
           )}
         >
