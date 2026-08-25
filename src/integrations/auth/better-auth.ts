@@ -1,5 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { betterAuth } from 'better-auth';
+import { mcp } from 'better-auth/plugins';
 import { organization } from 'better-auth/plugins/organization';
 import { sendInvitationEmail } from '../notifications/email.ts';
 import { orgAc, orgRoles } from './organization-access.ts';
@@ -60,6 +61,17 @@ import { orgAc, orgRoles } from './organization-access.ts';
 //     overrideUserInfoOnSignIn rewrites them from the GitHub profile on
 //     every sign-in (which also repairs rows created while the bug shipped,
 //     and tracks GitHub username renames).
+//   - The mcp plugin turns this instance into an OAuth 2.1 authorization
+//     server for the inbound /mcp endpoint (tables in
+//     migrations/0041_mcp_oauth.sql). Its authorize/token/register endpoints
+//     (/api/auth/mcp/authorize|token|register) and .well-known documents ride
+//     the existing GET|POST /api/auth/* catch-all in app.ts — no new mounts
+//     needed there, and neither the closed /update-user route nor the
+//     sign-up/email override collides with the /api/auth/mcp/* prefix. An
+//     unauthenticated authorize hit redirects to loginPage with the OAuth
+//     query intact (ui.ts resumes the authorize after sign-in); consent is
+//     skipped unless a client sends prompt=consent, so no consent UI exists.
+//     requireMcpUser in services/auth.ts is the bearer-token consumer.
 
 const SESSION_DAYS = 30;
 
@@ -134,6 +146,12 @@ function createAuth() {
     // doesn't have) — ac/roles here matter because the plugin's own
     // invite/remove/role-change endpoints check permissions through them.
     plugins: [
+      mcp({
+        loginPage: '/auth/login',
+        // The protected-resource metadata's `resource` — the MCP endpoint
+        // itself, not the origin default.
+        resource: `${env.PUBLIC_BASE_URL}/mcp`,
+      }),
       organization({
         ac: orgAc,
         roles: orgRoles,

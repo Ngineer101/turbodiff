@@ -8,9 +8,11 @@ import { createApiRoutes } from './http/api.ts';
 import { handleEmailSignUp } from './http/auth-email.ts';
 import { renderCertificatePage } from './http/certificate-page.tsx';
 import { createInternalRoutes } from './http/internal.ts';
+import { createMcpRoutes } from './http/mcp.ts';
 import { handleMcpProxy } from './http/mcp-proxy.ts';
 import { createUiRoutes } from './http/ui.ts';
 import { createWebhookRoutes } from './http/webhooks.ts';
+import { oAuthDiscoveryMetadata, oAuthProtectedResourceMetadata } from 'better-auth/plugins';
 import { auth } from './integrations/auth/better-auth.ts';
 import { verifyArtifactSig } from './integrations/security/crypto.ts';
 import { certificateSigKey, loadCertificateData } from './services/certificates.ts';
@@ -108,6 +110,23 @@ app.route('/webhooks', createWebhookRoutes(dispatchReviewAgent));
 // MCP relay for sandbox runs — authenticated by a short-lived sealed grant
 // minted per run, not by session or bearer secret (see lib/mcp-proxy.ts).
 app.on(['GET', 'POST', 'DELETE'], '/mcp-proxy/:id', handleMcpProxy);
+
+// Inbound MCP server (distinct from the /mcp-proxy/:id relay above — this is
+// turbodiff exposing its own tools, OAuth-bearer authed via better-auth's
+// mcp plugin). /mcp and /mcp-proxy/:id are distinct prefixes; no shadowing.
+app.route('/mcp', createMcpRoutes());
+
+// OAuth 2.1 discovery for MCP hosts (RFC 8414 / RFC 9728). The plugin's own
+// authorize/token/register endpoints ride the /api/auth/* catch-all below;
+// only the root-level .well-known documents need explicit mounts. Kept above
+// the UI mount to preserve this file's ordering discipline, though
+// createUiRoutes registers no competing GET.
+app.get('/.well-known/oauth-authorization-server', (c) =>
+  oAuthDiscoveryMetadata(auth())(c.req.raw),
+);
+app.get('/.well-known/oauth-protected-resource', (c) =>
+  oAuthProtectedResourceMetadata(auth())(c.req.raw),
+);
 
 // better-auth (sessions, OAuth callback, sign-out). Registered before the
 // /api data plane so it owns the /api/auth prefix.

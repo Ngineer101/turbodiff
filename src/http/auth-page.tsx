@@ -104,6 +104,8 @@ const CSS = `
 
 // Posts the active form as JSON to better-auth. Error bodies are
 // { code, message }; anything unparseable falls back to a generic line.
+// The wire() calls are appended per render (see script below): the sign-in
+// destination is the OAuth-continuation target when one is set, / otherwise.
 const SCRIPT = `
 	var tabs = document.querySelectorAll('.tab');
 	var forms = { signin: document.getElementById('signin'), signup: document.getElementById('signup') };
@@ -144,9 +146,19 @@ const SCRIPT = `
 				});
 		});
 	}
-	wire(forms.signin, '/api/auth/sign-in/email', '/');
+`;
+
+// The sign-in destination is server-validated path-only (ui.ts) and its query
+// string is URLSearchParams-encoded, so after JSON.stringify no backtick,
+// dollar-brace, or </script> sequence can reach the inline script. Sign-up
+// keeps /onboarding: a brand-new account has no installations to authorize
+// against, so the connect-GitHub step comes first regardless.
+function script(signinDestination: string): string {
+  return `${SCRIPT}
+	wire(forms.signin, '/api/auth/sign-in/email', ${JSON.stringify(signinDestination)});
 	wire(forms.signup, '/api/auth/sign-up/email', '/onboarding');
 `;
+}
 
 function GitHubIcon() {
   return (
@@ -156,7 +168,10 @@ function GitHubIcon() {
   );
 }
 
-function AuthPage() {
+function AuthPage({ next }: { next?: string }) {
+  const githubHref = next
+    ? `/auth/login/github?next=${encodeURIComponent(next)}`
+    : '/auth/login/github';
   return (
     <html lang="en">
       <head>
@@ -185,7 +200,7 @@ function AuthPage() {
 
         <main>
           <div class="panel">
-            <a class="github" href="/auth/login/github">
+            <a class="github" href={githubHref}>
               <GitHubIcon />
               Continue with GitHub
             </a>
@@ -247,12 +262,12 @@ function AuthPage() {
           <a href="/">&larr; back</a>
         </footer>
 
-        <script dangerouslySetInnerHTML={{ __html: SCRIPT }} />
+        <script dangerouslySetInnerHTML={{ __html: script(next ?? '/') }} />
       </body>
     </html>
   );
 }
 
-export function renderAuthPage(): string {
-  return `<!doctype html>${(<AuthPage />).toString()}`;
+export function renderAuthPage(next?: string): string {
+  return `<!doctype html>${(<AuthPage next={next} />).toString()}`;
 }

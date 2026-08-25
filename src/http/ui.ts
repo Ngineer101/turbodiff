@@ -88,16 +88,29 @@ export function createUiRoutes() {
   // account). The forms post JSON to better-auth's /api/auth/sign-in/email
   // and /api/auth/sign-up/email from a small inline script.
   app.get('/auth/login', async (c) => {
-    if (await hasSession(c)) return c.redirect('/');
-    return c.html(renderAuthPage());
+    // OAuth continuation: better-auth's mcp plugin redirects an
+    // unauthenticated /api/auth/mcp/authorize hit here with the authorize
+    // query intact. After sign-in the browser must resume that authorize
+    // request (which then redirects back to the MCP client with a code) —
+    // landing on / would strand the client's OAuth flow.
+    const query = new URL(c.req.url).searchParams;
+    const oauthAuthorize = query.has('client_id') && query.has('redirect_uri');
+    const next = oauthAuthorize ? `/api/auth/mcp/authorize?${query.toString()}` : '/';
+    if (await hasSession(c)) return c.redirect(next);
+    return c.html(renderAuthPage(oauthAuthorize ? next : undefined));
   });
 
   app.get('/auth/login/github', async (c) => {
+    // Where to land after sign-in; path-only so the redirect can't leave the
+    // app (same idiom as /auth/connect/github). The OAuth authorize
+    // continuation from /auth/login rides this as ?next=.
+    const next = c.req.query('next') ?? '';
+    const callbackURL = next.startsWith('/') && !next.startsWith('//') ? next : '/';
     // Server-initiated better-auth social sign-in. The returned headers carry
     // the state cookie the OAuth callback validates — they must reach the
     // browser along with the redirect.
     const { headers, response } = await auth().api.signInSocial({
-      body: { provider: 'github', callbackURL: '/' },
+      body: { provider: 'github', callbackURL },
       returnHeaders: true,
     });
     if (!response.url) return c.text('sign-in failed — start again at /', 502);
