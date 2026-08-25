@@ -135,7 +135,16 @@ import {
   signArtifactKey,
 } from '../integrations/security/crypto.ts';
 import { githubRequest as gh } from '../integrations/github/client.ts';
-import { installationToken } from '../integrations/github/app.ts';
+import { installationToken, sandboxGitToken } from '../integrations/github/app.ts';
+import {
+  isValidRepoPath,
+  isValidRepoRef,
+  listBranchesAndDefault,
+  readFile,
+  readTree,
+  RepoBrowserError,
+  saveFile,
+} from '../services/repo-browser.ts';
 import { testMcpEndpoint } from '../integrations/mcp/client.ts';
 import { checkMergeability, dispatchConflictResolution } from '../services/merge-conflicts.ts';
 import { mergePullRequest } from '../services/auto-merge.ts';
@@ -175,6 +184,8 @@ import type {
   ApiTaskDetail,
   ApiUsage,
   ApiCreatedProject,
+  ApiFileSave,
+  ApiRepoCode,
 } from '../shared/api-types.ts';
 
 // JSON API for the SPA (src/client). Session-cookie authed — the same
@@ -791,6 +802,146 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     } catch (err) {
       console.error('turbodiff: clone-token mint failed:', err);
       return c.json({ error: err instanceof Error ? err.message : 'token mint failed' }, 502);
+    }
+  });
+
+  // --- Repo code browser ---
+
+  const CODE_NOT_SUPPORTED = 'code browsing is not yet supported for turbodiff-hosted repositories';
+
+  // Branches + default branch for the code page header. Unlike the tree/file
+  // routes, an Artifacts repo answers 200 with supported: false so the page
+  // can render the repo header and the unsupported state from one query.
+  app.get('/repos/:id/code', async (c) => {
+    const repo = await authorizedRepo(c);
+    if (!repo) return c.json({ error: 'unknown repository' }, 404);
+    const repoSummary = {
+      id: repo.id,
+      owner: repo.owner,
+      name: repo.name,
+      provider: repo.provider,
+    };
+    if (repo.provider !== 'github') {
+      return c.json<ApiRepoCode>({
+        repo: repoSummary,
+        supported: false,
+        default_branch: repo.default_branch,
+        branches: [],
+      });
+    }
+    try {
+      const token = await installationToken(repo.installation_id);
+      const { default_branch, branches } = await listBranchesAndDefault(token, repo);
+      return c.json<ApiRepoCode>({
+        repo: repoSummary,
+        supported: true,
+        default_branch,
+        branches,
+      });
+    } catch (err) {
+      console.error('turbodiff: code branch listing failed:', err);
+      return c.json({ error: err instanceof Error ? err.message : 'branch listing failed' }, 502);
+    }
+  });
+
+  // One directory level of the repo tree at ?ref=&path= (lazy — the client
+  // fetches per expanded directory).
+  app.get('/repos/:id/tree', async (c) => {
+    const repo = await authorizedRepo(c);
+    if (!repo) return c.json({ error: 'unknown repository' }, 404);
+    if (repo.provider !== 'github') return c.json({ error: CODE_NOT_SUPPORTED }, 400);
+    const ref = c.req.query('ref') ?? '';
+    const path = c.req.query('path') ?? '';
+    if (!isValidRepoRef(ref)) return c.json({ error: 'a valid ref query param is required' }, 400);
+    if (!isValidRepoPath(path)) return c.json({ error: 'invalid path' }, 400);
+    try {
+      const token = await installationToken(repo.installation_id);
+      return c.json(await readTree(token, repo, ref, path));
+    } catch (err) {
+      if (err instanceof RepoBrowserError) return c.json({ error: err.message }, err.status);
+      console.error('turbodiff: tree read failed:', err);
+      return c.json({ error: err instanceof Error ? err.message : 'tree read failed' }, 502);
+    }
+  });
+
+  app.get('/repos/:id/file', async (c) => {
+    const repo = await authorizedRepo(c);
+    if (!repo) return c.json({ error: 'unknown repository' }, 404);
+    if (repo.provider !== 'github') return c.json({ error: CODE_NOT_SUPPORTED }, 400);
+    const ref = c.req.query('ref') ?? '';
+    const path = c.req.query('path') ?? '';
+    if (!isValidRepoRef(ref)) return c.json({ error: 'a valid ref query param is required' }, 400);
+    if (!path || !isValidRepoPath(path)) return c.json({ error: 'invalid path' }, 400);
+    try {
+      const token = await installationToken(repo.installation_id);
+      return c.json(await readFile(token, repo, ref, path));
+    } catch (err) {
+      if (err instanceof RepoBrowserError) return c.json({ error: err.message }, err.status);
+      console.error('turbodiff: file read failed:', err);
+      return c.json({ error: err instanceof Error ? err.message : 'file read failed' }, 502);
+    }
+  });
+
+  // Save one edited file: commit directly to the branch, or branch + PR.
+  // base_sha is the optimistic-concurrency token — a stale one maps to 409.
+  app.put('/repos/:id/file', async (c) => {
+    const repo = await authorizedRepo(c);
+    if (!repo) return c.json({ error: 'unknown repository' }, 404);
+    if (repo.provider !== 'github') return c.json({ error: CODE_NOT_SUPPORTED }, 400);
+    const body = await c.req
+      .json<{
+        path?: unknown;
+        ref?: unknown;
+        base_sha?: unknown;
+        content?: unknown;
+        message?: unknown;
+        mode?: unknown;
+      }>()
+      .catch(() => null);
+    const path = isString(body?.path) ? body.path : '';
+    const ref = isString(body?.ref) ? body.ref : '';
+    const content = body?.content;
+    const mode = body?.mode;
+    if (!path || !isValidRepoPath(path)) return c.json({ error: 'invalid path' }, 400);
+    if (!isValidRepoRef(ref)) return c.json({ error: 'a valid ref is required' }, 400);
+    if (!isString(content) || new TextEncoder().encode(content).length > 1024 * 1024) {
+      return c.json({ error: 'content must be a string of at most 1 MB' }, 400);
+    }
+    if (mode !== 'commit' && mode !== 'pr') {
+      return c.json({ error: 'mode must be "commit" or "pr"' }, 400);
+    }
+    const message =
+      isString(body?.message) && body.message.trim() ? body.message.trim() : `Update ${path}`;
+    // The caller's own GitHub push permission, before any write token exists —
+    // installation membership alone also covers read-only members.
+    const deniedPush = await requireRepoPush(c, repo, canPushToRepo);
+    if (deniedPush) return deniedPush;
+    try {
+      const writeToken = await sandboxGitToken(repo.installation_id, repo.name, 'write');
+      const login = c.get('user').session.login || 'turbodiff';
+      const result = await saveFile(writeToken, repo, {
+        path,
+        ref,
+        base_sha: isString(body?.base_sha) ? body.base_sha : null,
+        content,
+        message,
+        mode,
+        author: { name: login, email: `${login}@users.noreply.github.com` },
+      });
+      return c.json<ApiFileSave>(result);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      // GitHub answers 409 (or a "does not match" 422) when base_sha is stale.
+      if (/GitHub API 409\b/.test(detail) || detail.includes('does not match')) {
+        return c.json(
+          {
+            error: 'file changed on the branch since you opened it — reload and reapply your edit',
+          },
+          409,
+        );
+      }
+      console.error('turbodiff: file save failed:', err);
+      return c.json({ error: detail }, 502);
     }
   });
 

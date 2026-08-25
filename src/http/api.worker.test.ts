@@ -662,6 +662,132 @@ describe('push subscriptions', () => {
   });
 });
 
+// GitHub-dependent success paths (tree listing, save, 409 mapping) are left
+// to manual verification: this suite has no outbound-fetch mocking harness,
+// so only the paths that resolve before any GitHub call are covered.
+describe('repo code browser', () => {
+  async function seedArtifactsRepo(): Promise<void> {
+    await testEnv.DB.prepare(
+      `INSERT INTO repositories (id, installation_id, owner, name, provider)
+			 VALUES (303, 1001, 'acme', 'hosted', 'artifacts')`,
+    ).run();
+  }
+
+  const validSave = {
+    path: 'src/index.ts',
+    ref: 'main',
+    base_sha: 'abc123',
+    content: 'export {}\n',
+    message: 'Update src/index.ts',
+    mode: 'commit',
+  };
+
+  it('rejects unauthenticated requests on every code route', async () => {
+    for (const path of [
+      '/api/repos/101/code',
+      '/api/repos/101/tree?ref=main',
+      '/api/repos/101/file?ref=main&path=readme.md',
+    ]) {
+      const response = await apiApp().request(`https://turbodiff.test${path}`);
+      expect(response.status).toBe(401);
+    }
+  });
+
+  it('conceals repositories outside the caller installations', async () => {
+    const app = authenticatedApi();
+    for (const path of [
+      '/api/repos/202/code',
+      '/api/repos/202/tree?ref=main',
+      '/api/repos/202/file?ref=main&path=readme.md',
+    ]) {
+      const response = await app.request(`https://turbodiff.test${path}`);
+      expect(response.status).toBe(404);
+    }
+    const write = await app.request('https://turbodiff.test/api/repos/202/file', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(validSave),
+    });
+    expect(write.status).toBe(404);
+  });
+
+  it('refuses tree and file access for an artifacts-hosted repo', async () => {
+    await seedArtifactsRepo();
+    const app = authenticatedApi();
+    for (const request of [
+      app.request('https://turbodiff.test/api/repos/303/tree?ref=main'),
+      app.request('https://turbodiff.test/api/repos/303/file?ref=main&path=readme.md'),
+      app.request('https://turbodiff.test/api/repos/303/file', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(validSave),
+      }),
+    ]) {
+      const response = await request;
+      expect(response.status).toBe(400);
+      const body = parseJson(await response.text());
+      expect(
+        isJsonObject(body) && isString(body.error) && body.error.includes('not yet supported'),
+      ).toBe(true);
+    }
+  });
+
+  it('reports an artifacts-hosted repo as unsupported on /code without touching GitHub', async () => {
+    await seedArtifactsRepo();
+    const response = await authenticatedApi().request('https://turbodiff.test/api/repos/303/code');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      repo: { id: 303, owner: 'acme', name: 'hosted', provider: 'artifacts' },
+      supported: false,
+      default_branch: null,
+      branches: [],
+    });
+  });
+
+  it('requires the caller’s own GitHub push permission before any write', async () => {
+    const canPush = vi.fn(async () => false);
+    const response = await authenticatedApi(canPush).request(
+      'https://turbodiff.test/api/repos/101/file',
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(validSave),
+      },
+    );
+    expect(response.status).toBe(403);
+    expect(canPush).toHaveBeenCalledWith(acmeUser, 'acme', 'api');
+  });
+
+  it('rejects malformed paths, refs, and modes before the push-permission check', async () => {
+    const canPush = vi.fn(async () => true);
+    const app = authenticatedApi(canPush);
+    for (const body of [
+      { ...validSave, path: 'src/../../etc/passwd' },
+      { ...validSave, path: '/etc/passwd' },
+      { ...validSave, ref: 'main..other' },
+      { ...validSave, mode: 'yolo' },
+      { ...validSave, content: 42 },
+    ]) {
+      const response = await app.request('https://turbodiff.test/api/repos/101/file', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(400);
+    }
+    expect(canPush).not.toHaveBeenCalled();
+
+    const badTree = await app.request(
+      'https://turbodiff.test/api/repos/101/tree?ref=main&path=src/../..',
+    );
+    expect(badTree.status).toBe(400);
+    const noRef = await app.request('https://turbodiff.test/api/repos/101/tree');
+    expect(noRef.status).toBe(400);
+    const noPath = await app.request('https://turbodiff.test/api/repos/101/file?ref=main');
+    expect(noPath.status).toBe(400);
+  });
+});
+
 // The success path (a real audio file transcribed by the AI binding) isn't
 // covered here: wrangler.test.jsonc has no "ai" binding, matching every
 // other worker test's D1-only fixture — exercising real Workers AI needs

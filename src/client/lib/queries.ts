@@ -13,6 +13,9 @@ import type {
   ApiMe,
   ApiOrgMembers,
   ApiPlan,
+  ApiRepoCode,
+  ApiRepoFile,
+  ApiRepoTree,
   ApiSettings,
   ApiSkillDetail,
   ApiSkillsList,
@@ -163,6 +166,35 @@ export const automationRunsQuery = (id: number) =>
     queryFn: () => api.get<ApiAutomationRunsList>(`/api/automations/${id}/runs`),
     refetchInterval: (query) =>
       query.state.data?.runs.some((r) => r.status === 'running') ? LIVE_POLL_MS : false,
+  });
+
+// --- Repo code browser (the lazy /repos/$repoId/code/$ page) ---
+
+export const repoCodeQuery = (repoId: number) =>
+  queryOptions({
+    queryKey: ['repo-code', repoId],
+    queryFn: () => api.get<ApiRepoCode>(`/api/repos/${repoId}/code`),
+    staleTime: 60_000,
+  });
+
+export const repoTreeQuery = (repoId: number, ref: string, path: string) =>
+  queryOptions({
+    queryKey: ['repo-tree', repoId, ref, path],
+    queryFn: () =>
+      api.get<ApiRepoTree>(
+        `/api/repos/${repoId}/tree?ref=${encodeURIComponent(ref)}&path=${encodeURIComponent(path)}`,
+      ),
+    staleTime: 60_000,
+  });
+
+export const repoFileQuery = (repoId: number, ref: string, path: string) =>
+  queryOptions({
+    queryKey: ['repo-file', repoId, ref, path],
+    queryFn: () =>
+      api.get<ApiRepoFile>(
+        `/api/repos/${repoId}/file?ref=${encodeURIComponent(ref)}&path=${encodeURIComponent(path)}`,
+      ),
+    staleTime: 60_000,
   });
 
 export const automationRunQuery = (id: number) =>
