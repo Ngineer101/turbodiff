@@ -42,6 +42,19 @@ const INSTALLATIONS_TTL_MS = 5 * 60_000;
 const INSTALLATIONS_STALE_MAX_MS = 60 * 60_000;
 const tokenCache = new Map<string, { token: string; exp: number }>();
 const installationsCache = new Map<string, { ids: number[]; fetchedAt: number }>();
+// Synthetic (Artifacts) installation ids were the one uncached D1 read on
+// every API request — same TTL discipline as the GitHub installation list,
+// with the same bounded staleness on membership revocation.
+const SYNTHETIC_TTL_MS = 60_000;
+const syntheticCache = new Map<number, { ids: number[]; fetchedAt: number }>();
+
+async function cachedSyntheticInstallationIds(githubId: number): Promise<number[]> {
+  const cached = syntheticCache.get(githubId);
+  if (cached && Date.now() - cached.fetchedAt < SYNTHETIC_TTL_MS) return cached.ids;
+  const ids = await syntheticInstallationIds(githubId);
+  syntheticCache.set(githubId, { ids, fetchedAt: Date.now() });
+  return ids;
+}
 
 // A currently-valid GitHub user access token from the better-auth account
 // row (refreshed + persisted by better-auth near expiry). Empty string when
@@ -191,7 +204,7 @@ async function resolveAuthedUser(user: AuthUser): Promise<AuthedUser | null> {
   if (ids === null) return null;
   // Artifacts-hosted projects ride on synthetic negative-id installations;
   // GitHub can't know about them, so membership-derived ids are unioned in.
-  const synthetic = await syntheticInstallationIds(githubId);
+  const synthetic = await cachedSyntheticInstallationIds(githubId);
   return {
     session: { userId: githubId, login, ghToken },
     installationIds: [...new Set([...ids, ...synthetic])],

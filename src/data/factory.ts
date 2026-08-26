@@ -641,6 +641,16 @@ export async function getFeature(id: number): Promise<FeatureRow | null> {
 // run_started_at fall back to created_at.
 const GENERATION_STRAND_MINUTES = 45;
 
+// The change counter maintained by the 0042 triggers: one indexed read that
+// answers "did any live-UI table change since v?" for the client's cheap
+// poll (GET /api/factory/version).
+export async function factoryVersion(): Promise<number> {
+  const row = await env.DB.prepare('SELECT version FROM factory_version WHERE id = 1').first<{
+    version: number;
+  }>();
+  return row?.version ?? 0;
+}
+
 export async function failStrandedGeneration(): Promise<number> {
   const res = await env.DB.prepare(
     `UPDATE features SET status = 'failed',

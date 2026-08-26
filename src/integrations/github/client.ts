@@ -16,18 +16,23 @@ function apiUrl(pathOrUrl: string): string {
 export async function githubRequest(
   token: string,
   pathOrUrl: string,
-  init?: RequestInit & { accept?: string },
+  init?: RequestInit & { accept?: string; allow304?: boolean },
 ): Promise<Response> {
-  const { accept, ...requestInit } = init ?? {};
+  const { accept, allow304, ...requestInit } = init ?? {};
   const headers = new Headers({
     accept: accept ?? 'application/vnd.github+json',
     authorization: `Bearer ${token}`,
     'user-agent': 'turbodiff',
     'x-github-api-version': '2022-11-28',
   });
+  // Caller headers ride on top of the defaults (conditional-request etags).
+  for (const [name, value] of new Headers(requestInit.headers ?? {})) {
+    headers.set(name, value);
+  }
   if (requestInit.body) headers.set('content-type', 'application/json');
   const response = await fetch(apiUrl(pathOrUrl), { ...requestInit, headers });
-  if (!response.ok) {
+  // 304 is a success for conditional requests, not an error.
+  if (!response.ok && !(allow304 && response.status === 304)) {
     throw new Error(
       `GitHub API ${response.status} on ${pathOrUrl}: ${(await response.text()).slice(0, 500)}`,
     );
@@ -44,6 +49,40 @@ export async function githubJson<T>(
   // SAFETY: callers provide the documented success shape for the selected
   // GitHub endpoint; githubRequest has already rejected non-2xx responses.
   return response.json() as Promise<T>;
+}
+
+// Per-isolate conditional-request memory for githubJsonCached. Bounded;
+// oldest entries fall out first.
+const GITHUB_ETAG_MAX = 100;
+const githubEtagCache = new Map<string, { etag: string; data: unknown }>();
+
+// githubJson with If-None-Match: GitHub answers 304 when the resource is
+// unchanged, which costs no rate-limit credit and no body transfer — built
+// for the cockpit's polled PR reads, which are usually identical between
+// polls. Cache is per-isolate; a cold isolate just pays one full read.
+export async function githubJsonCached<T>(token: string, pathOrUrl: string): Promise<T> {
+  const cached = githubEtagCache.get(pathOrUrl);
+  const response = await githubRequest(token, pathOrUrl, {
+    headers: cached ? { 'if-none-match': cached.etag } : undefined,
+    allow304: true,
+  });
+  if (response.status === 304 && cached) {
+    // SAFETY: a 304 certifies the resource matches the cached etag, so the
+    // stored payload is the same T a fresh read would produce.
+    return cached.data as T;
+  }
+  // SAFETY: as in githubJson — documented success shape, non-2xx rejected.
+  const data = (await response.json()) as T;
+  const etag = response.headers.get('etag');
+  if (etag) {
+    githubEtagCache.delete(pathOrUrl);
+    githubEtagCache.set(pathOrUrl, { etag, data });
+    if (githubEtagCache.size > GITHUB_ETAG_MAX) {
+      // SAFETY: size > 0, so the iterator yields a first key.
+      githubEtagCache.delete(githubEtagCache.keys().next().value as string);
+    }
+  }
+  return data;
 }
 
 function nextPage(response: Response): string | null {

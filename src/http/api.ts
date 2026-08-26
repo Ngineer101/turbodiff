@@ -32,8 +32,7 @@ import {
   deleteTodo,
   dispatchOpenCockpitComments,
   ensureBuiltinAgents,
-  failStrandedGeneration,
-  failStrandedVerifications,
+  factoryVersion,
   getAgentById,
   getAgentBySlug,
   getAgentRunForAuth,
@@ -137,7 +136,7 @@ import {
   sealToken,
   signArtifactKey,
 } from '../integrations/security/crypto.ts';
-import { githubRequest as gh } from '../integrations/github/client.ts';
+import { githubJsonCached, githubRequest as gh } from '../integrations/github/client.ts';
 import { installationToken, sandboxGitToken } from '../integrations/github/app.ts';
 import {
   isValidRepoPath,
@@ -270,6 +269,27 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (!user) return c.json({ error: 'unauthorized' }, 401);
     c.set('user', user);
     await next();
+  });
+
+  // Conditional GETs: hash the JSON body into a strong ETag and answer 304
+  // to a matching If-None-Match. The server still builds the payload, but
+  // polls and focus-refetches stop re-downloading (and re-rendering) bodies
+  // that haven't changed — the client wrapper (src/client/lib/api.ts) keeps
+  // the parsed payload alongside the etag.
+  app.use('*', async (c, next) => {
+    await next();
+    if (c.req.method !== 'GET' || c.res.status !== 200) return;
+    if (!c.res.headers.get('content-type')?.includes('application/json')) return;
+    const body = await c.res.clone().arrayBuffer();
+    const digest = await crypto.subtle.digest('SHA-1', body);
+    const etag = `"${[...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')}"`;
+    if (c.req.header('if-none-match') === etag) {
+      c.res = new Response(null, { status: 304, headers: { etag } });
+      return;
+    }
+    const headers = new Headers(c.res.headers);
+    headers.set('etag', etag);
+    c.res = new Response(body, { status: 200, headers });
   });
 
   app.get('/me', (c) => {
@@ -428,14 +448,17 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     return c.json<ApiReviewsPage>({ total, page, pages, reviews: reviews.map(serializeReview) });
   });
 
+  // Cheap live-poll target: a single-row change counter (0042 triggers) the
+  // client checks every few seconds, refetching the real payloads only when
+  // it moves — instead of rebuilding board/task/feature responses per poll.
+  app.get('/factory/version', async (c) => {
+    return c.json({ v: await factoryVersion() });
+  });
+
   // --- Kanban board: todos (backlog) + started tasks (plans) ---
 
   app.get('/board', async (c) => {
     const { installationIds } = c.get('user');
-    // Flip wall-clock-killed runs to failed before reading, so the cards
-    // never show an eternal "generating" for a dead run.
-    await failStrandedGeneration();
-    await failStrandedVerifications();
     // The board deliberately shows /api/usage's pipeline figure, not the
     // review-only one dashboardStats computes — same number, both surfaces.
     const [groups, plans, todos, stats, pipelineCost] = await Promise.all([
@@ -462,7 +485,9 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
           .filter((r) => r.todo_id === t.id)
           .map((r) => ({ id: r.repository_id, owner: r.owner, name: r.name })),
       })),
-      tasks: plans.filter((p) => p.archived !== 1).map((p) => serializeTask(p, repoStatuses)),
+      tasks: plans
+        .filter((p) => p.archived !== 1)
+        .map((p) => serializeTask(p, repoStatuses, { includePlan: false })),
       installations: groups.map(({ installation }) => ({
         id: installation.id,
         account_login: installation.account_login,
@@ -614,8 +639,6 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
 
   // Task detail for the board's compact cards.
   app.get('/tasks/:id', async (c) => {
-    await failStrandedGeneration();
-    await failStrandedVerifications();
     const id = Number(c.req.param('id'));
     const plan = Number.isInteger(id) ? await getPlanWithRepoById(id) : null;
     if (!plan || !c.get('user').installationIds.includes(plan.installation_id)) {
@@ -992,8 +1015,6 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   // --- Factory PR cockpit ---
 
   app.get('/factory/features/:id', async (c) => {
-    await failStrandedGeneration();
-    await failStrandedVerifications();
     const id = Number(c.req.param('id'));
     const feature = Number.isInteger(id) ? await getFeature(id) : null;
     const repo = feature ? await getRepoById(feature.repository_id) : null;
@@ -1113,31 +1134,31 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     } else {
       const token = await installationToken(repo.installation_id);
       const ghBase = `/repos/${repo.owner}/${repo.name}`;
+      // Conditional requests (githubJsonCached): between polls these three
+      // reads are usually unchanged — GitHub's 304s cost no rate-limit
+      // credit and skip re-downloading up to 100 file patches.
       const [prMeta, prFiles, prReviews] = await Promise.all([
-        gh(token, `${ghBase}/pulls/${feature.pr_number}`).then((r) =>
-          r.json<{
-            state: string;
-            merged: boolean;
-            html_url: string;
+        githubJsonCached<{
+          state: string;
+          merged: boolean;
+          html_url: string;
+          additions: number;
+          deletions: number;
+          changed_files: number;
+          mergeable_state: string | null;
+        }>(token, `${ghBase}/pulls/${feature.pr_number}`),
+        githubJsonCached<
+          {
+            filename: string;
+            status: string;
             additions: number;
             deletions: number;
-            changed_files: number;
-            mergeable_state: string | null;
-          }>(),
-        ),
-        gh(token, `${ghBase}/pulls/${feature.pr_number}/files?per_page=100`).then((r) =>
-          r.json<
-            {
-              filename: string;
-              status: string;
-              additions: number;
-              deletions: number;
-              patch?: string;
-            }[]
-          >(),
-        ),
-        gh(token, `${ghBase}/pulls/${feature.pr_number}/reviews?per_page=100`).then((r) =>
-          r.json<{ state: string; body: string; user: { login: string } | null }[]>(),
+            patch?: string;
+          }[]
+        >(token, `${ghBase}/pulls/${feature.pr_number}/files?per_page=100`),
+        githubJsonCached<{ state: string; body: string; user: { login: string } | null }[]>(
+          token,
+          `${ghBase}/pulls/${feature.pr_number}/reviews?per_page=100`,
         ),
       ]);
 
