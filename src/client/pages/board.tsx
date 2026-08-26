@@ -21,6 +21,7 @@ import { DEFAULT_RUNNER_MODEL, RUNNER_MODELS } from '../../shared/runner-models.
 import { api, ApiError } from '../lib/api.ts';
 import { useDictation } from '../lib/dictation.ts';
 import { ago, fmtUsd } from '../lib/format.ts';
+import { applyOptimistic, optimisticId, optimisticNow } from '../lib/optimistic.ts';
 import { boardQuery } from '../lib/queries.ts';
 import { nextIndex, noOverlayOpen, onListboxKeyDown } from '../lib/shortcuts.ts';
 import { taskColumn, taskStages, taskState } from '../lib/task-state.ts';
@@ -75,16 +76,36 @@ function QuickAdd({ board }: { board: ApiBoard }) {
     [isDesktop],
   );
   const add = useMutation({
-    mutationFn: () => api.post('/api/todos', { installation_id: installationId, title }),
-    onSuccess: () => {
-      setTitle('');
-      void queryClient.invalidateQueries({ queryKey: ['board'] });
+    mutationFn: (t: string) => api.post('/api/todos', { installation_id: installationId, title: t }),
+    // The card appears (and the input clears, in submit) the moment Enter is
+    // pressed; the refetch below swaps in the server row.
+    onMutate: (t) =>
+      applyOptimistic<ApiBoard>(queryClient, ['board'], (prev) => ({
+        ...prev,
+        todos: [
+          {
+            id: optimisticId(),
+            installation_id: installationId,
+            title: t,
+            notes: null,
+            created_at: optimisticNow(),
+            repos: [],
+          },
+          ...prev.todos,
+        ],
+      })),
+    onError: (err, _t, ctx) => {
+      ctx?.rollback();
+      onApiError(err);
     },
-    onError: onApiError,
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['board'] }),
   });
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (title.trim()) add.mutate();
+    const t = title.trim();
+    if (!t) return;
+    add.mutate(t);
+    setTitle('');
   };
   return (
     <form onSubmit={submit} className="flex flex-col gap-2 sm:flex-row">
@@ -141,33 +162,42 @@ function StartDialog({
   const [files, setFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const start = useMutation({
-    // Attachments (pdf/images) upload first, then ride the start payload so
-    // the planning agent reads them alongside the requirements.
+    // Attachments (pdf/images) upload first — in parallel — then ride the
+    // start payload so the planning agent reads them alongside the
+    // requirements.
     mutationFn: async () => {
-      const attachments: { key: string; name: string; content_type: string }[] = [];
-      for (const file of files) {
-        const fd = new FormData();
-        fd.append('file', file);
-        const res = await fetch('/api/uploads', { method: 'POST', body: fd });
-        const body = await res.json().catch(() => null);
-        const data = isJsonObject(body) ? body : null;
-        const key = data && isString(data.key) ? data.key : null;
-        if (!res.ok || !key) {
-          const message = data && isString(data.error) ? data.error : null;
-          throw new ApiError(message ?? `upload failed for ${file.name}`, res.status);
-        }
-        attachments.push({
-          key,
-          name: data && isString(data.name) ? data.name : file.name,
-          content_type: data && isString(data.content_type) ? data.content_type : file.type,
-        });
-      }
+      const attachments = await Promise.all(
+        files.map(async (file) => {
+          const fd = new FormData();
+          fd.append('file', file);
+          const res = await fetch('/api/uploads', { method: 'POST', body: fd });
+          const body = await res.json().catch(() => null);
+          const data = isJsonObject(body) ? body : null;
+          const key = data && isString(data.key) ? data.key : null;
+          if (!res.ok || !key) {
+            const message = data && isString(data.error) ? data.error : null;
+            throw new ApiError(message ?? `upload failed for ${file.name}`, res.status);
+          }
+          return {
+            key,
+            name: data && isString(data.name) ? data.name : file.name,
+            content_type: data && isString(data.content_type) ? data.content_type : file.type,
+          };
+        }),
+      );
       return api.post(`/api/todos/${todo.id}/start`, { title, requirements, attachments, model });
+    },
+    // With nothing to upload the dialog closes on click — the request is a
+    // single POST and the board reconciles in the background. With files the
+    // dialog stays up (spinner on the submit) so an upload failure can't
+    // strand the user's attachments in an unmounted form.
+    onMutate: () => {
+      if (files.length === 0) onClose();
     },
     onSuccess: () => {
       toast.success('Task started — the planning agent is on it');
       void queryClient.invalidateQueries({ queryKey: ['board'] });
-      onClose();
+      if (files.length > 0) onClose();
     },
     onError: onApiError,
   });
@@ -421,8 +451,17 @@ function TodoCard({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
   const [starting, setStarting] = useState(false);
   const remove = useMutation({
     mutationFn: () => api.delete(`/api/todos/${todo.id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['board'] }),
-    onError: onApiError,
+    // The card leaves the board on confirm, not after the round-trip.
+    onMutate: () =>
+      applyOptimistic<ApiBoard>(queryClient, ['board'], (prev) => ({
+        ...prev,
+        todos: prev.todos.filter((t) => t.id !== todo.id),
+      })),
+    onError: (err, _v, ctx) => {
+      ctx?.rollback();
+      onApiError(err);
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['board'] }),
   });
   return (
     <Card
@@ -487,11 +526,18 @@ function TaskCard({ task }: { task: ApiPlan }) {
   const done = column === 'done';
   const archive = useMutation({
     mutationFn: () => api.post(`/api/tasks/${task.id}/archive`, { archived: true }),
-    onSuccess: () => {
-      toast.success('Task archived');
-      void queryClient.invalidateQueries({ queryKey: ['board'] });
+    // The card leaves the board on confirm, not after the round-trip.
+    onMutate: () =>
+      applyOptimistic<ApiBoard>(queryClient, ['board'], (prev) => ({
+        ...prev,
+        tasks: prev.tasks.filter((t) => t.id !== task.id),
+      })),
+    onSuccess: () => toast.success('Task archived'),
+    onError: (err, _v, ctx) => {
+      ctx?.rollback();
+      onApiError(err);
     },
-    onError: onApiError,
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['board'] }),
   });
   return (
     <Card

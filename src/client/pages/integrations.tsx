@@ -6,8 +6,10 @@ import type {
   ApiConnectionTest,
   ApiIntegration,
   ApiIntegrationRepo,
+  ApiIntegrations,
 } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
+import { applyOptimistic } from '../lib/optimistic.ts';
 import { integrationsQuery } from '../lib/queries.ts';
 import { cn } from '../lib/utils.ts';
 import { ConfirmButton } from '../components/confirm-button.tsx';
@@ -194,8 +196,35 @@ function IntegrationCard({ conn, repos }: { conn: ApiIntegration; repos: ApiInte
   const toggleRepo = useMutation({
     mutationFn: ({ repoId, attached, reviews, automations }: RepoLinkUpdate) =>
       api.put(`/api/integrations/${conn.id}/repos/${repoId}`, { attached, reviews, automations }),
-    onSuccess: refresh,
-    onError: onApiError,
+    // Chips flip on click; the refetch below reconciles.
+    onMutate: ({ repoId, attached, reviews, automations }) =>
+      applyOptimistic<ApiIntegrations>(queryClient, ['integrations'], (prev) => ({
+        ...prev,
+        connections: prev.connections.map((c) =>
+          c.id === conn.id
+            ? {
+                ...c,
+                repo_links: attached
+                  ? [
+                      ...c.repo_links.filter((l) => l.repository_id !== repoId),
+                      // Same defaults the PUT handler applies when the
+                      // fields are omitted.
+                      {
+                        repository_id: repoId,
+                        reviews: reviews ?? true,
+                        automations: automations ?? true,
+                      },
+                    ]
+                  : c.repo_links.filter((l) => l.repository_id !== repoId),
+              }
+            : c,
+        ),
+      })),
+    onSettled: refresh,
+    onError: (err, _v, ctx) => {
+      ctx?.rollback();
+      onApiError(err);
+    },
   });
 
   const needsOAuthConnect =

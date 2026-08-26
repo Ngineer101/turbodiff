@@ -3,11 +3,12 @@ import { Link, useNavigate, useParams } from '@tanstack/react-router';
 import { ArrowLeft, Bell, MessageSquarePlus, Paperclip, X } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { toast } from 'sonner';
-import type { ApiPlan } from '../../shared/api-types.ts';
+import type { ApiBoard, ApiPlan, ApiTaskDetail } from '../../shared/api-types.ts';
 import { RUNNER_MODELS } from '../../shared/runner-models.ts';
 import { api, ApiError } from '../lib/api.ts';
 import { useDictation } from '../lib/dictation.ts';
 import { ago } from '../lib/format.ts';
+import { applyOptimistic } from '../lib/optimistic.ts';
 import { pushSupported, subscribeToPush } from '../lib/push.ts';
 import { GENERATION_STOPPED, meQuery, taskQuery } from '../lib/queries.ts';
 import { taskColumn, taskStages, taskState } from '../lib/task-state.ts';
@@ -126,11 +127,20 @@ export function TaskPage() {
 
   const approve = useMutation({
     mutationFn: () => api.post(`/api/factory/plans/${task.id}/approve`),
+    // The page flips to the approved state on click; the refetch reconciles.
+    onMutate: () =>
+      applyOptimistic<ApiTaskDetail>(queryClient, ['task', id], (prev) => ({
+        ...prev,
+        status: 'approved',
+      })),
     onSuccess: () => {
       toast.success('Plan approved — generation queued');
       refresh();
     },
-    onError: onApiError,
+    onError: (err, _v, ctx) => {
+      ctx?.rollback();
+      onApiError(err);
+    },
   });
   // Each repo's feature retries independently — the mutation takes the
   // feature id so the correct button can show its own loading state.
@@ -152,20 +162,39 @@ export function TaskPage() {
   });
   const setModel = useMutation({
     mutationFn: (model: string) => api.post(`/api/tasks/${task.id}/model`, { model }),
+    // The select reflects the choice immediately instead of snapping back
+    // until the refetch lands.
+    onMutate: (model) =>
+      applyOptimistic<ApiTaskDetail>(queryClient, ['task', id], (prev) => ({ ...prev, model })),
     onSuccess: () => {
       toast.success('Model updated — applies to future runs on this task');
       refresh();
     },
-    onError: onApiError,
+    onError: (err, _v, ctx) => {
+      ctx?.rollback();
+      onApiError(err);
+    },
   });
   const archive = useMutation({
     mutationFn: (archived: boolean) => api.post(`/api/tasks/${task.id}/archive`, { archived }),
+    // Archiving leaves for the board immediately, with the card already
+    // gone; the background refetch reconciles (or the rollback restores it).
+    onMutate: (archived) => {
+      if (!archived) return undefined;
+      void navigate({ to: '/' });
+      return applyOptimistic<ApiBoard>(queryClient, ['board'], (prev) => ({
+        ...prev,
+        tasks: prev.tasks.filter((t) => t.id !== task.id),
+      }));
+    },
     onSuccess: (_d, archived) => {
       toast.success(archived ? 'Task archived' : 'Task restored to the board');
       refresh();
-      if (archived) void navigate({ to: '/' });
     },
-    onError: onApiError,
+    onError: (err, _v, ctx) => {
+      ctx?.rollback();
+      onApiError(err);
+    },
   });
 
   // Plan review feedback: select text in the plan, comment via the popover,
