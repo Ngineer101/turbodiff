@@ -101,6 +101,7 @@ function Browser({
   title: React.ReactNode;
 }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const goTo = (path: string, ref = refName) =>
     void navigate({
       to: '/repos/$repoId/code/$',
@@ -197,6 +198,9 @@ function Browser({
               onSelectFile={(path) => goTo(path)}
               fileHref={(path) =>
                 `/repos/${repoId}/code/${path}?ref=${encodeURIComponent(refName)}`
+              }
+              onPrefetchFile={(path) =>
+                void queryClient.prefetchQuery(repoFileQuery(repoId, refName, path))
               }
             />
           </div>

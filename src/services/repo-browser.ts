@@ -1,5 +1,5 @@
 import type { RepositoryRow } from '../data/db.ts';
-import { githubJson, githubPaginate } from '../integrations/github/client.ts';
+import { githubJson, githubJsonCached, githubPaginate } from '../integrations/github/client.ts';
 import type { ApiFileSave, ApiRepoFile, ApiRepoTree, ApiTreeEntry } from '../shared/api-types.ts';
 import { isString } from '../shared/json.ts';
 
@@ -99,7 +99,10 @@ export async function readTree(
   ref: string,
   path: string,
 ): Promise<ApiRepoTree> {
-  const data = await githubJson<GithubContentsEntry[] | GithubContentsEntry>(
+  // Conditional request: re-expanding a directory (or the tree's auto-reveal
+  // on a deep link) usually hits an unchanged listing — GitHub's 304 costs
+  // no rate-limit credit and no body.
+  const data = await githubJsonCached<GithubContentsEntry[] | GithubContentsEntry>(
     token,
     `/repos/${repo.owner}/${repo.name}/contents/${encodePath(path)}?ref=${encodeURIComponent(ref)}`,
   );

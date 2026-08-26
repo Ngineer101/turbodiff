@@ -34,18 +34,38 @@ const FILE_CAP = 1024 * 1024;
 
 interface BrowseContext {
   sandbox: Sandbox;
-  remote: WorkspaceRemote;
+  // null on the fresh-mirror fast path: reads are local git operations that
+  // need no credentials, so no token is minted and no fetch runs.
+  remote: WorkspaceRemote | null;
 }
 
+// A read within this window of the last sync skips the remote fetch (and
+// the per-request token mint) entirely — clicking through a tree is many
+// reads against the same seconds-old mirror. Writes always resync.
+const MIRROR_FRESH_SECONDS = 30;
+// Inside .git so the worktree stays clean for the save path's `git add`.
+const SYNC_MARKER = `${BROWSE_DIR}/.git/turbodiff-synced-at`;
+
 // Every public function starts here: clone on first touch, fetch --prune
-// after — exactly how the CR engine syncs its workspace.
+// after (the CR engine's sync pattern) — but at most once per freshness
+// window for reads. The marker file carries the last sync's epoch seconds.
 async function browseContext(repo: RepositoryRow, scope: 'read' | 'write'): Promise<BrowseContext> {
   if (repo.provider !== 'artifacts') {
     throw new Error(`${repo.owner}/${repo.name} is not an Artifacts-hosted repo`);
   }
-  const remote = await resolveWorkspaceRemote(repo, scope);
   const sandbox = generationSandbox(repo);
+  if (scope === 'read') {
+    const probe = await sandbox.exec(
+      `now=$(date +%s); ts=$(cat ${SYNC_MARKER} 2>/dev/null || echo 0); ` +
+        `[ $((now - ts)) -lt ${MIRROR_FRESH_SECONDS} ] && echo fresh || echo stale`,
+    );
+    if (probe.success && probe.stdout.trim() === 'fresh') {
+      return { sandbox, remote: null };
+    }
+  }
+  const remote = await resolveWorkspaceRemote(repo, scope);
   await prepareFullMirror(sandbox, BROWSE_DIR, remote);
+  await sandbox.exec(`date +%s > ${SYNC_MARKER}`).catch(() => {});
   return { sandbox, remote };
 }
 
@@ -56,12 +76,15 @@ async function git(
   timeoutMs = 2 * 60_000,
 ): Promise<string> {
   const result = await ctx.sandbox.exec(command, {
-    env: { ...ctx.remote.env, ...extraEnv },
+    env: { ...ctx.remote?.env, ...extraEnv },
     timeout: timeoutMs,
   });
   if (!result.success) {
     throw new Error(
-      redactSecrets(result.stderr || result.stdout, [ctx.remote.token]).slice(0, 500),
+      redactSecrets(result.stderr || result.stdout, ctx.remote ? [ctx.remote.token] : []).slice(
+        0,
+        500,
+      ),
     );
   }
   return result.stdout;
@@ -197,13 +220,16 @@ export async function saveFileArtifacts(
     throw new RepoBrowserError('invalid path', 400);
   }
   const ctx = await browseContext(repo, 'write');
+  // SAFETY: scope 'write' never takes the fresh-mirror fast path, so the
+  // remote is always resolved.
+  const remote = ctx.remote!;
   const refEnv = { BROWSE_REF: input.ref, BROWSE_PATH: input.path };
 
   // base_sha is the optimistic-concurrency token, exactly as on GitHub. A
   // failed rev-parse is the expected outcome for new files, hence raw exec.
   const current = await ctx.sandbox.exec(
     `git -C ${BROWSE_DIR} rev-parse "refs/remotes/origin/$BROWSE_REF:$BROWSE_PATH"`,
-    { env: { ...ctx.remote.env, ...refEnv } },
+    { env: { ...remote.env, ...refEnv } },
   );
   if (input.base_sha !== null) {
     if (!current.success || current.stdout.trim() !== input.base_sha) {
@@ -233,7 +259,7 @@ export async function saveFileArtifacts(
     const out = await git(
       ctx,
       `cd ${BROWSE_DIR} && git add -- "$BROWSE_PATH" && git commit -q -m "$EDIT_MSG" && ` +
-        `git ${ctx.remote.configFlags} push -q "${ctx.remote.authUrl}" code-edit:"refs/heads/$BROWSE_REF" && ` +
+        `git ${remote.configFlags} push -q "${remote.authUrl}" code-edit:"refs/heads/$BROWSE_REF" && ` +
         `git rev-parse HEAD && git rev-parse "HEAD:$BROWSE_PATH"`,
       {
         ...refEnv,
