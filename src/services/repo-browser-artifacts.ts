@@ -5,7 +5,8 @@ import { generationSandbox } from '../ai/runtime/sandbox.ts';
 import type { RepositoryRow } from '../data/db.ts';
 import { resolveWorkspaceRemote } from '../integrations/git/provider.ts';
 import type { WorkspaceRemote } from '../integrations/git/remotes.ts';
-import type { ApiFileSave, ApiRepoFile, ApiRepoTree, ApiTreeEntry } from '../shared/api-types.ts';
+import type { ApiFileSave, ApiRepoFile, ApiRepoTree } from '../shared/api-types.ts';
+import { parseLsTreeZ } from './ls-tree.ts';
 import {
   decodeBase64Text,
   isValidRepoPath,
@@ -102,10 +103,16 @@ export async function readTreeArtifacts(
   let out: string;
   try {
     // Empty path ⇒ `rev:` ⇒ the root tree. -z gives NUL-separated records
-    // with unquoted names, so filenames with spaces/quotes parse safely.
+    // with unquoted names, so filenames with spaces/quotes parse safely —
+    // but exec stdout is not binary-safe (NUL bytes are stripped, which
+    // used to collapse the whole listing into one garbage entry), so the
+    // records ship out as base64, same as cat-file below. The temp file
+    // keeps ls-tree's exit code and stderr as the command's own (a plain
+    // pipe would report base64's), and $$ keeps concurrent reads apart.
     out = await git(
       ctx,
-      `git -C ${BROWSE_DIR} ls-tree -l -z "refs/remotes/origin/$BROWSE_REF:$BROWSE_PATH"`,
+      `git -C ${BROWSE_DIR} ls-tree -l -z "refs/remotes/origin/$BROWSE_REF:$BROWSE_PATH" > "/tmp/browse-tree.$$" && ` +
+        `base64 < "/tmp/browse-tree.$$" | tr -d '\\n' && rm -f "/tmp/browse-tree.$$"`,
       { BROWSE_REF: ref, BROWSE_PATH: path },
     );
   } catch (err) {
@@ -122,29 +129,13 @@ export async function readTreeArtifacts(
     }
     throw err;
   }
-  const entries: ApiTreeEntry[] = [];
-  // Each record: `mode SP type SP sha SP+ size TAB name`.
-  for (const record of out.split('\0')) {
-    const tab = record.indexOf('\t');
-    if (tab < 0) continue;
-    const name = record.slice(tab + 1);
-    const [mode = '', objectType = '', sha = '', size = ''] = record.slice(0, tab).split(/\s+/);
-    const type: ApiTreeEntry['type'] =
-      objectType === 'tree'
-        ? 'dir'
-        : objectType === 'commit'
-          ? 'submodule'
-          : mode === '120000'
-            ? 'symlink'
-            : 'file';
-    entries.push({
-      name,
-      path: path ? `${path}/${name}` : name,
-      type,
-      size: size === '-' ? null : Number(size),
-      sha,
-    });
+  const raw = decodeBase64Text(out.trim());
+  if (raw === null) {
+    // A filename that isn't valid UTF-8 can't round-trip through the JSON
+    // API contract at all.
+    throw new RepoBrowserError('directory listing is not valid UTF-8', 400);
   }
+  const entries = parseLsTreeZ(raw, path);
   sortTreeEntries(entries);
   return { path, entries };
 }
