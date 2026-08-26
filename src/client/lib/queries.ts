@@ -28,6 +28,10 @@ export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 15_000,
+      // Keep visited pages warm for the whole session: re-entering a route
+      // renders the cached page instantly (stale data refetches in the
+      // background) instead of falling back to the pending skeleton.
+      gcTime: 30 * 60_000,
       retry: 1,
       refetchOnWindowFocus: true,
     },

@@ -13,7 +13,9 @@ export function StatTile({
   index?: number;
 }) {
   return (
-    <Card className="animate-rise" style={{ animationDelay: `${index * 60}ms` }}>
+    // Stagger is capped and tight: with instant route swaps a long tile
+    // cascade reads as slowness, not delight.
+    <Card className="animate-rise" style={{ animationDelay: `${Math.min(index, 4) * 40}ms` }}>
       <div className="font-mono text-[10px] tracking-[0.14em] text-mute uppercase">{label}</div>
       <div className="mt-1 font-mono text-2xl font-semibold tabular-nums">{value}</div>
       <div className="mt-0.5 min-h-4 text-xs text-mute">{sub ?? ' '}</div>

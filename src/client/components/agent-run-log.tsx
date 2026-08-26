@@ -25,7 +25,9 @@ function AgentRunEntry({ run, open }: { run: ApiAgentRun; open: boolean }) {
   return (
     <>
       {isLoading ? (
-        <p className="text-xs text-mute">Loading…</p>
+        <p className="text-xs text-mute" role="status">
+          Loading<span className="animate-cursor text-accent-bright">_</span>
+        </p>
       ) : isError ? (
         <p className="text-xs text-danger">Failed to load the log.</p>
       ) : (

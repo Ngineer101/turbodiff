@@ -67,12 +67,18 @@ function ShellLayout() {
   );
 }
 
+// Route-pending skeleton: page-shaped placeholders instead of a collapsed
+// centered spinner, so the container keeps its height and nothing jumps
+// when the real page lands.
 function Pending() {
   return (
-    <div className="flex min-h-64 items-center justify-center text-mute" role="status">
-      <span>
-        Loading<span className="animate-cursor text-accent-bright">_</span>
-      </span>
+    <div className="animate-pulse space-y-6" role="status" aria-label="Loading page">
+      <div className="h-7 w-64 max-w-full rounded-md bg-surface" />
+      <div className="space-y-3">
+        <div className="h-24 rounded-xl border border-line/60 bg-surface/70" />
+        <div className="h-24 rounded-xl border border-line/60 bg-surface/70" />
+        <div className="h-24 rounded-xl border border-line/60 bg-surface/50" />
+      </div>
     </div>
   );
 }
@@ -322,6 +328,13 @@ const router = createRouter({
   defaultErrorComponent: RouteError,
   // react-query owns caching; let loaders re-run on navigation.
   defaultPreloadStaleTime: 0,
+  // Without these the router holds the *previous* page on screen for up to
+  // 1s (its defaultPendingMs) on cold loads — cached navigations stay
+  // instant, cold ones show the skeleton almost immediately instead of a
+  // frozen stale page.
+  defaultPendingMs: 100,
+  defaultPendingMinMs: 200,
+  scrollRestoration: true,
 });
 
 declare module '@tanstack/react-router' {
