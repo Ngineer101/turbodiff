@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import type { ApiChatMessage } from '../../shared/api-types.ts';
+import type { ApiChatList, ApiChatMessage, ApiMe } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
 import { useDictation } from '../lib/dictation.ts';
 import { ago } from '../lib/format.ts';
+import { applyOptimistic, optimisticId, optimisticNow } from '../lib/optimistic.ts';
 import { CHAT_TURN_PENDING, chatQuery } from '../lib/queries.ts';
 import { Markdown } from './markdown.tsx';
 import { MicButton } from './mic-button.tsx';
@@ -83,12 +84,39 @@ export function ChatPanel({ featureId, canWrite }: { featureId: number; canWrite
     setBody((prev) => (prev.trim() ? `${prev}\n\n${text}` : text)),
   );
   const send = useMutation({
-    mutationFn: () => api.post(`/api/factory/features/${featureId}/chat`, { body: body.trim() }),
-    onSuccess: () => {
+    mutationFn: (text: string) =>
+      api.post(`/api/factory/features/${featureId}/chat`, { body: text }),
+    // The message appears in the transcript (and the box clears) on Send;
+    // 'queued' status also flips `pending`, so the working pill and the
+    // disabled input react instantly too.
+    onMutate: async (text) => {
       setBody('');
-      void queryClient.invalidateQueries({ queryKey: ['chat', featureId] });
+      const me = queryClient.getQueryData<ApiMe>(['me']);
+      const ctx = await applyOptimistic<ApiChatList>(queryClient, ['chat', featureId], (prev) => ({
+        messages: [
+          ...prev.messages,
+          {
+            id: optimisticId(),
+            role: 'user',
+            body: text,
+            author: me?.login ?? null,
+            status: 'queued',
+            outcome: null,
+            commit_sha: null,
+            error: null,
+            created_at: optimisticNow(),
+          },
+        ],
+      }));
+      return { ...ctx, text };
     },
-    onError: onApiError,
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['chat', featureId] }),
+    onError: (err, _v, ctx) => {
+      ctx?.rollback();
+      // Give the failed message back to the box rather than losing it.
+      if (ctx) setBody(ctx.text);
+      onApiError(err);
+    },
   });
 
   // A merged/closed PR with no history has nothing to show; existing
@@ -144,7 +172,7 @@ export function ChatPanel({ featureId, canWrite }: { featureId: number; canWrite
             <MicButton dictation={dictation} />
             <Button
               size="sm"
-              onClick={() => body.trim() && send.mutate()}
+              onClick={() => body.trim() && send.mutate(body.trim())}
               disabled={!body.trim() || pending || send.isPending}
               loading={send.isPending}
             >

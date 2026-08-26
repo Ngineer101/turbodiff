@@ -16,6 +16,7 @@ import { useHotkeys } from 'react-hotkeys-hook';
 import type { ApiMe } from '../../shared/api-types.ts';
 import { navShortcuts, noOverlayOpen } from '../lib/shortcuts.ts';
 import { useIsDesktop } from '../lib/use-is-desktop.ts';
+import { useLiveRefresh } from '../lib/use-live-refresh.ts';
 import { cn } from '../lib/utils.ts';
 import { CommandPalette } from './command-palette.tsx';
 import { Lamp } from './identity.tsx';
@@ -162,6 +163,9 @@ export function AppShell({ me, children }: { me: ApiMe; children: ReactNode }) {
   });
   const navigate = useNavigate();
   const isDesktop = useIsDesktop();
+  // App-wide live updates: one tiny version poll instead of per-page
+  // full-payload polling (see use-live-refresh.ts).
+  useLiveRefresh();
   useHotkeys(
     NAV_SHORTCUTS.map((s) => s.key).join(','),
     (_e, hk) => {

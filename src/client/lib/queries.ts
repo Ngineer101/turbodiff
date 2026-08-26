@@ -38,8 +38,11 @@ export const queryClient = new QueryClient({
   },
 });
 
-// Poll cadence while an agent is working — instead of full-page reloads.
-export const LIVE_POLL_MS = 5_000;
+// Slow fallback cadence while an agent is working. Fast updates come from
+// the version poll (use-live-refresh.ts), which invalidates these queries
+// within seconds of an actual change — this interval only covers a missed
+// bump, so it can be leisurely.
+export const LIVE_POLL_MS = 30_000;
 
 const RUNNING_PLAN_STATUSES = new Set(['analyzing', 'refining']);
 

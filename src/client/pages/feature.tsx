@@ -10,10 +10,11 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import type { ApiCockpitComment, ApiFeatureDetail } from '../../shared/api-types.ts';
+import type { ApiCockpitComment, ApiFeatureDetail, ApiMe } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
 import { useDictation } from '../lib/dictation.ts';
 import { sentence } from '../lib/format.ts';
+import { applyOptimistic, optimisticId, optimisticNow } from '../lib/optimistic.ts';
 import { featureQuery, FIX_TERMINAL, GENERATION_STOPPED } from '../lib/queries.ts';
 import { cn } from '../lib/utils.ts';
 import { AgentRunLog } from '../components/agent-run-log.tsx';
@@ -257,19 +258,51 @@ function Composer({
   const dictation = useDictation((text) =>
     setBody((prev) => (prev.trim() ? `${prev}\n\n${text}` : text)),
   );
+  const queryClient = useQueryClient();
   const submit = useMutation({
-    mutationFn: () =>
+    mutationFn: (text: string) =>
       api.post(`/api/factory/features/${featureId}/comments`, {
         path: selection.file,
         line: selection.endLine,
         side: selection.side,
-        body: body.trim(),
+        body: text,
       }),
+    // The comment bubble lands in the diff on click; the background
+    // refetch swaps in the server row.
+    onMutate: async (text) => {
+      const me = queryClient.getQueryData<ApiMe>(['me']);
+      const ctx = await applyOptimistic<ApiFeatureDetail>(
+        queryClient,
+        ['feature', featureId],
+        (prev) => ({
+          ...prev,
+          comments: [
+            ...prev.comments,
+            {
+              id: optimisticId(),
+              path: selection.file,
+              line: selection.endLine,
+              side: selection.side,
+              body: text,
+              author: me?.login ?? '',
+              status: 'open',
+              created_at: optimisticNow(),
+              fix_status: null,
+            },
+          ],
+        }),
+      );
+      onDone();
+      return ctx;
+    },
     onSuccess: () => {
       toast.success('Comment added');
-      onDone();
+      void queryClient.invalidateQueries({ queryKey: ['feature', featureId] });
     },
-    onError: onApiError,
+    onError: (err, _v, ctx) => {
+      ctx?.rollback();
+      onApiError(err);
+    },
   });
 
   return (
@@ -295,7 +328,7 @@ function Composer({
         <MicButton dictation={dictation} />
         <Button
           size="sm"
-          onClick={() => body.trim() && submit.mutate()}
+          onClick={() => body.trim() && submit.mutate(body.trim())}
           disabled={!body.trim()}
           loading={submit.isPending}
         >
@@ -320,12 +353,10 @@ function FileDiff({
   data,
   file,
   diffStyle,
-  onCommented,
 }: {
   data: ApiFeatureDetail;
   file: CockpitFile;
   diffStyle: 'split' | 'unified';
-  onCommented: () => void;
 }) {
   const [selection, setSelection] = useState<Selection | null>(null);
   const prOpen = data.pr?.state === 'open';
@@ -378,10 +409,7 @@ function FileDiff({
             <Composer
               selection={selection}
               featureId={data.feature.id}
-              onDone={() => {
-                setSelection(null);
-                onCommented();
-              }}
+              onDone={() => setSelection(null)}
               onCancel={() => setSelection(null)}
             />
           ) : a.metadata?.comment ? (
@@ -410,7 +438,6 @@ function FileSection({
   commentCount,
   diffStyle,
   onToggle,
-  onCommented,
   sectionRef,
 }: {
   data: ApiFeatureDetail;
@@ -419,7 +446,6 @@ function FileSection({
   commentCount: number;
   diffStyle: 'split' | 'unified';
   onToggle: () => void;
-  onCommented: () => void;
   sectionRef: (el: HTMLElement | null) => void;
 }) {
   const dir = file.filename.includes('/')
@@ -471,9 +497,7 @@ function FileSection({
           {file.deletions > 0 ? <span className="text-danger">−{file.deletions}</span> : null}
         </span>
       </button>
-      {collapsed ? null : (
-        <FileDiff data={data} file={file} diffStyle={diffStyle} onCommented={onCommented} />
-      )}
+      {collapsed ? null : <FileDiff data={data} file={file} diffStyle={diffStyle} />}
     </section>
   );
 }
@@ -1050,7 +1074,6 @@ export default function FeaturePage() {
               collapsed={collapsed.has(f.filename)}
               commentCount={commentCounts.get(f.filename) ?? 0}
               onToggle={() => toggleFile(f.filename)}
-              onCommented={refresh}
               sectionRef={(el) => {
                 if (el) sectionEls.current.set(f.filename, el);
                 else sectionEls.current.delete(f.filename);

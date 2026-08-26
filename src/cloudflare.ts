@@ -17,6 +17,7 @@ import { startChatTurn, ChatWorkflow } from './ai/workflows/chat.ts';
 import { startFix, FixWorkflow } from './ai/workflows/fix.ts';
 import type { FactoryMessage } from './shared/factory-messages.ts';
 import { startGeneration } from './ai/workflows/generation.ts';
+import { failStrandedGeneration, failStrandedVerifications } from './data/factory.ts';
 import { sweepFactoryPrConflicts } from './services/merge-conflicts.ts';
 import { runPlanAnalyze, runPlanRefine } from './ai/runners/planner.ts';
 import { dispatchNativeCrReviews } from './ai/review/native-dispatch.ts';
@@ -108,5 +109,11 @@ export default {
     // this app receives, so open factory PRs are re-checked here (see
     // merge-conflicts.ts).
     await sweepFactoryPrConflicts();
+    // Stranded-run backstops, moved off the hot read paths (they used to be
+    // two serialized table-sweeping UPDATEs on every board/task/feature
+    // GET). The strand thresholds are 45 minutes, so the 15-minute cron adds
+    // negligible staleness.
+    await failStrandedGeneration();
+    await failStrandedVerifications();
   },
 };

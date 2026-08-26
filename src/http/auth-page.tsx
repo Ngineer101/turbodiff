@@ -180,12 +180,7 @@ function AuthPage({ next }: { next?: string }) {
         <title>Sign in — Turbodiff</title>
         <meta name="color-scheme" content="dark" />
         <link rel="icon" type="image/png" href="/logo-small.png" />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap"
-          rel="stylesheet"
-        />
+        <link href="/fonts/fonts.css" rel="stylesheet" />
         <style dangerouslySetInnerHTML={{ __html: CSS }} />
       </head>
       <body>

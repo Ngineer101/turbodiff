@@ -254,7 +254,14 @@ export function serializeChatMessage(r: ChatMessageRow): ApiChatMessage {
   };
 }
 
-export function serializeTask(p: PlanWithRepo, repoStatuses: TaskRepoStatusRow[]): ApiPlan {
+export function serializeTask(
+  p: PlanWithRepo,
+  repoStatuses: TaskRepoStatusRow[],
+  // The board renders cards, never the plan body — omitting it keeps the
+  // full plan markdown of up to 50 tasks out of every board response. The
+  // task page passes true.
+  opts: { includePlan: boolean } = { includePlan: true },
+): ApiPlan {
   // SAFETY: plans.questions is written only by the planner (planner.ts) as a
   // serialized question array matching ApiPlanQuestion.
   const questions = p.questions ? (JSON.parse(p.questions) as ApiPlanQuestion[]) : [];
@@ -271,7 +278,7 @@ export function serializeTask(p: PlanWithRepo, repoStatuses: TaskRepoStatusRow[]
     created_at: p.created_at,
     questions,
     acceptance,
-    plan: p.plan,
+    plan: opts.includePlan ? p.plan : null,
     archived: p.archived === 1,
     model: p.runner_model ?? DEFAULT_RUNNER_MODEL,
     attachments: attachments.map((a) => ({ name: a.name })),

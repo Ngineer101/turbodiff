@@ -3,8 +3,9 @@ import { useParams } from '@tanstack/react-router';
 import { Trash2, UserPlus } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
-import type { ApiInvitation, ApiMember, ApiRole } from '../../shared/api-types.ts';
+import type { ApiInvitation, ApiMember, ApiOrgMembers, ApiRole } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
+import { applyOptimistic } from '../lib/optimistic.ts';
 import { orgMembersQuery } from '../lib/queries.ts';
 import { EmptyState, Muted, PageTitle, SectionHeading } from '../components/section.tsx';
 import { Button } from '../components/ui/button.tsx';
@@ -42,7 +43,16 @@ function MemberRow({
   const updateRole = useMutation({
     mutationFn: (role: ApiRole) =>
       api.patch(`/api/organizations/${installationId}/members/${member.id}`, { role }),
-    onError: onApiError,
+    // The select reflects the new role immediately; the refetch reconciles.
+    onMutate: (role) =>
+      applyOptimistic<ApiOrgMembers>(queryClient, ['org-members', installationId], (prev) => ({
+        ...prev,
+        members: prev.members.map((m) => (m.id === member.id ? { ...m, role } : m)),
+      })),
+    onError: (err, _v, ctx) => {
+      ctx?.rollback();
+      onApiError(err);
+    },
     onSuccess: () => toast.success(`Role updated for ${member.login ?? member.email}`),
     onSettled: invalidate,
   });

@@ -38,6 +38,7 @@ export function RepoTree({
   activePath,
   onSelectFile,
   fileHref,
+  onPrefetchFile,
 }: {
   repoId: number;
   // The branch (git ref) — named treeRef because `ref` is reserved in React.
@@ -46,6 +47,9 @@ export function RepoTree({
   onSelectFile: (path: string) => void;
   // Real href for a file row, so middle-click/⌘-click open a new tab.
   fileHref: (path: string) => string;
+  // Hover/focus intent: warm the file query before the click (same idea as
+  // the router's preload-on-intent, one level deeper).
+  onPrefetchFile: (path: string) => void;
 }) {
   return (
     <nav aria-label="Repository files" className="font-mono" onKeyDown={onTreeKeyDown}>
@@ -57,6 +61,7 @@ export function RepoTree({
         activePath={activePath}
         onSelectFile={onSelectFile}
         fileHref={fileHref}
+        onPrefetchFile={onPrefetchFile}
       />
     </nav>
   );
@@ -70,6 +75,7 @@ function DirContents({
   activePath,
   onSelectFile,
   fileHref,
+  onPrefetchFile,
 }: {
   repoId: number;
   treeRef: string;
@@ -78,6 +84,7 @@ function DirContents({
   activePath: string | null;
   onSelectFile: (path: string) => void;
   fileHref: (path: string) => string;
+  onPrefetchFile: (path: string) => void;
 }) {
   const { data, isPending, isError, refetch } = useQuery(repoTreeQuery(repoId, treeRef, path));
   const indent = !root && 'ml-[0.6875rem] border-l border-line/70 pl-1';
@@ -113,6 +120,7 @@ function DirContents({
           activePath={activePath}
           onSelectFile={onSelectFile}
           fileHref={fileHref}
+          onPrefetchFile={onPrefetchFile}
         />
       ))}
     </ul>
@@ -126,6 +134,7 @@ function EntryRow({
   activePath,
   onSelectFile,
   fileHref,
+  onPrefetchFile,
 }: {
   repoId: number;
   treeRef: string;
@@ -133,6 +142,7 @@ function EntryRow({
   activePath: string | null;
   onSelectFile: (path: string) => void;
   fileHref: (path: string) => string;
+  onPrefetchFile: (path: string) => void;
 }) {
   // Directories on the active file's path start expanded, so a deep link
   // (or a reload) reveals the open file instead of a bare repo root.
@@ -164,6 +174,7 @@ function EntryRow({
             activePath={activePath}
             onSelectFile={onSelectFile}
             fileHref={fileHref}
+            onPrefetchFile={onPrefetchFile}
           />
         ) : null}
       </li>
@@ -188,6 +199,8 @@ function EntryRow({
       <a
         href={fileHref(entry.path)}
         data-tree-row
+        onPointerEnter={() => onPrefetchFile(entry.path)}
+        onFocus={() => onPrefetchFile(entry.path)}
         onClick={(e) => {
           // Plain click stays a client-side navigation; modified clicks and
           // middle-click keep their native new-tab behavior via the href.
