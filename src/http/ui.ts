@@ -17,7 +17,12 @@ const LEGACY_SESSION_COOKIE = 'turbodiff_session';
 
 // The shell references fixed asset names (no content hashes) so it can be a
 // static string here; see build.rollupOptions in vite.client.config.ts.
-const SHELL = `<!doctype html>
+// Boot-critical resources are declared up front: fonts are self-hosted
+// (public/fonts — no render-blocking cross-origin stylesheet), app.js is
+// modulepreloaded, and the route's API payload is preloaded so the data
+// round-trip overlaps the JS parse instead of following it.
+function shell(preload: string[]): string {
+  return `<!doctype html>
 <html lang="en">
 	<head>
 		<meta charset="utf-8" />
@@ -28,12 +33,11 @@ const SHELL = `<!doctype html>
 		<link rel="manifest" href="/manifest.webmanifest" />
 		<link rel="apple-touch-icon" href="/logo.png" />
 		<meta name="theme-color" content="#3fb950" />
-		<link rel="preconnect" href="https://fonts.googleapis.com" />
-		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-		<link
-			href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap"
-			rel="stylesheet"
-		/>
+		<link rel="modulepreload" href="/app/app.js" />
+		<link rel="preload" href="/fonts/ibm-plex-sans-normal-400-latin.woff2" as="font" type="font/woff2" crossorigin />
+		<link rel="preload" href="/fonts/ibm-plex-mono-normal-400-latin.woff2" as="font" type="font/woff2" crossorigin />
+${preload.map((path) => `\t\t<link rel="preload" href="${path}" as="fetch" />`).join('\n')}
+		<link rel="stylesheet" href="/fonts/fonts.css" />
 		<link rel="stylesheet" href="/app/app.css" />
 		<style>
 			html { background: #0f1318; }
@@ -68,6 +72,23 @@ const SHELL = `<!doctype html>
 		<script type="module" src="/app/app.js"></script>
 	</body>
 </html>`;
+}
+
+// Which API payload each SPA route needs first — preloaded from the shell so
+// the browser has the response (or most of it) by the time app.js asks.
+// /api/me rides on every shell; per-route payloads keep the preload honest.
+function shellForPath(path: string): string {
+  const preload = ['/api/me'];
+  if (path === '/') preload.push('/api/board');
+  else if (path === '/settings') preload.push('/api/settings');
+  else if (path === '/usage') preload.push('/api/usage');
+  else if (path === '/integrations') preload.push('/api/integrations');
+  else if (path === '/agents') preload.push('/api/agents');
+  else if (path === '/skills') preload.push('/api/skills');
+  else if (path === '/automations') preload.push('/api/automations');
+  else if (/^\/tasks\/\d+$/.test(path)) preload.push(`/api${path}`);
+  return shell(preload);
+}
 
 // Cheap shell gate: a live better-auth session (cookie-cached — no D1 read
 // within the cache window). Installation-level authorization happens per
@@ -176,7 +197,7 @@ export function createUiRoutes() {
 
   app.get('/', async (c) => {
     if (!(await hasSession(c))) return c.html(renderLanding());
-    return c.html(SHELL);
+    return c.html(shellForPath('/'));
   });
 
   // Every SPA route the client router owns. Unauthenticated hits start OAuth,
@@ -203,7 +224,7 @@ export function createUiRoutes() {
   ]) {
     app.get(path, async (c) => {
       if (!(await hasSession(c))) return c.redirect('/auth/login');
-      return c.html(SHELL);
+      return c.html(shellForPath(new URL(c.req.url).pathname));
     });
   }
 

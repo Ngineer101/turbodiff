@@ -84,7 +84,8 @@ export function ChatPanel({ featureId, canWrite }: { featureId: number; canWrite
     setBody((prev) => (prev.trim() ? `${prev}\n\n${text}` : text)),
   );
   const send = useMutation({
-    mutationFn: (text: string) => api.post(`/api/factory/features/${featureId}/chat`, { body: text }),
+    mutationFn: (text: string) =>
+      api.post(`/api/factory/features/${featureId}/chat`, { body: text }),
     // The message appears in the transcript (and the box clears) on Send;
     // 'queued' status also flips `pending`, so the working pill and the
     // disabled input react instantly too.

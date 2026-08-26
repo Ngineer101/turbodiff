@@ -3,6 +3,12 @@
 // tsconfig-included d.ts files like vite-env.d.ts.
 import './vite-env.d.ts';
 import { QueryClientProvider, useSuspenseQuery } from '@tanstack/react-query';
+import { createSyncStoragePersister } from '@tanstack/query-sync-storage-persister';
+import {
+  persistQueryClientRestore,
+  persistQueryClientSubscribe,
+  type PersistQueryClientOptions,
+} from '@tanstack/react-query-persist-client';
 import {
   createRootRoute,
   createRoute,
@@ -38,24 +44,8 @@ import {
   taskQuery,
   usageQuery,
 } from './lib/queries.ts';
-import { AgentEditPage } from './pages/agent-edit.tsx';
-import { AgentNewPage } from './pages/agent-new.tsx';
-import { ProjectNewPage } from './pages/project-new.tsx';
-import { AgentsPage } from './pages/agents.tsx';
-import { AutomationEditPage } from './pages/automation-edit.tsx';
-import { AutomationNewPage } from './pages/automation-new.tsx';
-import { AutomationRunPage } from './pages/automation-run.tsx';
-import { AutomationsPage } from './pages/automations.tsx';
 import { BoardPage } from './pages/board.tsx';
-import { IntegrationsPage } from './pages/integrations.tsx';
-import { MembersPage } from './pages/members.tsx';
-import { OnboardingPage } from './pages/onboarding.tsx';
-import { SettingsPage } from './pages/settings.tsx';
-import { SkillEditPage } from './pages/skill-edit.tsx';
-import { SkillNewPage } from './pages/skill-new.tsx';
-import { SkillsPage } from './pages/skills.tsx';
 import { TaskPage } from './pages/task.tsx';
-import { UsagePage } from './pages/usage.tsx';
 import './styles.css';
 
 function ShellLayout() {
@@ -142,7 +132,7 @@ const shellRoute = createRoute({
 const onboardingRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/onboarding',
-  component: OnboardingPage,
+  component: lazyRouteComponent(() => import('./pages/onboarding.tsx'), 'OnboardingPage'),
 });
 
 const boardRoute = createRoute({
@@ -163,14 +153,14 @@ const usageRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/usage',
   loader: () => queryClient.ensureQueryData(usageQuery),
-  component: UsagePage,
+  component: lazyRouteComponent(() => import('./pages/usage.tsx'), 'UsagePage'),
 });
 
 const integrationsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/integrations',
   loader: () => queryClient.ensureQueryData(integrationsQuery),
-  component: IntegrationsPage,
+  component: lazyRouteComponent(() => import('./pages/integrations.tsx'), 'IntegrationsPage'),
 });
 
 // The cockpit pulls in @pierre/diffs (+ syntax themes) — lazy so the rest of
@@ -198,13 +188,13 @@ const agentsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/agents',
   loader: () => queryClient.ensureQueryData(agentsQuery),
-  component: AgentsPage,
+  component: lazyRouteComponent(() => import('./pages/agents.tsx'), 'AgentsPage'),
 });
 
 const agentNewRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/agents/new',
-  component: AgentNewPage,
+  component: lazyRouteComponent(() => import('./pages/agent-new.tsx'), 'AgentNewPage'),
 });
 
 // Turbodiff-hosted (Cloudflare Artifacts) project creation —
@@ -212,41 +202,41 @@ const agentNewRoute = createRoute({
 const projectNewRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/projects/new',
-  component: ProjectNewPage,
+  component: lazyRouteComponent(() => import('./pages/project-new.tsx'), 'ProjectNewPage'),
 });
 
 const agentEditRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/agents/$agentId/edit',
   loader: ({ params }) => queryClient.ensureQueryData(agentQuery(Number(params.agentId))),
-  component: AgentEditPage,
+  component: lazyRouteComponent(() => import('./pages/agent-edit.tsx'), 'AgentEditPage'),
 });
 
 const skillsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/skills',
   loader: () => queryClient.ensureQueryData(skillsQuery),
-  component: SkillsPage,
+  component: lazyRouteComponent(() => import('./pages/skills.tsx'), 'SkillsPage'),
 });
 
 const skillNewRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/skills/new',
-  component: SkillNewPage,
+  component: lazyRouteComponent(() => import('./pages/skill-new.tsx'), 'SkillNewPage'),
 });
 
 const skillEditRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/skills/$skillId/edit',
   loader: ({ params }) => queryClient.ensureQueryData(skillQuery(Number(params.skillId))),
-  component: SkillEditPage,
+  component: lazyRouteComponent(() => import('./pages/skill-edit.tsx'), 'SkillEditPage'),
 });
 
 const settingsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/settings',
   loader: () => queryClient.ensureQueryData(settingsQuery),
-  component: SettingsPage,
+  component: lazyRouteComponent(() => import('./pages/settings.tsx'), 'SettingsPage'),
 });
 
 // /config was a hub page (usage/settings/members links) before those moved
@@ -264,35 +254,35 @@ const membersRoute = createRoute({
   path: '/settings/members/$installationId',
   loader: ({ params }) =>
     queryClient.ensureQueryData(orgMembersQuery(Number(params.installationId))),
-  component: MembersPage,
+  component: lazyRouteComponent(() => import('./pages/members.tsx'), 'MembersPage'),
 });
 
 const automationsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/automations',
   loader: () => queryClient.ensureQueryData(automationsQuery),
-  component: AutomationsPage,
+  component: lazyRouteComponent(() => import('./pages/automations.tsx'), 'AutomationsPage'),
 });
 
 const automationNewRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/automations/new',
   loader: () => queryClient.ensureQueryData(automationsQuery),
-  component: AutomationNewPage,
+  component: lazyRouteComponent(() => import('./pages/automation-new.tsx'), 'AutomationNewPage'),
 });
 
 const automationEditRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/automations/$automationId/edit',
   loader: ({ params }) => queryClient.ensureQueryData(automationQuery(Number(params.automationId))),
-  component: AutomationEditPage,
+  component: lazyRouteComponent(() => import('./pages/automation-edit.tsx'), 'AutomationEditPage'),
 });
 
 const automationRunRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/automations/runs/$runId',
   loader: ({ params }) => queryClient.ensureQueryData(automationRunQuery(Number(params.runId))),
-  component: AutomationRunPage,
+  component: lazyRouteComponent(() => import('./pages/automation-run.tsx'), 'AutomationRunPage'),
 });
 
 const routeTree = rootRoute.addChildren([
@@ -344,6 +334,42 @@ declare module '@tanstack/react-router' {
 }
 
 void registerServiceWorker();
+
+// Warm-boot persistence: the last-known payloads of the cheap, list-shaped
+// queries hydrate from localStorage before first render, so a reload paints
+// real content immediately and revalidates in the background. Heavy or
+// fast-moving payloads (diffs, file contents, chat) stay memory-only.
+const PERSISTED_KEYS = new Set([
+  'me',
+  'board',
+  'agents',
+  'skills',
+  'settings',
+  'integrations',
+  'automations',
+  'usage',
+]);
+// Bump to drop persisted caches whose shape no longer matches the client.
+const PERSIST_BUSTER = 'v1';
+const persistOptions: PersistQueryClientOptions = {
+  queryClient,
+  persister: createSyncStoragePersister({
+    storage: window.localStorage,
+    key: 'turbodiff.queryCache',
+  }),
+  buster: PERSIST_BUSTER,
+  maxAge: 24 * 60 * 60 * 1000,
+  dehydrateOptions: {
+    shouldDehydrateQuery: (query) =>
+      query.state.status === 'success' && PERSISTED_KEYS.has(String(query.queryKey[0])),
+  },
+};
+// Restore BEFORE the router mounts: route loaders (ensureQueryData) run
+// outside React, so an async restore would race them and a cold reload
+// would still wait on the network. localStorage is synchronous — this
+// resolves in the same tick.
+await persistQueryClientRestore(persistOptions);
+persistQueryClientSubscribe(persistOptions);
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

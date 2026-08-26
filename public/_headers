@@ -1,0 +1,15 @@
+# Cache policy for Workers Static Assets (consumed by the platform, not
+# served). Content-hashed chunks and fonts are immutable; app.js/app.css
+# keep fixed names (the Worker shell references them statically) so they
+# stay on the platform default ETag revalidation — a chunk importing
+# "../app.js" would otherwise pin a stale entry forever.
+/app/chunks/*
+  Cache-Control: public, max-age=31536000, immutable
+/app/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+/fonts/*
+  Cache-Control: public, max-age=31536000, immutable
+/logo.png
+  Cache-Control: public, max-age=86400
+/logo-small.png
+  Cache-Control: public, max-age=86400

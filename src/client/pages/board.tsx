@@ -76,7 +76,8 @@ function QuickAdd({ board }: { board: ApiBoard }) {
     [isDesktop],
   );
   const add = useMutation({
-    mutationFn: (t: string) => api.post('/api/todos', { installation_id: installationId, title: t }),
+    mutationFn: (t: string) =>
+      api.post('/api/todos', { installation_id: installationId, title: t }),
     // The card appears (and the input clears, in submit) the moment Enter is
     // pressed; the refetch below swaps in the server row.
     onMutate: (t) =>

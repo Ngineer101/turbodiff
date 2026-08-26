@@ -10,10 +10,11 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import type { ApiCockpitComment, ApiFeatureDetail } from '../../shared/api-types.ts';
+import type { ApiCockpitComment, ApiFeatureDetail, ApiMe } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
 import { useDictation } from '../lib/dictation.ts';
 import { sentence } from '../lib/format.ts';
+import { applyOptimistic, optimisticId, optimisticNow } from '../lib/optimistic.ts';
 import { featureQuery, FIX_TERMINAL, GENERATION_STOPPED } from '../lib/queries.ts';
 import { cn } from '../lib/utils.ts';
 import { AgentRunLog } from '../components/agent-run-log.tsx';
@@ -496,9 +497,7 @@ function FileSection({
           {file.deletions > 0 ? <span className="text-danger">−{file.deletions}</span> : null}
         </span>
       </button>
-      {collapsed ? null : (
-        <FileDiff data={data} file={file} diffStyle={diffStyle} />
-      )}
+      {collapsed ? null : <FileDiff data={data} file={file} diffStyle={diffStyle} />}
     </section>
   );
 }
