@@ -480,6 +480,76 @@ describe('organization member management', () => {
     expect(member?.role).toBe('owner');
   });
 
+  it('promotes the recorded installer of a memberless organization without touching GitHub', async () => {
+    // The exact production dead end: the installer signed in only after
+    // installing (webhook-time ensureOwnerMember was a no-op), and the
+    // GitHub admin check fails closed — orgAdmin false stands in for the
+    // App lacking the Organization Members permission.
+    await seedOrg(null);
+    await testEnv.DB.prepare(
+      'UPDATE installations SET installer_github_id = 3001 WHERE id = 1001',
+    ).run();
+    const response = await authenticatedApi(undefined, async () => false).request(
+      'https://turbodiff.test/api/organizations/1001/members',
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ my_role: 'owner' });
+    const member = await testEnv.DB.prepare(
+      `SELECT role FROM "member" WHERE "organizationId" = 'org1' AND "userId" = 'u1'`,
+    ).first<{ role: string }>();
+    expect(member?.role).toBe('owner');
+  });
+
+  it('never promotes the installer once the organization has any member row', async () => {
+    // An explicit row means the org has working governance — a demoted or
+    // removed installer must not climb back in through the bootstrap.
+    await seedOrg(null);
+    await seedCoOwner();
+    await testEnv.DB.prepare(
+      'UPDATE installations SET installer_github_id = 3001 WHERE id = 1001',
+    ).run();
+    const response = await authenticatedApi(undefined, async () => false).request(
+      'https://turbodiff.test/api/organizations/1001/members',
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ my_role: 'member' });
+  });
+
+  it('never promotes a caller who is not the recorded installer of a memberless organization', async () => {
+    await seedOrg(null);
+    await testEnv.DB.prepare(
+      'UPDATE installations SET installer_github_id = 9999 WHERE id = 1001',
+    ).run();
+    const response = await authenticatedApi(undefined, async () => false).request(
+      'https://turbodiff.test/api/organizations/1001/members',
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ my_role: 'member' });
+    const count = await testEnv.DB.prepare(
+      `SELECT COUNT(*) AS n FROM "member" WHERE "organizationId" = 'org1'`,
+    ).first<{ n: number }>();
+    expect(count?.n).toBe(0);
+  });
+
+  it('opens the settings capability gate for the recorded installer', async () => {
+    // Same shape as the promotion test above, but through a capability-gated
+    // mutation — proving the heal runs on the capabilityDenied choke point
+    // (the route the production lockout actually 403'd on).
+    await seedOrg(null);
+    await testEnv.DB.prepare(
+      'UPDATE installations SET installer_github_id = 3001 WHERE id = 1001',
+    ).run();
+    const response = await authenticatedApi(
+      async () => true,
+      async () => false,
+    ).request('https://turbodiff.test/api/repos/101', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(response.status).toBe(200);
+  });
+
   it('never re-elevates a caller who already has an explicit member row', async () => {
     await seedOrg('member');
     await seedCoOwner();

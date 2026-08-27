@@ -10,6 +10,7 @@ export interface InstallationRow {
   account_type: string;
   suspended: number;
   provider: string; // 'github' | 'artifacts' (synthetic tenancy rows)
+  installer_github_id: number | null; // App installer (webhook sender); feeds the deferred owner bootstrap
 }
 
 export interface RepositoryRow {
@@ -48,13 +49,21 @@ interface WebhookRepo {
   full_name: string;
 }
 
-export async function upsertInstallation(id: number, account: WebhookAccount): Promise<void> {
+export async function upsertInstallation(
+  id: number,
+  account: WebhookAccount,
+  installerGithubId?: number,
+): Promise<void> {
+  // COALESCE keeps a recorded installer through deliveries that carry no
+  // sender (installation_repositories) — only the `installation created`
+  // delivery may set it.
   await env.DB.prepare(
-    `INSERT INTO installations (id, account_login, account_id, account_type, suspended)
-		 VALUES (?1, ?2, ?3, ?4, 0)
-		 ON CONFLICT(id) DO UPDATE SET account_login = ?2, account_id = ?3, account_type = ?4, suspended = 0`,
+    `INSERT INTO installations (id, account_login, account_id, account_type, suspended, installer_github_id)
+		 VALUES (?1, ?2, ?3, ?4, 0, ?5)
+		 ON CONFLICT(id) DO UPDATE SET account_login = ?2, account_id = ?3, account_type = ?4, suspended = 0,
+		   installer_github_id = COALESCE(?5, installer_github_id)`,
   )
-    .bind(id, account.login, account.id, account.type)
+    .bind(id, account.login, account.id, account.type, installerGithubId ?? null)
     .run();
 }
 

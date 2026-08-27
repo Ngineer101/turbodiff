@@ -189,7 +189,7 @@ async function handleEvent(
 async function handleInstallation(p: InstallationEvent): Promise<WebhookHandlerResult> {
   switch (p.action) {
     case 'created':
-      await upsertInstallation(p.installation.id, p.installation.account);
+      await upsertInstallation(p.installation.id, p.installation.account, p.sender?.id);
       await addRepositories(p.installation.id, p.repositories ?? []);
       await ensureBuiltinAgents(p.installation.id);
       // Teams & orgs (migrations/0031_organizations.sql): Organization-type
@@ -223,9 +223,9 @@ async function handleInstallationRepositories(p: InstallationEvent): Promise<Web
   await upsertInstallation(p.installation.id, p.installation.account);
   // Same self-heal for the organization row: if the `installation created`
   // delivery was missed, this is the next chance to provision it (no sender
-  // on this event, so no owner to assign — that gap is closed lazily: a
-  // GitHub org admin is bootstrapped as owner on their first authenticated
-  // org request, see orgForInstallationWithHeal in
+  // on this event, so no owner to assign — that gap is closed lazily: the
+  // recorded installer or a GitHub org admin is bootstrapped as owner on
+  // their first authenticated org request, see orgForInstallationWithHeal in
   // src/services/access-control.ts, and an existing owner/admin can always
   // add one by hand).
   if (p.installation.account.type === 'Organization') {

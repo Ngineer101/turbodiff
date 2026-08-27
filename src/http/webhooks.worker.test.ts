@@ -242,6 +242,39 @@ describe('GitHub webhook authentication and mirroring', () => {
       .bind(org?.id)
       .first<{ n: number }>();
     expect(memberCount?.n).toBe(0);
+
+    // …but the installer's identity is recorded, so the deferred owner
+    // bootstrap (ensureInstallerOwner) can promote them once they sign in.
+    const installation = await testEnv.DB.prepare(
+      'SELECT installer_github_id FROM installations WHERE id = 1001',
+    ).first<{ installer_github_id: number | null }>();
+    expect(installation?.installer_github_id).toBe(9999);
+  });
+
+  it('keeps the recorded installer through deliveries that carry no sender', async () => {
+    const created = {
+      action: 'created',
+      installation: {
+        id: 1001,
+        account: { login: 'acme', id: 2001, type: 'Organization' },
+      },
+      sender: { id: 9999, login: 'never-signed-in' },
+      repositories: [],
+    };
+    expect((await postWebhook(webhookApp(), 'installation', created)).status).toBe(200);
+    const reposChanged = {
+      action: 'added',
+      installation: created.installation,
+      repositories_added: [{ id: 101, name: 'api', full_name: 'acme/api' }],
+    };
+    expect(
+      (await postWebhook(webhookApp(), 'installation_repositories', reposChanged)).status,
+    ).toBe(200);
+
+    const installation = await testEnv.DB.prepare(
+      'SELECT installer_github_id FROM installations WHERE id = 1001',
+    ).first<{ installer_github_id: number | null }>();
+    expect(installation?.installer_github_id).toBe(9999);
   });
 });
 

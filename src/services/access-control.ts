@@ -58,15 +58,17 @@ export async function ensureOrganizationForInstallation(
 }
 
 // Records a GitHub user as the organization's owner — called for the App
-// installer from the `installation created` webhook, and from the
-// GitHub-admin bootstrap below (ensureGithubAdminOwner) for orgs provisioned
-// without an installer identity. Only possible if the user already has a
-// better-auth `user` row (i.e. they signed in to Turbodiff before or after
-// installing the app). If they haven't yet, this is a no-op: the
-// auto-provisioning fallback in memberRole treats them as an implicit
-// 'member' (never locked out) until their first sign-in, at which point an
-// existing owner/admin can promote them via
-// PATCH /organizations/:installationId/members/:memberId — or, if they end
+// installer from the `installation created` webhook, and from the installer
+// and GitHub-admin bootstraps below (ensureInstallerOwner,
+// ensureGithubAdminOwner) for orgs the webhook couldn't finish provisioning.
+// Only possible if the user already has a better-auth `user` row (i.e. they
+// signed in to Turbodiff before or after installing the app). If they
+// haven't yet, this is a no-op: the auto-provisioning fallback in memberRole
+// treats them as an implicit 'member' (never locked out) until their first
+// sign-in, at which point the installer bootstrap picks them up from the
+// installer_github_id recorded on the installations row — or an existing
+// owner/admin promotes them via
+// PATCH /organizations/:installationId/members/:memberId, or, if they end
 // up the org's only member, the sole-member heal in
 // orgForInstallationWithHeal promotes them itself.
 // Synthetic Artifacts installations a user can reach via an explicit member
@@ -133,6 +135,33 @@ async function hasMemberRow(organizationId: string, githubId: number): Promise<b
   return row !== null;
 }
 
+// Deferred installer bootstrap: the `installation created` webhook records
+// the installer's GitHub id but can only write their owner row if they had
+// already signed in (ensureOwnerMember above is a no-op without a user row).
+// When the installer signs in later, this closes the gap on their first
+// request: an organization that still has zero member rows makes the
+// recorded installer its owner. Zero rows is precisely the dead-end state —
+// explicit rows only ever appear through an owner/admin or these bootstraps,
+// so any existing row means the org has working governance and in-app
+// decisions must stand. Needs nothing from GitHub, unlike the admin
+// bootstrap below, whose org-membership call fails closed when the App
+// lacks the Organization Members (read) permission.
+async function ensureInstallerOwner(
+  user: AuthedUser,
+  organizationId: string,
+  installerGithubId: number | null,
+): Promise<void> {
+  if (user.devFake || installerGithubId === null) return;
+  if (user.session.userId !== installerGithubId) return;
+  const count = await env.DB.prepare(
+    'SELECT COUNT(*) AS n FROM "member" WHERE "organizationId" = ?1',
+  )
+    .bind(organizationId)
+    .first<{ n: number }>();
+  if (!count || count.n > 0) return;
+  await ensureOwnerMember(organizationId, user.session.userId);
+}
+
 // First-owner bootstrap for orgs provisioned without an `installation
 // created` webhook (no installer identity): a caller with no member row who
 // is an admin (owner) of the org on GitHub becomes this org's owner. Runs
@@ -197,6 +226,10 @@ export async function orgForInstallationWithHeal(
     };
   }
   if (installation) {
+    // Installer first: it is a pure D1 check, and when it promotes the
+    // caller the admin bootstrap's no-member-row guard makes the GitHub
+    // call below unnecessary.
+    await ensureInstallerOwner(user, org.id, installation.installer_github_id);
     // The GitHub call inside runs only for callers with no member row —
     // exactly the callers who would otherwise be denied — and is cached 5
     // minutes in userIsGithubOrgAdmin, so owners/admins with rows never
