@@ -14,6 +14,7 @@ import {
 import { useState, type ReactNode } from 'react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import type { ApiMe } from '../../shared/api-types.ts';
+import { codeRoute } from '../lib/layout.ts';
 import { navShortcuts, noOverlayOpen } from '../lib/shortcuts.ts';
 import { useIsDesktop } from '../lib/use-is-desktop.ts';
 import { useLiveRefresh } from '../lib/use-live-refresh.ts';
@@ -186,9 +187,11 @@ export function AppShell({ me, children }: { me: ApiMe; children: ReactNode }) {
     [],
   );
   // The cockpit's diff pane needs room; the code browser gets the whole
-  // viewport — a full-width, full-height workspace on desktop.
+  // viewport — a full-width, full-height workspace on desktop. codeRoute
+  // lives in lib/layout.ts: Artifacts repos have negative ids, which a
+  // bare \d+ here silently dropped into the reading-width container.
   const wide = pathname.startsWith('/factory/features/');
-  const code = /^\/repos\/\d+\/code/.test(pathname);
+  const code = codeRoute(pathname);
   // The board's three lanes need more room than the reading-width default.
   const board = pathname === '/';
   return (
