@@ -10,7 +10,7 @@ import {
   Pencil,
   WrapText,
 } from 'lucide-react';
-import { useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useMemo, useRef, useState } from 'react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { toast } from 'sonner';
 import type { ApiFileSave, ApiRepoCode } from '../../shared/api-types.ts';
@@ -24,7 +24,6 @@ import {
 } from '../lib/line-diff.ts';
 import { repoCodeQuery, repoFileQuery } from '../lib/queries.ts';
 import { cn } from '../lib/utils.ts';
-import { CodeEditor } from '../components/code-editor.tsx';
 import { RepoTree } from '../components/repo-tree.tsx';
 import { EmptyState, Muted, PageTitle } from '../components/section.tsx';
 import { Button, buttonVariants } from '../components/ui/button.tsx';
@@ -34,6 +33,10 @@ import { Field, Input } from '../components/ui/input.tsx';
 import { Kbd } from '../components/ui/kbd.tsx';
 import { OptionCard } from '../components/ui/option-card.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover.tsx';
+
+const CodeEditor = lazy(() =>
+  import('../components/code-editor.tsx').then((module) => ({ default: module.CodeEditor })),
+);
 
 // The code browser: the whole repository readable (and editable) in the
 // browser, straight off the GitHub REST API — no clone. The branch rides in
@@ -592,16 +595,20 @@ function FilePane({
         </span>
       </div>
       <div className="h-[calc(100dvh-16rem)] min-h-96 overflow-hidden rounded-lg border border-line bg-surface lg:h-auto lg:min-h-0 lg:flex-1">
-        <CodeEditor
-          value={editing ? buffer : loadedText}
-          onChange={setBuffer}
-          path={path}
-          readOnly={!editing}
-          wrap={wrap}
-          onSave={() => {
-            if (editing && dirty) openSave();
-          }}
-        />
+        <Suspense
+          fallback={<div className="h-full animate-pulse bg-surface" aria-label="Loading editor" />}
+        >
+          <CodeEditor
+            value={editing ? buffer : loadedText}
+            onChange={setBuffer}
+            path={path}
+            readOnly={!editing}
+            wrap={wrap}
+            onSave={() => {
+              if (editing && dirty) openSave();
+            }}
+          />
+        </Suspense>
       </div>
 
       <Dialog open={saveOpen} onOpenChange={setSaveOpen}>

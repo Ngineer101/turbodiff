@@ -20,7 +20,7 @@ type Authenticate = NonNullable<ApiRouteDependencies['authenticate']>;
 const testEnv = env as TestEnv;
 
 const acmeUser: AuthedUser = {
-  session: { userId: 3001, login: 'octocat', ghToken: 'test-user-token' },
+  session: { authUserId: 'user-3001', userId: 3001, login: 'octocat' },
   installationIds: [1001],
   githubConnected: true,
   name: 'octocat',
@@ -86,6 +86,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   const tables = [
+    'repository_refs',
     'push_subscriptions',
     'chat_messages',
     'todo_repositories',
@@ -701,6 +702,19 @@ describe('cockpit chat', () => {
     const list = await app.request(`https://turbodiff.test/api/factory/features/${foreignId}/chat`);
     expect(list.status).toBe(404);
     expect((await postChat(app, foreignId, 'hello')).status).toBe(404);
+    expect(
+      (await app.request(`https://turbodiff.test/api/factory/features/${foreignId}/diff?v=abcdef1`))
+        .status,
+    ).toBe(404);
+  });
+
+  it('does not cache arbitrary client-provided diff versions', async () => {
+    const featureId = await seedFeature(101, 'generating', null);
+    const response = await chatApp().request(
+      `https://turbodiff.test/api/factory/features/${featureId}/diff?v=not-a-commit`,
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ version: null, files: [], more_files: 0 });
   });
 
   it('rejects an empty message body', async () => {
@@ -785,6 +799,7 @@ describe('push subscriptions', () => {
     expect(response.status).toBe(200);
     const me = parseJson(await response.text());
     expect(isJsonObject(me) && isString(me.vapid_public_key)).toBe(true);
+    expect(isJsonObject(me) && me.installation_ids).toEqual([1001]);
   });
 
   it('upserts a subscription row for the signed-in user', async () => {

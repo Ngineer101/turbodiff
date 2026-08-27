@@ -17,18 +17,24 @@ import {
   createPlanForTodo,
   createTodo,
   createUserChatMessage,
+  deleteRepositoryRef,
+  claimInstallationRepoSync,
   deletePushSubscriptionByEndpoint,
   deletePushSubscriptionById,
   dispatchOpenCockpitComments,
   finishFixAttempt,
   getChatMessage,
   getFeature,
+  installationAccessSnapshot,
   hasPendingChatTurn,
   listChatMessages,
   listPushSubscriptionsForUser,
   listReposForPlan,
   pipelineCostByMonth,
   recentChatHistory,
+  recordRepositoryRef,
+  repositoryRef,
+  repositoryRefs,
   setChatMessageStatus,
   setChatSessionId,
   tryRecordAutomationRun,
@@ -36,6 +42,8 @@ import {
   tryRecordReview,
   updatePlan,
   upsertPushSubscription,
+  finishInstallationRepoSync,
+  storeInstallationAccessSnapshot,
 } from './db.ts';
 
 type TestEnv = Cloudflare.Env & { TEST_MIGRATIONS: D1Migration[] };
@@ -63,6 +71,9 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   const tables = [
+    'installation_repo_sync',
+    'repository_refs',
+    'user_installation_access',
     'push_subscriptions',
     'agent_runs',
     'chat_messages',
@@ -93,6 +104,45 @@ beforeEach(async () => {
   ];
   await testEnv.DB.batch(tables.map((table) => testEnv.DB.prepare(`DELETE FROM "${table}"`)));
   await seedTenant();
+});
+
+describe('performance state', () => {
+  it('round-trips durable membership snapshots and rejects corrupt data', async () => {
+    await storeInstallationAccessSnapshot('user-1', [1001, 2002]);
+    const snapshot = await installationAccessSnapshot('user-1');
+    expect(snapshot?.installationIds).toEqual([1001, 2002]);
+    expect(snapshot?.verifiedAt).toBeGreaterThan(0);
+
+    await testEnv.DB.prepare(
+      `UPDATE user_installation_access SET installation_ids = '[1001,"bad"]' WHERE user_id = 'user-1'`,
+    ).run();
+    expect(await installationAccessSnapshot('user-1')).toBeNull();
+  });
+
+  it('records ref heads and serializes repository refresh claims across callers', async () => {
+    await recordRepositoryRef(101, 'refs/heads/main', 'abc123', '2026-01-02T03:04:05Z');
+    await recordRepositoryRef(101, 'refs/heads/main', 'def456', '2026-01-03T03:04:05Z');
+    await recordRepositoryRef(101, 'refs/heads/topic', 'fedcba', '2026-01-03T03:04:06Z');
+    expect(await repositoryRef(101, 'refs/heads/main')).toMatchObject({ head_sha: 'def456' });
+    expect((await repositoryRefs(101)).map((ref) => ref.ref)).toEqual([
+      'refs/heads/main',
+      'refs/heads/topic',
+    ]);
+    await deleteRepositoryRef(101, 'refs/heads/topic');
+    expect((await repositoryRefs(101)).map((ref) => ref.ref)).toEqual(['refs/heads/main']);
+
+    const claims = await Promise.all(
+      Array.from({ length: 6 }, () => claimInstallationRepoSync(1001)),
+    );
+    expect(claims.filter(Boolean)).toHaveLength(1);
+    await finishInstallationRepoSync(1001, true);
+    expect(await claimInstallationRepoSync(1001)).toBe(false);
+    await testEnv.DB.prepare(
+      `UPDATE installation_repo_sync SET last_synced_at = datetime('now', '-6 minutes')
+		 WHERE installation_id = 1001`,
+    ).run();
+    expect(await claimInstallationRepoSync(1001)).toBe(true);
+  });
 });
 
 describe('fix attempt invariants', () => {

@@ -3,6 +3,8 @@ import { redactSecrets } from '../ai/runtime/redaction.ts';
 import { prepareFullMirror } from '../ai/runtime/repository-workspace.ts';
 import { generationSandbox } from '../ai/runtime/sandbox.ts';
 import type { RepositoryRow } from '../data/db.ts';
+import { recordRepositoryRef, repositoryRef, repositoryRefs } from '../data/performance.ts';
+import { readArtifactsTreeDirect } from '../integrations/artifacts/content.ts';
 import { resolveWorkspaceRemote } from '../integrations/git/provider.ts';
 import type { WorkspaceRemote } from '../integrations/git/remotes.ts';
 import type { ApiFileSave, ApiRepoFile, ApiRepoTree } from '../shared/api-types.ts';
@@ -39,12 +41,8 @@ interface BrowseContext {
   remote: WorkspaceRemote | null;
 }
 
-// A read within this window of the last sync skips the remote fetch (and
-// the per-request token mint) entirely — clicking through a tree is many
-// reads against the same seconds-old mirror. Writes always resync.
-const MIRROR_FRESH_SECONDS = 30;
 // Inside .git so the worktree stays clean for the save path's `git add`.
-const SYNC_MARKER = `${BROWSE_DIR}/.git/turbodiff-synced-at`;
+const SYNC_MARKER = `${BROWSE_DIR}/.git/turbodiff-synced-version`;
 
 // Every public function starts here: clone on first touch, fetch --prune
 // after (the CR engine's sync pattern) — but at most once per freshness
@@ -54,10 +52,12 @@ async function browseContext(repo: RepositoryRow, scope: 'read' | 'write'): Prom
     throw new Error(`${repo.owner}/${repo.name} is not an Artifacts-hosted repo`);
   }
   const sandbox = generationSandbox(repo);
+  const version = repo.last_push_at ?? 'before-first-push-event';
   if (scope === 'read') {
     const probe = await sandbox.exec(
-      `now=$(date +%s); ts=$(cat ${SYNC_MARKER} 2>/dev/null || echo 0); ` +
-        `[ $((now - ts)) -lt ${MIRROR_FRESH_SECONDS} ] && echo fresh || echo stale`,
+      `stored=$(cat ${SYNC_MARKER} 2>/dev/null || true); ` +
+        `[ "$stored" = "$BROWSE_VERSION" ] && echo fresh || echo stale`,
+      { env: { BROWSE_VERSION: version } },
     );
     if (probe.success && probe.stdout.trim() === 'fresh') {
       return { sandbox, remote: null };
@@ -65,7 +65,7 @@ async function browseContext(repo: RepositoryRow, scope: 'read' | 'write'): Prom
   }
   const remote = await resolveWorkspaceRemote(repo, scope);
   await prepareFullMirror(sandbox, BROWSE_DIR, remote);
-  await sandbox.exec(`date +%s > ${SYNC_MARKER}`).catch(() => {});
+  await sandbox.writeFile(SYNC_MARKER, version).catch(() => {});
   return { sandbox, remote };
 }
 
@@ -100,17 +100,34 @@ function assertRefAndPath(ref: string, path: string): void {
 export async function listBranchesAndDefaultArtifacts(
   repo: RepositoryRow,
 ): Promise<{ default_branch: string | null; branches: string[] }> {
+  const recorded = await repositoryRefs(repo.id);
+  if (recorded.length > 0) {
+    return {
+      default_branch: repo.default_branch ?? recorded[0]?.ref ?? null,
+      branches: recorded.map((row) => row.ref),
+    };
+  }
   const ctx = await browseContext(repo, 'read');
   const out = await git(
     ctx,
-    `git -C ${BROWSE_DIR} for-each-ref --format='%(refname:strip=3)' refs/remotes/origin`,
+    `git -C ${BROWSE_DIR} for-each-ref --format='%(refname:strip=3)%09%(objectname)' refs/remotes/origin`,
   );
-  const branches = out
+  const discovered = out
     .split('\n')
     .map((line) => line.trim())
     // HEAD is the clone's origin/HEAD symref, not a branch.
-    .filter((name) => name && name !== 'HEAD')
-    .sort((a, b) => a.localeCompare(b));
+    .map((line) => {
+      const [name = '', sha = ''] = line.split('\t');
+      return { name, sha };
+    })
+    .filter(({ name, sha }) => name && name !== 'HEAD' && sha)
+    .sort((a, b) => a.name.localeCompare(b.name));
+  await Promise.all(
+    discovered.map(({ name, sha }) =>
+      recordRepositoryRef(repo.id, name, sha, repo.last_push_at ?? new Date().toISOString()),
+    ),
+  );
+  const branches = discovered.map(({ name }) => name);
   // default_branch is set at Artifacts project creation; fall back for rows
   // that somehow predate it.
   return { default_branch: repo.default_branch ?? branches[0] ?? null, branches };
@@ -122,6 +139,9 @@ export async function readTreeArtifacts(
   path: string,
 ): Promise<ApiRepoTree> {
   assertRefAndPath(ref, path);
+  const recorded = await repositoryRef(repo.id, ref);
+  const direct = await readArtifactsTreeDirect(repo, ref, path, recorded?.head_sha);
+  if (direct) return direct;
   const ctx = await browseContext(repo, 'read');
   let out: string;
   try {
@@ -173,22 +193,22 @@ export async function readFileArtifacts(
   const ctx = await browseContext(repo, 'read');
   const spec = `"refs/remotes/origin/$BROWSE_REF:$BROWSE_PATH"`;
   const refEnv = { BROWSE_REF: ref, BROWSE_PATH: path };
-  let stat: string;
+  let out: string;
   try {
-    stat = await git(
+    out = await git(
       ctx,
-      `git -C ${BROWSE_DIR} rev-parse ${spec} && ` +
-        `git -C ${BROWSE_DIR} cat-file -t ${spec} && ` +
-        `git -C ${BROWSE_DIR} cat-file -s ${spec}`,
+      `object=$(git -C ${BROWSE_DIR} rev-parse ${spec}) && ` +
+        `type=$(git -C ${BROWSE_DIR} cat-file -t "$object") && ` +
+        `size=$(git -C ${BROWSE_DIR} cat-file -s "$object") && ` +
+        `printf '%s\\n%s\\n%s\\n' "$object" "$type" "$size" && ` +
+        `if [ "$type" = blob ] && [ "$size" -le ${FILE_CAP} ]; then ` +
+        `git -C ${BROWSE_DIR} cat-file blob "$object" | base64 | tr -d '\\n'; fi`,
       refEnv,
     );
   } catch {
     throw new RepoBrowserError('file not found on this ref', 400);
   }
-  const [sha = '', type = '', sizeRaw = ''] = stat
-    .trim()
-    .split('\n')
-    .map((line) => line.trim());
+  const [sha = '', type = '', sizeRaw = '', ...encoded] = out.split('\n');
   if (type === 'tree') throw new RepoBrowserError('path is a directory, not a file', 400);
   if (type !== 'blob') {
     // Submodule (commit) entries have no text to show — render as binary.
@@ -198,14 +218,9 @@ export async function readFileArtifacts(
   if (size > FILE_CAP) {
     return { path, ref, sha, size, text: null, binary: false, too_large: true };
   }
-  // Exec stdout is not binary-safe, so ship the blob out as base64
-  // (`tr -d '\n'` rather than the GNU-only `base64 -w 0`).
-  const b64 = await git(
-    ctx,
-    `git -C ${BROWSE_DIR} cat-file blob ${spec} | base64 | tr -d '\\n'`,
-    refEnv,
-  );
-  const text = decodeBase64Text(b64.trim());
+  // The same exec emitted the bounded blob as base64 after the metadata,
+  // avoiding a third Sandbox round trip for every file click.
+  const text = decodeBase64Text(encoded.join('').trim());
   return { path, ref, sha, size, text, binary: text === null, too_large: false };
 }
 

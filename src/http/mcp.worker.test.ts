@@ -23,7 +23,7 @@ type EnqueueFactory = NonNullable<McpRouteDependencies['enqueueFactory']>;
 const testEnv = env as TestEnv;
 
 const acmeUser: AuthedUser = {
-  session: { userId: 3001, login: 'octocat', ghToken: 'test-user-token' },
+  session: { authUserId: 'user-3001', userId: 3001, login: 'octocat' },
   installationIds: [1001],
   githubConnected: true,
   name: 'octocat',

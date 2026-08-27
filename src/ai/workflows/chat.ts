@@ -1,6 +1,7 @@
 import { env, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { processChatMessage } from '../runners/chat.ts';
 import type { ChatQueueMessage } from '../../shared/factory-messages.ts';
+import { notifyFeatureLive } from '../../services/live-updates.ts';
 
 // Chat turns run as a durable Workflow, mirroring FixWorkflow: the sandbox
 // work (clone/refresh + agent + tests + repair rounds) routinely exceeds the
@@ -22,6 +23,7 @@ export class ChatWorkflow extends WorkflowEntrypoint<unknown, ChatParams> {
       { retries: { limit: 1, delay: '5 minutes' }, timeout: '85 minutes' },
       async () => {
         await processChatMessage(event.payload.message);
+        await notifyFeatureLive(event.payload.message.featureId);
       },
     );
     return 'done';

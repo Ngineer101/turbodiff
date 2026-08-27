@@ -162,6 +162,24 @@ export async function todoRepositoriesForTodos(todoIds: number[]): Promise<TodoR
   return res.results;
 }
 
+// Board rollup form: installation-scoped so it can run in parallel with the
+// todo list instead of waiting for its ids and starting a second D1 phase.
+export async function boardTodoRepositories(installationIds: number[]): Promise<TodoRepoRow[]> {
+  if (installationIds.length === 0) return [];
+  const placeholders = placeholderList(installationIds.length);
+  const res = await env.DB.prepare(
+    `SELECT tr.todo_id, tr.repository_id, r.owner, r.name
+		 FROM todo_repositories tr
+		 JOIN todos t ON t.id = tr.todo_id
+		 JOIN repositories r ON r.id = tr.repository_id
+		 WHERE t.installation_id IN (${placeholders}) AND t.plan_id IS NULL
+		 ORDER BY tr.todo_id, tr.position`,
+  )
+    .bind(...installationIds)
+    .all<TodoRepoRow>();
+  return res.results;
+}
+
 export async function listReposForPlan(planId: number): Promise<RepositoryRow[]> {
   const res = await env.DB.prepare(
     `SELECT r.* FROM plan_repositories pr
@@ -207,6 +225,31 @@ export async function getTaskRepoStatuses(planIds: number[]): Promise<TaskRepoSt
 		 ORDER BY pr.plan_id, pr.position`,
   )
     .bind(...planIds)
+    .all<TaskRepoStatusRow>();
+  return res.results;
+}
+
+// Board rollup form: installation-scoped so statuses load alongside plans in
+// the first D1 wave. The id-scoped variant remains for the task detail route.
+export async function boardTaskRepoStatuses(
+  installationIds: number[],
+): Promise<TaskRepoStatusRow[]> {
+  if (installationIds.length === 0) return [];
+  const placeholders = placeholderList(installationIds.length);
+  const res = await env.DB.prepare(
+    `SELECT pr.plan_id, pr.repository_id, r.owner, r.name, r.provider,
+		        f.id AS feature_id, f.status AS feature_status, f.error AS feature_error,
+		        f.pr_number AS pr_number,
+		        v.status AS verification_status, v.results AS verification_results
+		 FROM plan_repositories pr
+		 JOIN plans p ON p.id = pr.plan_id
+		 JOIN repositories r ON r.id = pr.repository_id
+		 LEFT JOIN features f ON f.plan_id = pr.plan_id AND f.repository_id = pr.repository_id
+		 LEFT JOIN verifications v ON v.id = (SELECT MAX(id) FROM verifications WHERE feature_id = f.id)
+		 WHERE r.installation_id IN (${placeholders}) AND p.archived = 0
+		 ORDER BY pr.plan_id, pr.position`,
+  )
+    .bind(...installationIds)
     .all<TaskRepoStatusRow>();
   return res.results;
 }

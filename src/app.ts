@@ -43,15 +43,26 @@ const app = new Hono();
 // executable.
 app.use('*', async (c, next) => {
   await next();
-  c.res.headers.set('x-content-type-options', 'nosniff');
-  if (c.res.headers.get('content-type')?.includes('text/html')) {
-    c.res.headers.set(
+  // Responses returned by the static-assets binding have immutable Headers.
+  // Re-wrap the response once so security headers work for both Worker-owned
+  // responses and hashed assets. A WebSocket upgrade must retain its native
+  // response object and does not need document security headers.
+  if (c.res.status === 101) return;
+  const headers = new Headers(c.res.headers);
+  headers.set('x-content-type-options', 'nosniff');
+  if (headers.get('content-type')?.includes('text/html')) {
+    headers.set(
       'content-security-policy',
       "frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
     );
-    c.res.headers.set('x-frame-options', 'DENY');
-    c.res.headers.set('referrer-policy', 'same-origin');
+    headers.set('x-frame-options', 'DENY');
+    headers.set('referrer-policy', 'same-origin');
   }
+  c.res = new Response(c.res.body, {
+    status: c.res.status,
+    statusText: c.res.statusText,
+    headers,
+  });
 });
 
 app.get('/healthz', async (c) => {

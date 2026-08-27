@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { Hono, type Context } from 'hono';
 import { deleteCookie } from 'hono/cookie';
 import { auth } from '../integrations/auth/better-auth.ts';
+import { isJsonArray, isJsonObject, isString, parseJson } from '../shared/json.ts';
 import { renderAuthPage } from './auth-page.tsx';
 import { renderLanding } from './landing.tsx';
 
@@ -15,13 +16,97 @@ import { renderLanding } from './landing.tsx';
 // nothing stale lingers after the migration.
 const LEGACY_SESSION_COOKIE = 'turbodiff_session';
 
-// The shell references fixed asset names (no content hashes) so it can be a
-// static string here; see build.rollupOptions in vite.client.config.ts.
-// Boot-critical resources are declared up front: fonts are self-hosted
-// (public/fonts — no render-blocking cross-origin stylesheet), app.js is
-// modulepreloaded, and the route's API payload is preloaded so the data
-// round-trip overlaps the JS parse instead of following it.
-function shell(preload: string[]): string {
+interface ClientAsset {
+  file: string;
+  css: string[];
+  imports: string[];
+  isEntry: boolean;
+}
+
+type ClientManifest = Map<string, ClientAsset>;
+let manifestPromise: Promise<ClientManifest> | null = null;
+
+function clientManifest(value: ReturnType<typeof parseJson>): ClientManifest {
+  if (!isJsonObject(value)) throw new Error('client asset manifest is not an object');
+  const manifest = new Map<string, ClientAsset>();
+  for (const [key, raw] of Object.entries(value)) {
+    if (!isJsonObject(raw) || !isString(raw.file)) continue;
+    manifest.set(key, {
+      file: raw.file,
+      css: isJsonArray(raw.css) ? raw.css.filter(isString) : [],
+      imports: isJsonArray(raw.imports) ? raw.imports.filter(isString) : [],
+      isEntry: raw.isEntry === true,
+    });
+  }
+  return manifest;
+}
+
+async function loadClientManifest(c: Context): Promise<ClientManifest> {
+  // Static assets and Worker code deploy atomically, so one parsed manifest
+  // is valid for this isolate's lifetime. Share the in-flight read too: a
+  // burst of cold shell requests should parse the 200KB manifest once.
+  manifestPromise ??= (async () => {
+    const url = new URL('/app/manifest.json', c.req.url);
+    const response = await env.ASSETS.fetch(url);
+    if (!response.ok) throw new Error(`client asset manifest returned ${response.status}`);
+    return clientManifest(parseJson(await response.text()));
+  })();
+  try {
+    return await manifestPromise;
+  } catch (err) {
+    manifestPromise = null;
+    throw err;
+  }
+}
+
+function manifestAsset(manifest: ClientManifest, suffix: string): string | null {
+  const hit = [...manifest].find(([key]) => key.endsWith(suffix));
+  return hit?.[0] ?? null;
+}
+
+function routeAsset(path: string): string | null {
+  if (path === '/') return 'src/client/pages/board.tsx';
+  if (/^\/tasks\/\d+$/.test(path)) return 'src/client/pages/task.tsx';
+  if (/^\/factory\/features\/\d+$/.test(path)) return 'src/client/pages/feature.tsx';
+  if (/^\/repos\/-?\d+\/code(?:\/.*)?$/.test(path)) return 'src/client/pages/code.tsx';
+  if (path === '/usage') return 'src/client/pages/usage.tsx';
+  if (path === '/integrations') return 'src/client/pages/integrations.tsx';
+  if (path === '/agents') return 'src/client/pages/agents.tsx';
+  if (path === '/skills') return 'src/client/pages/skills.tsx';
+  if (path === '/automations') return 'src/client/pages/automations.tsx';
+  if (path === '/settings') return 'src/client/pages/settings.tsx';
+  if (path === '/onboarding') return 'src/client/pages/onboarding.tsx';
+  return null;
+}
+
+function clientAssets(manifest: ClientManifest, path: string) {
+  const entryKey = [...manifest].find(([, asset]) => asset.isEntry)?.[0];
+  if (!entryKey) throw new Error('client asset manifest has no entry');
+  const routeSuffix = routeAsset(path);
+  const routeKey = routeSuffix ? manifestAsset(manifest, routeSuffix) : null;
+  const pending = [entryKey, ...(routeKey ? [routeKey] : [])];
+  const visited = new Set<string>();
+  const scripts = new Set<string>();
+  const styles = new Set<string>();
+  while (pending.length > 0) {
+    const key = pending.pop();
+    if (!key || visited.has(key)) continue;
+    visited.add(key);
+    const asset = manifest.get(key);
+    if (!asset) continue;
+    scripts.add(`/app/${asset.file}`);
+    for (const css of asset.css) styles.add(`/app/${css}`);
+    pending.push(...asset.imports);
+  }
+  const entry = manifest.get(entryKey);
+  if (!entry) throw new Error('client asset manifest entry is missing');
+  return { entry: `/app/${entry.file}`, scripts: [...scripts], styles: [...styles] };
+}
+
+// Boot-critical resources are declared up front: fonts are self-hosted,
+// Vite's content-hashed entry and active route chunks are modulepreloaded,
+// and the route's API payload overlaps JS parse instead of following it.
+function shell(preload: string[], assets: ReturnType<typeof clientAssets>): string {
   return `<!doctype html>
 <html lang="en">
 	<head>
@@ -33,12 +118,12 @@ function shell(preload: string[]): string {
 		<link rel="manifest" href="/manifest.webmanifest" />
 		<link rel="apple-touch-icon" href="/logo.png" />
 		<meta name="theme-color" content="#3fb950" />
-		<link rel="modulepreload" href="/app/app.js" />
+${assets.scripts.map((path) => `\t\t<link rel="modulepreload" href="${path}" />`).join('\n')}
 		<link rel="preload" href="/fonts/ibm-plex-sans-normal-400-latin.woff2" as="font" type="font/woff2" crossorigin />
 		<link rel="preload" href="/fonts/ibm-plex-mono-normal-400-latin.woff2" as="font" type="font/woff2" crossorigin />
 ${preload.map((path) => `\t\t<link rel="preload" href="${path}" as="fetch" />`).join('\n')}
 		<link rel="stylesheet" href="/fonts/fonts.css" />
-		<link rel="stylesheet" href="/app/app.css" />
+${assets.styles.map((path) => `\t\t<link rel="stylesheet" href="${path}" />`).join('\n')}
 		<style>
 			html { background: #0f1318; }
 			/* Static splash inside #root, painted before app.js runs; React's
@@ -69,7 +154,7 @@ ${preload.map((path) => `\t\t<link rel="preload" href="${path}" as="fetch" />`).
 				<span>Loading<span class="cursor">_</span></span>
 			</div>
 		</div>
-		<script type="module" src="/app/app.js"></script>
+		<script type="module" src="${assets.entry}"></script>
 	</body>
 </html>`;
 }
@@ -77,7 +162,7 @@ ${preload.map((path) => `\t\t<link rel="preload" href="${path}" as="fetch" />`).
 // Which API payload each SPA route needs first — preloaded from the shell so
 // the browser has the response (or most of it) by the time app.js asks.
 // /api/me rides on every shell; per-route payloads keep the preload honest.
-function shellForPath(path: string): string {
+async function shellForPath(c: Context, path: string): Promise<string> {
   const preload = ['/api/me'];
   if (path === '/') preload.push('/api/board');
   else if (path === '/settings') preload.push('/api/settings');
@@ -87,7 +172,12 @@ function shellForPath(path: string): string {
   else if (path === '/skills') preload.push('/api/skills');
   else if (path === '/automations') preload.push('/api/automations');
   else if (/^\/tasks\/\d+$/.test(path)) preload.push(`/api${path}`);
-  return shell(preload);
+  else if (/^\/factory\/features\/\d+$/.test(path)) preload.push(`/api${path}`);
+  else {
+    const code = path.match(/^\/repos\/(-?\d+)\/code(?:\/.*)?$/);
+    if (code) preload.push(`/api/repos/${code[1]}/code`);
+  }
+  return shell(preload, clientAssets(await loadClientManifest(c), path));
 }
 
 // Cheap shell gate: a live better-auth session (cookie-cached — no D1 read
@@ -197,7 +287,7 @@ export function createUiRoutes() {
 
   app.get('/', async (c) => {
     if (!(await hasSession(c))) return c.html(renderLanding());
-    return c.html(shellForPath('/'));
+    return c.html(await shellForPath(c, '/'));
   });
 
   // Every SPA route the client router owns. Unauthenticated hits start OAuth,
@@ -224,7 +314,7 @@ export function createUiRoutes() {
   ]) {
     app.get(path, async (c) => {
       if (!(await hasSession(c))) return c.redirect('/auth/login');
-      return c.html(shellForPath(new URL(c.req.url).pathname));
+      return c.html(await shellForPath(c, new URL(c.req.url).pathname));
     });
   }
 
