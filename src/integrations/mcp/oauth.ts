@@ -43,6 +43,11 @@ export interface OAuthEndpoints {
   // authorization — some servers only issue refresh tokens when the request
   // names a scope (e.g. offline_access).
   scopesSupported?: string[];
+  // RFC 8414 token_endpoint_auth_methods_supported. Dynamic client
+  // registration picks its token_endpoint_auth_method from this list — a
+  // PKCE-only server like Stripe's advertises just ['none'] and issues no
+  // client secret.
+  tokenEndpointAuthMethodsSupported?: string[];
 }
 
 async function fetchJson(url: string): Promise<JsonObject | null> {
@@ -141,7 +146,17 @@ export async function discoverOAuthEndpoints(mcpServerUrl: string): Promise<OAut
   if (registrationEndpoint) assertSecureUrl(registrationEndpoint, 'registration endpoint');
   const rawScopes = metadata?.scopes_supported;
   const scopesSupported = isJsonArray(rawScopes) ? rawScopes.filter(isString) : undefined;
-  return { authorizationEndpoint, tokenEndpoint, registrationEndpoint, scopesSupported };
+  const rawAuthMethods = metadata?.token_endpoint_auth_methods_supported;
+  const tokenEndpointAuthMethodsSupported = isJsonArray(rawAuthMethods)
+    ? rawAuthMethods.filter(isString)
+    : undefined;
+  return {
+    authorizationEndpoint,
+    tokenEndpoint,
+    registrationEndpoint,
+    scopesSupported,
+    tokenEndpointAuthMethodsSupported,
+  };
 }
 
 // --- dynamic client registration (RFC 7591) ---
@@ -151,19 +166,53 @@ export interface RegisteredClient {
   clientSecret?: string;
 }
 
+export interface ClientRegistrationOptions {
+  // RFC 7591 client_name — nominally optional metadata, but some servers
+  // (Stripe's access.stripe.com) reject registrations without it, and it is
+  // what the user sees on the consent screen either way.
+  clientName: string;
+  // RFC 7591 client_uri, shown alongside the name on consent screens.
+  clientUri?: string;
+  // The authorization server's advertised token_endpoint_auth_methods_supported.
+  authMethodsSupported?: string[];
+}
+
+// The token-endpoint auth methods this module implements, most preferred
+// first: client_secret_post (tokenRequest sends the secret in the form body)
+// and none (public client — PKCE only, no secret issued). client_secret_basic
+// is deliberately absent: nothing here sends an Authorization header to token
+// endpoints.
+const IMPLEMENTED_AUTH_METHODS = ['client_secret_post', 'none'];
+
+// RFC 7591 says the registered token_endpoint_auth_method must be one the
+// server supports, so pick the first implemented method it advertises
+// (RFC 8414). A server that advertises none of ours — or no list at all —
+// gets the historical client_secret_post request and may coerce or reject
+// it; there is no better option without implementing more methods.
+function chooseAuthMethod(advertised: string[] | undefined): string {
+  const chosen = advertised?.length
+    ? IMPLEMENTED_AUTH_METHODS.find((method) => advertised.includes(method))
+    : undefined;
+  return chosen ?? 'client_secret_post';
+}
+
 export async function registerOAuthClient(
   registrationEndpoint: string,
   redirectUri: string,
+  options: ClientRegistrationOptions,
 ): Promise<RegisteredClient> {
+  const clientMetadata: JsonObject = {
+    client_name: options.clientName,
+    redirect_uris: [redirectUri],
+    grant_types: ['authorization_code', 'refresh_token'],
+    response_types: ['code'],
+    token_endpoint_auth_method: chooseAuthMethod(options.authMethodsSupported),
+  };
+  if (options.clientUri) clientMetadata.client_uri = options.clientUri;
   const res = await fetch(registrationEndpoint, {
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'application/json' },
-    body: JSON.stringify({
-      redirect_uris: [redirectUri],
-      grant_types: ['authorization_code', 'refresh_token'],
-      response_types: ['code'],
-      token_endpoint_auth_method: 'client_secret_post',
-    }),
+    body: JSON.stringify(clientMetadata),
   });
   if (!res.ok) {
     throw new Error(

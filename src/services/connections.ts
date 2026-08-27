@@ -226,7 +226,11 @@ export async function startOAuthConnect(conn: ConnectionRow): Promise<OAuthConne
       return { ok: false, reason: 'no_registration_endpoint' };
     }
     try {
-      const registered = await registerOAuthClient(endpoints.registrationEndpoint, redirectUri);
+      const registered = await registerOAuthClient(endpoints.registrationEndpoint, redirectUri, {
+        clientName: 'turbodiff',
+        clientUri: env.PUBLIC_BASE_URL,
+        authMethodsSupported: endpoints.tokenEndpointAuthMethodsSupported,
+      });
       clientId = registered.clientId;
       cache = { ...cache, clientId, clientSecret: registered.clientSecret };
     } catch (err) {

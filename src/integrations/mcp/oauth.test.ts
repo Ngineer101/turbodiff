@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
-import type { JsonObject } from '../../shared/json.ts';
+import { isString, parseJson, type JsonObject, type JsonValue } from '../../shared/json.ts';
 // Co-located with the OAuth protocol adapter.
-import { discoverOAuthEndpoints, generatePkce, packState, unpackState } from './oauth.ts';
+import {
+  discoverOAuthEndpoints,
+  generatePkce,
+  packState,
+  registerOAuthClient,
+  unpackState,
+} from './oauth.ts';
 
 const SECRET = 'test-session-secret';
 
@@ -37,6 +43,7 @@ describe('discoverOAuthEndpoints', () => {
     token_endpoint: 'https://auth.example.com/oauth2/token',
     registration_endpoint: 'https://auth.example.com/oauth2/register',
     scopes_supported: ['mcp'],
+    token_endpoint_auth_methods_supported: ['none'],
   };
 
   it('discovers a path-less authorization server (appended and inserted forms coincide)', async () => {
@@ -52,6 +59,7 @@ describe('discoverOAuthEndpoints', () => {
       tokenEndpoint: metadata.token_endpoint,
       registrationEndpoint: metadata.registration_endpoint,
       scopesSupported: ['mcp'],
+      tokenEndpointAuthMethodsSupported: ['none'],
     });
   });
 
@@ -112,6 +120,80 @@ describe('discoverOAuthEndpoints', () => {
     await expect(discoverOAuthEndpoints('https://mcp.example.com')).rejects.toThrow(
       /must be an https:\/\/ URL/,
     );
+  });
+});
+
+describe('registerOAuthClient', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const ENDPOINT = 'https://auth.example.com/oauth2/register';
+  const REDIRECT = 'https://app.example.com/api/integrations/1/oauth/callback';
+
+  // Returns the JSON bodies of the registration requests the code sent.
+  function stubRegistration(response: JsonObject, status = 201): JsonValue[] {
+    const bodies: JsonValue[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_input: string | URL, init?: RequestInit) => {
+        bodies.push(isString(init?.body) ? parseJson(init.body) : null);
+        return new Response(JSON.stringify(response), {
+          status,
+          headers: { 'content-type': 'application/json' },
+        });
+      }),
+    );
+    return bodies;
+  }
+
+  it('registers as a public client when the server only supports none (the Stripe shape)', async () => {
+    const bodies = stubRegistration({ client_id: 'oacli_1', token_endpoint_auth_method: 'none' });
+    const registered = await registerOAuthClient(ENDPOINT, REDIRECT, {
+      clientName: 'turbodiff',
+      clientUri: 'https://app.example.com',
+      authMethodsSupported: ['none'],
+    });
+    expect(registered).toEqual({ clientId: 'oacli_1', clientSecret: undefined });
+    expect(bodies[0]).toMatchObject({
+      client_name: 'turbodiff',
+      client_uri: 'https://app.example.com',
+      redirect_uris: [REDIRECT],
+      token_endpoint_auth_method: 'none',
+    });
+  });
+
+  it('prefers client_secret_post when the server advertises it', async () => {
+    const bodies = stubRegistration({ client_id: 'c1', client_secret: 's1' });
+    const registered = await registerOAuthClient(ENDPOINT, REDIRECT, {
+      clientName: 'turbodiff',
+      authMethodsSupported: ['client_secret_basic', 'client_secret_post', 'none'],
+    });
+    expect(registered).toEqual({ clientId: 'c1', clientSecret: 's1' });
+    expect(bodies[0]).toMatchObject({ token_endpoint_auth_method: 'client_secret_post' });
+  });
+
+  it('keeps the client_secret_post default when the server advertises no method list', async () => {
+    const bodies = stubRegistration({ client_id: 'c1', client_secret: 's1' });
+    await registerOAuthClient(ENDPOINT, REDIRECT, { clientName: 'turbodiff' });
+    expect(bodies[0]).toMatchObject({ token_endpoint_auth_method: 'client_secret_post' });
+  });
+
+  it('surfaces a rejected registration with the server detail', async () => {
+    stubRegistration(
+      { error: 'invalid_client_metadata', error_description: 'Missing required param: x.' },
+      400,
+    );
+    await expect(
+      registerOAuthClient(ENDPOINT, REDIRECT, { clientName: 'turbodiff' }),
+    ).rejects.toThrow(/HTTP 400.*Missing required param/s);
+  });
+
+  it('throws when the response carries no client_id', async () => {
+    stubRegistration({ token_endpoint_auth_method: 'none' });
+    await expect(
+      registerOAuthClient(ENDPOINT, REDIRECT, { clientName: 'turbodiff' }),
+    ).rejects.toThrow(/did not return a client_id/);
   });
 });
 
