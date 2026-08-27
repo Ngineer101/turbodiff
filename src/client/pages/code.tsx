@@ -122,7 +122,7 @@ function Browser({
   const segments = filePath ? filePath.split('/') : [];
 
   return (
-    <div className="animate-rise">
+    <div className="animate-rise lg:flex lg:min-h-0 lg:flex-1 lg:flex-col">
       <PageTitle
         aside={
           <BranchPicker
@@ -147,18 +147,13 @@ function Browser({
 
       <div
         className={cn(
-          'mt-4 lg:grid lg:items-start lg:gap-6 lg:transition-[grid-template-columns] lg:duration-200',
+          'mt-4 lg:grid lg:min-h-0 lg:flex-1 lg:gap-6 lg:transition-[grid-template-columns] lg:duration-200',
           treeOpen ? 'lg:grid-cols-[16rem_minmax(0,1fr)]' : 'lg:grid-cols-[2.25rem_minmax(0,1fr)]',
         )}
       >
         {/* Mobile shows tree OR file (feature #44's no-zoom, plain-button
-            investment); desktop keeps the cockpit's sticky collapsible rail. */}
-        <aside
-          className={cn(
-            filePath && 'hidden',
-            'lg:sticky lg:top-4 lg:flex lg:max-h-[calc(100dvh-2rem)] lg:flex-col',
-          )}
-        >
+            investment); desktop keeps the cockpit's collapsible rail. */}
+        <aside className={cn(filePath && 'hidden', 'lg:flex lg:min-h-0 lg:flex-col')}>
           {treeOpen ? (
             <div className="hidden items-center justify-between gap-2 px-1.5 pb-2 lg:flex">
               <span className="font-mono text-xs font-medium tracking-[0.14em] text-mute uppercase">
@@ -206,7 +201,7 @@ function Browser({
           </div>
         </aside>
 
-        <div className={cn('min-w-0', !filePath && 'hidden lg:block')}>
+        <div className={cn('min-w-0 lg:min-h-0', !filePath && 'hidden lg:block')}>
           {filePath ? (
             <FilePane
               key={`${refName}:${filePath}`}
@@ -464,10 +459,10 @@ function FilePane({
     // Editor-shaped skeleton: the frame lands at its final size immediately,
     // only the text area shimmers — no layout jump when content arrives.
     return (
-      <div>
+      <div className="lg:flex lg:h-full lg:min-h-0 lg:flex-col">
         {backButton}
         <div
-          className="mt-2 h-[calc(100dvh-16rem)] min-h-96 animate-pulse space-y-2.5 overflow-hidden rounded-lg border border-line bg-surface p-4"
+          className="mt-2 h-[calc(100dvh-16rem)] min-h-96 animate-pulse space-y-2.5 overflow-hidden rounded-lg border border-line bg-surface p-4 lg:h-auto lg:min-h-0 lg:flex-1"
           role="status"
           aria-label="Loading file"
         >
@@ -555,7 +550,7 @@ function FilePane({
   };
 
   return (
-    <div>
+    <div className="lg:flex lg:h-full lg:min-h-0 lg:flex-col">
       <div className="flex flex-wrap items-center gap-2 pb-2">
         {backButton}
         <span className="ml-auto flex items-center gap-2">
@@ -596,7 +591,7 @@ function FilePane({
           )}
         </span>
       </div>
-      <div className="h-[calc(100dvh-16rem)] min-h-96 overflow-hidden rounded-lg border border-line bg-surface">
+      <div className="h-[calc(100dvh-16rem)] min-h-96 overflow-hidden rounded-lg border border-line bg-surface lg:h-auto lg:min-h-0 lg:flex-1">
         <CodeEditor
           value={editing ? buffer : loadedText}
           onChange={setBuffer}

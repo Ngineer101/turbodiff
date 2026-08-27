@@ -185,8 +185,10 @@ export function AppShell({ me, children }: { me: ApiMe; children: ReactNode }) {
     { preventDefault: true, enableOnFormTags: true },
     [],
   );
-  // The cockpit's diff pane and the code browser's editor both need room.
-  const wide = pathname.startsWith('/factory/features/') || /^\/repos\/\d+\/code/.test(pathname);
+  // The cockpit's diff pane needs room; the code browser gets the whole
+  // viewport — a full-width, full-height workspace on desktop.
+  const wide = pathname.startsWith('/factory/features/');
+  const code = /^\/repos\/\d+\/code/.test(pathname);
   // The board's three lanes need more room than the reading-width default.
   const board = pathname === '/';
   return (
@@ -233,7 +235,16 @@ export function AppShell({ me, children }: { me: ApiMe; children: ReactNode }) {
         <div
           className={cn(
             'mx-auto px-4 py-5 pb-28 sm:py-8 md:px-8 md:pb-8',
-            wide ? 'max-w-[96rem]' : board ? 'max-w-7xl' : 'max-w-4xl',
+            code
+              ? // Code browser: no width cap; at lg the container pins to the
+                // viewport height and stops scrolling — the page's tree/editor
+                // panes scroll internally instead.
+                'max-w-none lg:flex lg:h-dvh lg:min-h-0 lg:flex-col lg:overflow-hidden lg:px-6 lg:pt-4 lg:pb-4'
+              : wide
+                ? 'max-w-[96rem]'
+                : board
+                  ? 'max-w-7xl'
+                  : 'max-w-4xl',
           )}
         >
           {/* Password account without GitHub: every station reads empty until
