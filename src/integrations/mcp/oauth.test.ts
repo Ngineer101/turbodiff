@@ -1,7 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
-import type { JsonObject } from '../../shared/json.ts';
+import { isString, parseJson, type JsonObject, type JsonValue } from '../../shared/json.ts';
 // Co-located with the OAuth protocol adapter.
-import { discoverOAuthEndpoints, generatePkce, packState, unpackState } from './oauth.ts';
+import {
+  canonicalResourceUri,
+  discoverOAuthEndpoints,
+  exchangeAuthorizationCode,
+  generatePkce,
+  packState,
+  refreshOAuthToken,
+  registerOAuthClient,
+  resourceMetadataUrlFromHeader,
+  unpackState,
+} from './oauth.ts';
 
 const SECRET = 'test-session-secret';
 
@@ -37,6 +47,7 @@ describe('discoverOAuthEndpoints', () => {
     token_endpoint: 'https://auth.example.com/oauth2/token',
     registration_endpoint: 'https://auth.example.com/oauth2/register',
     scopes_supported: ['mcp'],
+    token_endpoint_auth_methods_supported: ['none'],
   };
 
   it('discovers a path-less authorization server (appended and inserted forms coincide)', async () => {
@@ -52,6 +63,7 @@ describe('discoverOAuthEndpoints', () => {
       tokenEndpoint: metadata.token_endpoint,
       registrationEndpoint: metadata.registration_endpoint,
       scopesSupported: ['mcp'],
+      tokenEndpointAuthMethodsSupported: ['none'],
     });
   });
 
@@ -112,6 +124,220 @@ describe('discoverOAuthEndpoints', () => {
     await expect(discoverOAuthEndpoints('https://mcp.example.com')).rejects.toThrow(
       /must be an https:\/\/ URL/,
     );
+  });
+});
+
+describe('canonicalResourceUri', () => {
+  it('normalizes to the RFC 8707 canonical form', () => {
+    expect(canonicalResourceUri('https://mcp.example.com')).toBe('https://mcp.example.com');
+    expect(canonicalResourceUri('https://mcp.example.com/')).toBe('https://mcp.example.com');
+    expect(canonicalResourceUri('https://MCP.Example.com/mcp')).toBe('https://mcp.example.com/mcp');
+    expect(canonicalResourceUri('https://mcp.example.com/mcp/')).toBe(
+      'https://mcp.example.com/mcp',
+    );
+    expect(canonicalResourceUri('https://mcp.example.com:8443/mcp#frag')).toBe(
+      'https://mcp.example.com:8443/mcp',
+    );
+  });
+});
+
+describe('resourceMetadataUrlFromHeader', () => {
+  it('parses quoted and bare auth-param forms', () => {
+    expect(
+      resourceMetadataUrlFromHeader(
+        'Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource"',
+      ),
+    ).toBe('https://mcp.example.com/.well-known/oauth-protected-resource');
+    // The bare form Stripe's server sends.
+    expect(
+      resourceMetadataUrlFromHeader(
+        'Bearer resource_metadata=https://mcp.stripe.com/.well-known/oauth-protected-resource',
+      ),
+    ).toBe('https://mcp.stripe.com/.well-known/oauth-protected-resource');
+    expect(resourceMetadataUrlFromHeader('Bearer realm="mcp"')).toBeUndefined();
+    expect(resourceMetadataUrlFromHeader(null)).toBeUndefined();
+  });
+});
+
+describe('discovery via the 401 WWW-Authenticate challenge', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('prefers the resource_metadata URL the MCP server names on 401', async () => {
+    const metadata = {
+      authorization_endpoint: 'https://auth.example.com/authorize',
+      token_endpoint: 'https://auth.example.com/token',
+    };
+    // Protected-resource metadata lives ONLY at a non-default URL that the
+    // 401 challenge points to — well-known probing alone would miss it.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === 'https://mcp.example.com' && init?.method === 'POST') {
+          return new Response(null, {
+            status: 401,
+            headers: {
+              'www-authenticate': 'Bearer resource_metadata="https://mcp.example.com/custom/prm"',
+            },
+          });
+        }
+        if (url === 'https://mcp.example.com/custom/prm') {
+          return Response.json({ authorization_servers: ['https://auth.example.com'] });
+        }
+        if (url === 'https://auth.example.com/.well-known/oauth-authorization-server') {
+          return Response.json(metadata);
+        }
+        return new Response('not found', { status: 404 });
+      }),
+    );
+    const endpoints = await discoverOAuthEndpoints('https://mcp.example.com');
+    expect(endpoints.tokenEndpoint).toBe(metadata.token_endpoint);
+  });
+
+  it('falls back to well-known probing when the probe cannot produce a challenge', async () => {
+    // Network-level failure on the probe POST must not break discovery.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (init?.method === 'POST') throw new Error('connection refused');
+        if (url === 'https://mcp.example.com/.well-known/oauth-protected-resource') {
+          return Response.json({ authorization_servers: ['https://auth.example.com'] });
+        }
+        if (url === 'https://auth.example.com/.well-known/oauth-authorization-server') {
+          return Response.json({
+            authorization_endpoint: 'https://auth.example.com/authorize',
+            token_endpoint: 'https://auth.example.com/token',
+          });
+        }
+        return new Response('not found', { status: 404 });
+      }),
+    );
+    const endpoints = await discoverOAuthEndpoints('https://mcp.example.com');
+    expect(endpoints.tokenEndpoint).toBe('https://auth.example.com/token');
+  });
+});
+
+describe('token requests carry the RFC 8707 resource parameter', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // Captures the form bodies token requests send.
+  function stubTokenEndpoint(response: JsonObject): URLSearchParams[] {
+    const bodies: URLSearchParams[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_input: string | URL, init?: RequestInit) => {
+        if (init?.body instanceof URLSearchParams) bodies.push(init.body);
+        return Response.json(response);
+      }),
+    );
+    return bodies;
+  }
+
+  it('includes resource in the authorization-code exchange', async () => {
+    const bodies = stubTokenEndpoint({ access_token: 'at', expires_in: 3600 });
+    await exchangeAuthorizationCode(
+      'https://auth.example.com/token',
+      'code1',
+      'verifier1',
+      'https://app.example.com/callback',
+      'client1',
+      undefined,
+      'https://mcp.example.com/mcp',
+    );
+    expect(bodies[0]?.get('resource')).toBe('https://mcp.example.com/mcp');
+    expect(bodies[0]?.get('client_secret')).toBeNull();
+  });
+
+  it('includes resource in the refresh grant', async () => {
+    const bodies = stubTokenEndpoint({ access_token: 'at2' });
+    const result = await refreshOAuthToken(
+      'https://auth.example.com/token',
+      'rt1',
+      'client1',
+      undefined,
+      'https://mcp.example.com/mcp',
+    );
+    expect(result.ok).toBe(true);
+    expect(bodies[0]?.get('resource')).toBe('https://mcp.example.com/mcp');
+  });
+});
+
+describe('registerOAuthClient', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const ENDPOINT = 'https://auth.example.com/oauth2/register';
+  const REDIRECT = 'https://app.example.com/api/integrations/1/oauth/callback';
+
+  // Returns the JSON bodies of the registration requests the code sent.
+  function stubRegistration(response: JsonObject, status = 201): JsonValue[] {
+    const bodies: JsonValue[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_input: string | URL, init?: RequestInit) => {
+        bodies.push(isString(init?.body) ? parseJson(init.body) : null);
+        return new Response(JSON.stringify(response), {
+          status,
+          headers: { 'content-type': 'application/json' },
+        });
+      }),
+    );
+    return bodies;
+  }
+
+  it('registers as a public client when the server only supports none (the Stripe shape)', async () => {
+    const bodies = stubRegistration({ client_id: 'oacli_1', token_endpoint_auth_method: 'none' });
+    const registered = await registerOAuthClient(ENDPOINT, REDIRECT, {
+      clientName: 'turbodiff',
+      clientUri: 'https://app.example.com',
+      authMethodsSupported: ['none'],
+    });
+    expect(registered).toEqual({ clientId: 'oacli_1', clientSecret: undefined });
+    expect(bodies[0]).toMatchObject({
+      client_name: 'turbodiff',
+      client_uri: 'https://app.example.com',
+      redirect_uris: [REDIRECT],
+      token_endpoint_auth_method: 'none',
+    });
+  });
+
+  it('prefers client_secret_post when the server advertises it', async () => {
+    const bodies = stubRegistration({ client_id: 'c1', client_secret: 's1' });
+    const registered = await registerOAuthClient(ENDPOINT, REDIRECT, {
+      clientName: 'turbodiff',
+      authMethodsSupported: ['client_secret_basic', 'client_secret_post', 'none'],
+    });
+    expect(registered).toEqual({ clientId: 'c1', clientSecret: 's1' });
+    expect(bodies[0]).toMatchObject({ token_endpoint_auth_method: 'client_secret_post' });
+  });
+
+  it('keeps the client_secret_post default when the server advertises no method list', async () => {
+    const bodies = stubRegistration({ client_id: 'c1', client_secret: 's1' });
+    await registerOAuthClient(ENDPOINT, REDIRECT, { clientName: 'turbodiff' });
+    expect(bodies[0]).toMatchObject({ token_endpoint_auth_method: 'client_secret_post' });
+  });
+
+  it('surfaces a rejected registration with the server detail', async () => {
+    stubRegistration(
+      { error: 'invalid_client_metadata', error_description: 'Missing required param: x.' },
+      400,
+    );
+    await expect(
+      registerOAuthClient(ENDPOINT, REDIRECT, { clientName: 'turbodiff' }),
+    ).rejects.toThrow(/HTTP 400.*Missing required param/s);
+  });
+
+  it('throws when the response carries no client_id', async () => {
+    stubRegistration({ token_endpoint_auth_method: 'none' });
+    await expect(
+      registerOAuthClient(ENDPOINT, REDIRECT, { clientName: 'turbodiff' }),
+    ).rejects.toThrow(/did not return a client_id/);
   });
 });
 
