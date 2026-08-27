@@ -1,0 +1,11 @@
+-- The GitHub user who installed the App — the `sender` on the `installation
+-- created` webhook. Recorded so the first-owner bootstrap survives the
+-- installer signing in *after* installing: the webhook-time ensureOwnerMember
+-- is a no-op without a user row, and the request-time GitHub-admin bootstrap
+-- depends on an org-membership API call that fails when the App lacks the
+-- Organization Members (read) permission — leaving the organization with
+-- zero member rows and nobody able to grant the settings/member capability.
+-- ensureInstallerOwner (src/services/access-control.ts) closes that gap from
+-- this column. NULL for installations that predate this migration, for
+-- deliveries without a sender, and for synthetic Artifacts rows.
+ALTER TABLE installations ADD COLUMN installer_github_id INTEGER;
