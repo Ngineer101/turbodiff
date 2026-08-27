@@ -33,6 +33,20 @@ function b64urlDecode(s: string): Uint8Array {
   return Uint8Array.from(bin, (c) => c.charCodeAt(0));
 }
 
+// --- RFC 8707 resource indicator ---
+
+// The MCP authorization spec requires the RFC 8707 `resource` parameter on
+// both authorization and token requests — sent regardless of whether the
+// authorization server supports it — carrying the MCP server's canonical
+// URI: lowercase scheme/host (URL parsing normalizes those), no fragment,
+// and no trailing slash (the spec prefers the slash-less form for
+// interoperability).
+export function canonicalResourceUri(mcpServerUrl: string): string {
+  const url = new URL(mcpServerUrl);
+  const path = url.pathname.replace(/\/+$/, '');
+  return `${url.origin}${path}${url.search}`;
+}
+
 // --- endpoint discovery ---
 
 export interface OAuthEndpoints {
@@ -103,19 +117,70 @@ async function fetchFirstJson(urls: string[]): Promise<JsonObject | null> {
   return null;
 }
 
+// RFC 9728 §5.1: a 401 challenge names where the protected-resource
+// metadata lives, e.g. WWW-Authenticate: Bearer resource_metadata="<url>".
+// Challenge auth-params are quoted-strings per RFC 9110, but live servers
+// (Stripe's mcp.stripe.com) also send the value bare — accept both.
+export function resourceMetadataUrlFromHeader(header: string | null): string | undefined {
+  if (!header) return undefined;
+  const match = /resource_metadata\s*=\s*(?:"([^"]+)"|([^",\s]+))/i.exec(header);
+  return match?.[1] ?? match?.[2];
+}
+
+// The MCP spec's discovery sequence opens with an unauthenticated MCP
+// request: the 401 response's WWW-Authenticate header is the server's own
+// pointer to its protected-resource metadata and takes precedence over
+// well-known probing. One initialize POST (mirroring the handshake opener
+// in client.ts); anything other than a 401 with the header — including
+// network failure — just means well-known discovery proceeds alone.
+async function probeResourceMetadataUrl(mcpServerUrl: string): Promise<string | undefined> {
+  let res: Response;
+  try {
+    res = await fetch(mcpServerUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'turbodiff', version: '1.0.0' },
+        },
+      }),
+    });
+  } catch {
+    return undefined;
+  }
+  // The body is irrelevant here; cancel it so the connection is released.
+  await res.body?.cancel();
+  if (res.status !== 401) return undefined;
+  return resourceMetadataUrlFromHeader(res.headers.get('www-authenticate'));
+}
+
 export async function discoverOAuthEndpoints(mcpServerUrl: string): Promise<OAuthEndpoints> {
   const server = new URL(mcpServerUrl);
 
   // RFC 9728: the MCP server names which authorization server(s) protect it.
-  // A server mounted on a path publishes at the path-inserted form; the
-  // origin root stays as a fallback for servers that predate that rule.
-  // Fall back to the MCP server's own origin as the authorization server —
-  // the MCP spec's baseline for servers that are their own authorization
-  // server.
-  const resource = await fetchFirstJson([
+  // The 401 challenge's own metadata pointer wins; then the path-inserted
+  // well-known form for servers mounted on a path; the origin root stays as
+  // a fallback for servers that predate that rule. Fall back to the MCP
+  // server's own origin as the authorization server — the MCP spec's
+  // baseline for servers that are their own authorization server.
+  const resourceUrls = [
     wellKnown(server, 'oauth-protected-resource', 'insert'),
     `${server.origin}/.well-known/oauth-protected-resource`,
-  ]);
+  ];
+  const challengeUrl = await probeResourceMetadataUrl(mcpServerUrl);
+  if (challengeUrl) {
+    assertSecureUrl(challengeUrl, 'resource metadata URL');
+    resourceUrls.unshift(challengeUrl);
+  }
+  const resource = await fetchFirstJson(resourceUrls);
   const servers = resource?.authorization_servers;
   const authServer = isJsonArray(servers) && isString(servers[0]) ? servers[0] : server.origin;
   assertSecureUrl(authServer, 'authorization server');
@@ -368,6 +433,7 @@ export async function exchangeAuthorizationCode(
   redirectUri: string,
   clientId: string,
   clientSecret?: string,
+  resource?: string,
 ): Promise<TokenResult> {
   const params = new URLSearchParams({
     grant_type: 'authorization_code',
@@ -377,6 +443,7 @@ export async function exchangeAuthorizationCode(
     code_verifier: verifier,
   });
   if (clientSecret) params.set('client_secret', clientSecret);
+  if (resource) params.set('resource', resource);
   const data = await tokenRequest(tokenEndpoint, params);
   if (!data || !isString(data.access_token)) {
     throw new Error(`OAuth code exchange failed: ${describeTokenError(data)}`);
@@ -402,6 +469,7 @@ export async function refreshOAuthToken(
   refreshToken: string,
   clientId: string,
   clientSecret?: string,
+  resource?: string,
 ): Promise<OAuthRefreshResult> {
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
@@ -409,6 +477,7 @@ export async function refreshOAuthToken(
     client_id: clientId,
   });
   if (clientSecret) params.set('client_secret', clientSecret);
+  if (resource) params.set('resource', resource);
   const data = await tokenRequest(tokenEndpoint, params);
   if (!data || !isString(data.access_token)) {
     return {
@@ -430,6 +499,7 @@ export async function fetchClientCredentialsToken(
   clientId: string,
   clientSecret: string,
   scope?: string,
+  resource?: string,
 ): Promise<{ accessToken: string; expiresAt?: string }> {
   const params = new URLSearchParams({
     grant_type: 'client_credentials',
@@ -437,6 +507,7 @@ export async function fetchClientCredentialsToken(
     client_secret: clientSecret,
   });
   if (scope) params.set('scope', scope);
+  if (resource) params.set('resource', resource);
   const data = await tokenRequest(tokenEndpoint, params);
   if (!data || !isString(data.access_token)) {
     throw new Error(`client-credentials token request failed: ${describeTokenError(data)}`);

@@ -9,6 +9,7 @@ import {
 import type { ConnectionSnapshot } from '../shared/connections.ts';
 import { openJson, openToken, sealJson } from '../integrations/security/crypto.ts';
 import {
+  canonicalResourceUri,
   discoverOAuthEndpoints,
   exchangeAuthorizationCode,
   fetchClientCredentialsToken,
@@ -111,6 +112,7 @@ async function resolveClientCredentials(conn: ConnectionRow): Promise<ResolvedAu
     config.clientId,
     config.clientSecret,
     config.scope,
+    canonicalResourceUri(conn.url),
   );
   await updateConnectionAuth(conn.id, {
     authConfigCiphertext: await sealJson<ClientCredentialsConfig>({
@@ -160,6 +162,7 @@ async function resolveOAuthConnection(conn: ConnectionRow): Promise<ResolvedAuth
     config.refreshToken,
     config.clientId,
     config.clientSecret,
+    canonicalResourceUri(conn.url),
   );
   if (!refreshed.ok) {
     if (refreshed.invalidGrant) {
@@ -257,6 +260,9 @@ export async function startOAuthConnect(conn: ConnectionRow): Promise<OAuthConne
     code_challenge: challenge,
     code_challenge_method: 'S256',
     state,
+    // RFC 8707, required by the MCP spec on authorization and token
+    // requests alike, whether or not the server supports it.
+    resource: canonicalResourceUri(conn.url),
   });
   // Request the server's advertised scopes — some issue refresh tokens
   // only when the authorization request names a scope (offline_access).
@@ -298,6 +304,7 @@ export async function completeOAuthConnect(
       oauthRedirectUri(conn.id),
       cache.clientId,
       cache.clientSecret,
+      canonicalResourceUri(conn.url),
     );
   } catch (err) {
     console.error(`turbodiff: oauth code exchange failed for connection ${conn.id}:`, err);
