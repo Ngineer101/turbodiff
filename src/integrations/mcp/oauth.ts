@@ -76,23 +76,55 @@ function assertSecureUrl(raw: string, label: string): void {
   }
 }
 
+// RFC 8414 §3 and RFC 9728 §3 build well-known URLs by *inserting* the
+// well-known segment between host and path — an issuer/resource of
+// https://host/path publishes at https://host/.well-known/<doc>/path (this
+// is how Stripe's https://access.stripe.com/mcp serves its metadata).
+// OpenID Connect Discovery predates that rule and *appends* instead
+// (https://host/path/.well-known/openid-configuration); live servers exist
+// on both conventions. For a URL with no path the two forms coincide.
+function wellKnown(base: URL, doc: string, form: 'insert' | 'append'): string {
+  const path = base.pathname.replace(/\/+$/, '');
+  return form === 'insert'
+    ? `${base.origin}/.well-known/${doc}${path}`
+    : `${base.origin}${path}/.well-known/${doc}`;
+}
+
+async function fetchFirstJson(urls: string[]): Promise<JsonObject | null> {
+  for (const url of new Set(urls)) {
+    const data = await fetchJson(url);
+    if (data) return data;
+  }
+  return null;
+}
+
 export async function discoverOAuthEndpoints(mcpServerUrl: string): Promise<OAuthEndpoints> {
-  const origin = new URL(mcpServerUrl).origin;
+  const server = new URL(mcpServerUrl);
 
   // RFC 9728: the MCP server names which authorization server(s) protect it.
+  // A server mounted on a path publishes at the path-inserted form; the
+  // origin root stays as a fallback for servers that predate that rule.
   // Fall back to the MCP server's own origin as the authorization server —
   // the MCP spec's baseline for servers that are their own authorization
   // server.
-  const resource = await fetchJson(`${origin}/.well-known/oauth-protected-resource`);
+  const resource = await fetchFirstJson([
+    wellKnown(server, 'oauth-protected-resource', 'insert'),
+    `${server.origin}/.well-known/oauth-protected-resource`,
+  ]);
   const servers = resource?.authorization_servers;
-  const authServer = isJsonArray(servers) && isString(servers[0]) ? servers[0] : origin;
+  const authServer = isJsonArray(servers) && isString(servers[0]) ? servers[0] : server.origin;
   assertSecureUrl(authServer, 'authorization server');
 
   // RFC 8414, falling back to OpenID Connect discovery for authorization
-  // servers that only publish that document.
-  const metadata =
-    (await fetchJson(`${authServer}/.well-known/oauth-authorization-server`)) ??
-    (await fetchJson(`${authServer}/.well-known/openid-configuration`));
+  // servers that only publish that document. Spec-correct inserted form
+  // first, appended form second for each document.
+  const issuer = new URL(authServer);
+  const metadata = await fetchFirstJson([
+    wellKnown(issuer, 'oauth-authorization-server', 'insert'),
+    wellKnown(issuer, 'oauth-authorization-server', 'append'),
+    wellKnown(issuer, 'openid-configuration', 'insert'),
+    wellKnown(issuer, 'openid-configuration', 'append'),
+  ]);
   const authorizationEndpoint = metadata?.authorization_endpoint;
   const tokenEndpoint = metadata?.token_endpoint;
   if (!isString(authorizationEndpoint) || !isString(tokenEndpoint)) {
