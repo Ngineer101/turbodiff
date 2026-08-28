@@ -1,7 +1,7 @@
-import { env } from 'cloudflare:workers';
+import { database } from './postgres.ts';
 import { placeholderList } from './sql.ts';
 
-// --- External MCP tool connections per repository (migration 0032) ---
+// --- External MCP tool connections per repository ---
 
 // Installation-level integrations registry: connections are added once per
 // installation on the integrations page; MCP-kind connections are attached to
@@ -32,12 +32,13 @@ export async function listRepoConnections(
   context: 'reviews' | 'automations',
 ): Promise<ConnectionRow[]> {
   const contextColumn = context === 'reviews' ? 'l.reviews' : 'l.automations';
-  const res = await env.DB.prepare(
-    `SELECT c.* FROM connections c
+  const res = await database()
+    .prepare(
+      `SELECT c.* FROM connections c
 		 JOIN repo_connections l ON l.connection_id = c.id
 		 WHERE l.repository_id = ?1 AND ${contextColumn} = 1 AND c.kind = 'mcp'
 		 ORDER BY c.name`,
-  )
+    )
     .bind(repositoryId)
     .all<ConnectionRow>();
   return res.results;
@@ -46,16 +47,18 @@ export async function listRepoConnections(
 export async function listConnections(installationIds: number[]): Promise<ConnectionRow[]> {
   if (installationIds.length === 0) return [];
   const placeholders = placeholderList(installationIds.length);
-  const res = await env.DB.prepare(
-    `SELECT * FROM connections WHERE installation_id IN (${placeholders}) ORDER BY name`,
-  )
+  const res = await database()
+    .prepare(`SELECT * FROM connections WHERE installation_id IN (${placeholders}) ORDER BY name`)
     .bind(...installationIds)
     .all<ConnectionRow>();
   return res.results;
 }
 
 export async function getConnection(id: number): Promise<ConnectionRow | null> {
-  return env.DB.prepare('SELECT * FROM connections WHERE id = ?1').bind(id).first<ConnectionRow>();
+  return database()
+    .prepare('SELECT * FROM connections WHERE id = ?1')
+    .bind(id)
+    .first<ConnectionRow>();
 }
 
 export async function createConnection(fields: {
@@ -68,11 +71,12 @@ export async function createConnection(fields: {
   authType: string;
   authConfigCiphertext: string | null;
 }): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO connections
+  await database()
+    .prepare(
+      `INSERT INTO connections
 		 (installation_id, name, kind, url, tool_allowlist, auth_ciphertext, optional, auth_type, auth_config_ciphertext)
 		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8)`,
-  )
+    )
     .bind(
       fields.installationId,
       fields.name,
@@ -101,15 +105,16 @@ export async function updateConnectionAuth(
   id: number,
   fields: ConnectionAuthUpdate,
 ): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE connections SET
+  await database()
+    .prepare(
+      `UPDATE connections SET
 		 auth_type = COALESCE(?2, auth_type),
 		 auth_config_ciphertext = COALESCE(?3, auth_config_ciphertext),
 		 oauth_token_expires_at = COALESCE(?4, oauth_token_expires_at),
 		 oauth_needs_reauth = COALESCE(?5, oauth_needs_reauth),
 		 oauth_has_refresh_token = COALESCE(?6, oauth_has_refresh_token)
 		 WHERE id = ?1`,
-  )
+    )
     .bind(
       id,
       fields.authType ?? null,
@@ -122,8 +127,8 @@ export async function updateConnectionAuth(
 }
 
 export async function deleteConnection(id: number): Promise<void> {
-  await env.DB.prepare('DELETE FROM repo_connections WHERE connection_id = ?1').bind(id).run();
-  await env.DB.prepare('DELETE FROM connections WHERE id = ?1').bind(id).run();
+  await database().prepare('DELETE FROM repo_connections WHERE connection_id = ?1').bind(id).run();
+  await database().prepare('DELETE FROM connections WHERE id = ?1').bind(id).run();
 }
 
 export interface RepoConnectionLink {
@@ -138,11 +143,12 @@ export async function listRepoConnectionLinks(
 ): Promise<RepoConnectionLink[]> {
   if (installationIds.length === 0) return [];
   const placeholders = placeholderList(installationIds.length);
-  const res = await env.DB.prepare(
-    `SELECT l.repository_id, l.connection_id, l.reviews, l.automations FROM repo_connections l
+  const res = await database()
+    .prepare(
+      `SELECT l.repository_id, l.connection_id, l.reviews, l.automations FROM repo_connections l
 		 JOIN connections c ON c.id = l.connection_id
 		 WHERE c.installation_id IN (${placeholders})`,
-  )
+    )
     .bind(...installationIds)
     .all<RepoConnectionLink>();
   return res.results;
@@ -156,18 +162,25 @@ export async function setRepoConnectionLink(
   link: { attached: boolean; reviews: boolean; automations: boolean },
 ): Promise<void> {
   if (link.attached) {
-    await env.DB.prepare(
-      `INSERT INTO repo_connections (repository_id, connection_id, reviews, automations)
-			 VALUES (?1, ?2, ?3, ?4)
+    const result = await database()
+      .prepare(
+        `INSERT INTO repo_connections
+			   (repository_id, connection_id, installation_id, reviews, automations)
+			 SELECT r.id, c.id, r.installation_id, ?3, ?4
+			 FROM repositories r
+			 JOIN connections c ON c.id = ?2 AND c.installation_id = r.installation_id
+			 WHERE r.id = ?1
 			 ON CONFLICT (repository_id, connection_id)
-			 DO UPDATE SET reviews = ?3, automations = ?4`,
-    )
+			 DO UPDATE SET reviews = EXCLUDED.reviews, automations = EXCLUDED.automations`,
+      )
       .bind(repositoryId, connectionId, link.reviews ? 1 : 0, link.automations ? 1 : 0)
       .run();
+    if (result.meta.changes === 0) {
+      throw new Error('repository and connection must belong to one tenant');
+    }
   } else {
-    await env.DB.prepare(
-      'DELETE FROM repo_connections WHERE repository_id = ?1 AND connection_id = ?2',
-    )
+    await database()
+      .prepare('DELETE FROM repo_connections WHERE repository_id = ?1 AND connection_id = ?2')
       .bind(repositoryId, connectionId)
       .run();
   }
@@ -180,10 +193,11 @@ export async function tryClaimConnectionRefresh(
   expectedExpiresAt: string | null,
   claimUntil: string,
 ): Promise<boolean> {
-  const claim = await env.DB.prepare(
-    `UPDATE connections SET oauth_token_expires_at = ?2
+  const claim = await database()
+    .prepare(
+      `UPDATE connections SET oauth_token_expires_at = ?2
 			 WHERE id = ?1 AND (oauth_token_expires_at = ?3 OR (oauth_token_expires_at IS NULL AND ?3 IS NULL))`,
-  )
+    )
     .bind(id, claimUntil, expectedExpiresAt)
     .run();
   return claim.meta.changes > 0;

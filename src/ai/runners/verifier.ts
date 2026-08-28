@@ -99,7 +99,7 @@ the background (\`nohup ... > /tmp/app.log 2>&1 &\`), wait for its port to
 accept connections, and verify runtime criteria against the live app.
 
 Timebox launch discovery to a few minutes. If the app needs Docker,
-containers, cloud bindings (e.g. Cloudflare Workers/D1/R2), a database, or
+containers, cloud bindings (e.g. Cloudflare Workers/PostgreSQL/R2), a database, or
 other external services to run, treat it as NOT launchable here — do not
 fight it; verify statically instead.
 

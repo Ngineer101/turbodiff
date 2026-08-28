@@ -8,7 +8,7 @@ import { connectionSnapshot, resolveConnectionAuth } from './connections.ts';
 // server at /mcp-proxy/:id with a short-lived sealed grant as its bearer
 // token, and this handler injects the connection's real credential per
 // request. Auth material keeps the same property as hosted review mounts —
-// it never leaves the Worker/D1 boundary, so a prompt-injected repo can at
+// it never leaves the Worker/PostgreSQL boundary, so a prompt-injected repo can at
 // worst use the connection for the grant's lifetime, never exfiltrate its
 // credential.
 

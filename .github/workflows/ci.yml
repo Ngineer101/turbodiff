@@ -28,8 +28,8 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
-      - name: Worker and D1 integration tests
-        run: pnpm test:worker
+      - name: Fresh PostgreSQL schema test
+        run: pnpm vp run test:schema
 
       - name: Build
         run: pnpm vp run build

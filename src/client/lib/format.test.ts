@@ -28,9 +28,8 @@ describe('fmtDuration', () => {
 });
 
 describe('ago', () => {
-  it('buckets a D1 UTC timestamp into s/m/h/d', () => {
-    const at = (msAgo: number) =>
-      new Date(Date.now() - msAgo).toISOString().slice(0, 19).replace('T', ' ');
+  it('buckets an ISO UTC timestamp into s/m/h/d', () => {
+    const at = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
     expect(ago(at(30_000))).toBe('30s ago');
     expect(ago(at(5 * 60_000))).toBe('5m ago');
     expect(ago(at(3 * 3_600_000))).toBe('3h ago');
@@ -39,7 +38,7 @@ describe('ago', () => {
 });
 
 describe('parseUtc', () => {
-  it('reads D1 datetime() output as UTC', () => {
-    expect(parseUtc('2026-08-07 12:00:00')).toBe(Date.parse('2026-08-07T12:00:00Z'));
+  it('reads PostgreSQL adapter output as UTC', () => {
+    expect(parseUtc('2026-08-07T12:00:00.000Z')).toBe(Date.parse('2026-08-07T12:00:00Z'));
   });
 });

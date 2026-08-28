@@ -1,4 +1,4 @@
-import { env } from 'cloudflare:workers';
+import { database } from './postgres.ts';
 import { placeholderList } from './sql.ts';
 import { STALL_CUTOFF_MODIFIER } from '../shared/time.ts';
 import type { CliUsage } from '../shared/usage.ts';
@@ -51,10 +51,11 @@ export async function createCockpitComment(
   // commit this comment dispatches can carry them as git author.
   authorId?: number,
 ): Promise<number> {
-  const row = await env.DB.prepare(
-    `INSERT INTO cockpit_comments (feature_id, path, line, side, body, author, author_id)
+  const row = await database()
+    .prepare(
+      `INSERT INTO cockpit_comments (feature_id, path, line, side, body, author, author_id)
 		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id`,
-  )
+    )
     .bind(featureId, path, line, side, body, author, authorId ?? null)
     .first<{ id: number }>();
   return row!.id;
@@ -64,11 +65,12 @@ export async function createCockpitComment(
 // concurrent Submit clicks can't both grab the same comment into two
 // separate fix runs.
 export async function dispatchOpenCockpitComments(featureId: number): Promise<CockpitCommentRow[]> {
-  const res = await env.DB.prepare(
-    `UPDATE cockpit_comments SET status = 'dispatched'
+  const res = await database()
+    .prepare(
+      `UPDATE cockpit_comments SET status = 'dispatched'
 		 WHERE feature_id = ?1 AND status = 'open'
 		 RETURNING *`,
-  )
+    )
     .bind(featureId)
     .all<CockpitCommentRow>();
   return res.results;
@@ -80,9 +82,8 @@ export async function linkCommentsToFixAttempt(
 ): Promise<void> {
   if (commentIds.length === 0) return;
   const placeholders = placeholderList(commentIds.length, 2);
-  await env.DB.prepare(
-    `UPDATE cockpit_comments SET fix_attempt_id = ?1 WHERE id IN (${placeholders})`,
-  )
+  await database()
+    .prepare(`UPDATE cockpit_comments SET fix_attempt_id = ?1 WHERE id IN (${placeholders})`)
     .bind(attemptId, ...commentIds)
     .run();
 }
@@ -91,48 +92,53 @@ export async function hasRunningFixAttempt(
   repositoryId: number,
   prNumber: number,
 ): Promise<boolean> {
-  const row = await env.DB.prepare(
-    `SELECT id FROM fix_attempts WHERE repository_id = ?1 AND pr_number = ?2 AND status = 'running' LIMIT 1`,
-  )
+  const row = await database()
+    .prepare(
+      `SELECT id FROM fix_attempts WHERE repository_id = ?1 AND pr_number = ?2 AND status = 'running' LIMIT 1`,
+    )
     .bind(repositoryId, prNumber)
     .first<{ id: number }>();
   return row !== null;
 }
 
 export async function listCockpitComments(featureId: number): Promise<CockpitCommentRow[]> {
-  const res = await env.DB.prepare(
-    `SELECT c.*, fa.status AS fix_status, fa.commit_sha AS fix_commit_sha, fa.error AS fix_error
+  const res = await database()
+    .prepare(
+      `SELECT c.*, fa.status AS fix_status, fa.commit_sha AS fix_commit_sha, fa.error AS fix_error
 		 FROM cockpit_comments c
 		 LEFT JOIN fix_attempts fa ON fa.id = c.fix_attempt_id
 		 WHERE c.feature_id = ?1 ORDER BY c.id`,
-  )
+    )
     .bind(featureId)
     .all<CockpitCommentRow>();
   return res.results;
 }
 
-// --- multi-repo task/plan repo lists (migration 0024) ---
+// --- multi-repo task/plan repo lists ---
 
 // Replaces a todo's repo list wholesale (delete-then-insert), so repeated
 // calls with a different array simply replace the prior selection.
 export async function setTodoRepositories(todoId: number, repositoryIds: number[]): Promise<void> {
-  await env.DB.batch([
-    env.DB.prepare('DELETE FROM todo_repositories WHERE todo_id = ?1').bind(todoId),
+  await database().batch([
+    database().prepare('DELETE FROM todo_repositories WHERE todo_id = ?1').bind(todoId),
     ...repositoryIds.map((repoId, i) =>
-      env.DB.prepare(
-        'INSERT INTO todo_repositories (todo_id, repository_id, position) VALUES (?1, ?2, ?3)',
-      ).bind(todoId, repoId, i),
+      database()
+        .prepare(
+          'INSERT INTO todo_repositories (todo_id, repository_id, position) VALUES (?1, ?2, ?3)',
+        )
+        .bind(todoId, repoId, i),
     ),
   ]);
 }
 
 export async function listReposForTodo(todoId: number): Promise<RepositoryRow[]> {
-  const res = await env.DB.prepare(
-    `SELECT r.* FROM todo_repositories tr
+  const res = await database()
+    .prepare(
+      `SELECT r.* FROM todo_repositories tr
 		 JOIN repositories r ON r.id = tr.repository_id
 		 WHERE tr.todo_id = ?1
 		 ORDER BY tr.position`,
-  )
+    )
     .bind(todoId)
     .all<RepositoryRow>();
   return res.results;
@@ -150,43 +156,46 @@ export interface TodoRepoRow {
 export async function todoRepositoriesForTodos(todoIds: number[]): Promise<TodoRepoRow[]> {
   if (todoIds.length === 0) return [];
   const placeholders = placeholderList(todoIds.length);
-  const res = await env.DB.prepare(
-    `SELECT tr.todo_id, tr.repository_id, r.owner, r.name
+  const res = await database()
+    .prepare(
+      `SELECT tr.todo_id, tr.repository_id, r.owner, r.name
 		 FROM todo_repositories tr
 		 JOIN repositories r ON r.id = tr.repository_id
 		 WHERE tr.todo_id IN (${placeholders})
 		 ORDER BY tr.todo_id, tr.position`,
-  )
+    )
     .bind(...todoIds)
     .all<TodoRepoRow>();
   return res.results;
 }
 
 // Board rollup form: installation-scoped so it can run in parallel with the
-// todo list instead of waiting for its ids and starting a second D1 phase.
+// todo list instead of waiting for its ids and starting a second PostgreSQL phase.
 export async function boardTodoRepositories(installationIds: number[]): Promise<TodoRepoRow[]> {
   if (installationIds.length === 0) return [];
   const placeholders = placeholderList(installationIds.length);
-  const res = await env.DB.prepare(
-    `SELECT tr.todo_id, tr.repository_id, r.owner, r.name
+  const res = await database()
+    .prepare(
+      `SELECT tr.todo_id, tr.repository_id, r.owner, r.name
 		 FROM todo_repositories tr
 		 JOIN todos t ON t.id = tr.todo_id
 		 JOIN repositories r ON r.id = tr.repository_id
 		 WHERE t.installation_id IN (${placeholders}) AND t.plan_id IS NULL
 		 ORDER BY tr.todo_id, tr.position`,
-  )
+    )
     .bind(...installationIds)
     .all<TodoRepoRow>();
   return res.results;
 }
 
 export async function listReposForPlan(planId: number): Promise<RepositoryRow[]> {
-  const res = await env.DB.prepare(
-    `SELECT r.* FROM plan_repositories pr
+  const res = await database()
+    .prepare(
+      `SELECT r.* FROM plan_repositories pr
 		 JOIN repositories r ON r.id = pr.repository_id
 		 WHERE pr.plan_id = ?1
 		 ORDER BY pr.position`,
-  )
+    )
     .bind(planId)
     .all<RepositoryRow>();
   return res.results;
@@ -212,8 +221,9 @@ export interface TaskRepoStatusRow {
 export async function getTaskRepoStatuses(planIds: number[]): Promise<TaskRepoStatusRow[]> {
   if (planIds.length === 0) return [];
   const placeholders = placeholderList(planIds.length);
-  const res = await env.DB.prepare(
-    `SELECT pr.plan_id, pr.repository_id, r.owner, r.name, r.provider,
+  const res = await database()
+    .prepare(
+      `SELECT pr.plan_id, pr.repository_id, r.owner, r.name, r.provider,
 		        f.id AS feature_id, f.status AS feature_status, f.error AS feature_error,
 		        f.pr_number AS pr_number,
 		        v.status AS verification_status, v.results AS verification_results
@@ -223,21 +233,22 @@ export async function getTaskRepoStatuses(planIds: number[]): Promise<TaskRepoSt
 		 LEFT JOIN verifications v ON v.id = (SELECT MAX(id) FROM verifications WHERE feature_id = f.id)
 		 WHERE pr.plan_id IN (${placeholders})
 		 ORDER BY pr.plan_id, pr.position`,
-  )
+    )
     .bind(...planIds)
     .all<TaskRepoStatusRow>();
   return res.results;
 }
 
 // Board rollup form: installation-scoped so statuses load alongside plans in
-// the first D1 wave. The id-scoped variant remains for the task detail route.
+// the first PostgreSQL wave. The id-scoped variant remains for the task detail route.
 export async function boardTaskRepoStatuses(
   installationIds: number[],
 ): Promise<TaskRepoStatusRow[]> {
   if (installationIds.length === 0) return [];
   const placeholders = placeholderList(installationIds.length);
-  const res = await env.DB.prepare(
-    `SELECT pr.plan_id, pr.repository_id, r.owner, r.name, r.provider,
+  const res = await database()
+    .prepare(
+      `SELECT pr.plan_id, pr.repository_id, r.owner, r.name, r.provider,
 		        f.id AS feature_id, f.status AS feature_status, f.error AS feature_error,
 		        f.pr_number AS pr_number,
 		        v.status AS verification_status, v.results AS verification_results
@@ -248,7 +259,7 @@ export async function boardTaskRepoStatuses(
 		 LEFT JOIN verifications v ON v.id = (SELECT MAX(id) FROM verifications WHERE feature_id = f.id)
 		 WHERE r.installation_id IN (${placeholders}) AND p.archived = 0
 		 ORDER BY pr.plan_id, pr.position`,
-  )
+    )
     .bind(...installationIds)
     .all<TaskRepoStatusRow>();
   return res.results;
@@ -259,9 +270,10 @@ export async function getFeatureByRepoPr(
   repositoryId: number,
   prNumber: number,
 ): Promise<FeatureRow | null> {
-  return env.DB.prepare(
-    'SELECT * FROM features WHERE repository_id = ?1 AND pr_number = ?2 ORDER BY id DESC LIMIT 1',
-  )
+  return database()
+    .prepare(
+      'SELECT * FROM features WHERE repository_id = ?1 AND pr_number = ?2 ORDER BY id DESC LIMIT 1',
+    )
     .bind(repositoryId, prNumber)
     .first<FeatureRow>();
 }
@@ -269,9 +281,8 @@ export async function getFeatureByRepoPr(
 export async function latestVerificationForFeature(
   featureId: number,
 ): Promise<VerificationRow | null> {
-  return env.DB.prepare(
-    'SELECT * FROM verifications WHERE feature_id = ?1 ORDER BY id DESC LIMIT 1',
-  )
+  return database()
+    .prepare('SELECT * FROM verifications WHERE feature_id = ?1 ORDER BY id DESC LIMIT 1')
     .bind(featureId)
     .first<VerificationRow>();
 }
@@ -282,19 +293,20 @@ export async function latestVerificationForFeature(
 const VERIFICATION_STRAND_MINUTES = 45;
 
 export async function failStrandedVerifications(): Promise<number> {
-  const res = await env.DB.prepare(
-    `UPDATE verifications SET status = 'error',
+  const res = await database()
+    .prepare(
+      `UPDATE verifications SET status = 'error',
 		   error = 'verification run was killed before finishing — re-run it from the PR or wait for the next push'
 		 WHERE status = 'running'
-		   AND created_at < datetime('now', '-${VERIFICATION_STRAND_MINUTES} minutes')`,
-  ).run();
+		   AND created_at < CURRENT_TIMESTAMP - INTERVAL '${VERIFICATION_STRAND_MINUTES} minutes'`,
+    )
+    .run();
   return res.meta.changes ?? 0;
 }
 
 export async function createVerification(featureId: number): Promise<number> {
-  const row = await env.DB.prepare(
-    'INSERT INTO verifications (feature_id) VALUES (?1) RETURNING id',
-  )
+  const row = await database()
+    .prepare('INSERT INTO verifications (feature_id) VALUES (?1) RETURNING id')
     .bind(featureId)
     .first<{ id: number }>();
   return row!.id;
@@ -311,13 +323,14 @@ export async function finishVerification(
     usage?: CliUsage;
   } = {},
 ): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE verifications SET
+  await database()
+    .prepare(
+      `UPDATE verifications SET
 		 status = ?2, results = ?3, summary = ?4, error = ?5, demo = ?6,
 		 input_tokens = ?7, output_tokens = ?8, cache_read_tokens = ?9, cache_write_tokens = ?10,
 		 cost_usd = ?11, model = ?12
 		 WHERE id = ?1`,
-  )
+    )
     .bind(
       id,
       status,
@@ -340,9 +353,8 @@ export async function finishVerification(
 // resolves correctly for every repo's feature in a multi-repo task — not
 // just the primary repo's via the legacy plans.feature_id pointer.
 export async function getPlanByFeatureId(featureId: number): Promise<PlanRow | null> {
-  return env.DB.prepare(
-    `SELECT p.* FROM plans p JOIN features f ON f.plan_id = p.id WHERE f.id = ?1`,
-  )
+  return database()
+    .prepare(`SELECT p.* FROM plans p JOIN features f ON f.plan_id = p.id WHERE f.id = ?1`)
     .bind(featureId)
     .first<PlanRow>();
 }
@@ -352,9 +364,8 @@ export async function getPlanByFeatureId(featureId: number): Promise<PlanRow | n
 // Every attempt counts toward the cap regardless of outcome, so even a
 // persistently failing fixer terminates after the cap.
 export async function countFixAttempts(repositoryId: number, prNumber: number): Promise<number> {
-  const row = await env.DB.prepare(
-    'SELECT COUNT(*) AS n FROM fix_attempts WHERE repository_id = ?1 AND pr_number = ?2',
-  )
+  const row = await database()
+    .prepare('SELECT COUNT(*) AS n FROM fix_attempts WHERE repository_id = ?1 AND pr_number = ?2')
     .bind(repositoryId, prNumber)
     .first<{ n: number }>();
   return row?.n ?? 0;
@@ -382,15 +393,17 @@ export async function tryRecordFixAttempt(
   // and hold that lock like any other attempt.
   capTrigger?: string,
 ): Promise<number | null> {
-  await env.DB.prepare(
-    `UPDATE fix_attempts SET status = 'failed', error = 'stale: consumer killed before completion'
+  await database()
+    .prepare(
+      `UPDATE fix_attempts SET status = 'failed', error = 'stale: consumer killed before completion'
 		 WHERE repository_id = ?1 AND pr_number = ?2 AND status = 'running'
-		 AND created_at < datetime('now', '${STALL_CUTOFF_MODIFIER}')`,
-  )
+		 AND created_at < CURRENT_TIMESTAMP + INTERVAL '${STALL_CUTOFF_MODIFIER}'`,
+    )
     .bind(repositoryId, prNumber)
     .run();
-  const row = await env.DB.prepare(
-    `INSERT INTO fix_attempts (repository_id, pr_number, "trigger")
+  const row = await database()
+    .prepare(
+      `INSERT INTO fix_attempts (repository_id, pr_number, "trigger")
 		 SELECT ?1, ?2, ?3
 		 WHERE (SELECT COUNT(*) FROM fix_attempts
 		        WHERE repository_id = ?1 AND pr_number = ?2
@@ -400,8 +413,9 @@ export async function tryRecordFixAttempt(
 		     SELECT 1 FROM fix_attempts
 		     WHERE repository_id = ?1 AND pr_number = ?2 AND status = 'running'
 		   )
+		 ON CONFLICT DO NOTHING
 		 RETURNING id`,
-  )
+    )
     .bind(repositoryId, prNumber, trigger, cap, capTrigger ?? null)
     .first<{ id: number }>();
   return row?.id ?? null;
@@ -412,14 +426,16 @@ export async function tryRecordFixAttempt(
 export async function listOpenFactoryPrConflictCandidates(): Promise<
   { repo: RepositoryRow; prNumber: number }[]
 > {
-  const res = await env.DB.prepare(
-    `SELECT r.*, f.pr_number AS factory_pr_number
+  const res = await database()
+    .prepare(
+      `SELECT r.*, f.pr_number AS factory_pr_number
 		 FROM features f
 		 JOIN repositories r ON r.id = f.repository_id
 		 WHERE f.pr_number IS NOT NULL AND f.status = 'pr_opened'
 		   AND r.enabled = 1 AND r.auto_resolve_conflicts = 1
 		   AND r.provider = 'github'`,
-  ).all<RepositoryRow & { factory_pr_number: number }>();
+    )
+    .all<RepositoryRow & { factory_pr_number: number }>();
   return res.results.map(({ factory_pr_number, ...repo }) => ({
     repo,
     prNumber: factory_pr_number,
@@ -451,10 +467,11 @@ export async function recordAgentRun(
   success: boolean,
   owner: { planId?: number; featureId?: number; fixAttemptId?: number; automationRunId?: number },
 ): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO agent_runs (kind, plan_id, feature_id, fix_attempt_id, automation_run_id, log_key, success)
+  await database()
+    .prepare(
+      `INSERT INTO agent_runs (kind, plan_id, feature_id, fix_attempt_id, automation_run_id, log_key, success)
 		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
-  )
+    )
     .bind(
       kind,
       owner.planId ?? null,
@@ -468,9 +485,8 @@ export async function recordAgentRun(
 }
 
 export async function listAgentRunsForPlan(planId: number): Promise<AgentRunRow[]> {
-  const res = await env.DB.prepare(
-    'SELECT id, kind, success, created_at FROM agent_runs WHERE plan_id = ?1 ORDER BY id',
-  )
+  const res = await database()
+    .prepare('SELECT id, kind, success, created_at FROM agent_runs WHERE plan_id = ?1 ORDER BY id')
     .bind(planId)
     .all<AgentRunRow>();
   return res.results;
@@ -480,8 +496,9 @@ export async function listAgentRunsForPlan(planId: number): Promise<AgentRunRow[
 // fix_attempts' (repository_id, pr_number) → the same feature, the same join
 // getFeatureByRepoPr performs — fix_attempts has no feature_id column.
 export async function listAgentRunsForFeature(featureId: number): Promise<AgentRunRow[]> {
-  const res = await env.DB.prepare(
-    `SELECT ar.id, ar.kind, ar.success, ar.created_at
+  const res = await database()
+    .prepare(
+      `SELECT ar.id, ar.kind, ar.success, ar.created_at
 		 FROM agent_runs ar
 		 WHERE ar.feature_id = ?1
 		 UNION ALL
@@ -491,7 +508,7 @@ export async function listAgentRunsForFeature(featureId: number): Promise<AgentR
 		 JOIN features f ON f.repository_id = fa.repository_id AND f.pr_number = fa.pr_number
 		 WHERE f.id = ?1
 		 ORDER BY id`,
-  )
+    )
     .bind(featureId)
     .all<AgentRunRow>();
   return res.results;
@@ -504,8 +521,9 @@ export async function listAgentRunsForFeature(featureId: number): Promise<AgentR
 export async function getAgentRunForAuth(
   id: number,
 ): Promise<{ logKey: string; installationId: number } | null> {
-  return env.DB.prepare(
-    `SELECT ar.log_key AS logKey,
+  return database()
+    .prepare(
+      `SELECT ar.log_key AS logKey,
 		        COALESCE(rp.installation_id, rf.installation_id, rx.installation_id, ra.installation_id) AS installationId
 		 FROM agent_runs ar
 		 LEFT JOIN plans p ON p.id = ar.plan_id
@@ -518,7 +536,7 @@ export async function getAgentRunForAuth(
 		 LEFT JOIN automations au ON au.id = aur.automation_id
 		 LEFT JOIN repositories ra ON ra.id = au.repository_id
 		 WHERE ar.id = ?1`,
-  )
+    )
     .bind(id)
     .first<{ logKey: string; installationId: number }>();
 }
@@ -574,11 +592,12 @@ export async function createFeature(
   // /internal/generate intakes).
   planId?: number,
 ): Promise<number> {
-  const row = await env.DB.prepare(
-    `INSERT INTO features
+  const row = await database()
+    .prepare(
+      `INSERT INTO features
      (repository_id, title, spec, acceptance, author_login, author_id, coauthor_login, coauthor_id, tier, plan_id)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) RETURNING id`,
-  )
+    )
     .bind(
       repositoryId,
       title,
@@ -607,7 +626,7 @@ export interface ApprovedFeatureFields {
   tier: string | null;
 }
 
-// Claims a ready plan and creates its per-repository features in one D1
+// Claims a ready plan and creates its per-repository features in one PostgreSQL
 // transaction. The unique (plan_id, repository_id) index is the final guard:
 // repeated requests and concurrent isolates can never duplicate paid work.
 export async function approvePlanFeatures(
@@ -615,17 +634,20 @@ export async function approvePlanFeatures(
   features: ApprovedFeatureFields[],
 ): Promise<number[] | null> {
   if (features.length === 0) return null;
-  const results = await env.DB.batch([
-    env.DB.prepare(
-      `UPDATE plans SET status = 'approving'
+  const results = await database().batch([
+    database()
+      .prepare(
+        `UPDATE plans SET status = 'approving'
 		 WHERE id = ?1 AND status = 'plan_ready' AND plan IS NOT NULL
 		 RETURNING id`,
-    ).bind(planId),
+      )
+      .bind(planId),
     ...features.map((feature) =>
       // runner_model snapshots from the plan so every downstream run
       // (generation, repair, fix) reads the feature row alone.
-      env.DB.prepare(
-        `INSERT INTO features
+      database()
+        .prepare(
+          `INSERT INTO features
 		   (repository_id, title, spec, acceptance, author_login, author_id,
 		    coauthor_login, coauthor_id, tier, plan_id, runner_model)
 		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, p.runner_model
@@ -634,21 +656,23 @@ export async function approvePlanFeatures(
 		 WHERE p.id = ?10 AND p.status = 'approving'
 		 ON CONFLICT(plan_id, repository_id) DO NOTHING
 		 RETURNING id`,
-      ).bind(
-        feature.repositoryId,
-        feature.title,
-        feature.spec,
-        feature.acceptance,
-        feature.authorLogin,
-        feature.authorId,
-        feature.coauthorLogin,
-        feature.coauthorId,
-        feature.tier,
-        planId,
-      ),
+        )
+        .bind(
+          feature.repositoryId,
+          feature.title,
+          feature.spec,
+          feature.acceptance,
+          feature.authorLogin,
+          feature.authorId,
+          feature.coauthorLogin,
+          feature.coauthorId,
+          feature.tier,
+          planId,
+        ),
     ),
-    env.DB.prepare(
-      `UPDATE plans
+    database()
+      .prepare(
+        `UPDATE plans
 		 SET status = 'approved',
 		     feature_id = (
 		       SELECT id FROM features
@@ -656,24 +680,26 @@ export async function approvePlanFeatures(
 		       LIMIT 1
 		     )
 		 WHERE id = ?1 AND status = 'approving'`,
-    ).bind(planId),
+      )
+      .bind(planId),
   ]);
   const claimed = results[0].results.length;
   if (!claimed) return null;
-  const rows = await env.DB.prepare(
-    `SELECT f.id FROM features f
+  const rows = await database()
+    .prepare(
+      `SELECT f.id FROM features f
 		 JOIN plan_repositories pr
 		   ON pr.plan_id = f.plan_id AND pr.repository_id = f.repository_id
 		 WHERE f.plan_id = ?1
 		 ORDER BY pr.position`,
-  )
+    )
     .bind(planId)
     .all<{ id: number }>();
   return rows.results.map((row) => row.id);
 }
 
 export async function getFeature(id: number): Promise<FeatureRow | null> {
-  return env.DB.prepare('SELECT * FROM features WHERE id = ?1').bind(id).first<FeatureRow>();
+  return database().prepare('SELECT * FROM features WHERE id = ?1').bind(id).first<FeatureRow>();
 }
 
 // Generation runs as a durable Workflow whose steps heartbeat run_started_at,
@@ -684,23 +710,26 @@ export async function getFeature(id: number): Promise<FeatureRow | null> {
 // run_started_at fall back to created_at.
 const GENERATION_STRAND_MINUTES = 45;
 
-// The change counter maintained by the 0042 triggers: one indexed read that
-// answers "did any live-UI table change since v?" for the client's cheap
-// poll (GET /api/factory/version).
+// A PostgreSQL sequence is the cache invalidation clock. Triggered nextval()
+// calls avoid a globally contended singleton UPDATE under concurrent runs.
 export async function factoryVersion(): Promise<number> {
-  const row = await env.DB.prepare('SELECT version FROM factory_version WHERE id = 1').first<{
-    version: number;
-  }>();
+  const row = await database()
+    .prepare('SELECT last_value AS version FROM app.factory_version_seq')
+    .first<{
+      version: number;
+    }>();
   return row?.version ?? 0;
 }
 
 export async function failStrandedGeneration(): Promise<number> {
-  const res = await env.DB.prepare(
-    `UPDATE features SET status = 'failed',
+  const res = await database()
+    .prepare(
+      `UPDATE features SET status = 'failed',
 		   error = 'generation run was killed before finishing (platform wall clock or runtime interruption) — retry'
 		 WHERE status = 'generating'
-		   AND COALESCE(run_started_at, created_at) < datetime('now', '-${GENERATION_STRAND_MINUTES} minutes')`,
-  ).run();
+		   AND COALESCE(run_started_at, created_at) < CURRENT_TIMESTAMP - INTERVAL '${GENERATION_STRAND_MINUTES} minutes'`,
+    )
+    .run();
   return res.meta.changes ?? 0;
 }
 
@@ -721,13 +750,14 @@ export async function updateFeature(
     changeRequestId?: number;
   },
 ): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE features SET
+  await database()
+    .prepare(
+      `UPDATE features SET
 		 status = COALESCE(?2, status),
 		 branch = COALESCE(?3, branch),
 		 pr_number = COALESCE(?4, pr_number),
 		 error = COALESCE(?5, error),
-		 run_started_at = CASE WHEN ?6 THEN datetime('now') ELSE run_started_at END,
+		 run_started_at = CASE WHEN ?6 THEN CURRENT_TIMESTAMP ELSE run_started_at END,
 		 input_tokens = COALESCE(?7, input_tokens),
 		 output_tokens = COALESCE(?8, output_tokens),
 		 cache_read_tokens = COALESCE(?9, cache_read_tokens),
@@ -736,14 +766,14 @@ export async function updateFeature(
 		 model = COALESCE(?12, model),
 		 change_request_id = COALESCE(?13, change_request_id)
 		 WHERE id = ?1`,
-  )
+    )
     .bind(
       id,
       fields.status ?? null,
       fields.branch ?? null,
       fields.prNumber ?? null,
       fields.error ?? null,
-      fields.runStartedAt === 'now' ? 1 : 0,
+      fields.runStartedAt === 'now',
       fields.usage?.inputTokens ?? null,
       fields.usage?.outputTokens ?? null,
       fields.usage?.cacheReadTokens ?? null,
@@ -756,13 +786,15 @@ export async function updateFeature(
 }
 
 export async function setFeatureCriteriaConflict(id: number, conflict: boolean): Promise<void> {
-  await env.DB.prepare('UPDATE features SET criteria_conflict = ?2 WHERE id = ?1')
+  await database()
+    .prepare('UPDATE features SET criteria_conflict = ?2 WHERE id = ?1')
     .bind(id, conflict ? 1 : 0)
     .run();
 }
 
 export async function setProposedAcceptance(id: number, criteria: string[] | null): Promise<void> {
-  await env.DB.prepare('UPDATE features SET proposed_acceptance = ?2 WHERE id = ?1')
+  await database()
+    .prepare('UPDATE features SET proposed_acceptance = ?2 WHERE id = ?1')
     .bind(id, criteria ? JSON.stringify(criteria) : null)
     .run();
 }
@@ -770,11 +802,12 @@ export async function setProposedAcceptance(id: number, criteria: string[] | nul
 // Rewrites the acceptance criteria wholesale (the criteria-conflict "update"
 // resolution — the user edited the contract) and clears the conflict flag.
 export async function updateFeatureAcceptance(id: number, criteria: string[]): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE features SET acceptance = ?2, criteria_conflict = 0,
-		   acceptance_updated_at = datetime('now'), proposed_acceptance = NULL
+  await database()
+    .prepare(
+      `UPDATE features SET acceptance = ?2, criteria_conflict = 0,
+		   acceptance_updated_at = CURRENT_TIMESTAMP, proposed_acceptance = NULL
 		 WHERE id = ?1`,
-  )
+    )
     .bind(id, JSON.stringify(criteria))
     .run();
 }
@@ -785,11 +818,12 @@ export async function latestFixedAttempt(
   repositoryId: number,
   prNumber: number,
 ): Promise<{ id: number; trigger: string; created_at: string } | null> {
-  return env.DB.prepare(
-    `SELECT id, trigger, created_at FROM fix_attempts
+  return database()
+    .prepare(
+      `SELECT id, "trigger", created_at FROM fix_attempts
 		 WHERE repository_id = ?1 AND pr_number = ?2 AND status = 'fixed'
 		 ORDER BY id DESC LIMIT 1`,
-  )
+    )
     .bind(repositoryId, prNumber)
     .first<{ id: number; trigger: string; created_at: string }>();
 }
@@ -834,10 +868,11 @@ export async function createPlan(
   // JSON [{key, name, content_type}] of user-uploaded context files.
   attachments?: string,
 ): Promise<number> {
-  const row = await env.DB.prepare(
-    `INSERT INTO plans (repository_id, title, requirements, created_by_login, created_by_id, attachments)
+  const row = await database()
+    .prepare(
+      `INSERT INTO plans (repository_id, title, requirements, created_by_login, created_by_id, attachments)
 		 VALUES (?1, ?2, ?3, ?4, ?5, ?6) RETURNING id`,
-  )
+    )
     .bind(
       repositoryIds[0],
       title,
@@ -848,11 +883,13 @@ export async function createPlan(
     )
     .first<{ id: number }>();
   const planId = row!.id;
-  await env.DB.batch(
+  await database().batch(
     repositoryIds.map((repoId, i) =>
-      env.DB.prepare(
-        'INSERT INTO plan_repositories (plan_id, repository_id, position) VALUES (?1, ?2, ?3)',
-      ).bind(planId, repoId, i),
+      database()
+        .prepare(
+          'INSERT INTO plan_repositories (plan_id, repository_id, position) VALUES (?1, ?2, ?3)',
+        )
+        .bind(planId, repoId, i),
     ),
   );
   return planId;
@@ -878,14 +915,15 @@ export async function createPlanForTodo(
   runnerModel?: string,
 ): Promise<CreatePlanForTodoResult | null> {
   if (repositoryIds.length === 0) return null;
-  const inserted = await env.DB.prepare(
-    `INSERT INTO plans
+  const inserted = await database()
+    .prepare(
+      `INSERT INTO plans
 		 (repository_id, title, requirements, created_by_login, created_by_id, attachments, todo_id, runner_model)
 		 SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
 		 FROM todos WHERE id = ?7 AND plan_id IS NULL
 		 ON CONFLICT(todo_id) DO NOTHING
 		 RETURNING id`,
-  )
+    )
     .bind(
       repositoryIds[0],
       title,
@@ -899,24 +937,29 @@ export async function createPlanForTodo(
     .first<{ id: number }>();
   const existing = inserted
     ? null
-    : await env.DB.prepare('SELECT id FROM plans WHERE todo_id = ?1')
+    : await database()
+        .prepare('SELECT id FROM plans WHERE todo_id = ?1')
         .bind(todoId)
         .first<{ id: number }>();
   const planId = inserted?.id ?? existing?.id;
   if (!planId) return null;
 
-  await env.DB.batch([
+  await database().batch([
     ...repositoryIds.map((repoId, position) =>
-      env.DB.prepare(
-        `INSERT INTO plan_repositories (plan_id, repository_id, position)
+      database()
+        .prepare(
+          `INSERT INTO plan_repositories (plan_id, repository_id, position)
 		   VALUES (?1, ?2, ?3)
 		   ON CONFLICT(plan_id, repository_id) DO NOTHING`,
-      ).bind(planId, repoId, position),
+        )
+        .bind(planId, repoId, position),
     ),
-    env.DB.prepare(
-      `UPDATE todos SET plan_id = ?2
+    database()
+      .prepare(
+        `UPDATE todos SET plan_id = ?2
 		 WHERE id = ?1 AND (plan_id IS NULL OR plan_id = ?2)`,
-    ).bind(todoId, planId),
+      )
+      .bind(todoId, planId),
   ]);
   return { planId, created: inserted !== null };
 }
@@ -925,14 +968,16 @@ export async function createPlanForTodo(
 // features (they snapshot the plan value at approval) so retries and fix
 // runs pick it up; runs already in flight keep the model they launched with.
 export async function setTaskRunnerModel(planId: number, model: string): Promise<void> {
-  await env.DB.batch([
-    env.DB.prepare('UPDATE plans SET runner_model = ?2 WHERE id = ?1').bind(planId, model),
-    env.DB.prepare('UPDATE features SET runner_model = ?2 WHERE plan_id = ?1').bind(planId, model),
+  await database().batch([
+    database().prepare('UPDATE plans SET runner_model = ?2 WHERE id = ?1').bind(planId, model),
+    database()
+      .prepare('UPDATE features SET runner_model = ?2 WHERE plan_id = ?1')
+      .bind(planId, model),
   ]);
 }
 
 export async function getPlan(id: number): Promise<PlanRow | null> {
-  return env.DB.prepare('SELECT * FROM plans WHERE id = ?1').bind(id).first<PlanRow>();
+  return database().prepare('SELECT * FROM plans WHERE id = ?1').bind(id).first<PlanRow>();
 }
 
 export interface PlanWithRepo extends PlanRow {
@@ -955,8 +1000,9 @@ export async function listPlansForInstallations(
 ): Promise<PlanWithRepo[]> {
   if (installationIds.length === 0) return [];
   const placeholders = placeholderList(installationIds.length, 2);
-  const res = await env.DB.prepare(
-    `SELECT p.*, r.owner, r.name, r.installation_id, f.pr_number AS pr_number,
+  const res = await database()
+    .prepare(
+      `SELECT p.*, r.owner, r.name, r.installation_id, f.pr_number AS pr_number,
 		        f.status AS feature_status, f.error AS feature_error,
 		        v.status AS verification_status, v.results AS verification_results,
 		        v.demo AS verification_demo
@@ -968,7 +1014,7 @@ export async function listPlansForInstallations(
 		 WHERE r.installation_id IN (${placeholders})
 		 ORDER BY p.id DESC
 		 LIMIT ?1`,
-  )
+    )
     .bind(limit, ...installationIds)
     .all<PlanWithRepo>();
   return res.results;
@@ -977,8 +1023,9 @@ export async function listPlansForInstallations(
 // One plan with the same repo/feature/verification context as the list query
 // (the board's task-detail view).
 export async function getPlanWithRepoById(id: number): Promise<PlanWithRepo | null> {
-  return env.DB.prepare(
-    `SELECT p.*, r.owner, r.name, r.installation_id, f.pr_number AS pr_number,
+  return database()
+    .prepare(
+      `SELECT p.*, r.owner, r.name, r.installation_id, f.pr_number AS pr_number,
 		        f.status AS feature_status, f.error AS feature_error,
 		        v.status AS verification_status, v.results AS verification_results,
 		        v.demo AS verification_demo
@@ -988,7 +1035,7 @@ export async function getPlanWithRepoById(id: number): Promise<PlanWithRepo | nu
 		 LEFT JOIN verifications v ON v.id =
 		   (SELECT MAX(id) FROM verifications WHERE feature_id = p.feature_id)
 		 WHERE p.id = ?1`,
-  )
+    )
     .bind(id)
     .first<PlanWithRepo>();
 }
@@ -1008,8 +1055,9 @@ export async function updatePlan(
     feedback?: string;
   },
 ): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE plans SET
+  await database()
+    .prepare(
+      `UPDATE plans SET
 		 status = COALESCE(?2, status),
 		 analysis = COALESCE(?3, analysis),
 		 questions = COALESCE(?4, questions),
@@ -1021,7 +1069,7 @@ export async function updatePlan(
 		 tier = COALESCE(?10, tier),
 		 feedback = COALESCE(?11, feedback)
 		 WHERE id = ?1`,
-  )
+    )
     .bind(
       id,
       fields.status ?? null,
@@ -1056,14 +1104,15 @@ export async function upsertPushSubscription(
   userGithubId: number,
   sub: { endpoint: string; p256dh: string; auth: string },
 ): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO push_subscriptions (user_github_id, endpoint, p256dh, auth)
+  await database()
+    .prepare(
+      `INSERT INTO push_subscriptions (user_github_id, endpoint, p256dh, auth)
 		 VALUES (?1, ?2, ?3, ?4)
 		 ON CONFLICT(endpoint) DO UPDATE SET
 		   user_github_id = excluded.user_github_id,
 		   p256dh = excluded.p256dh,
 		   auth = excluded.auth`,
-  )
+    )
     .bind(userGithubId, sub.endpoint, sub.p256dh, sub.auth)
     .run();
 }
@@ -1074,7 +1123,8 @@ export async function deletePushSubscriptionByEndpoint(
   userGithubId: number,
   endpoint: string,
 ): Promise<void> {
-  await env.DB.prepare('DELETE FROM push_subscriptions WHERE user_github_id = ?1 AND endpoint = ?2')
+  await database()
+    .prepare('DELETE FROM push_subscriptions WHERE user_github_id = ?1 AND endpoint = ?2')
     .bind(userGithubId, endpoint)
     .run();
 }
@@ -1082,7 +1132,8 @@ export async function deletePushSubscriptionByEndpoint(
 export async function listPushSubscriptionsForUser(
   userGithubId: number,
 ): Promise<PushSubscriptionRow[]> {
-  const res = await env.DB.prepare('SELECT * FROM push_subscriptions WHERE user_github_id = ?1')
+  const res = await database()
+    .prepare('SELECT * FROM push_subscriptions WHERE user_github_id = ?1')
     .bind(userGithubId)
     .all<PushSubscriptionRow>();
   return res.results;
@@ -1090,7 +1141,7 @@ export async function listPushSubscriptionsForUser(
 
 // Used by the send path to prune expired endpoints (410/404 responses).
 export async function deletePushSubscriptionById(id: number): Promise<void> {
-  await env.DB.prepare('DELETE FROM push_subscriptions WHERE id = ?1').bind(id).run();
+  await database().prepare('DELETE FROM push_subscriptions WHERE id = ?1').bind(id).run();
 }
 
 export async function finishFixAttempt(
@@ -1100,13 +1151,14 @@ export async function finishFixAttempt(
   error?: string,
   usage?: CliUsage,
 ): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE fix_attempts SET
+  await database()
+    .prepare(
+      `UPDATE fix_attempts SET
 		 status = ?2, commit_sha = ?3, error = ?4,
 		 input_tokens = ?5, output_tokens = ?6, cache_read_tokens = ?7, cache_write_tokens = ?8,
 		 cost_usd = ?9, model = ?10
 		 WHERE id = ?1`,
-  )
+    )
     .bind(
       id,
       status,
@@ -1142,21 +1194,24 @@ export async function tryRecordReview(
   agentInstanceId: string,
   riskTier: string | null = null,
 ): Promise<number | null> {
-  await env.DB.prepare(
-    `UPDATE reviews SET status = 'failed', completed_at = datetime('now')
+  await database()
+    .prepare(
+      `UPDATE reviews SET status = 'failed', completed_at = CURRENT_TIMESTAMP
 		 WHERE agent_instance_id = ?1 AND status = 'running'
-		 AND created_at < datetime('now', '${STALL_CUTOFF_MODIFIER}')`,
-  )
+		 AND created_at < CURRENT_TIMESTAMP + INTERVAL '${STALL_CUTOFF_MODIFIER}'`,
+    )
     .bind(agentInstanceId)
     .run();
-  const row = await env.DB.prepare(
-    `INSERT INTO reviews (repository_id, installation_id, pr_number, trigger_event, status, agent_slug, agent_instance_id, risk_tier)
+  const row = await database()
+    .prepare(
+      `INSERT INTO reviews (repository_id, installation_id, pr_number, trigger_event, status, agent_slug, agent_instance_id, risk_tier)
 		 SELECT ?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7
 		 WHERE NOT EXISTS (
 		   SELECT 1 FROM reviews WHERE agent_instance_id = ?6 AND status = 'running'
 		 )
+		 ON CONFLICT DO NOTHING
 		 RETURNING id`,
-  )
+    )
     .bind(repositoryId, installationId, prNumber, trigger, agentSlug, agentInstanceId, riskTier)
     .first<{ id: number }>();
   return row?.id ?? null;
@@ -1170,15 +1225,16 @@ export async function completeReview(
   reviewUrl: string | null,
   findingsCount: number | null = null,
 ): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE reviews
-		 SET status = 'completed', completed_at = datetime('now'), review_url = ?2, findings_count = ?3
+  await database()
+    .prepare(
+      `UPDATE reviews
+		 SET status = 'completed', completed_at = CURRENT_TIMESTAMP, review_url = ?2, findings_count = ?3
 		 WHERE id = (
 			SELECT id FROM reviews
 			WHERE agent_instance_id = ?1 AND status = 'running'
 			ORDER BY id DESC LIMIT 1
 		 )`,
-  )
+    )
     .bind(agentInstanceId, reviewUrl, findingsCount)
     .run();
 }
@@ -1196,8 +1252,9 @@ export async function addReviewUsage(
     model: string;
   },
 ): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE reviews SET
+  await database()
+    .prepare(
+      `UPDATE reviews SET
 			input_tokens = input_tokens + ?2,
 			output_tokens = output_tokens + ?3,
 			cache_read_tokens = cache_read_tokens + ?4,
@@ -1208,7 +1265,7 @@ export async function addReviewUsage(
 			SELECT id FROM reviews WHERE agent_instance_id = ?1
 			ORDER BY id DESC LIMIT 1
 		 )`,
-  )
+    )
     .bind(
       agentInstanceId,
       usage.inputTokens,

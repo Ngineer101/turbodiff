@@ -1,4 +1,4 @@
-import { env } from 'cloudflare:workers';
+import { database } from '../data/postgres.ts';
 import { auth } from '../integrations/auth/better-auth.ts';
 import { encryptionConfigured, openToken, sealToken } from '../integrations/security/crypto.ts';
 import { deleteUserRefreshToken, getUserRefreshToken, saveUserRefreshToken } from '../data/db.ts';
@@ -17,7 +17,8 @@ import { refreshUserToken } from '../integrations/github/app.ts';
 // stop trying them).
 export async function mintUserToken(userId: number): Promise<string | null> {
   // Preferred: the better-auth account, keyed by the user's GitHub id.
-  const baUser = await env.DB.prepare('SELECT "id" FROM "user" WHERE "githubId" = ?1')
+  const baUser = await database()
+    .prepare('SELECT "id" FROM "user" WHERE "githubId" = ?1')
     .bind(userId)
     .first<{ id: string }>();
   if (baUser) {

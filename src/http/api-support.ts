@@ -170,8 +170,7 @@ export async function serializeFeatureUsage(
   };
 }
 
-// Groups reviews/fix attempts (over-fetched by repo id + PR number
-// separately, D1 having no clean tuple-IN) down to the exact pair.
+// Groups the exact review/fix-attempt tuple query results for presentation.
 export function groupByRepoPr<T extends { repository_id: number; pr_number: number }>(
   rows: T[],
 ): Map<string, T[]> {

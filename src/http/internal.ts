@@ -50,7 +50,7 @@ export function createInternalRoutes() {
   // Artifacts-hosted project provisioning (docs/artifacts-provider.md):
   //   POST /projects { "owner": "...", "name": "...", "description"?: "..." }
   // Creates the Artifacts repo in turbodiff's namespace, seeds an initial
-  // commit, and records the synthetic-tenancy D1 rows. The request stays
+  // commit, and records the synthetic-tenancy PostgreSQL rows. The request stays
   // open for the provisioning (first call pays a container boot).
   routes.post('/projects', async (c) => {
     const payload = await c.req

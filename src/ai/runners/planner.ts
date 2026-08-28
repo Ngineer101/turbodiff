@@ -59,7 +59,7 @@ async function clonePlanRepos(
     const full = `${repo.owner}/${repo.name}`;
     let base: string;
     if (repo.provider === 'artifacts') {
-      // Artifacts repos carry their default branch in D1 — no forge API to
+      // Artifacts repos carry their default branch in PostgreSQL — no forge API to
       // ask, and installationToken rejects synthetic installation ids.
       base = repo.default_branch ?? 'main';
     } else {

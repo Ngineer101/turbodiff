@@ -1,6 +1,7 @@
 import { setProvider } from '@flue/runtime';
 import { cloudflareBindingProvider } from '@flue/runtime/cloudflare/workers-ai';
 import { env } from 'cloudflare:workers';
+import { database } from './data/postgres.ts';
 import { Hono } from 'hono';
 import { dispatchReviewAgent } from './ai/review/dispatch.ts';
 import { registerReviewMetering } from './ai/review/metering.ts';
@@ -27,7 +28,7 @@ setProvider(
   }),
 );
 
-// Accumulate per-turn token usage and cost onto review rows in D1.
+// Accumulate per-turn token usage and cost onto review rows in PostgreSQL.
 registerReviewMetering();
 
 const startedAt = Date.now();
@@ -67,9 +68,9 @@ app.use('*', async (c, next) => {
 
 app.get('/healthz', async (c) => {
   try {
-    await env.DB.prepare('SELECT 1').run();
+    await database().prepare('SELECT 1').run();
   } catch (err) {
-    console.error('turbodiff: healthz D1 check failed', err);
+    console.error('turbodiff: healthz PostgreSQL check failed', err);
     return c.json({ ok: false, db: false }, 503);
   }
   return c.json({ ok: true, db: true, uptime_s: Math.round((Date.now() - startedAt) / 1000) });

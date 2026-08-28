@@ -1,39 +1,18 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "turbodiff-tests",
-  "compatibility_date": "2026-06-01",
+  "compatibility_date": "2026-08-28",
   "compatibility_flags": ["nodejs_compat"],
   // better-auth (src/integrations/auth/better-auth.ts) needs a base URL at construction;
   // secrets (SESSION_SECRET etc.) come from .dev.vars.
   "vars": {
     "PUBLIC_BASE_URL": "https://turbodiff.test",
   },
-  "d1_databases": [
+  "hyperdrive": [
     {
-      "binding": "DB",
-      "database_name": "turbodiff-tests",
-      "database_id": "00000000-0000-0000-0000-000000000001",
-      "migrations_dir": "migrations",
-    },
-    {
-      "binding": "DB_MIGRATIONS_FRESH",
-      "database_name": "turbodiff-tests-migrations-fresh",
-      "database_id": "00000000-0000-0000-0000-000000000002",
-    },
-    {
-      "binding": "DB_MIGRATIONS_CONNECTIONS",
-      "database_name": "turbodiff-tests-migrations-connections",
-      "database_id": "00000000-0000-0000-0000-000000000003",
-    },
-    {
-      "binding": "DB_MIGRATIONS_MULTI_REPO",
-      "database_name": "turbodiff-tests-migrations-multi-repo",
-      "database_id": "00000000-0000-0000-0000-000000000004",
-    },
-    {
-      "binding": "DB_MIGRATIONS_IDEMPOTENCY",
-      "database_name": "turbodiff-tests-migrations-idempotency",
-      "database_id": "00000000-0000-0000-0000-000000000005",
+      "binding": "HYPERDRIVE",
+      "id": "00e793ecaf2c44b292e069861623dc3f",
+      "localConnectionString": "postgres://turbodiff:turbodiff@localhost:5432/turbodiff",
     },
   ],
 }

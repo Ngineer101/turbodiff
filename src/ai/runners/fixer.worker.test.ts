@@ -2,10 +2,8 @@
 /// <reference path="../../../worker-configuration.d.ts" />
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
 
-import type { D1Migration } from '@cloudflare/vitest-pool-workers';
-import { env } from 'cloudflare:workers';
-import { applyD1Migrations } from 'cloudflare:test';
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
+import { database } from '../../data/postgres.ts';
+import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { createFeature, setInstallationSuspended, updateFeature } from '../../data/db.ts';
 import {
   fixLabel,
@@ -15,12 +13,7 @@ import {
 } from './fixer.ts';
 import type { FixQueueMessage } from '../../shared/factory-messages.ts';
 
-type TestEnv = Cloudflare.Env & { TEST_MIGRATIONS: D1Migration[] };
 type ExecuteFix = NonNullable<FixProcessorDependencies['runFix']>;
-// SAFETY: vitest.worker.config.ts defines the test-only TEST_MIGRATIONS
-// miniflare binding, which the generated production Cloudflare.Env cannot
-// know about.
-const testEnv = env as TestEnv;
 
 const ciMessage: FixQueueMessage = {
   kind: 'fix',
@@ -39,12 +32,12 @@ const noChanges: FixOutcome = {
 };
 
 async function seedOpenFactoryPr(): Promise<number> {
-  await testEnv.DB.batch([
-    testEnv.DB.prepare(
+  await database().batch([
+    database().prepare(
       `INSERT INTO installations (id, account_login, account_id, account_type)
 		 VALUES (1001, 'acme', 2001, 'Organization')`,
     ),
-    testEnv.DB.prepare(
+    database().prepare(
       `INSERT INTO repositories (id, installation_id, owner, name, enabled, auto_fix)
 		 VALUES (101, 1001, 'acme', 'api', 1, 1)`,
     ),
@@ -53,10 +46,6 @@ async function seedOpenFactoryPr(): Promise<number> {
   await updateFeature(featureId, { status: 'pr_opened', prNumber: 42 });
   return featureId;
 }
-
-beforeAll(async () => {
-  await applyD1Migrations(testEnv.DB, testEnv.TEST_MIGRATIONS);
-});
 
 beforeEach(async () => {
   const tables = [
@@ -67,7 +56,7 @@ beforeEach(async () => {
     'repositories',
     'installations',
   ];
-  await testEnv.DB.batch(tables.map((table) => testEnv.DB.prepare(`DELETE FROM "${table}"`)));
+  await database().batch(tables.map((table) => database().prepare(`DELETE FROM "${table}"`)));
 });
 
 describe('CI fix queue consumption', () => {
@@ -88,9 +77,11 @@ describe('CI fix queue consumption', () => {
         workflowRunId: 9001,
       }),
     );
-    const attempt = await testEnv.DB.prepare(
-      'SELECT "trigger", status FROM fix_attempts WHERE repository_id = 101 AND pr_number = 42',
-    ).first<{ trigger: string; status: string }>();
+    const attempt = await database()
+      .prepare(
+        'SELECT "trigger", status FROM fix_attempts WHERE repository_id = 101 AND pr_number = 42',
+      )
+      .first<{ trigger: string; status: string }>();
     expect(attempt).toEqual({ trigger: 'ci_failure', status: 'no_changes' });
   });
 
@@ -106,9 +97,11 @@ describe('CI fix queue consumption', () => {
     await processFixMessage(ciMessage, { runFix });
 
     expect(runFix).not.toHaveBeenCalled();
-    const count = await testEnv.DB.prepare(
-      'SELECT COUNT(*) AS n FROM fix_attempts WHERE repository_id = 101 AND pr_number = 42',
-    ).first<{ n: number }>();
+    const count = await database()
+      .prepare(
+        'SELECT COUNT(*) AS n FROM fix_attempts WHERE repository_id = 101 AND pr_number = 42',
+      )
+      .first<{ n: number }>();
     expect(count?.n).toBe(0);
   });
 });

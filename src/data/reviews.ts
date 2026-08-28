@@ -1,4 +1,4 @@
-import { env } from 'cloudflare:workers';
+import { database } from './postgres.ts';
 import { placeholderList } from './sql.ts';
 import { STALL_CUTOFF_MODIFIER } from '../shared/time.ts';
 
@@ -16,14 +16,15 @@ export async function agentUsageForMonth(
 ): Promise<AgentUsageRow[]> {
   if (installationIds.length === 0) return [];
   const placeholders = placeholderList(installationIds.length);
-  const res = await env.DB.prepare(
-    `SELECT agent_slug, COUNT(*) AS reviews, SUM(cost_usd) AS cost_usd
+  const res = await database()
+    .prepare(
+      `SELECT agent_slug, COUNT(*) AS reviews, SUM(cost_usd) AS cost_usd
 		 FROM reviews
 		 WHERE installation_id IN (${placeholders})
-			AND strftime('%Y-%m', created_at) = ?${installationIds.length + 1}
+			AND to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM') = ?${installationIds.length + 1}
 		 GROUP BY agent_slug
 		 ORDER BY cost_usd DESC`,
-  )
+    )
     .bind(...installationIds, month)
     .all<AgentUsageRow>();
   return res.results;
@@ -60,14 +61,15 @@ export async function listRecentReviews(
 ): Promise<ReviewActivityRow[]> {
   if (installationIds.length === 0) return [];
   const placeholders = placeholderList(installationIds.length);
-  const res = await env.DB.prepare(
-    `SELECT r.*, repo.owner AS repo_owner, repo.name AS repo_name
+  const res = await database()
+    .prepare(
+      `SELECT r.*, repo.owner AS repo_owner, repo.name AS repo_name
 		 FROM reviews r
 		 LEFT JOIN repositories repo ON repo.id = r.repository_id
 		 WHERE r.installation_id IN (${placeholders})
 		 ORDER BY r.id DESC
 		 LIMIT ${limit} OFFSET ${offset}`,
-  )
+    )
     .bind(...installationIds)
     .all<ReviewActivityRow>();
   return res.results;
@@ -76,9 +78,8 @@ export async function listRecentReviews(
 export async function countReviews(installationIds: number[]): Promise<number> {
   if (installationIds.length === 0) return 0;
   const placeholders = placeholderList(installationIds.length);
-  const row = await env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM reviews WHERE installation_id IN (${placeholders})`,
-  )
+  const row = await database()
+    .prepare(`SELECT COUNT(*) AS n FROM reviews WHERE installation_id IN (${placeholders})`)
     .bind(...installationIds)
     .first<{ n: number }>();
   return row?.n ?? 0;
@@ -98,10 +99,11 @@ export async function monthlyUsage(
 ): Promise<MonthlyUsageRow[]> {
   if (installationIds.length === 0) return [];
   const placeholders = placeholderList(installationIds.length);
-  const res = await env.DB.prepare(
-    `SELECT strftime('%Y-%m', created_at) AS month,
+  const res = await database()
+    .prepare(
+      `SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM') AS month,
 			COUNT(*) AS reviews,
-			SUM(status = 'completed') AS completed,
+			COUNT(*) FILTER (WHERE status = 'completed') AS completed,
 			SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens) AS total_tokens,
 			SUM(cost_usd) AS cost_usd
 		 FROM reviews
@@ -109,7 +111,7 @@ export async function monthlyUsage(
 		 GROUP BY month
 		 ORDER BY month DESC
 		 LIMIT ${months}`,
-  )
+    )
     .bind(...installationIds)
     .all<MonthlyUsageRow>();
   return res.results;
@@ -131,8 +133,9 @@ export async function repoUsageForMonth(
 ): Promise<RepoUsageRow[]> {
   if (installationIds.length === 0) return [];
   const placeholders = placeholderList(installationIds.length);
-  const res = await env.DB.prepare(
-    `SELECT r.repository_id,
+  const res = await database()
+    .prepare(
+      `SELECT r.repository_id,
 			repo.owner AS repo_owner, repo.name AS repo_name,
 			COUNT(*) AS reviews,
 			SUM(r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_write_tokens) AS total_tokens,
@@ -140,10 +143,10 @@ export async function repoUsageForMonth(
 		 FROM reviews r
 		 LEFT JOIN repositories repo ON repo.id = r.repository_id
 		 WHERE r.installation_id IN (${placeholders})
-			AND strftime('%Y-%m', r.created_at) = ?${installationIds.length + 1}
-		 GROUP BY r.repository_id
+			AND to_char(r.created_at AT TIME ZONE 'UTC', 'YYYY-MM') = ?${installationIds.length + 1}
+		 GROUP BY r.repository_id, repo.owner, repo.name
 		 ORDER BY cost_usd DESC`,
-  )
+    )
     .bind(...installationIds, month)
     .all<RepoUsageRow>();
   return res.results;
@@ -173,23 +176,26 @@ export async function dashboardStats(installationIds: number[]): Promise<Dashboa
   // (STALL_AFTER_MS in shared/time.ts): a review row flips out of 'running'
   // solely when its agent posts, so a run that dies mid-flight would
   // otherwise pin the dashboard's active count forever.
-  const row = await env.DB.prepare(
-    `SELECT
-			COALESCE(SUM(strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')), 0) AS month_reviews,
-			COALESCE(SUM(CASE WHEN strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now') THEN cost_usd ELSE 0 END), 0) AS month_cost_usd,
-			COALESCE(SUM(CASE WHEN strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
-				THEN input_tokens + output_tokens + cache_read_tokens + cache_write_tokens ELSE 0 END), 0) AS month_tokens,
-			AVG(CASE WHEN status = 'completed' AND completed_at IS NOT NULL
-				AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
-				THEN (julianday(completed_at) - julianday(created_at)) * 86400 END) AS avg_duration_s,
-			AVG(CASE WHEN status = 'completed' AND findings_count IS NOT NULL
-				AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
-				THEN findings_count END) AS avg_findings,
-			COALESCE(SUM(status = 'running'
-				AND created_at > datetime('now', '${STALL_CUTOFF_MODIFIER}')), 0) AS running
+  const row = await database()
+    .prepare(
+      `SELECT
+			COUNT(*) FILTER (WHERE date_trunc('month', created_at) = date_trunc('month', CURRENT_TIMESTAMP)) AS month_reviews,
+			COALESCE(SUM(cost_usd) FILTER (WHERE date_trunc('month', created_at) = date_trunc('month', CURRENT_TIMESTAMP)), 0) AS month_cost_usd,
+			COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens)
+				FILTER (WHERE date_trunc('month', created_at) = date_trunc('month', CURRENT_TIMESTAMP)), 0) AS month_tokens,
+			AVG(EXTRACT(EPOCH FROM (completed_at - created_at))) FILTER (
+				WHERE status = 'completed' AND completed_at IS NOT NULL
+				AND date_trunc('month', created_at) = date_trunc('month', CURRENT_TIMESTAMP)
+			) AS avg_duration_s,
+			AVG(findings_count) FILTER (
+				WHERE status = 'completed' AND findings_count IS NOT NULL
+				AND date_trunc('month', created_at) = date_trunc('month', CURRENT_TIMESTAMP)
+			) AS avg_findings,
+			COUNT(*) FILTER (WHERE status = 'running'
+				AND created_at > CURRENT_TIMESTAMP + INTERVAL '${STALL_CUTOFF_MODIFIER}') AS running
 		 FROM reviews
 		 WHERE installation_id IN (${placeholders})`,
-  )
+    )
     .bind(...installationIds)
     .first<DashboardStats>();
   return row ?? empty;
@@ -200,13 +206,14 @@ export async function dashboardStats(installationIds: number[]): Promise<Dashboa
 // without post_review having completed the row (agent error, abort, or a run
 // that never posted). No-op when the row is already completed.
 export async function markReviewFailed(agentInstanceId: string): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE reviews SET status = 'failed', completed_at = datetime('now')
+  await database()
+    .prepare(
+      `UPDATE reviews SET status = 'failed', completed_at = CURRENT_TIMESTAMP
 		 WHERE id = (
 			SELECT id FROM reviews WHERE agent_instance_id = ?1 AND status = 'running'
 			ORDER BY id DESC LIMIT 1
 		 )`,
-  )
+    )
     .bind(agentInstanceId)
     .run();
 }
@@ -219,12 +226,13 @@ export async function hasActiveReview(
   prNumber: number,
   agentSlug: string,
 ): Promise<boolean> {
-  const row = await env.DB.prepare(
-    `SELECT id FROM reviews
+  const row = await database()
+    .prepare(
+      `SELECT id FROM reviews
 		 WHERE repository_id = ?1 AND pr_number = ?2 AND agent_slug = ?3
-			AND status = 'running' AND created_at > datetime('now', '${STALL_CUTOFF_MODIFIER}')
+			AND status = 'running' AND created_at > CURRENT_TIMESTAMP + INTERVAL '${STALL_CUTOFF_MODIFIER}'
 		 LIMIT 1`,
-  )
+    )
     .bind(repositoryId, prNumber, agentSlug)
     .first<{ id: number }>();
   return row !== null;
@@ -239,12 +247,13 @@ export async function reviewedRecently(
   agentSlug: string,
   windowMinutes: number,
 ): Promise<boolean> {
-  const row = await env.DB.prepare(
-    `SELECT id FROM reviews
+  const row = await database()
+    .prepare(
+      `SELECT id FROM reviews
 		 WHERE repository_id = ?1 AND pr_number = ?2 AND agent_slug = ?3
-			AND created_at > datetime('now', '-' || ?4 || ' minutes')
+			AND created_at > CURRENT_TIMESTAMP - (?4::double precision * INTERVAL '1 minute')
 		 LIMIT 1`,
-  )
+    )
     .bind(repositoryId, prNumber, agentSlug, windowMinutes)
     .first<{ id: number }>();
   return row !== null;
@@ -252,10 +261,11 @@ export async function reviewedRecently(
 
 // Reviews dispatched for this installation in the last 24h (backs the daily cap).
 export async function reviewCountLastDay(installationId: number): Promise<number> {
-  const row = await env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM reviews
-		 WHERE installation_id = ?1 AND created_at > datetime('now', '-1 day')`,
-  )
+  const row = await database()
+    .prepare(
+      `SELECT COUNT(*) AS n FROM reviews
+		 WHERE installation_id = ?1 AND created_at > CURRENT_TIMESTAMP - INTERVAL '1 day'`,
+    )
     .bind(installationId)
     .first<{ n: number }>();
   return row?.n ?? 0;

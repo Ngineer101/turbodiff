@@ -604,7 +604,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       deferredExecution(c),
       `board/${encodeURIComponent(tenantKey)}/${version}`,
       async (): Promise<ApiBoard> => {
-        // All D1 rollups start in one wave. The repo-link queries are scoped
+        // All PostgreSQL rollups start in one wave. The repo-link queries are scoped
         // directly by installation rather than waiting for plan/todo ids.
         const [groups, plans, todos, stats, pipelineCost, repoStatuses, todoRepos] =
           await Promise.all([
@@ -1080,9 +1080,9 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       const data = await immutableRepoJson(
         deferredExecution(c),
         recorded
-          // v2: the payload gained content_base64 — a fresh key so cached
-          // field-less JSON from before the change is never served.
-          ? `artifacts/file/v2/${repo.id}/${recorded.head_sha}/${encodeURIComponent(path)}`
+          ? // v2: the payload gained content_base64 — a fresh key so cached
+            // field-less JSON from before the change is never served.
+            `artifacts/file/v2/${repo.id}/${recorded.head_sha}/${encodeURIComponent(path)}`
           : null,
         () => readFileArtifacts(repo, ref, path),
       );
@@ -2231,7 +2231,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     return c.json({ ok: true });
   });
 
-  // --- Automations: recurring per-repo prompt runs (migration 0028) ---
+  // --- Automations: recurring per-repo prompt runs ---
 
   app.get('/automations', async (c) => {
     const { installationIds } = c.get('user');
@@ -2370,7 +2370,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       runs: runs.map((r) => ({
         id: r.id,
         // SAFETY: automation_runs.status only ever holds running | pr_opened |
-        // no_changes | checks_failed | failed (migration 0028, finishAutomationRun).
+        // no_changes | checks_failed | failed (finishAutomationRun).
         status: r.status as ApiAutomationRunSummary['status'],
         pr_number: r.pr_number,
         error: r.error,
@@ -2392,7 +2392,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       run: {
         id: detail.run.id,
         // SAFETY: automation_runs.status only ever holds running | pr_opened |
-        // no_changes | checks_failed | failed (migration 0028, finishAutomationRun).
+        // no_changes | checks_failed | failed (finishAutomationRun).
         status: detail.run.status as ApiAutomationRunSummary['status'],
         pr_number: detail.run.pr_number,
         error: detail.run.error,
@@ -2764,7 +2764,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   });
 
   // --- Organizations: member management for Organization-type installations ---
-  // (migrations/0031_organizations.sql). Reads use plain installation
+  // in the auth schema. Reads use plain installation
   // membership (the hybrid model's baseline), but the org row itself is now
   // provisioned lazily on first visit for installations whose webhook was
   // missed, with the first owner bootstrapped from GitHub org-admin status

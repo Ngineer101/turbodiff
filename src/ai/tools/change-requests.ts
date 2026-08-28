@@ -182,7 +182,7 @@ export const makeFetchCrComments = (pin: CrPin) =>
   });
 
 // The native post_review: findings land as cr_comments, the verdict on the
-// CR row and its 'review' check, and the D1 review row completes — then the
+// CR row and its 'review' check, and the PostgreSQL review row completes — then the
 // auto-merge gate gets its chance, exactly like the GitHub tool's tail.
 export const makePostCrReview = (agentInstanceId: string, pin: CrPin) =>
   defineTool({

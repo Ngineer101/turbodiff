@@ -22,7 +22,7 @@ application services <---- AI orchestration
 
 - `src/domain/` contains pure policy and value logic. It does not import
   Cloudflare bindings, Hono, databases, or remote clients.
-- `src/data/` contains D1 row types and queries. `db.ts` is a stable facade;
+- `src/data/` contains PostgreSQL row types and queries. `db.ts` is a stable facade;
   implementations are grouped by responsibility so callers do not depend on a
   single query god-module.
 - `src/integrations/` adapts external systems: GitHub, better-auth, MCP,
@@ -67,7 +67,7 @@ is the only place that routes the union to concrete runners and Workflows.
 ## Adding functionality
 
 1. Put pure rules and stable value types in `domain` or `shared`.
-2. Add D1 queries to the matching `data` module and re-export them from
+2. Add PostgreSQL queries to the matching `data` module and re-export them from
    `data/db.ts` when they are part of the data API.
 3. Put external protocol details in `integrations`.
 4. Coordinate the use case in `services` or `ai`.

@@ -1,10 +1,10 @@
-import { env } from 'cloudflare:workers';
+import { database } from './postgres.ts';
 import { placeholderList } from './sql.ts';
 import { STALL_CUTOFF_MODIFIER } from '../shared/time.ts';
 import type { CliUsage } from '../shared/usage.ts';
 import type { AgentRunRow } from './factory.ts';
 
-// --- Automations (migration 0028): recurring per-repo prompt runs ---
+// --- Automations: recurring per-repo prompt runs ---
 
 export interface AutomationRow {
   id: number;
@@ -56,8 +56,9 @@ export async function listAutomationsForInstallations(
 ): Promise<AutomationWithRepo[]> {
   if (installationIds.length === 0) return [];
   const placeholders = placeholderList(installationIds.length);
-  const res = await env.DB.prepare(
-    `SELECT a.*, r.owner, r.name AS name_repo,
+  const res = await database()
+    .prepare(
+      `SELECT a.*, r.owner, r.name AS name_repo,
 		        lr.id AS last_run_id, lr.status AS last_run_status, lr.created_at AS last_run_created_at
 		 FROM automations a
 		 JOIN repositories r ON r.id = a.repository_id
@@ -66,7 +67,7 @@ export async function listAutomationsForInstallations(
 		 )
 		 WHERE r.installation_id IN (${placeholders})
 		 ORDER BY r.owner, r.name, a.name`,
-  )
+    )
     .bind(...installationIds)
     .all<
       AutomationRow & {
@@ -87,7 +88,10 @@ export async function listAutomationsForInstallations(
 }
 
 export async function getAutomationById(id: number): Promise<AutomationRow | null> {
-  return env.DB.prepare('SELECT * FROM automations WHERE id = ?1').bind(id).first<AutomationRow>();
+  return database()
+    .prepare('SELECT * FROM automations WHERE id = ?1')
+    .bind(id)
+    .first<AutomationRow>();
 }
 
 export async function createAutomation(
@@ -95,10 +99,11 @@ export async function createAutomation(
   fields: AutomationFields,
   nextRunAt: string,
 ): Promise<number> {
-  const row = await env.DB.prepare(
-    `INSERT INTO automations (repository_id, name, prompt, schedule_kind, time_of_day, day_of_week, next_run_at)
+  const row = await database()
+    .prepare(
+      `INSERT INTO automations (repository_id, name, prompt, schedule_kind, time_of_day, day_of_week, next_run_at)
 		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id`,
-  )
+    )
     .bind(
       repositoryId,
       fields.name,
@@ -117,12 +122,13 @@ export async function updateAutomation(
   fields: AutomationFields & { enabled: boolean },
   nextRunAt: string,
 ): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE automations SET
+  await database()
+    .prepare(
+      `UPDATE automations SET
 		 name = ?2, prompt = ?3, schedule_kind = ?4, time_of_day = ?5, day_of_week = ?6,
 		 enabled = ?7, next_run_at = ?8
 		 WHERE id = ?1`,
-  )
+    )
     .bind(
       id,
       fields.name,
@@ -138,13 +144,12 @@ export async function updateAutomation(
 
 // automation_runs rows (and, transitively, their agent_runs) cascade via FK.
 export async function deleteAutomation(id: number): Promise<void> {
-  await env.DB.prepare('DELETE FROM automations WHERE id = ?1').bind(id).run();
+  await database().prepare('DELETE FROM automations WHERE id = ?1').bind(id).run();
 }
 
 export async function listDueAutomations(nowIso: string): Promise<AutomationRow[]> {
-  const res = await env.DB.prepare(
-    `SELECT * FROM automations WHERE enabled = 1 AND next_run_at <= ?1`,
-  )
+  const res = await database()
+    .prepare(`SELECT * FROM automations WHERE enabled = 1 AND next_run_at <= ?1`)
     .bind(nowIso)
     .all<AutomationRow>();
   return res.results;
@@ -157,11 +162,12 @@ export async function claimAutomation(
   nextRunAt: string,
   nowIso: string,
 ): Promise<boolean> {
-  const row = await env.DB.prepare(
-    `UPDATE automations SET next_run_at = ?2
+  const row = await database()
+    .prepare(
+      `UPDATE automations SET next_run_at = ?2
 		 WHERE id = ?1 AND enabled = 1 AND next_run_at <= ?3
 		 RETURNING id`,
-  )
+    )
     .bind(id, nextRunAt, nowIso)
     .first<{ id: number }>();
   return row !== null;
@@ -173,21 +179,24 @@ export async function claimAutomation(
 // (a consumer killed mid-run never finishes its row), mirroring
 // tryRecordFixAttempt minus the attempt cap — the schedule itself throttles.
 export async function tryRecordAutomationRun(automationId: number): Promise<number | null> {
-  await env.DB.prepare(
-    `UPDATE automation_runs SET status = 'failed', error = 'stale: consumer killed before completion'
+  await database()
+    .prepare(
+      `UPDATE automation_runs SET status = 'failed', error = 'stale: consumer killed before completion'
 		 WHERE automation_id = ?1 AND status = 'running'
-		 AND created_at < datetime('now', '${STALL_CUTOFF_MODIFIER}')`,
-  )
+		 AND created_at < CURRENT_TIMESTAMP + INTERVAL '${STALL_CUTOFF_MODIFIER}'`,
+    )
     .bind(automationId)
     .run();
-  const row = await env.DB.prepare(
-    `INSERT INTO automation_runs (automation_id)
+  const row = await database()
+    .prepare(
+      `INSERT INTO automation_runs (automation_id)
 		 SELECT ?1
 		 WHERE NOT EXISTS (
 		   SELECT 1 FROM automation_runs WHERE automation_id = ?1 AND status = 'running'
 		 )
+		 ON CONFLICT DO NOTHING
 		 RETURNING id`,
-  )
+    )
     .bind(automationId)
     .first<{ id: number }>();
   return row?.id ?? null;
@@ -201,13 +210,14 @@ export async function finishAutomationRun(
   error?: string,
   usage?: CliUsage,
 ): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE automation_runs SET
+  await database()
+    .prepare(
+      `UPDATE automation_runs SET
 		 status = ?2, pr_number = ?3, commit_sha = ?4, error = ?5,
 		 input_tokens = ?6, output_tokens = ?7, cache_read_tokens = ?8, cache_write_tokens = ?9,
 		 cost_usd = ?10, model = ?11
 		 WHERE id = ?1`,
-  )
+    )
     .bind(
       runId,
       status,
@@ -225,9 +235,8 @@ export async function finishAutomationRun(
 }
 
 export async function listAutomationRuns(automationId: number): Promise<AutomationRunRow[]> {
-  const res = await env.DB.prepare(
-    'SELECT * FROM automation_runs WHERE automation_id = ?1 ORDER BY id DESC',
-  )
+  const res = await database()
+    .prepare('SELECT * FROM automation_runs WHERE automation_id = ?1 ORDER BY id DESC')
     .bind(automationId)
     .all<AutomationRunRow>();
   return res.results;
@@ -242,13 +251,14 @@ export interface AutomationRunDetail {
 // check) plus repo context, in one query — the run page is reachable
 // standalone (GET /automations/runs/:id), not only nested in a list.
 export async function getAutomationRunDetail(runId: number): Promise<AutomationRunDetail | null> {
-  const row = await env.DB.prepare(
-    `SELECT ar.*, a.name AS automation_name, r.installation_id, r.owner, r.name AS repo_name
+  const row = await database()
+    .prepare(
+      `SELECT ar.*, a.name AS automation_name, r.installation_id, r.owner, r.name AS repo_name
 		 FROM automation_runs ar
 		 JOIN automations a ON a.id = ar.automation_id
 		 JOIN repositories r ON r.id = a.repository_id
 		 WHERE ar.id = ?1`,
-  )
+    )
     .bind(runId)
     .first<
       AutomationRunRow & {
@@ -288,9 +298,10 @@ export async function getAutomationRunDetail(runId: number): Promise<AutomationR
 export async function listAgentRunsForAutomationRun(
   automationRunId: number,
 ): Promise<AgentRunRow[]> {
-  const res = await env.DB.prepare(
-    'SELECT id, kind, success, created_at FROM agent_runs WHERE automation_run_id = ?1 ORDER BY id',
-  )
+  const res = await database()
+    .prepare(
+      'SELECT id, kind, success, created_at FROM agent_runs WHERE automation_run_id = ?1 ORDER BY id',
+    )
     .bind(automationRunId)
     .all<AgentRunRow>();
   return res.results;

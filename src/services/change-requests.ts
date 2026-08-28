@@ -23,7 +23,7 @@ import { autoMergeDecline } from '../domain/merge-policy.ts';
 import { splitDiffSegments } from '../domain/review-diff.ts';
 
 // Native change-request orchestration (docs/artifacts-provider.md): the
-// forge layer for Artifacts-hosted repos. Rows in D1 (data/change-requests),
+// forge layer for Artifacts-hosted repos. Rows in PostgreSQL (data/change-requests),
 // git mechanics in the sandbox (ai/runtime/cr-engine), diff patches in R2
 // under the private crs/ prefix — objects there are never issued capability
 // signatures, so /artifacts/* cannot serve them.

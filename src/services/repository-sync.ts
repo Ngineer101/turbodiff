@@ -2,23 +2,25 @@ import {
   addRepositories,
   claimInstallationRepoSync,
   finishInstallationRepoSync,
+  getInstallation,
   listRepositoryIdsForInstallation,
   removeRepositories,
 } from '../data/db.ts';
 import { installationToken } from '../integrations/github/app.ts';
 import { githubPaginate } from '../integrations/github/client.ts';
 
-// Webhooks keep the D1 repository mirror current, but a missed
+// Webhooks keep the PostgreSQL repository mirror current, but a missed
 // `installation_repositories` delivery (downtime, webhook URL change) leaves
 // the mirror stale forever. This reconciles one installation's rows against
 // GitHub's actual repo list — the same adds/removes the webhook would have
 // applied. Callers treat failures as non-fatal: the mirror stays as-is.
 
 export async function syncInstallationRepos(installationId: number): Promise<void> {
-  // Synthetic Artifacts installations (negative ids, docs/artifacts-provider.md)
-  // have no GitHub side to reconcile against — asking GitHub about them would
-  // 404 and, worse, delete every repo row as "stale".
-  if (installationId < 0) return;
+  // Artifacts installations have no GitHub side to reconcile against. Provider
+  // identity is explicit; numeric id ranges must never carry application
+  // semantics.
+  const installation = await getInstallation(installationId);
+  if (installation?.provider !== 'github') return;
   if (!(await claimInstallationRepoSync(installationId))) return;
 
   try {

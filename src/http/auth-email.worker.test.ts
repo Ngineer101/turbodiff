@@ -2,23 +2,12 @@
 /// <reference path="../../worker-configuration.d.ts" />
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
 
-import type { D1Migration } from '@cloudflare/vitest-pool-workers';
-import { env } from 'cloudflare:workers';
+import { database } from '../data/postgres.ts';
 // Transport-level coverage for email sign-up.
-import { applyD1Migrations } from 'cloudflare:test';
 import { Hono } from 'hono';
-import { beforeAll, describe, expect, it } from 'vite-plus/test';
+import { describe, expect, it } from 'vite-plus/test';
 import type { JsonObject } from '../shared/json.ts';
 import { handleEmailSignUp } from './auth-email.ts';
-
-type TestEnv = Cloudflare.Env & { TEST_MIGRATIONS: D1Migration[] };
-// SAFETY: vitest.worker.config.ts provisions the TEST_MIGRATIONS binding for
-// this pool on top of the generated Cloudflare.Env.
-const testEnv = env as TestEnv;
-
-beforeAll(async () => {
-  await applyD1Migrations(testEnv.DB, testEnv.TEST_MIGRATIONS);
-});
 
 async function signUp(body: JsonObject): Promise<Response> {
   const app = new Hono();
@@ -41,7 +30,8 @@ describe('email/password sign-up', () => {
     // autoSignIn: the sign-up response carries the session cookie.
     expect(response.headers.get('set-cookie')).toContain('turbodiff.session_token');
 
-    const user = await testEnv.DB.prepare('SELECT name, login, githubId FROM user WHERE email = ?')
+    const user = await database()
+      .prepare('SELECT name, login, "githubId" FROM "user" WHERE email = ?1')
       .bind('pat@example.test')
       .first<{ name: string; login: string | null; githubId: number | null }>();
     expect(user).toEqual({ name: 'Pat', login: null, githubId: null });
@@ -60,7 +50,8 @@ describe('email/password sign-up', () => {
     });
     expect(response.status).toBe(200);
 
-    const user = await testEnv.DB.prepare('SELECT login, githubId FROM user WHERE email = ?')
+    const user = await database()
+      .prepare('SELECT login, "githubId" FROM "user" WHERE email = ?1')
       .bind('mallory@example.test')
       .first<{ login: string | null; githubId: number | null }>();
     expect(user).toEqual({ login: null, githubId: null });

@@ -13,12 +13,14 @@ branch; everything here is production code.
   operation goes through a `WorkspaceRemote`; no call site builds a forge URL
   anymore. GitHub's command shapes are byte-identical to before.
 - **Synthetic tenancy** — Artifacts projects reuse the installation-scoped
-  access model via installation/repository rows in the **negative id range**
-  (GitHub ids are positive, so the spaces cannot collide). Migration
-  `0035_git_providers.sql`; allocation in `src/data/repositories.ts`.
+  access model via installation/repository rows. PostgreSQL allocates their
+  IDs from a dedicated high-range sequence, while provider identity remains
+  an explicit column rather than an ID convention. Schema in
+  `db/migrations/0002_tenant_and_repository.sql`; allocation in
+  `src/data/repositories.ts`.
 - **Provisioning** — `POST /internal/projects {owner, name, description?}`
   creates the Artifacts repo (collision-suffixed name `owner--name`), seeds an
-  initial commit from the sandbox, and records the D1 rows. Compensating
+  initial commit from the sandbox, and records the PostgreSQL rows. Compensating
   deletes on failure; no row ever points at a broken remote.
 - **Clone credentials** — `POST /internal/repos/clone-token {repo, scope?, ttl_seconds?}`
   mints a repo-scoped token so a user clones/pushes with plain git:
@@ -42,11 +44,11 @@ branch; everything here is production code.
   Artifacts uses `-c http.extraHeader="Authorization: Bearer $GIT_TOKEN"`
   because its tokens can carry `?expires=` — URL-hostile. Both shapes live in
   `remotes.ts` only.
-- **Negative synthetic ids over a schema rewrite.** `installation_id` drives
-  scoping, budgets, and org mapping across dozens of query sites. Synthetic
-  rows preserve every invariant with zero query changes; `mintToken` and
-  `syncInstallationRepos` hard-guard against a negative id ever reaching
-  GitHub.
+- **Provider identity is explicit.** `installation_id` still drives scoping,
+  budgets, and org mapping across the application, while `provider` controls
+  GitHub-versus-Artifact behavior. A high-range sequence avoids collisions
+  with external GitHub IDs without giving numeric ranges business meaning;
+  reconciliation checks the installation provider before calling GitHub.
 - **PR-head flows stay GitHub-constructed.** Fix and conflict-resolution
   operate on a PR's head repo (possibly a fork), so they build a GitHub
   remote for that slug directly rather than resolving from the repo row.
@@ -57,8 +59,8 @@ branch; everything here is production code.
    fails to provision otherwise).
 2. Namespace `turbodiff-repos` — must match `ARTIFACTS_NAMESPACE` in
    `src/integrations/git/remotes.ts` and the `triggers.events` filters.
-3. Migrations + deploy ride the normal CI path (migrations applied before
-   deploy, `wrangler deploy --dry-run` validates the new config in PR CI).
+3. Apply PostgreSQL migrations explicitly to PlanetScale, then use the normal CI path to validate
+   and deploy the Worker. The pipeline does not provision or mutate database resources.
 
 Smoke test after deploy:
 
@@ -76,8 +78,8 @@ curl -sX POST https://turbodiff.dev/internal/repos/clone-token -H "$AUTH" \
 
 The forge layer itself, no GitHub underneath:
 
-- **Records** — `change_requests` / `cr_comments` / `cr_checks` (migration
-  `0036`), diffs cached in R2 under the private `crs/` prefix. Data layer in
+- **Records** — `change_requests` / `cr_comments` / `cr_checks` (schema in
+  `db/migrations/0004_collaboration_and_access.sql`), diffs cached in R2 under the private `crs/` prefix. Data layer in
   `src/data/change-requests.ts`, orchestration in
   `src/services/change-requests.ts`.
 - **Engine** — `src/ai/runtime/cr-engine.ts` (production port of the

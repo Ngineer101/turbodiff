@@ -2,22 +2,16 @@
 /// <reference path="../../worker-configuration.d.ts" />
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
 
-import type { D1Migration } from '@cloudflare/vitest-pool-workers';
-import { env } from 'cloudflare:workers';
+import { database } from '../data/postgres.ts';
 // Transport-level coverage for the signed-in JSON API.
-import { applyD1Migrations } from 'cloudflare:test';
 import { Hono } from 'hono';
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
+import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import type { AuthedUser } from '../services/auth.ts';
 import type { ApiBoard, ApiUsage } from '../shared/api-types.ts';
 import { isJsonObject, isString, parseJson } from '../shared/json.ts';
 import { createApiRoutes, type ApiRouteDependencies } from './api.ts';
 
-type TestEnv = Cloudflare.Env & { TEST_MIGRATIONS: D1Migration[] };
 type Authenticate = NonNullable<ApiRouteDependencies['authenticate']>;
-// SAFETY: vitest.worker.config.ts provisions the TEST_MIGRATIONS binding for
-// this pool on top of the generated Cloudflare.Env.
-const testEnv = env as TestEnv;
 
 const acmeUser: AuthedUser = {
   session: { authUserId: 'user-3001', userId: 3001, login: 'octocat' },
@@ -46,23 +40,23 @@ function authenticatedApi(canPush = async () => true, orgAdmin = async () => tru
 }
 
 async function seedTenants(): Promise<void> {
-  await testEnv.DB.batch([
-    testEnv.DB.prepare(
+  await database().batch([
+    database().prepare(
       `INSERT INTO installations (id, account_login, account_id, account_type)
 		 VALUES (1001, 'acme', 2001, 'Organization'),
 		        (2002, 'other', 2002, 'Organization')`,
     ),
-    testEnv.DB.prepare(
+    database().prepare(
       `INSERT INTO repositories (id, installation_id, owner, name)
 		 VALUES (101, 1001, 'acme', 'api'),
 		        (202, 2002, 'other', 'private')`,
     ),
-    testEnv.DB.prepare(
+    database().prepare(
       `INSERT INTO todos (id, installation_id, title, created_by_login, created_by_id)
 		 VALUES (401, 1001, 'Acme backlog', 'octocat', 3001),
 		        (402, 2002, 'Other backlog', 'someone-else', 4001)`,
     ),
-    testEnv.DB.prepare(
+    database().prepare(
       `INSERT INTO todo_repositories (todo_id, repository_id, position)
 		 VALUES (401, 101, 0), (402, 202, 0)`,
     ),
@@ -72,17 +66,13 @@ async function seedTenants(): Promise<void> {
     // defaults to true in authenticatedApi) actually records the member row,
     // keeping capability-gated suites that never seed org rows on their
     // pre-heal "allowed" outcome.
-    testEnv.DB.prepare(
+    database().prepare(
       `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt", login, "githubId")
-		 VALUES ('u1', 'octocat', 'octocat@example.test', 1, '2026-01-01T00:00:00.000Z',
+		 VALUES ('u1', 'octocat', 'octocat@example.test', true, '2026-01-01T00:00:00.000Z',
 		         '2026-01-01T00:00:00.000Z', 'octocat', 3001)`,
     ),
   ]);
 }
-
-beforeAll(async () => {
-  await applyD1Migrations(testEnv.DB, testEnv.TEST_MIGRATIONS);
-});
 
 beforeEach(async () => {
   const tables = [
@@ -108,7 +98,7 @@ beforeEach(async () => {
     'account',
     'user',
   ];
-  await testEnv.DB.batch(tables.map((table) => testEnv.DB.prepare(`DELETE FROM "${table}"`)));
+  await database().batch(tables.map((table) => database().prepare(`DELETE FROM "${table}"`)));
   await seedTenants();
 });
 
@@ -179,10 +169,12 @@ describe('authenticated tenant isolation', () => {
       }),
     });
     expect(accepted.status).toBe(200);
-    const created = await testEnv.DB.prepare(
-      `SELECT installation_id, created_by_login, created_by_id
+    const created = await database()
+      .prepare(
+        `SELECT installation_id, created_by_login, created_by_id
 		 FROM todos WHERE title = 'Owned todo'`,
-    ).first<{ installation_id: number; created_by_login: string; created_by_id: number }>();
+      )
+      .first<{ installation_id: number; created_by_login: string; created_by_id: number }>();
     expect(created).toEqual({
       installation_id: 1001,
       created_by_login: 'octocat',
@@ -197,14 +189,14 @@ describe('authenticated tenant isolation', () => {
     });
     expect(foreign.status).toBe(404);
     expect(
-      await testEnv.DB.prepare('SELECT id FROM todos WHERE id = 402').first<{ id: number }>(),
+      await database().prepare('SELECT id FROM todos WHERE id = 402').first<{ id: number }>(),
     ).toEqual({ id: 402 });
 
     const owned = await app.request('https://turbodiff.test/api/todos/401', {
       method: 'DELETE',
     });
     expect(owned.status).toBe(200);
-    expect(await testEnv.DB.prepare('SELECT id FROM todos WHERE id = 401').first()).toBeNull();
+    expect(await database().prepare('SELECT id FROM todos WHERE id = 401').first()).toBeNull();
   });
 
   it('checks ownership before push permission and requires both to mutate repo posture', async () => {
@@ -238,7 +230,7 @@ describe('authenticated tenant isolation', () => {
       },
     );
     expect(allowed.status).toBe(200);
-    const repo = await testEnv.DB.prepare('SELECT enabled FROM repositories WHERE id = 101').first<{
+    const repo = await database().prepare('SELECT enabled FROM repositories WHERE id = 101').first<{
       enabled: number;
     }>();
     expect(repo?.enabled).toBe(0);
@@ -247,30 +239,30 @@ describe('authenticated tenant isolation', () => {
 
 describe('pipeline cost reporting', () => {
   // One row per metered stage in the current UTC month (created_at defaults to
-  // datetime('now'), which is what dashboardStats and the cost union both
+  // CURRENT_TIMESTAMP, which is what dashboardStats and the cost union both
   // compare against), plus a foreign installation's row that neither surface
   // may count.
   async function seedPipelineCosts(): Promise<void> {
-    await testEnv.DB.batch([
-      testEnv.DB.prepare(
+    await database().batch([
+      database().prepare(
         `INSERT INTO reviews (repository_id, installation_id, pr_number, trigger_event, cost_usd)
 			 VALUES (101, 1001, 7, 'opened', 0.1),
 			        (202, 2002, 9, 'opened', 9.99)`,
       ),
-      testEnv.DB.prepare(
+      database().prepare(
         `INSERT INTO features (id, repository_id, title, spec, cost_usd)
 			 VALUES (501, 101, 'Ship it', 'spec', 0.02)`,
       ),
-      testEnv.DB.prepare(
+      database().prepare(
         `INSERT INTO fix_attempts (repository_id, pr_number, "trigger", cost_usd)
 			 VALUES (101, 7, 'blocking_review', 0.003)`,
       ),
-      testEnv.DB.prepare(`INSERT INTO verifications (feature_id, cost_usd) VALUES (501, 0.0004)`),
-      testEnv.DB.prepare(
+      database().prepare(`INSERT INTO verifications (feature_id, cost_usd) VALUES (501, 0.0004)`),
+      database().prepare(
         `INSERT INTO automations (id, repository_id, name, prompt, schedule_kind, next_run_at)
 			 VALUES (601, 101, 'Nightly', 'do the thing', 'daily', '2026-01-01T00:00:00Z')`,
       ),
-      testEnv.DB.prepare(
+      database().prepare(
         `INSERT INTO automation_runs (automation_id, cost_usd) VALUES (601, 0.00005)`,
       ),
     ]);
@@ -309,15 +301,18 @@ describe('organization member management', () => {
   // globally in seedTenants — this seeds only the org row (and optionally an
   // explicit member row) on top of it.
   async function seedOrg(role: 'owner' | 'admin' | 'member' | null): Promise<void> {
-    await testEnv.DB.prepare(
-      `INSERT INTO "organization" (id, name, slug, "installationId", "createdAt")
+    await database()
+      .prepare(
+        `INSERT INTO "organization" (id, name, slug, "installationId", "createdAt")
 				 VALUES ('org1', 'acme', 'acme', 1001, '2026-01-01T00:00:00.000Z')`,
-    ).run();
-    if (role) {
-      await testEnv.DB.prepare(
-        `INSERT INTO "member" (id, "organizationId", "userId", role, "createdAt")
-				 VALUES ('m1', 'org1', 'u1', ?1, '2026-01-01T00:00:00.000Z')`,
       )
+      .run();
+    if (role) {
+      await database()
+        .prepare(
+          `INSERT INTO "member" (id, "organizationId", "userId", role, "createdAt")
+				 VALUES ('m1', 'org1', 'u1', ?1, '2026-01-01T00:00:00.000Z')`,
+        )
         .bind(role)
         .run();
     }
@@ -326,15 +321,19 @@ describe('organization member management', () => {
   // A second human in org1 — the sole-member owner promotion must not fire
   // when the caller is not the organization's only member row.
   async function seedCoOwner(): Promise<void> {
-    await testEnv.DB.prepare(
-      `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt", login, "githubId")
-				 VALUES ('u2', 'hubot', 'hubot@example.test', 1, '2026-01-01T00:00:00.000Z',
+    await database()
+      .prepare(
+        `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt", login, "githubId")
+				 VALUES ('u2', 'hubot', 'hubot@example.test', true, '2026-01-01T00:00:00.000Z',
 				         '2026-01-01T00:00:00.000Z', 'hubot', 3002)`,
-    ).run();
-    await testEnv.DB.prepare(
-      `INSERT INTO "member" (id, "organizationId", "userId", role, "createdAt")
+      )
+      .run();
+    await database()
+      .prepare(
+        `INSERT INTO "member" (id, "organizationId", "userId", role, "createdAt")
 				 VALUES ('m2', 'org1', 'u2', 'owner', '2026-01-01T00:00:00.000Z')`,
-    ).run();
+      )
+      .run();
   }
 
   it('is readable by any installation member, including one with no explicit member row', async () => {
@@ -354,16 +353,16 @@ describe('organization member management', () => {
   });
 
   it('404s for a personal installation and never provisions an org row for it', async () => {
-    await testEnv.DB.prepare(
-      `UPDATE installations SET account_type = 'User' WHERE id = 1001`,
-    ).run();
+    await database()
+      .prepare(`UPDATE installations SET account_type = 'User' WHERE id = 1001`)
+      .run();
     const response = await authenticatedApi().request(
       'https://turbodiff.test/api/organizations/1001/members',
     );
     expect(response.status).toBe(404);
-    const orgRow = await testEnv.DB.prepare(
-      'SELECT id FROM "organization" WHERE "installationId" = 1001',
-    ).first();
+    const orgRow = await database()
+      .prepare('SELECT id FROM "organization" WHERE "installationId" = 1001')
+      .first();
     expect(orgRow).toBeNull();
   });
 
@@ -432,9 +431,9 @@ describe('organization member management', () => {
     // A personal (User-type) installation has no organization row and the
     // heal must not create one — requireCapability returns null (allowed)
     // rather than 403, leaving push permission as the only gate.
-    await testEnv.DB.prepare(
-      `UPDATE installations SET account_type = 'User' WHERE id = 1001`,
-    ).run();
+    await database()
+      .prepare(`UPDATE installations SET account_type = 'User' WHERE id = 1001`)
+      .run();
     const response = await authenticatedApi(
       async () => true,
       async () => false,
@@ -452,18 +451,18 @@ describe('organization member management', () => {
     const app = authenticatedApi(undefined, async () => false);
     const first = await app.request('https://turbodiff.test/api/organizations/1001/members');
     expect(first.status).toBe(200);
-    const healed = await testEnv.DB.prepare(
-      'SELECT id FROM "organization" WHERE "installationId" = 1001',
-    ).first<{ id: string }>();
+    const healed = await database()
+      .prepare('SELECT id FROM "organization" WHERE "installationId" = 1001')
+      .first<{ id: string }>();
     expect(healed).not.toBeNull();
     expect(await first.json()).toMatchObject({ org_id: healed?.id, my_role: 'member' });
 
     const second = await app.request('https://turbodiff.test/api/organizations/1001/members');
     expect(second.status).toBe(200);
     expect(await second.json()).toMatchObject({ org_id: healed?.id });
-    const count = await testEnv.DB.prepare(
-      'SELECT COUNT(*) AS n FROM "organization" WHERE "installationId" = 1001',
-    ).first<{ n: number }>();
+    const count = await database()
+      .prepare('SELECT COUNT(*) AS n FROM "organization" WHERE "installationId" = 1001')
+      .first<{ n: number }>();
     expect(count?.n).toBe(1);
   });
 
@@ -473,11 +472,13 @@ describe('organization member management', () => {
     );
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ my_role: 'owner' });
-    const member = await testEnv.DB.prepare(
-      `SELECT "member".role AS role FROM "member"
+    const member = await database()
+      .prepare(
+        `SELECT "member".role AS role FROM "member"
 			 JOIN "organization" ON "organization".id = "member"."organizationId"
 			 WHERE "organization"."installationId" = 1001 AND "member"."userId" = 'u1'`,
-    ).first<{ role: string }>();
+      )
+      .first<{ role: string }>();
     expect(member?.role).toBe('owner');
   });
 
@@ -487,17 +488,17 @@ describe('organization member management', () => {
     // GitHub admin check fails closed — orgAdmin false stands in for the
     // App lacking the Organization Members permission.
     await seedOrg(null);
-    await testEnv.DB.prepare(
-      'UPDATE installations SET installer_github_id = 3001 WHERE id = 1001',
-    ).run();
+    await database()
+      .prepare('UPDATE installations SET installer_github_id = 3001 WHERE id = 1001')
+      .run();
     const response = await authenticatedApi(undefined, async () => false).request(
       'https://turbodiff.test/api/organizations/1001/members',
     );
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ my_role: 'owner' });
-    const member = await testEnv.DB.prepare(
-      `SELECT role FROM "member" WHERE "organizationId" = 'org1' AND "userId" = 'u1'`,
-    ).first<{ role: string }>();
+    const member = await database()
+      .prepare(`SELECT role FROM "member" WHERE "organizationId" = 'org1' AND "userId" = 'u1'`)
+      .first<{ role: string }>();
     expect(member?.role).toBe('owner');
   });
 
@@ -506,9 +507,9 @@ describe('organization member management', () => {
     // removed installer must not climb back in through the bootstrap.
     await seedOrg(null);
     await seedCoOwner();
-    await testEnv.DB.prepare(
-      'UPDATE installations SET installer_github_id = 3001 WHERE id = 1001',
-    ).run();
+    await database()
+      .prepare('UPDATE installations SET installer_github_id = 3001 WHERE id = 1001')
+      .run();
     const response = await authenticatedApi(undefined, async () => false).request(
       'https://turbodiff.test/api/organizations/1001/members',
     );
@@ -518,17 +519,17 @@ describe('organization member management', () => {
 
   it('never promotes a caller who is not the recorded installer of a memberless organization', async () => {
     await seedOrg(null);
-    await testEnv.DB.prepare(
-      'UPDATE installations SET installer_github_id = 9999 WHERE id = 1001',
-    ).run();
+    await database()
+      .prepare('UPDATE installations SET installer_github_id = 9999 WHERE id = 1001')
+      .run();
     const response = await authenticatedApi(undefined, async () => false).request(
       'https://turbodiff.test/api/organizations/1001/members',
     );
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ my_role: 'member' });
-    const count = await testEnv.DB.prepare(
-      `SELECT COUNT(*) AS n FROM "member" WHERE "organizationId" = 'org1'`,
-    ).first<{ n: number }>();
+    const count = await database()
+      .prepare(`SELECT COUNT(*) AS n FROM "member" WHERE "organizationId" = 'org1'`)
+      .first<{ n: number }>();
     expect(count?.n).toBe(0);
   });
 
@@ -537,9 +538,9 @@ describe('organization member management', () => {
     // mutation — proving the heal runs on the capabilityDenied choke point
     // (the route the production lockout actually 403'd on).
     await seedOrg(null);
-    await testEnv.DB.prepare(
-      'UPDATE installations SET installer_github_id = 3001 WHERE id = 1001',
-    ).run();
+    await database()
+      .prepare('UPDATE installations SET installer_github_id = 3001 WHERE id = 1001')
+      .run();
     const response = await authenticatedApi(
       async () => true,
       async () => false,
@@ -559,7 +560,7 @@ describe('organization member management', () => {
     );
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ my_role: 'member' });
-    const row = await testEnv.DB.prepare(`SELECT role FROM "member" WHERE id = 'm1'`).first<{
+    const row = await database().prepare(`SELECT role FROM "member" WHERE id = 'm1'`).first<{
       role: string;
     }>();
     expect(row?.role).toBe('member');
@@ -602,7 +603,7 @@ describe('organization member management', () => {
       my_role: 'owner',
       members: [expect.objectContaining({ id: 'm1', role: 'owner' })],
     });
-    const row = await testEnv.DB.prepare(`SELECT role FROM "member" WHERE id = 'm1'`).first<{
+    const row = await database().prepare(`SELECT role FROM "member" WHERE id = 'm1'`).first<{
       role: string;
     }>();
     expect(row?.role).toBe('owner');
@@ -610,9 +611,9 @@ describe('organization member management', () => {
     const second = await app.request('https://turbodiff.test/api/organizations/1001/members');
     expect(second.status).toBe(200);
     expect(await second.json()).toMatchObject({ my_role: 'owner' });
-    const count = await testEnv.DB.prepare(
-      `SELECT COUNT(*) AS n FROM "member" WHERE "organizationId" = 'org1'`,
-    ).first<{ n: number }>();
+    const count = await database()
+      .prepare(`SELECT COUNT(*) AS n FROM "member" WHERE "organizationId" = 'org1'`)
+      .first<{ n: number }>();
     expect(count?.n).toBe(1);
   });
 
@@ -623,7 +624,7 @@ describe('organization member management', () => {
     );
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ my_role: 'owner' });
-    const row = await testEnv.DB.prepare(`SELECT role FROM "member" WHERE id = 'm1'`).first<{
+    const row = await database().prepare(`SELECT role FROM "member" WHERE id = 'm1'`).first<{
       role: string;
     }>();
     expect(row?.role).toBe('owner');
@@ -649,13 +650,13 @@ describe('organization member management', () => {
     await seedOrg(null);
     await seedCoOwner();
     // org1's only member row now belongs to u2, not the caller.
-    await testEnv.DB.prepare(`UPDATE "member" SET role = 'member' WHERE id = 'm2'`).run();
+    await database().prepare(`UPDATE "member" SET role = 'member' WHERE id = 'm2'`).run();
     const response = await authenticatedApi(undefined, async () => false).request(
       'https://turbodiff.test/api/organizations/1001/members',
     );
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ my_role: 'member' });
-    const row = await testEnv.DB.prepare(`SELECT role FROM "member" WHERE id = 'm2'`).first<{
+    const row = await database().prepare(`SELECT role FROM "member" WHERE id = 'm2'`).first<{
       role: string;
     }>();
     expect(row?.role).toBe('member');
@@ -670,10 +671,11 @@ describe('cockpit chat', () => {
     status = 'pr_opened',
     prNumber: number | null = 42,
   ): Promise<number> {
-    const row = await testEnv.DB.prepare(
-      `INSERT INTO features (repository_id, title, spec, status, pr_number)
+    const row = await database()
+      .prepare(
+        `INSERT INTO features (repository_id, title, spec, status, pr_number)
 			 VALUES (?1, 'Feature', 'Spec', ?2, ?3) RETURNING id`,
-    )
+      )
       .bind(repoId, status, prNumber)
       .first<{ id: number }>();
     return row!.id;
@@ -747,9 +749,8 @@ describe('cockpit chat', () => {
       featureId,
       chatMessageId: created.message_id,
     });
-    const row = await testEnv.DB.prepare(
-      'SELECT role, body, author, author_id, status FROM chat_messages WHERE id = ?1',
-    )
+    const row = await database()
+      .prepare('SELECT role, body, author, author_id, status FROM chat_messages WHERE id = ?1')
       .bind(created.message_id)
       .first<{ role: string; body: string; author: string; author_id: number; status: string }>();
     expect(row).toEqual({
@@ -772,11 +773,12 @@ describe('cockpit chat', () => {
 
   it('lists messages in chronological order with turn outcomes', async () => {
     const featureId = await seedFeature(101);
-    await testEnv.DB.prepare(
-      `INSERT INTO chat_messages (feature_id, role, body, author, author_id, status, outcome, commit_sha)
+    await database()
+      .prepare(
+        `INSERT INTO chat_messages (feature_id, role, body, author, author_id, status, outcome, commit_sha)
 			 VALUES (?1, 'user', 'Do it', 'octocat', 3001, 'done', NULL, NULL),
 			        (?1, 'assistant', 'Done.', NULL, NULL, 'done', 'changed', 'abc1234')`,
-    )
+      )
       .bind(featureId)
       .run();
 
@@ -813,9 +815,8 @@ describe('push subscriptions', () => {
     });
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
-    const row = await testEnv.DB.prepare(
-      'SELECT user_github_id, p256dh, auth FROM push_subscriptions WHERE endpoint = ?1',
-    )
+    const row = await database()
+      .prepare('SELECT user_github_id, p256dh, auth FROM push_subscriptions WHERE endpoint = ?1')
       .bind('https://push.example/abc')
       .first<{ user_github_id: number; p256dh: string; auth: string }>();
     expect(row).toEqual({ user_github_id: 3001, p256dh: 'p256dh-key', auth: 'auth-key' });
@@ -831,11 +832,13 @@ describe('push subscriptions', () => {
   });
 
   it('deletes only the calling user’s subscription by endpoint', async () => {
-    await testEnv.DB.prepare(
-      `INSERT INTO push_subscriptions (user_github_id, endpoint, p256dh, auth)
+    await database()
+      .prepare(
+        `INSERT INTO push_subscriptions (user_github_id, endpoint, p256dh, auth)
 			 VALUES (3001, 'https://push.example/mine', 'p', 'a'),
 			        (4001, 'https://push.example/theirs', 'p', 'a')`,
-    ).run();
+      )
+      .run();
 
     const foreign = await authenticatedApi().request(
       'https://turbodiff.test/api/push/unsubscribe',
@@ -847,7 +850,8 @@ describe('push subscriptions', () => {
     );
     expect(foreign.status).toBe(200);
     expect(
-      await testEnv.DB.prepare('SELECT id FROM push_subscriptions WHERE endpoint = ?1')
+      await database()
+        .prepare('SELECT id FROM push_subscriptions WHERE endpoint = ?1')
         .bind('https://push.example/theirs')
         .first(),
     ).not.toBeNull();
@@ -859,7 +863,8 @@ describe('push subscriptions', () => {
     });
     expect(owned.status).toBe(200);
     expect(
-      await testEnv.DB.prepare('SELECT id FROM push_subscriptions WHERE endpoint = ?1')
+      await database()
+        .prepare('SELECT id FROM push_subscriptions WHERE endpoint = ?1')
         .bind('https://push.example/mine')
         .first(),
     ).toBeNull();
@@ -874,10 +879,12 @@ describe('push subscriptions', () => {
 // paths that resolve before the sandbox are covered here.
 describe('repo code browser', () => {
   async function seedArtifactsRepo(): Promise<void> {
-    await testEnv.DB.prepare(
-      `INSERT INTO repositories (id, installation_id, owner, name, provider, artifacts_repo, default_branch)
+    await database()
+      .prepare(
+        `INSERT INTO repositories (id, installation_id, owner, name, provider, artifacts_repo, default_branch)
 			 VALUES (303, 1001, 'acme', 'hosted', 'artifacts', 'acme--hosted', 'main')`,
-    ).run();
+      )
+      .run();
   }
 
   const validSave = {
@@ -1000,7 +1007,7 @@ describe('repo code browser', () => {
 
 // The success path (a real audio file transcribed by the AI binding) isn't
 // covered here: wrangler.test.jsonc has no "ai" binding, matching every
-// other worker test's D1-only fixture — exercising real Workers AI needs
+// other worker test's PostgreSQL-only fixture — exercising real Workers AI needs
 // account credentials this offline suite doesn't have.
 describe('dictation transcription', () => {
   it('rejects a request without a durable session', async () => {

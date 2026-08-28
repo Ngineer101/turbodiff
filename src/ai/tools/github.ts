@@ -35,7 +35,7 @@ export const MAX_DIFF_CHARS = 300_000;
 export const MAX_FILE_CHARS = 60_000;
 
 // Every GitHub call authenticates as the App installation that owns the repo.
-// The repo -> installation mapping lives in D1 (synced by the webhook handler),
+// The repo -> installation mapping lives in PostgreSQL (synced by the webhook handler),
 // so a review can only touch repos where Turbodiff is actually installed.
 async function tokenFor(owner: string, repo: string): Promise<string> {
   const row = await getRepoByFullName(owner, repo);
@@ -313,7 +313,7 @@ interface ReviewComment {
 }
 
 // A per-render factory rather than a shared definition: the tool closes over
-// the agent instance id so completing the D1 review row targets exactly the
+// the agent instance id so completing the PostgreSQL review row targets exactly the
 // dispatch that ran it — concurrent agents on the same PR never collide.
 export const makePostReview = (agentInstanceId: string, pin: RepoPin = null) =>
   defineTool({

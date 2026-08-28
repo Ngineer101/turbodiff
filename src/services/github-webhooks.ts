@@ -30,7 +30,7 @@ import {
 import type { JsonValue } from '../shared/json.ts';
 
 // GitHub App webhook receiver. Two jobs:
-//   1. Mirror installation / repository-selection changes into D1.
+//   1. Mirror installation / repository-selection changes into PostgreSQL.
 //   2. Drive the factory's review/fix loop: auto-dispatch the repo-enabled
 //      agents when a FACTORY-GENERATED PR opens or gets pushed to, and enqueue
 //      a fix run when one of turbodiff's own blocking reviews lands.
@@ -192,7 +192,7 @@ async function handleInstallation(p: InstallationEvent): Promise<WebhookHandlerR
       await upsertInstallation(p.installation.id, p.installation.account, p.sender?.id);
       await addRepositories(p.installation.id, p.repositories ?? []);
       await ensureBuiltinAgents(p.installation.id);
-      // Teams & orgs (migrations/0031_organizations.sql): Organization-type
+      // Teams & orgs: Organization-type
       // installations get a linked better-auth organization, with the
       // installer recorded as its owner — the natural provisioning point,
       // since this delivery already carries both the installation and the

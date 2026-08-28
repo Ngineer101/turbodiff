@@ -2,10 +2,8 @@
 /// <reference path="../../worker-configuration.d.ts" />
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
 
-import { env } from 'cloudflare:workers';
-import { applyD1Migrations } from 'cloudflare:test';
+import { database } from '../data/postgres.ts';
 import { beforeAll, describe, expect, it } from 'vite-plus/test';
-import type { D1Migration } from '@cloudflare/vitest-pool-workers';
 import {
   createArtifactsInstallation,
   createArtifactsRepository,
@@ -15,21 +13,20 @@ import {
 } from '../data/db.ts';
 import { applyArtifactsEvent } from './artifacts.ts';
 
-type TestEnv = Cloudflare.Env & { TEST_MIGRATIONS: D1Migration[] };
-// SAFETY: vitest.worker.config.ts defines the test-only TEST_MIGRATIONS
-// miniflare binding, which the generated production Cloudflare.Env cannot
-// know about.
-const testEnv = env as TestEnv;
-
 beforeAll(async () => {
-  await applyD1Migrations(testEnv.DB, testEnv.TEST_MIGRATIONS);
+  await database()
+    .prepare(
+      `DELETE FROM installations
+		 WHERE id = 1001 OR (provider = 'artifacts' AND account_login IN ('hosted-org', 'other-org'))`,
+    )
+    .run();
   // A GitHub tenant, to prove the two id spaces coexist.
-  await testEnv.DB.batch([
-    testEnv.DB.prepare(
+  await database().batch([
+    database().prepare(
       `INSERT INTO installations (id, account_login, account_id, account_type)
 			 VALUES (1001, 'acme', 2001, 'Organization')`,
     ),
-    testEnv.DB.prepare(
+    database().prepare(
       `INSERT INTO repositories (id, installation_id, owner, name)
 			 VALUES (101, 1001, 'acme', 'api')`,
     ),
@@ -37,18 +34,18 @@ beforeAll(async () => {
 });
 
 describe('synthetic Artifacts tenancy', () => {
-  it('allocates installations downward in the negative id space', async () => {
+  it('allocates installations from the collision-free native id sequence', async () => {
     const first = await createArtifactsInstallation('hosted-org');
     const second = await createArtifactsInstallation('other-org');
-    expect(first.id).toBe(-1);
-    expect(second.id).toBe(-2);
+    expect(first.id).toBeGreaterThan(3_000_000_000_000_000);
+    expect(second.id).toBe(first.id + 1);
     expect(first.provider).toBe('artifacts');
     expect(first.account_type).toBe('Organization');
-    // GitHub rows are untouched by the allocation scan.
-    expect((await getArtifactsInstallationByLogin('hosted-org'))?.id).toBe(-1);
+    // GitHub rows are untouched by native sequence allocation.
+    expect((await getArtifactsInstallationByLogin('hosted-org'))?.id).toBe(first.id);
   });
 
-  it('records artifacts repositories with negative ids alongside GitHub rows', async () => {
+  it('records native artifacts repositories alongside GitHub rows', async () => {
     const installation = await getArtifactsInstallationByLogin('hosted-org');
     const repo = await createArtifactsRepository({
       installationId: installation!.id,
@@ -57,7 +54,7 @@ describe('synthetic Artifacts tenancy', () => {
       artifactsRepo: 'hosted-org--shop',
       defaultBranch: 'main',
     });
-    expect(repo.id).toBeLessThan(0);
+    expect(repo.id).toBeGreaterThan(3_000_000_000_000_000);
     expect(repo.provider).toBe('artifacts');
     expect(repo.artifacts_repo).toBe('hosted-org--shop');
     expect(repo.default_branch).toBe('main');

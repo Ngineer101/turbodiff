@@ -1,8 +1,5 @@
-import path from 'node:path';
-import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-pool-workers';
+import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
 import { defineConfig } from 'vite-plus/test/config';
-
-const migrations = await readD1Migrations(path.resolve('migrations'));
 
 export default defineConfig({
   plugins: [
@@ -10,7 +7,6 @@ export default defineConfig({
       wrangler: { configPath: './wrangler.test.jsonc' },
       miniflare: {
         bindings: {
-          TEST_MIGRATIONS: migrations,
           PUBLIC_BASE_URL: 'https://turbodiff.test',
           GITHUB_APP_SLUG: 'turbodiff-test',
           GITHUB_WEBHOOK_SECRET: 'worker-test-webhook-secret',
@@ -31,5 +27,8 @@ export default defineConfig({
   ],
   test: {
     include: ['src/**/*.worker.test.ts'],
+    // Worker files share one local PostgreSQL database. Serializing files
+    // keeps each suite's explicit fixture cleanup isolated and deterministic.
+    fileParallelism: false,
   },
 });

@@ -68,7 +68,7 @@ function routeAsset(path: string): string | null {
   if (path === '/') return 'src/client/pages/board.tsx';
   if (/^\/tasks\/\d+$/.test(path)) return 'src/client/pages/task.tsx';
   if (/^\/factory\/features\/\d+$/.test(path)) return 'src/client/pages/feature.tsx';
-  if (/^\/repos\/-?\d+\/code(?:\/.*)?$/.test(path)) return 'src/client/pages/code.tsx';
+  if (/^\/repos\/\d+\/code(?:\/.*)?$/.test(path)) return 'src/client/pages/code.tsx';
   if (path === '/usage') return 'src/client/pages/usage.tsx';
   if (path === '/integrations') return 'src/client/pages/integrations.tsx';
   if (path === '/agents') return 'src/client/pages/agents.tsx';
@@ -174,13 +174,13 @@ async function shellForPath(c: Context, path: string): Promise<string> {
   else if (/^\/tasks\/\d+$/.test(path)) preload.push(`/api${path}`);
   else if (/^\/factory\/features\/\d+$/.test(path)) preload.push(`/api${path}`);
   else {
-    const code = path.match(/^\/repos\/(-?\d+)\/code(?:\/.*)?$/);
+    const code = path.match(/^\/repos\/(\d+)\/code(?:\/.*)?$/);
     if (code) preload.push(`/api/repos/${code[1]}/code`);
   }
   return shell(preload, clientAssets(await loadClientManifest(c), path));
 }
 
-// Cheap shell gate: a live better-auth session (cookie-cached — no D1 read
+// Cheap shell gate: a live better-auth session (cookie-cached — no PostgreSQL read
 // within the cache window). Installation-level authorization happens per
 // request in the API layer.
 async function hasSession(c: Context): Promise<boolean> {

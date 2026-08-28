@@ -1,6 +1,6 @@
 # Per-PR preview: uploads a Worker version (not a full deploy) for same-repo
 # pull requests so production traffic routing is never affected. The version
-# shares production's D1 database, R2 bucket, queue, Durable Objects, and
+# shares production's PostgreSQL database, R2 bucket, queue, Durable Objects, and
 # sandbox container — see README.md's Deploy section for the caveats this
 # implies (auth/redirect flows are pinned to the production domain).
 #

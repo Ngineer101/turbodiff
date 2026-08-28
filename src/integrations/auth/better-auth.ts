@@ -2,13 +2,14 @@ import { env } from 'cloudflare:workers';
 import { betterAuth } from 'better-auth';
 import { mcp } from 'better-auth/plugins';
 import { organization } from 'better-auth/plugins/organization';
+import { Pool } from 'pg';
 import { sendInvitationEmail } from '../notifications/email.ts';
 import { orgAc, orgRoles } from './organization-access.ts';
 
-// Identity and sessions via better-auth (tables in migrations/0026_better_auth.sql).
+// Identity and sessions via Better Auth in the PostgreSQL `auth` schema.
 // Design notes:
 //
-//   - Sessions are durable D1 rows with a 30-day sliding window — signing out
+//   - Sessions are durable PostgreSQL rows with a 30-day sliding window — signing out
 //     is an explicit act, never a side effect of a GitHub hiccup (the old
 //     stateless cookie died at the 8h GitHub token expiry and was deleted on
 //     any failed GitHub call; see requireUser in auth.ts for the other half).
@@ -63,7 +64,7 @@ import { orgAc, orgRoles } from './organization-access.ts';
 //     and tracks GitHub username renames).
 //   - The mcp plugin turns this instance into an OAuth 2.1 authorization
 //     server for the inbound /mcp endpoint (tables in
-//     migrations/0041_mcp_oauth.sql). Its authorize/token/register endpoints
+//     db/migrations/0001_foundation_and_auth.sql). Its authorize/token/register endpoints
 //     (/api/auth/mcp/authorize|token|register) and .well-known documents ride
 //     the existing GET|POST /api/auth/* catch-all in app.ts — no new mounts
 //     needed there, and neither the closed /update-user route nor the
@@ -83,12 +84,19 @@ function createAuth() {
     baseURL: env.PUBLIC_BASE_URL,
     basePath: '/api/auth',
     secret: env.SESSION_SECRET,
-    database: env.DB,
+    database: new Pool({
+      connectionString: env.HYPERDRIVE.connectionString,
+      options: '-c search_path=auth,app,public',
+      max: 5,
+      connectionTimeoutMillis: 10_000,
+      idleTimeoutMillis: 30_000,
+      application_name: 'turbodiff-auth',
+    }),
     session: {
       expiresIn: SESSION_DAYS * 24 * 60 * 60,
       updateAge: 24 * 60 * 60,
       // Signed cookie snapshot: polling requests (the board refetches every
-      // 5s while agents run) skip the D1 session read for 5 minutes.
+      // 5s while agents run) skip the PostgreSQL session read for 5 minutes.
       cookieCache: { enabled: true, maxAge: 5 * 60 },
     },
     account: {
@@ -99,7 +107,9 @@ function createAuth() {
         updateUserInfoOnLink: true,
       },
     },
-    advanced: { cookiePrefix: 'turbodiff' },
+    advanced: {
+      cookiePrefix: 'turbodiff',
+    },
     // Password sign-up/sign-in. requireEmailVerification stays off until an
     // email provider lands (Resend, separate PR) — there is no way to send
     // the verification mail yet.
@@ -138,7 +148,7 @@ function createAuth() {
         githubId: { type: 'number', required: false },
       },
     },
-    // Teams & orgs (migrations/0031_organizations.sql): one organization row
+    // Teams & orgs: one organization row
     // per Organization-type installation, linked by installationId. Rows are
     // written by hand from src/services/access-control.ts (webhook provisioning,
     // never this plugin's own createOrganization/addMember endpoints — those

@@ -2,10 +2,8 @@
 /// <reference path="../../worker-configuration.d.ts" />
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
 
-import { env } from 'cloudflare:workers';
-import { applyD1Migrations } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vite-plus/test';
-import type { D1Migration } from '@cloudflare/vitest-pool-workers';
+import { database } from '../data/postgres.ts';
 import {
   createArtifactsInstallation,
   createArtifactsRepository,
@@ -22,16 +20,12 @@ import {
 import { maybeAutoMergeCr, splitPatchByFile } from './change-requests.ts';
 import { computeRiskTierFromFiles } from './review-policy.ts';
 
-type TestEnv = Cloudflare.Env & { TEST_MIGRATIONS: D1Migration[] };
-// SAFETY: vitest.worker.config.ts defines the test-only TEST_MIGRATIONS
-// miniflare binding, which the generated production Cloudflare.Env cannot
-// know about.
-const testEnv = env as TestEnv;
-
 let repo: RepositoryRow;
 
 beforeAll(async () => {
-  await applyD1Migrations(testEnv.DB, testEnv.TEST_MIGRATIONS);
+  await database()
+    .prepare(`DELETE FROM installations WHERE provider = 'artifacts' AND account_login = 'cr-org'`)
+    .run();
   const installation = await createArtifactsInstallation('cr-org');
   repo = await createArtifactsRepository({
     installationId: installation.id,

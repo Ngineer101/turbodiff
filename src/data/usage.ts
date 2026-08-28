@@ -1,4 +1,4 @@
-import { env } from 'cloudflare:workers';
+import { database } from './postgres.ts';
 import { placeholderList } from './sql.ts';
 import type { VerificationRow } from './factory.ts';
 import type { ReviewActivityRow } from './reviews.ts';
@@ -32,8 +32,9 @@ export async function listRecentFeaturesForUsage(
 ): Promise<FeatureUsageRow[]> {
   if (installationIds.length === 0) return [];
   const placeholders = placeholderList(installationIds.length, 2);
-  const res = await env.DB.prepare(
-    `SELECT f.id, f.repository_id, repo.owner AS repo_owner, repo.name AS repo_name,
+  const res = await database()
+    .prepare(
+      `SELECT f.id, f.repository_id, repo.owner AS repo_owner, repo.name AS repo_name,
 		        f.title, f.status, f.pr_number, f.created_at,
 		        f.input_tokens, f.output_tokens, f.cache_read_tokens, f.cache_write_tokens,
 		        f.cost_usd, f.model
@@ -42,33 +43,43 @@ export async function listRecentFeaturesForUsage(
 		 WHERE repo.installation_id IN (${placeholders})
 		 ORDER BY f.id DESC
 		 LIMIT ?1`,
-  )
+    )
     .bind(limit, ...installationIds)
     .all<FeatureUsageRow>();
   return res.results;
 }
 
-// Reviews/fix attempts belonging to any of the given (repository, PR) pairs.
-// D1/SQLite has no clean tuple-IN, so this over-fetches by repo id and PR
-// number separately; the caller groups results down to the exact pairs. The
-// candidate set is bounded by listRecentFeaturesForUsage's limit, so the
-// over-fetch is cheap.
+function distinctRepoPrPairs(
+  pairs: { repositoryId: number; prNumber: number }[],
+): { repositoryId: number; prNumber: number }[] {
+  return [
+    ...new Map(pairs.map((pair) => [`${pair.repositoryId}:${pair.prNumber}`, pair])).values(),
+  ];
+}
+
+function repoPrTupleList(count: number): string {
+  return Array.from({ length: count }, (_, index) => `(?${index * 2 + 1}, ?${index * 2 + 2})`).join(
+    ', ',
+  );
+}
+
+// Reviews/fix attempts belonging to the exact (repository, PR) pairs. Native
+// PostgreSQL row constructors avoid the broader Cartesian candidate set the
+// former SQLite query had to fetch and filter in application code.
 export async function listReviewsForRepoPrs(
   pairs: { repositoryId: number; prNumber: number }[],
 ): Promise<ReviewActivityRow[]> {
   if (pairs.length === 0) return [];
-  const repoIds = [...new Set(pairs.map((p) => p.repositoryId))];
-  const prNumbers = [...new Set(pairs.map((p) => p.prNumber))];
-  const repoPlaceholders = placeholderList(repoIds.length);
-  const prPlaceholders = placeholderList(prNumbers.length, repoIds.length + 1);
-  const res = await env.DB.prepare(
-    `SELECT r.*, repo.owner AS repo_owner, repo.name AS repo_name
+  const distinct = distinctRepoPrPairs(pairs);
+  const res = await database()
+    .prepare(
+      `SELECT r.*, repo.owner AS repo_owner, repo.name AS repo_name
 		 FROM reviews r
 		 LEFT JOIN repositories repo ON repo.id = r.repository_id
-		 WHERE r.repository_id IN (${repoPlaceholders}) AND r.pr_number IN (${prPlaceholders})
+		 WHERE (r.repository_id, r.pr_number) IN (${repoPrTupleList(distinct.length)})
 		 ORDER BY r.created_at ASC`,
-  )
-    .bind(...repoIds, ...prNumbers)
+    )
+    .bind(...distinct.flatMap((pair) => [pair.repositoryId, pair.prNumber]))
     .all<ReviewActivityRow>();
   return res.results;
 }
@@ -94,18 +105,16 @@ export async function listFixAttemptsForRepoPrs(
   pairs: { repositoryId: number; prNumber: number }[],
 ): Promise<FixAttemptRow[]> {
   if (pairs.length === 0) return [];
-  const repoIds = [...new Set(pairs.map((p) => p.repositoryId))];
-  const prNumbers = [...new Set(pairs.map((p) => p.prNumber))];
-  const repoPlaceholders = placeholderList(repoIds.length);
-  const prPlaceholders = placeholderList(prNumbers.length, repoIds.length + 1);
-  const res = await env.DB.prepare(
-    `SELECT id, repository_id, pr_number, "trigger", status, commit_sha, error, created_at,
+  const distinct = distinctRepoPrPairs(pairs);
+  const res = await database()
+    .prepare(
+      `SELECT id, repository_id, pr_number, "trigger", status, commit_sha, error, created_at,
 		        input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, model
 		 FROM fix_attempts
-		 WHERE repository_id IN (${repoPlaceholders}) AND pr_number IN (${prPlaceholders})
+		 WHERE (repository_id, pr_number) IN (${repoPrTupleList(distinct.length)})
 		 ORDER BY created_at ASC`,
-  )
-    .bind(...repoIds, ...prNumbers)
+    )
+    .bind(...distinct.flatMap((pair) => [pair.repositoryId, pair.prNumber]))
     .all<FixAttemptRow>();
   return res.results;
 }
@@ -115,9 +124,10 @@ export async function listVerificationsForFeatures(
 ): Promise<VerificationRow[]> {
   if (featureIds.length === 0) return [];
   const placeholders = placeholderList(featureIds.length);
-  const res = await env.DB.prepare(
-    `SELECT * FROM verifications WHERE feature_id IN (${placeholders}) ORDER BY created_at ASC`,
-  )
+  const res = await database()
+    .prepare(
+      `SELECT * FROM verifications WHERE feature_id IN (${placeholders}) ORDER BY created_at ASC`,
+    )
     .bind(...featureIds)
     .all<VerificationRow>();
   return res.results;
@@ -141,17 +151,19 @@ export async function automationUsageForMonth(
 ): Promise<AutomationUsageRow[]> {
   if (installationIds.length === 0) return [];
   const placeholders = placeholderList(installationIds.length);
-  const res = await env.DB.prepare(
-    `SELECT a.id AS automation_id, a.name, repo.owner AS repo_owner, repo.name AS repo_name,
+  const res = await database()
+    .prepare(
+      `SELECT a.id AS automation_id, a.name, repo.owner AS repo_owner, repo.name AS repo_name,
 		        COUNT(ar.id) AS runs, COALESCE(SUM(ar.cost_usd), 0) AS cost_usd
 		 FROM automations a
 		 JOIN repositories repo ON repo.id = a.repository_id
 		 JOIN automation_runs ar
-		   ON ar.automation_id = a.id AND strftime('%Y-%m', ar.created_at) = ?${installationIds.length + 1}
+		   ON ar.automation_id = a.id
+		  AND to_char(ar.created_at AT TIME ZONE 'UTC', 'YYYY-MM') = ?${installationIds.length + 1}
 		 WHERE repo.installation_id IN (${placeholders})
-		 GROUP BY a.id
+		 GROUP BY a.id, a.name, repo.owner, repo.name
 		 ORDER BY cost_usd DESC`,
-  )
+    )
     .bind(...installationIds, month)
     .all<AutomationUsageRow>();
   return res.results;
@@ -159,7 +171,7 @@ export async function automationUsageForMonth(
 
 // The five metered pipeline stages, each reduced to (month, cost) and unioned
 // into ONE statement: /api/board polls while tasks are live, so five separate
-// round-trips per poll was five times the D1 row-read bill for the same total.
+// round-trips per poll was five times the PostgreSQL row-read bill for the same total.
 // Reviews scope on reviews.installation_id; every other stage reaches an
 // installation through repositories (equivalent — a review's repository always
 // belongs to the same installation). Each leg pre-aggregates by month, so the
@@ -168,27 +180,27 @@ function pipelineCostUnion(installationIds: number[]) {
   const scope = (leg: number) =>
     placeholderList(installationIds.length, leg * installationIds.length + 1);
   const legs = [
-    `SELECT strftime('%Y-%m', r.created_at) AS month, SUM(r.cost_usd) AS cost
+    `SELECT to_char(r.created_at AT TIME ZONE 'UTC', 'YYYY-MM') AS month, SUM(r.cost_usd) AS cost
 			 FROM reviews r
 			 WHERE r.installation_id IN (${scope(0)})
 			 GROUP BY month`,
-    `SELECT strftime('%Y-%m', f.created_at) AS month, SUM(f.cost_usd) AS cost
+    `SELECT to_char(f.created_at AT TIME ZONE 'UTC', 'YYYY-MM') AS month, SUM(f.cost_usd) AS cost
 			 FROM features f
 			 JOIN repositories repo ON repo.id = f.repository_id
 			 WHERE repo.installation_id IN (${scope(1)})
 			 GROUP BY month`,
-    `SELECT strftime('%Y-%m', fa.created_at) AS month, SUM(fa.cost_usd) AS cost
+    `SELECT to_char(fa.created_at AT TIME ZONE 'UTC', 'YYYY-MM') AS month, SUM(fa.cost_usd) AS cost
 			 FROM fix_attempts fa
 			 JOIN repositories repo ON repo.id = fa.repository_id
 			 WHERE repo.installation_id IN (${scope(2)})
 			 GROUP BY month`,
-    `SELECT strftime('%Y-%m', v.created_at) AS month, SUM(v.cost_usd) AS cost
+    `SELECT to_char(v.created_at AT TIME ZONE 'UTC', 'YYYY-MM') AS month, SUM(v.cost_usd) AS cost
 			 FROM verifications v
 			 JOIN features f ON f.id = v.feature_id
 			 JOIN repositories repo ON repo.id = f.repository_id
 			 WHERE repo.installation_id IN (${scope(3)})
 			 GROUP BY month`,
-    `SELECT strftime('%Y-%m', ar.created_at) AS month, SUM(ar.cost_usd) AS cost
+    `SELECT to_char(ar.created_at AT TIME ZONE 'UTC', 'YYYY-MM') AS month, SUM(ar.cost_usd) AS cost
 			 FROM automation_runs ar
 			 JOIN automations a ON a.id = ar.automation_id
 			 JOIN repositories repo ON repo.id = a.repository_id
@@ -211,9 +223,10 @@ export async function pipelineCostForMonth(
 ): Promise<number> {
   if (installationIds.length === 0) return 0;
   const { sql, binds } = pipelineCostUnion(installationIds);
-  const row = await env.DB.prepare(
-    `SELECT COALESCE(SUM(cost), 0) AS cost_usd FROM (${sql}) legs WHERE month = ?${binds.length + 1}`,
-  )
+  const row = await database()
+    .prepare(
+      `SELECT COALESCE(SUM(cost), 0) AS cost_usd FROM (${sql}) legs WHERE month = ?${binds.length + 1}`,
+    )
     .bind(...binds, month)
     .first<{ cost_usd: number }>();
   return row?.cost_usd ?? 0;
@@ -234,12 +247,13 @@ export async function pipelineCostByMonth(
 ): Promise<PipelineMonthCostRow[]> {
   if (installationIds.length === 0) return [];
   const { sql, binds } = pipelineCostUnion(installationIds);
-  const res = await env.DB.prepare(
-    `SELECT month, COALESCE(SUM(cost), 0) AS cost_usd FROM (${sql}) legs
+  const res = await database()
+    .prepare(
+      `SELECT month, COALESCE(SUM(cost), 0) AS cost_usd FROM (${sql}) legs
 			 GROUP BY month
 			 ORDER BY month DESC
 			 LIMIT ${months}`,
-  )
+    )
     .bind(...binds)
     .all<PipelineMonthCostRow>();
   return res.results;

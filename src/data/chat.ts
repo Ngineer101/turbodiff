@@ -1,6 +1,6 @@
-import { env } from 'cloudflare:workers';
+import { database } from './postgres.ts';
 
-// --- cockpit chat (migration 0040): conversational turns with the fix
+// --- cockpit chat: conversational turns with the fix
 // sandbox's coding agent. One row per message; a user row's status tracks
 // its turn through the queue ('queued' → 'running' → 'done'|'failed'),
 // assistant rows are always 'done' and carry the turn's branch outcome.
@@ -27,25 +27,26 @@ export async function createUserChatMessage(
   // commit this turn pushes can carry them as git author.
   authorId?: number,
 ): Promise<number> {
-  const row = await env.DB.prepare(
-    `INSERT INTO chat_messages (feature_id, role, body, author, author_id, status)
+  const row = await database()
+    .prepare(
+      `INSERT INTO chat_messages (feature_id, role, body, author, author_id, status)
 		 VALUES (?1, 'user', ?2, ?3, ?4, 'queued') RETURNING id`,
-  )
+    )
     .bind(featureId, body, author, authorId ?? null)
     .first<{ id: number }>();
   return row!.id;
 }
 
 export async function getChatMessage(id: number): Promise<ChatMessageRow | null> {
-  return env.DB.prepare('SELECT * FROM chat_messages WHERE id = ?1')
+  return database()
+    .prepare('SELECT * FROM chat_messages WHERE id = ?1')
     .bind(id)
     .first<ChatMessageRow>();
 }
 
 export async function listChatMessages(featureId: number): Promise<ChatMessageRow[]> {
-  const res = await env.DB.prepare(
-    'SELECT * FROM chat_messages WHERE feature_id = ?1 ORDER BY id ASC',
-  )
+  const res = await database()
+    .prepare('SELECT * FROM chat_messages WHERE feature_id = ?1 ORDER BY id ASC')
     .bind(featureId)
     .all<ChatMessageRow>();
   return res.results;
@@ -56,7 +57,8 @@ export async function setChatMessageStatus(
   status: string,
   error?: string,
 ): Promise<void> {
-  await env.DB.prepare('UPDATE chat_messages SET status = ?2, error = ?3 WHERE id = ?1')
+  await database()
+    .prepare('UPDATE chat_messages SET status = ?2, error = ?3 WHERE id = ?1')
     .bind(id, status, error ?? null)
     .run();
 }
@@ -67,10 +69,11 @@ export async function addAssistantChatMessage(
   outcome: string,
   commitSha?: string,
 ): Promise<number> {
-  const row = await env.DB.prepare(
-    `INSERT INTO chat_messages (feature_id, role, body, status, outcome, commit_sha)
+  const row = await database()
+    .prepare(
+      `INSERT INTO chat_messages (feature_id, role, body, status, outcome, commit_sha)
 		 VALUES (?1, 'assistant', ?2, 'done', ?3, ?4) RETURNING id`,
-  )
+    )
     .bind(featureId, body, outcome, commitSha ?? null)
     .first<{ id: number }>();
   return row!.id;
@@ -79,11 +82,12 @@ export async function addAssistantChatMessage(
 // A user turn still in flight blocks new sends (one turn at a time — the
 // same invariant the client's disabled input reflects).
 export async function hasPendingChatTurn(featureId: number): Promise<boolean> {
-  const row = await env.DB.prepare(
-    `SELECT id FROM chat_messages
+  const row = await database()
+    .prepare(
+      `SELECT id FROM chat_messages
 		 WHERE feature_id = ?1 AND role = 'user' AND status IN ('queued', 'running')
 		 LIMIT 1`,
-  )
+    )
     .bind(featureId)
     .first<{ id: number }>();
   return row !== null;
@@ -92,16 +96,16 @@ export async function hasPendingChatTurn(featureId: number): Promise<boolean> {
 // The last N messages, oldest first — the fresh-session prompt's context
 // when no resumable CLI session survives.
 export async function recentChatHistory(featureId: number, limit = 20): Promise<ChatMessageRow[]> {
-  const res = await env.DB.prepare(
-    'SELECT * FROM chat_messages WHERE feature_id = ?1 ORDER BY id DESC LIMIT ?2',
-  )
+  const res = await database()
+    .prepare('SELECT * FROM chat_messages WHERE feature_id = ?1 ORDER BY id DESC LIMIT ?2')
     .bind(featureId, limit)
     .all<ChatMessageRow>();
   return res.results.reverse();
 }
 
 export async function setChatSessionId(featureId: number, sessionId: string | null): Promise<void> {
-  await env.DB.prepare('UPDATE features SET chat_session_id = ?2 WHERE id = ?1')
+  await database()
+    .prepare('UPDATE features SET chat_session_id = ?2 WHERE id = ?1')
     .bind(featureId, sessionId)
     .run();
 }

@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { database, type PreparedQuery } from '../data/postgres.ts';
 import type { LiveUpdates } from '../live-updates.ts';
 
 // One hibernating Durable Object per GitHub installation. Invalidations carry
@@ -16,7 +17,7 @@ export async function notifyInstallationsLive(installationIds: number[]): Promis
   );
 }
 
-async function notifyQueryLive(query: D1PreparedStatement): Promise<void> {
+async function notifyQueryLive(query: PreparedQuery): Promise<void> {
   try {
     const rows = await query.all<{ installation_id: number }>();
     await notifyInstallationsLive(rows.results.map((row) => row.installation_id));
@@ -30,39 +31,45 @@ async function notifyQueryLive(query: D1PreparedStatement): Promise<void> {
 
 export async function notifyFeatureLive(featureId: number): Promise<void> {
   await notifyQueryLive(
-    env.DB.prepare(
-      `SELECT DISTINCT r.installation_id
+    database()
+      .prepare(
+        `SELECT DISTINCT r.installation_id
 		 FROM features f JOIN repositories r ON r.id = f.repository_id
 		 WHERE f.id = ?1`,
-    ).bind(featureId),
+      )
+      .bind(featureId),
   );
 }
 
 export async function notifyPlanLive(planId: number): Promise<void> {
   await notifyQueryLive(
-    env.DB.prepare(
-      `SELECT DISTINCT r.installation_id
+    database()
+      .prepare(
+        `SELECT DISTINCT r.installation_id
 		 FROM repositories r
 		 WHERE r.id IN (
 		   SELECT repository_id FROM plan_repositories WHERE plan_id = ?1
 		   UNION SELECT repository_id FROM plans WHERE id = ?1
 		 )`,
-    ).bind(planId),
+      )
+      .bind(planId),
   );
 }
 
 export async function notifyRepositoryLive(repositoryId: number): Promise<void> {
   await notifyQueryLive(
-    env.DB.prepare('SELECT installation_id FROM repositories WHERE id = ?1').bind(repositoryId),
+    database().prepare('SELECT installation_id FROM repositories WHERE id = ?1').bind(repositoryId),
   );
 }
 
 export async function notifyAutomationLive(automationId: number): Promise<void> {
   await notifyQueryLive(
-    env.DB.prepare(
-      `SELECT r.installation_id
+    database()
+      .prepare(
+        `SELECT r.installation_id
 		 FROM automations a JOIN repositories r ON r.id = a.repository_id
 		 WHERE a.id = ?1`,
-    ).bind(automationId),
+      )
+      .bind(automationId),
   );
 }
