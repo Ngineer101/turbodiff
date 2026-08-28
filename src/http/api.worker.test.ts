@@ -69,9 +69,7 @@ async function seedTenants(): Promise<void> {
     testDatabase().prepare(
       `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt", login, "githubId")
 		 VALUES ('u1', 'octocat', 'octocat@example.test', true, '2026-01-01T00:00:00.000Z',
-		         '2026-01-01T00:00:00.000Z', 'octocat', 3001),
-		        ('u2', 'hubot', 'hubot@example.test', true, '2026-01-01T00:00:00.000Z',
-		         '2026-01-01T00:00:00.000Z', 'hubot', 4001)`,
+		         '2026-01-01T00:00:00.000Z', 'octocat', 3001)`,
     ),
   ]);
 }
@@ -865,13 +863,19 @@ describe('push subscriptions', () => {
   });
 
   it('deletes only the calling user’s subscription by endpoint', async () => {
-    await testDatabase()
-      .prepare(
+    await testDatabase().batch([
+      testDatabase().prepare(
+        `INSERT INTO "user"
+           (id, name, email, "emailVerified", "createdAt", "updatedAt", login, "githubId")
+         VALUES ('push-4001', 'hubot', 'push-4001@example.test', true,
+           '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', 'hubot', 4001)`,
+      ),
+      testDatabase().prepare(
         `INSERT INTO push_subscriptions (user_github_id, endpoint, p256dh, auth)
-			 VALUES (3001, 'https://push.example/mine', 'p', 'a'),
-			        (4001, 'https://push.example/theirs', 'p', 'a')`,
-      )
-      .run();
+				 VALUES (3001, 'https://push.example/mine', 'p', 'a'),
+				        (4001, 'https://push.example/theirs', 'p', 'a')`,
+      ),
+    ]);
 
     const foreign = await authenticatedApi().request(
       'https://turbodiff.test/api/push/unsubscribe',
