@@ -1,0 +1,27 @@
+src/http/api.worker.test.ts
+  s_140622c634f845::t_dc174ec51450b8 292
+src/data/usage.ts
+  s_140622c634f845::t_dc174ec51450b8 69-70
+src/data/database.ts
+  s_140622c634f845::t_dc174ec51450b8 17,27-34,66-76
+src/test/database-fixture.ts
+  s_140622c634f845::t_dc174ec51450b8 11,15,20,70,110
+scripts/db-migrate.mjs
+  s_140622c634f845::t_dc174ec51450b8 75,77
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "66f8fd91e6c247d4abe90ae6797acb65070402eb",
+  "prompts": {},
+  "sessions": {
+    "s_140622c634f845": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a048c4-df71-7811-aa11-c17f78944a00",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
