@@ -1,5 +1,6 @@
-import { database } from './postgres.ts';
-import { placeholderList } from './sql.ts';
+import { inArray, sql } from 'drizzle-orm';
+import { execute, queryOne, queryRows, withDatabase } from './database.ts';
+import { repositories } from './schema.ts';
 
 // Thin typed layer over the PostgreSQL application schema.
 
@@ -57,74 +58,76 @@ export async function upsertInstallation(
   // COALESCE keeps a recorded installer through deliveries that carry no
   // sender (installation_repositories) — only the `installation created`
   // delivery may set it.
-  await database()
-    .prepare(
-      `INSERT INTO installations (id, account_login, account_id, account_type, suspended, installer_github_id)
-		 VALUES (?1, ?2, ?3, ?4, 0, ?5)
-		 ON CONFLICT(id) DO UPDATE SET account_login = ?2, account_id = ?3, account_type = ?4, suspended = 0,
-		   installer_github_id = COALESCE(?5, installer_github_id)`,
-    )
-    .bind(id, account.login, account.id, account.type, installerGithubId ?? null)
-    .run();
+  await execute(sql`
+    INSERT INTO app.installations
+      (id, account_login, account_id, account_type, suspended, installer_github_id)
+    VALUES (${id}, ${account.login}, ${account.id}, ${account.type}, 0, ${installerGithubId ?? null})
+    ON CONFLICT(id) DO UPDATE SET
+      account_login = excluded.account_login,
+      account_id = excluded.account_id,
+      account_type = excluded.account_type,
+      suspended = 0,
+      installer_github_id = COALESCE(excluded.installer_github_id, installations.installer_github_id)
+  `);
 }
 
 export async function deleteInstallation(id: number): Promise<void> {
-  await database().prepare('DELETE FROM installations WHERE id = ?1').bind(id).run();
+  await execute(sql`DELETE FROM app.installations WHERE id = ${id}`);
 }
 
 export async function setInstallationSuspended(id: number, suspended: boolean): Promise<void> {
-  await database()
-    .prepare('UPDATE installations SET suspended = ?2 WHERE id = ?1')
-    .bind(id, suspended ? 1 : 0)
-    .run();
+  await execute(sql`
+    UPDATE app.installations SET suspended = ${suspended ? 1 : 0} WHERE id = ${id}
+  `);
 }
 
 export async function addRepositories(installationId: number, repos: WebhookRepo[]): Promise<void> {
   if (repos.length === 0) return;
-  await database().batch(
-    repos.map((r) => {
-      const [owner, name] = r.full_name.split('/');
-      return database()
-        .prepare(
-          `INSERT INTO repositories (id, installation_id, owner, name)
-				 VALUES (?1, ?2, ?3, ?4)
-				 ON CONFLICT(id) DO UPDATE SET installation_id = ?2, owner = ?3, name = ?4`,
-        )
-        .bind(r.id, installationId, owner, name);
-    }),
-  );
+  await withDatabase(async (database) => {
+    await database
+      .insert(repositories)
+      .values(
+        repos.map((repo) => {
+          const [owner = '', name = ''] = repo.full_name.split('/');
+          return { id: repo.id, installationId, owner, name };
+        }),
+      )
+      .onConflictDoUpdate({
+        target: repositories.id,
+        set: {
+          installationId: sql`excluded.installation_id`,
+          owner: sql`excluded.owner`,
+          name: sql`excluded.name`,
+        },
+      });
+  });
 }
 
 export async function listRepositoryIdsForInstallation(installationId: number): Promise<number[]> {
-  const rows = await database()
-    .prepare('SELECT id FROM repositories WHERE installation_id = ?1')
-    .bind(installationId)
-    .all<{ id: number }>();
-  return rows.results.map((r) => r.id);
+  const rows = await queryRows<{ id: number }>(sql`
+    SELECT id FROM app.repositories WHERE installation_id = ${installationId}
+  `);
+  return rows.map((row) => row.id);
 }
 
 export async function removeRepositories(repoIds: number[]): Promise<void> {
   if (repoIds.length === 0) return;
-  await database().batch(
-    repoIds.map((id) => database().prepare('DELETE FROM repositories WHERE id = ?1').bind(id)),
-  );
+  await withDatabase(async (database) => {
+    await database.delete(repositories).where(inArray(repositories.id, repoIds));
+  });
 }
 
 export async function getRepoByFullName(
   owner: string,
   name: string,
 ): Promise<RepositoryRow | null> {
-  return database()
-    .prepare('SELECT * FROM repositories WHERE owner = ?1 AND name = ?2')
-    .bind(owner, name)
-    .first<RepositoryRow>();
+  return queryOne<RepositoryRow>(sql`
+    SELECT * FROM app.repositories WHERE owner = ${owner} AND name = ${name}
+  `);
 }
 
 export async function getInstallation(id: number): Promise<InstallationRow | null> {
-  return database()
-    .prepare('SELECT * FROM installations WHERE id = ?1')
-    .bind(id)
-    .first<InstallationRow>();
+  return queryOne<InstallationRow>(sql`SELECT * FROM app.installations WHERE id = ${id}`);
 }
 
 // ── Artifacts-hosted projects (docs/artifacts-provider.md) ─────────────────
@@ -135,22 +138,19 @@ export async function getInstallation(id: number): Promise<InstallationRow | nul
 export async function getArtifactsInstallationByLogin(
   accountLogin: string,
 ): Promise<InstallationRow | null> {
-  return database()
-    .prepare(`SELECT * FROM installations WHERE account_login = ?1 AND provider = 'artifacts'`)
-    .bind(accountLogin)
-    .first<InstallationRow>();
+  return queryOne<InstallationRow>(sql`
+    SELECT * FROM app.installations
+    WHERE account_login = ${accountLogin} AND provider = 'artifacts'
+  `);
 }
 
 export async function createArtifactsInstallation(accountLogin: string): Promise<InstallationRow> {
-  const row = await database()
-    .prepare(
-      `WITH allocated AS (SELECT nextval('app.native_entity_id_seq') AS id)
-		 INSERT INTO installations (id, account_login, account_id, account_type, provider)
-		 SELECT id, ?1, id, 'Organization', 'artifacts' FROM allocated
-		 RETURNING *`,
-    )
-    .bind(accountLogin)
-    .first<InstallationRow>();
+  const row = await queryOne<InstallationRow>(sql`
+    WITH allocated AS (SELECT nextval('app.native_entity_id_seq') AS id)
+    INSERT INTO app.installations (id, account_login, account_id, account_type, provider)
+    SELECT id, ${accountLogin}, id, 'Organization', 'artifacts' FROM allocated
+    RETURNING *
+  `);
   if (!row) throw new Error('artifacts installation insert returned no row');
   return row;
 }
@@ -162,55 +162,61 @@ export async function createArtifactsRepository(input: {
   artifactsRepo: string;
   defaultBranch: string;
 }): Promise<RepositoryRow> {
-  const row = await database()
-    .prepare(
-      `INSERT INTO repositories (installation_id, owner, name, provider, artifacts_repo, default_branch)
-		 VALUES (?1, ?2, ?3, 'artifacts', ?4, ?5)
-		 RETURNING *`,
+  const row = await queryOne<RepositoryRow>(sql`
+    INSERT INTO app.repositories
+      (installation_id, owner, name, provider, artifacts_repo, default_branch)
+    VALUES (
+      ${input.installationId}, ${input.owner}, ${input.name},
+      'artifacts', ${input.artifactsRepo}, ${input.defaultBranch}
     )
-    .bind(input.installationId, input.owner, input.name, input.artifactsRepo, input.defaultBranch)
-    .first<RepositoryRow>();
+    RETURNING *
+  `);
   if (!row) throw new Error('artifacts repository insert returned no row');
   return row;
 }
 
 export async function getRepoByArtifactsName(artifactsRepo: string): Promise<RepositoryRow | null> {
-  return database()
-    .prepare('SELECT * FROM repositories WHERE artifacts_repo = ?1')
-    .bind(artifactsRepo)
-    .first<RepositoryRow>();
+  return queryOne<RepositoryRow>(sql`
+    SELECT * FROM app.repositories WHERE artifacts_repo = ${artifactsRepo}
+  `);
 }
 
 export async function recordArtifactsPush(
   artifactsRepo: string,
   pushedAt: string,
 ): Promise<RepositoryRow | null> {
-  return database()
-    .prepare('UPDATE repositories SET last_push_at = ?2 WHERE artifacts_repo = ?1 RETURNING *')
-    .bind(artifactsRepo, pushedAt)
-    .first<RepositoryRow>();
+  return queryOne<RepositoryRow>(sql`
+    UPDATE app.repositories SET last_push_at = ${pushedAt}
+    WHERE artifacts_repo = ${artifactsRepo}
+    RETURNING *
+  `);
 }
 
 export async function listInstallationsWithRepos(
   installationIds: number[],
 ): Promise<{ installation: InstallationRow; repos: RepositoryRow[] }[]> {
   if (installationIds.length === 0) return [];
-  const placeholders = placeholderList(installationIds.length);
   const [installations, repos] = await Promise.all([
-    database()
-      .prepare(`SELECT * FROM installations WHERE id IN (${placeholders}) ORDER BY account_login`)
-      .bind(...installationIds)
-      .all<InstallationRow>(),
-    database()
-      .prepare(
-        `SELECT * FROM repositories WHERE installation_id IN (${placeholders}) ORDER BY owner, name`,
-      )
-      .bind(...installationIds)
-      .all<RepositoryRow>(),
+    queryRows<InstallationRow>(sql`
+      SELECT * FROM app.installations
+      WHERE id IN (${sql.join(
+        installationIds.map((id) => sql`${id}`),
+        sql`, `,
+      )})
+      ORDER BY account_login
+    `),
+    queryRows<RepositoryRow>(sql`
+      SELECT * FROM app.repositories
+      WHERE installation_id IN (${sql.join(
+        installationIds.map((id) => sql`${id}`),
+        sql`, `,
+      )})
+      ORDER BY owner, name
+    `),
   ]);
-  return installations.results.map((installation) => ({
+  return installations.map((installation) => ({
     installation,
-    repos: repos.results.filter((r) => r.installation_id === installation.id),
+    repos: repos.filter((repo) => repo.installation_id === installation.id),
   }));
 }
 
@@ -237,102 +243,71 @@ export interface OrgInvitationRow {
 // the hybrid access model reads (GET /organizations/:id/members) with plain
 // installation membership instead, same bar as every other GET route.
 export async function listMembersWithGithubLogin(organizationId: string): Promise<OrgMemberRow[]> {
-  const rows = await database()
-    .prepare(
-      `SELECT "member".id AS id, "user".login AS login, "user".email AS email,
-			        "member".role AS role, "member"."createdAt" AS created_at
-		 FROM "member" JOIN "user" ON "user".id = "member"."userId"
-		 WHERE "member"."organizationId" = ?1
-		 ORDER BY "member"."createdAt"`,
-    )
-    .bind(organizationId)
-    .all<OrgMemberRow>();
-  return rows.results;
+  return queryRows<OrgMemberRow>(sql`
+    SELECT member.id, "user".login, "user".email,
+      member.role, member."createdAt" AS created_at
+    FROM auth."member" AS member
+    JOIN auth."user" AS "user" ON "user".id = member."userId"
+    WHERE member."organizationId" = ${organizationId}
+    ORDER BY member."createdAt"
+  `);
 }
 
 export async function listPendingInvitations(organizationId: string): Promise<OrgInvitationRow[]> {
-  const rows = await database()
-    .prepare(
-      `SELECT id, email, role, status, "expiresAt" AS expires_at
-		 FROM "invitation"
-		 WHERE "organizationId" = ?1 AND status = 'pending'
-		 ORDER BY "createdAt"`,
-    )
-    .bind(organizationId)
-    .all<OrgInvitationRow>();
-  return rows.results;
+  return queryRows<OrgInvitationRow>(sql`
+    SELECT id, email, role, status, "expiresAt" AS expires_at
+    FROM auth."invitation"
+    WHERE "organizationId" = ${organizationId} AND status = 'pending'
+    ORDER BY "createdAt"
+  `);
 }
 
 export async function getRepoById(id: number): Promise<RepositoryRow | null> {
-  return database()
-    .prepare('SELECT * FROM repositories WHERE id = ?1')
-    .bind(id)
-    .first<RepositoryRow>();
+  return queryOne<RepositoryRow>(sql`SELECT * FROM app.repositories WHERE id = ${id}`);
 }
 
 export async function setRepoEnabled(id: number, enabled: boolean): Promise<void> {
-  await database()
-    .prepare('UPDATE repositories SET enabled = ?2 WHERE id = ?1')
-    .bind(id, enabled ? 1 : 0)
-    .run();
+  await execute(sql`UPDATE app.repositories SET enabled = ${enabled ? 1 : 0} WHERE id = ${id}`);
 }
 
 export async function setRepoReviewOnPush(id: number, on: boolean): Promise<void> {
-  await database()
-    .prepare('UPDATE repositories SET review_on_push = ?2 WHERE id = ?1')
-    .bind(id, on ? 1 : 0)
-    .run();
+  await execute(sql`UPDATE app.repositories SET review_on_push = ${on ? 1 : 0} WHERE id = ${id}`);
 }
 
 export async function setRepoBlockingReviews(id: number, on: boolean): Promise<void> {
-  await database()
-    .prepare('UPDATE repositories SET blocking_reviews = ?2 WHERE id = ?1')
-    .bind(id, on ? 1 : 0)
-    .run();
+  await execute(sql`UPDATE app.repositories SET blocking_reviews = ${on ? 1 : 0} WHERE id = ${id}`);
 }
 
 export async function setRepoAutoFix(id: number, on: boolean): Promise<void> {
-  await database()
-    .prepare('UPDATE repositories SET auto_fix = ?2 WHERE id = ?1')
-    .bind(id, on ? 1 : 0)
-    .run();
+  await execute(sql`UPDATE app.repositories SET auto_fix = ${on ? 1 : 0} WHERE id = ${id}`);
 }
 
 export async function setRepoAutoMerge(id: number, on: boolean): Promise<void> {
-  await database()
-    .prepare('UPDATE repositories SET auto_merge = ?2 WHERE id = ?1')
-    .bind(id, on ? 1 : 0)
-    .run();
+  await execute(sql`UPDATE app.repositories SET auto_merge = ${on ? 1 : 0} WHERE id = ${id}`);
 }
 
 export async function setRepoAutoResolveConflicts(id: number, on: boolean): Promise<void> {
-  await database()
-    .prepare('UPDATE repositories SET auto_resolve_conflicts = ?2 WHERE id = ?1')
-    .bind(id, on ? 1 : 0)
-    .run();
+  await execute(sql`
+    UPDATE app.repositories SET auto_resolve_conflicts = ${on ? 1 : 0} WHERE id = ${id}
+  `);
 }
 
 // The sandbox verification gate for factory pushes. Empty string clears it.
 export async function setRepoLaunchable(id: number, launchable: boolean): Promise<void> {
-  await database()
-    .prepare('UPDATE repositories SET launchable = ?2 WHERE id = ?1')
-    .bind(id, launchable ? 1 : 0)
-    .run();
+  await execute(sql`
+    UPDATE app.repositories SET launchable = ${launchable ? 1 : 0} WHERE id = ${id}
+  `);
 }
 
 export async function setRepoDemoVideos(id: number, on: boolean): Promise<void> {
-  await database()
-    .prepare('UPDATE repositories SET demo_videos = ?2 WHERE id = ?1')
-    .bind(id, on ? 1 : 0)
-    .run();
+  await execute(sql`UPDATE app.repositories SET demo_videos = ${on ? 1 : 0} WHERE id = ${id}`);
 }
 
 export async function setRepoCheckCommand(id: number, command: string): Promise<void> {
   const trimmed = command.trim();
-  await database()
-    .prepare('UPDATE repositories SET check_command = ?2 WHERE id = ?1')
-    .bind(id, trimmed || null)
-    .run();
+  await execute(sql`
+    UPDATE app.repositories SET check_command = ${trimmed || null} WHERE id = ${id}
+  `);
 }
 
 // How the verify step launches the repo's app for runtime/visual checks.
@@ -343,8 +318,9 @@ export async function setRepoRunCommand(
   port: number | null,
 ): Promise<void> {
   const trimmed = command.trim();
-  await database()
-    .prepare('UPDATE repositories SET run_command = ?2, app_port = ?3 WHERE id = ?1')
-    .bind(id, trimmed || null, trimmed ? port : null)
-    .run();
+  await execute(sql`
+    UPDATE app.repositories
+    SET run_command = ${trimmed || null}, app_port = ${trimmed ? port : null}
+    WHERE id = ${id}
+  `);
 }

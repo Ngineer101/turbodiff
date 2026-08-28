@@ -1,7 +1,8 @@
 import { setProvider } from '@flue/runtime';
 import { cloudflareBindingProvider } from '@flue/runtime/cloudflare/workers-ai';
 import { env } from 'cloudflare:workers';
-import { database } from './data/postgres.ts';
+import { sql } from 'drizzle-orm';
+import { execute } from './data/database.ts';
 import { Hono } from 'hono';
 import { dispatchReviewAgent } from './ai/review/dispatch.ts';
 import { registerReviewMetering } from './ai/review/metering.ts';
@@ -68,7 +69,7 @@ app.use('*', async (c, next) => {
 
 app.get('/healthz', async (c) => {
   try {
-    await database().prepare('SELECT 1').run();
+    await execute(sql`SELECT 1`);
   } catch (err) {
     console.error('turbodiff: healthz PostgreSQL check failed', err);
     return c.json({ ok: false, db: false }, 503);

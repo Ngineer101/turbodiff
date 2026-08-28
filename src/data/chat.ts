@@ -1,4 +1,5 @@
-import { database } from './postgres.ts';
+import { sql } from 'drizzle-orm';
+import { execute, queryOne, queryRows } from './database.ts';
 
 // --- cockpit chat: conversational turns with the fix
 // sandbox's coding agent. One row per message; a user row's status tracks
@@ -27,29 +28,22 @@ export async function createUserChatMessage(
   // commit this turn pushes can carry them as git author.
   authorId?: number,
 ): Promise<number> {
-  const row = await database()
-    .prepare(
-      `INSERT INTO chat_messages (feature_id, role, body, author, author_id, status)
-		 VALUES (?1, 'user', ?2, ?3, ?4, 'queued') RETURNING id`,
-    )
-    .bind(featureId, body, author, authorId ?? null)
-    .first<{ id: number }>();
+  const row = await queryOne<{ id: number }>(sql`
+    INSERT INTO app.chat_messages (feature_id, role, body, author, author_id, status)
+    VALUES (${featureId}, 'user', ${body}, ${author}, ${authorId ?? null}, 'queued')
+    RETURNING id
+  `);
   return row!.id;
 }
 
 export async function getChatMessage(id: number): Promise<ChatMessageRow | null> {
-  return database()
-    .prepare('SELECT * FROM chat_messages WHERE id = ?1')
-    .bind(id)
-    .first<ChatMessageRow>();
+  return queryOne<ChatMessageRow>(sql`SELECT * FROM app.chat_messages WHERE id = ${id}`);
 }
 
 export async function listChatMessages(featureId: number): Promise<ChatMessageRow[]> {
-  const res = await database()
-    .prepare('SELECT * FROM chat_messages WHERE feature_id = ?1 ORDER BY id ASC')
-    .bind(featureId)
-    .all<ChatMessageRow>();
-  return res.results;
+  return queryRows<ChatMessageRow>(sql`
+    SELECT * FROM app.chat_messages WHERE feature_id = ${featureId} ORDER BY id ASC
+  `);
 }
 
 export async function setChatMessageStatus(
@@ -57,10 +51,9 @@ export async function setChatMessageStatus(
   status: string,
   error?: string,
 ): Promise<void> {
-  await database()
-    .prepare('UPDATE chat_messages SET status = ?2, error = ?3 WHERE id = ?1')
-    .bind(id, status, error ?? null)
-    .run();
+  await execute(sql`
+    UPDATE app.chat_messages SET status = ${status}, error = ${error ?? null} WHERE id = ${id}
+  `);
 }
 
 export async function addAssistantChatMessage(
@@ -69,43 +62,37 @@ export async function addAssistantChatMessage(
   outcome: string,
   commitSha?: string,
 ): Promise<number> {
-  const row = await database()
-    .prepare(
-      `INSERT INTO chat_messages (feature_id, role, body, status, outcome, commit_sha)
-		 VALUES (?1, 'assistant', ?2, 'done', ?3, ?4) RETURNING id`,
-    )
-    .bind(featureId, body, outcome, commitSha ?? null)
-    .first<{ id: number }>();
+  const row = await queryOne<{ id: number }>(sql`
+    INSERT INTO app.chat_messages (feature_id, role, body, status, outcome, commit_sha)
+    VALUES (${featureId}, 'assistant', ${body}, 'done', ${outcome}, ${commitSha ?? null})
+    RETURNING id
+  `);
   return row!.id;
 }
 
 // A user turn still in flight blocks new sends (one turn at a time — the
 // same invariant the client's disabled input reflects).
 export async function hasPendingChatTurn(featureId: number): Promise<boolean> {
-  const row = await database()
-    .prepare(
-      `SELECT id FROM chat_messages
-		 WHERE feature_id = ?1 AND role = 'user' AND status IN ('queued', 'running')
-		 LIMIT 1`,
-    )
-    .bind(featureId)
-    .first<{ id: number }>();
+  const row = await queryOne<{ id: number }>(sql`
+    SELECT id FROM app.chat_messages
+    WHERE feature_id = ${featureId} AND role = 'user' AND status IN ('queued', 'running')
+    LIMIT 1
+  `);
   return row !== null;
 }
 
 // The last N messages, oldest first — the fresh-session prompt's context
 // when no resumable CLI session survives.
 export async function recentChatHistory(featureId: number, limit = 20): Promise<ChatMessageRow[]> {
-  const res = await database()
-    .prepare('SELECT * FROM chat_messages WHERE feature_id = ?1 ORDER BY id DESC LIMIT ?2')
-    .bind(featureId, limit)
-    .all<ChatMessageRow>();
-  return res.results.reverse();
+  const rows = await queryRows<ChatMessageRow>(sql`
+    SELECT * FROM app.chat_messages
+    WHERE feature_id = ${featureId} ORDER BY id DESC LIMIT ${limit}
+  `);
+  return rows.reverse();
 }
 
 export async function setChatSessionId(featureId: number, sessionId: string | null): Promise<void> {
-  await database()
-    .prepare('UPDATE features SET chat_session_id = ?2 WHERE id = ?1')
-    .bind(featureId, sessionId)
-    .run();
+  await execute(sql`
+    UPDATE app.features SET chat_session_id = ${sessionId} WHERE id = ${featureId}
+  `);
 }

@@ -1,4 +1,5 @@
-import { database } from '../data/postgres.ts';
+import { sql } from 'drizzle-orm';
+import { execute, queryOne, queryRows } from '../data/database.ts';
 import { getInstallation } from '../data/repositories.ts';
 import type { AuthedUser, userIsGithubOrgAdmin } from './auth.ts';
 import { orgRoles, type OrgRole } from '../integrations/auth/organization-access.ts';
@@ -25,10 +26,9 @@ import { orgRoles, type OrgRole } from '../integrations/auth/organization-access
 // for installations whose webhook delivery was missed, lazily from
 // orgForInstallationWithHeal on request paths.
 async function orgForInstallation(installationId: number): Promise<{ id: string } | null> {
-  return database()
-    .prepare('SELECT id FROM "organization" WHERE "installationId" = ?1')
-    .bind(installationId)
-    .first<{ id: string }>();
+  return queryOne<{ id: string }>(sql`
+    SELECT id FROM auth."organization" WHERE "installationId" = ${installationId}
+  `);
 }
 
 // Idempotent: creates the linked organization row for an Organization-type
@@ -44,14 +44,14 @@ export async function ensureOrganizationForInstallation(
   const existing = await orgForInstallation(installationId);
   if (existing) return existing.id;
   const now = new Date().toISOString();
-  await database()
-    .prepare(
-      `INSERT INTO "organization" (id, name, slug, "installationId", "createdAt")
-		 VALUES (?1, ?2, ?3, ?4, ?5)
-		 ON CONFLICT("installationId") DO NOTHING`,
+  await execute(sql`
+    INSERT INTO auth."organization" (id, name, slug, "installationId", "createdAt")
+    VALUES (
+      ${crypto.randomUUID()}, ${accountLogin}, ${accountLogin.toLowerCase()},
+      ${installationId}, ${now}
     )
-    .bind(crypto.randomUUID(), accountLogin, accountLogin.toLowerCase(), installationId, now)
-    .run();
+    ON CONFLICT("installationId") DO NOTHING
+  `);
   // A concurrent webhook delivery may have won the insert race above.
   const row = await orgForInstallation(installationId);
   if (!row)
@@ -79,36 +79,32 @@ export async function ensureOrganizationForInstallation(
 // linked organization IS the access grant. Uncached on purpose: a freshly
 // created project must appear on the next request.
 export async function syntheticInstallationIds(githubId: number): Promise<number[]> {
-  const rows = await database()
-    .prepare(
-      `SELECT o."installationId" AS id FROM "member" m
-		 JOIN "organization" o ON o.id = m."organizationId"
-		 JOIN "user" u ON u.id = m."userId"
-		 JOIN installations i ON i.id = o."installationId"
-		 WHERE u."githubId" = ?1 AND i.provider = 'artifacts'`,
-    )
-    .bind(githubId)
-    .all<{ id: number }>();
-  return rows.results.map((r) => r.id);
+  const rows = await queryRows<{ id: number }>(sql`
+    SELECT o."installationId" AS id FROM auth."member" m
+    JOIN auth."organization" o ON o.id = m."organizationId"
+    JOIN auth."user" u ON u.id = m."userId"
+    JOIN app.installations i ON i.id = o."installationId"
+    WHERE u."githubId" = ${githubId} AND i.provider = 'artifacts'
+  `);
+  return rows.map((row) => row.id);
 }
 
 export async function ensureOwnerMember(
   organizationId: string,
   installerGithubId: number,
 ): Promise<void> {
-  const user = await database()
-    .prepare('SELECT id FROM "user" WHERE "githubId" = ?1')
-    .bind(installerGithubId)
-    .first<{ id: string }>();
+  const user = await queryOne<{ id: string }>(sql`
+    SELECT id FROM auth."user" WHERE "githubId" = ${installerGithubId}
+  `);
   if (!user) return;
-  await database()
-    .prepare(
-      `INSERT INTO "member" (id, "organizationId", "userId", role, "createdAt")
-		 VALUES (?1, ?2, ?3, 'owner', ?4)
-		 ON CONFLICT("organizationId", "userId") DO NOTHING`,
+  await execute(sql`
+    INSERT INTO auth."member" (id, "organizationId", "userId", role, "createdAt")
+    VALUES (
+      ${crypto.randomUUID()}, ${organizationId}, ${user.id}, 'owner',
+      ${new Date().toISOString()}
     )
-    .bind(crypto.randomUUID(), organizationId, user.id, new Date().toISOString())
-    .run();
+    ON CONFLICT("organizationId", "userId") DO NOTHING
+  `);
 }
 
 // The caller's role in an organization, keyed by their GitHub user id (the
@@ -117,14 +113,11 @@ export async function ensureOwnerMember(
 // 'member' (the auto-provisioning decision — hybrid access never locks
 // someone out of an installation they have real GitHub access to).
 export async function memberRole(organizationId: string, githubId: number): Promise<OrgRole> {
-  const row = await database()
-    .prepare(
-      `SELECT "member".role AS role FROM "member"
-		 JOIN "user" ON "user".id = "member"."userId"
-		 WHERE "member"."organizationId" = ?1 AND "user"."githubId" = ?2`,
-    )
-    .bind(organizationId, githubId)
-    .first<{ role: string }>();
+  const row = await queryOne<{ role: string }>(sql`
+    SELECT member.role FROM auth."member" AS member
+    JOIN auth."user" AS "user" ON "user".id = member."userId"
+    WHERE member."organizationId" = ${organizationId} AND "user"."githubId" = ${githubId}
+  `);
   return row?.role === 'owner' || row?.role === 'admin' ? row.role : 'member';
 }
 
@@ -132,14 +125,11 @@ export async function memberRole(organizationId: string, githubId: number): Prom
 // explicit 'member' row from the implicit fallback, and explicit in-app role
 // assignments must win over GitHub-derived elevation.
 async function hasMemberRow(organizationId: string, githubId: number): Promise<boolean> {
-  const row = await database()
-    .prepare(
-      `SELECT 1 AS x FROM "member"
-     JOIN "user" ON "user".id = "member"."userId"
-     WHERE "member"."organizationId" = ?1 AND "user"."githubId" = ?2`,
-    )
-    .bind(organizationId, githubId)
-    .first();
+  const row = await queryOne<{ x: number }>(sql`
+    SELECT 1 AS x FROM auth."member" AS member
+    JOIN auth."user" AS "user" ON "user".id = member."userId"
+    WHERE member."organizationId" = ${organizationId} AND "user"."githubId" = ${githubId}
+  `);
   return row !== null;
 }
 
@@ -161,10 +151,9 @@ async function ensureInstallerOwner(
 ): Promise<void> {
   if (user.devFake || installerGithubId === null) return;
   if (user.session.userId !== installerGithubId) return;
-  const count = await database()
-    .prepare('SELECT COUNT(*) AS n FROM "member" WHERE "organizationId" = ?1')
-    .bind(organizationId)
-    .first<{ n: number }>();
+  const count = await queryOne<{ n: number }>(sql`
+    SELECT COUNT(*) AS n FROM auth."member" WHERE "organizationId" = ${organizationId}
+  `);
   if (!count || count.n > 0) return;
   await ensureOwnerMember(organizationId, user.session.userId);
 }
@@ -198,16 +187,18 @@ async function ensureGithubAdminOwner(
 // org must keep going through the GitHub-admin bootstrap above.
 async function ensureSoleMemberOwner(user: AuthedUser, organizationId: string): Promise<void> {
   if (user.devFake) return;
-  await database()
-    .prepare(
-      `UPDATE "member" SET role = 'owner'
-     WHERE "organizationId" = ?1
-       AND role <> 'owner'
-       AND "userId" IN (SELECT id FROM "user" WHERE "githubId" = ?2)
-       AND (SELECT COUNT(*) FROM "member" m2 WHERE m2."organizationId" = ?1) = 1`,
-    )
-    .bind(organizationId, user.session.userId)
-    .run();
+  await execute(sql`
+    UPDATE auth."member" SET role = 'owner'
+    WHERE "organizationId" = ${organizationId}
+      AND role <> 'owner'
+      AND "userId" IN (
+        SELECT id FROM auth."user" WHERE "githubId" = ${user.session.userId}
+      )
+      AND (
+        SELECT COUNT(*) FROM auth."member" m2
+        WHERE m2."organizationId" = ${organizationId}
+      ) = 1
+  `);
 }
 
 // Resolve an installation to its linked organization, provisioning the row

@@ -2,9 +2,8 @@ import { env } from 'cloudflare:workers';
 import { Client, types, type QueryResultRow } from 'pg';
 import { isJsonObject, type JsonValue } from '../shared/json.ts';
 
-// Turbodiff's TypeScript contract uses numbers for database ids, counts, and
-// costs. PostgreSQL returns int8/numeric as strings by default. Provider ids
-// are constrained to JavaScript's safe integer range by the application.
+// Test-only raw SQL fixture for arranging rows and inspecting side effects.
+// Production data access lives in src/data/database.ts and uses Drizzle.
 types.setTypeParser(20, Number);
 types.setTypeParser(1700, Number);
 types.setTypeParser(1083, (value) => value.slice(0, 5));
@@ -108,7 +107,7 @@ export class PreparedQuery {
   }
 }
 
-export class PostgresDatabase {
+export class TestDatabaseFixture {
   prepare(text: string): PreparedQuery {
     return new PreparedQuery(text);
   }
@@ -139,8 +138,8 @@ export class PostgresDatabase {
   }
 }
 
-const instance = new PostgresDatabase();
+const instance = new TestDatabaseFixture();
 
-export function database(): PostgresDatabase {
+export function testDatabase(): TestDatabaseFixture {
   return instance;
 }

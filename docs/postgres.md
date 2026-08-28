@@ -29,8 +29,15 @@ vp run db:migrate
 vp run db:verify
 ```
 
-Every migration runs in its own transaction. The runner serializes deploys with a PostgreSQL
-advisory lock and refuses to continue if an already-applied migration's checksum changed.
+This PR establishes a new Drizzle baseline rather than preserving the earlier POC migration
+history. The first deployment therefore expects an empty `app`/`auth` schema and no existing
+`public.schema_migrations` table. If the pre-merge POC schema was applied to the otherwise
+disposable PlanetScale database, reset those schemas manually once before deploying this baseline.
+The deployment pipeline intentionally never drops schemas or provisions infrastructure.
+
+Drizzle applies all pending migrations transactionally. The deployment wrapper serializes
+migration runs with a PostgreSQL advisory lock and refuses to continue if an already-applied
+migration's checksum changed.
 
 The production deployment workflow runs `db:migrate` and `db:verify` against the existing
 PlanetScale database using the `POSTGRES_DATABASE_URL` repository secret before it deploys the
@@ -78,7 +85,17 @@ types with `vp exec wrangler types`.
 - `auth`: Better Auth users, sessions, accounts, organizations, invitations, and MCP OAuth data.
 - `app`: installations, repositories, configuration, factory tasks, reviews, runs, usage, and
   collaboration data.
-- `public.schema_migrations`: immutable migration ledger only.
+- `public.schema_migrations`: Drizzle's immutable migration ledger only.
+
+`src/data/schema.ts` is the schema source of truth. Generate a new migration after changing it:
+
+```sh
+vp exec drizzle-kit generate --name=<short_description>
+```
+
+Do not edit a migration after it has been applied. Database functions and triggers that Drizzle
+cannot express declaratively belong in a named custom migration generated with
+`vp exec drizzle-kit generate --custom --name=<short_description>`.
 
 The application sets `search_path=app,auth,public` on database clients. Better Auth reverses the
 first two entries so its own tables resolve from `auth` first.

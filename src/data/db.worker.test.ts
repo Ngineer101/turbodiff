@@ -2,7 +2,7 @@
 /// <reference path="../../worker-configuration.d.ts" />
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
 
-import { database } from './postgres.ts';
+import { testDatabase } from '../test/database-fixture.ts';
 import { beforeEach, describe, expect, it } from 'vite-plus/test';
 import {
   addAssistantChatMessage,
@@ -45,21 +45,21 @@ import {
 } from './db.ts';
 
 async function seedTenant(): Promise<void> {
-  await database().batch([
-    database().prepare(
+  await testDatabase().batch([
+    testDatabase().prepare(
       `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt")
        VALUES ('user-1', 'Test User', 'user-1@example.test', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
     ),
-    database().prepare(
+    testDatabase().prepare(
       `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt", "githubId")
        VALUES ('push-3001', 'Push 3001', 'push-3001@example.test', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 3001),
               ('push-4001', 'Push 4001', 'push-4001@example.test', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 4001)`,
     ),
-    database().prepare(
+    testDatabase().prepare(
       `INSERT INTO installations (id, account_login, account_id, account_type)
 		 VALUES (1001, 'acme', 2001, 'Organization')`,
     ),
-    database().prepare(
+    testDatabase().prepare(
       `INSERT INTO repositories (id, installation_id, owner, name)
 		 VALUES (101, 1001, 'acme', 'api'), (102, 1001, 'acme', 'web')`,
     ),
@@ -99,7 +99,9 @@ beforeEach(async () => {
     'user',
     'user_tokens',
   ];
-  await database().batch(tables.map((table) => database().prepare(`DELETE FROM "${table}"`)));
+  await testDatabase().batch(
+    tables.map((table) => testDatabase().prepare(`DELETE FROM "${table}"`)),
+  );
   await seedTenant();
 });
 
@@ -111,7 +113,7 @@ describe('performance state', () => {
     expect(snapshot?.verifiedAt).toBeGreaterThan(0);
 
     await expect(
-      database()
+      testDatabase()
         .prepare(
           `UPDATE user_installation_access
          SET installation_ids = ARRAY[1001::bigint, NULL] WHERE user_id = 'user-1'`,
@@ -139,7 +141,7 @@ describe('performance state', () => {
     expect(claims.filter(Boolean)).toHaveLength(1);
     await finishInstallationRepoSync(1001, true);
     expect(await claimInstallationRepoSync(1001)).toBe(false);
-    await database()
+    await testDatabase()
       .prepare(
         `UPDATE installation_repo_sync SET last_synced_at = CURRENT_TIMESTAMP - INTERVAL '6 minutes'
 		 WHERE installation_id = 1001`,
@@ -168,7 +170,7 @@ describe('fix attempt invariants', () => {
     await finishFixAttempt(third!, 'failed');
     expect(await tryRecordFixAttempt(101, 7, 'blocking_review', 3)).toBeNull();
 
-    const count = await database()
+    const count = await testDatabase()
       .prepare(
         'SELECT COUNT(*) AS count FROM fix_attempts WHERE repository_id = 101 AND pr_number = 7',
       )
@@ -178,7 +180,7 @@ describe('fix attempt invariants', () => {
 
   it('fails a stale run before admitting its replacement', async () => {
     const stale = await tryRecordFixAttempt(101, 8, 'blocking_review', 3);
-    await database()
+    await testDatabase()
       .prepare(
         `UPDATE fix_attempts SET created_at = CURRENT_TIMESTAMP - INTERVAL '21 minutes' WHERE id = ?1`,
       )
@@ -188,7 +190,7 @@ describe('fix attempt invariants', () => {
     const replacement = await tryRecordFixAttempt(101, 8, 'blocking_review', 3);
     expect(replacement).not.toBeNull();
     expect(replacement).not.toBe(stale);
-    const old = await database()
+    const old = await testDatabase()
       .prepare('SELECT status, error FROM fix_attempts WHERE id = ?1')
       .bind(stale)
       .first<{ status: string; error: string }>();
@@ -279,7 +281,7 @@ describe('review dispatch invariants', () => {
     );
     expect(results.filter((id) => id !== null)).toHaveLength(1);
 
-    const count = await database()
+    const count = await testDatabase()
       .prepare(
         `SELECT COUNT(*) AS count FROM reviews WHERE agent_instance_id = 'review--acme--api--9'`,
       )
@@ -289,7 +291,7 @@ describe('review dispatch invariants', () => {
 
   it('fails a stale running claim before admitting its replacement', async () => {
     const stale = await tryRecordReview(101, 1001, 10, 'opened', 'review', 'review--acme--api--10');
-    await database()
+    await testDatabase()
       .prepare(
         `UPDATE reviews SET created_at = CURRENT_TIMESTAMP - INTERVAL '21 minutes' WHERE id = ?1`,
       )
@@ -326,7 +328,7 @@ describe('review dispatch invariants', () => {
     );
     expect(replacement).not.toBeNull();
     expect(replacement).not.toBe(stale);
-    const old = await database()
+    const old = await testDatabase()
       .prepare('SELECT status FROM reviews WHERE id = ?1')
       .bind(stale)
       .first<{ status: string }>();
@@ -394,11 +396,11 @@ describe('paid-work idempotency', () => {
     expect(starts.filter((result) => result?.created)).toHaveLength(1);
     expect(new Set(starts.map((result) => result?.planId))).toHaveLength(1);
     const planId = starts[0]!.planId;
-    const count = await database()
+    const count = await testDatabase()
       .prepare('SELECT COUNT(*) AS count FROM plans WHERE todo_id = ?1')
       .bind(todoId)
       .first<{ count: number }>();
-    const todo = await database()
+    const todo = await testDatabase()
       .prepare('SELECT plan_id FROM todos WHERE id = ?1')
       .bind(todoId)
       .first<{ plan_id: number }>();
@@ -436,18 +438,18 @@ describe('paid-work idempotency', () => {
     expect(approvals.filter((ids) => ids !== null)).toHaveLength(1);
     expect(approvals.find((ids) => ids !== null)).toHaveLength(2);
 
-    const rows = await database()
+    const rows = await testDatabase()
       .prepare('SELECT id, repository_id FROM features WHERE plan_id = ?1 ORDER BY repository_id')
       .bind(planId)
       .all<{ id: number; repository_id: number }>();
-    const plan = await database()
+    const plan = await testDatabase()
       .prepare('SELECT status, feature_id FROM plans WHERE id = ?1')
       .bind(planId)
       .first<{ status: string; feature_id: number }>();
     expect(rows.results.map((row) => row.repository_id)).toEqual([101, 102]);
     expect(plan).toMatchObject({ status: 'approved', feature_id: rows.results[0].id });
     await expect(
-      database()
+      testDatabase()
         .prepare(
           `INSERT INTO features (repository_id, title, spec, plan_id)
 		 VALUES (101, 'Duplicate', 'Must fail', ?1)`,
@@ -511,21 +513,21 @@ describe('push subscriptions', () => {
 
 describe('pipeline cost by month', () => {
   it('reports a month whose only spend is non-review, and scopes to the caller', async () => {
-    await database().batch([
-      database().prepare(
+    await testDatabase().batch([
+      testDatabase().prepare(
         `INSERT INTO installations (id, account_login, account_id, account_type)
 		 VALUES (2002, 'other', 2002, 'Organization')`,
       ),
-      database().prepare(
+      testDatabase().prepare(
         `INSERT INTO repositories (id, installation_id, owner, name)
 		 VALUES (202, 2002, 'other', 'private')`,
       ),
-      database().prepare(
+      testDatabase().prepare(
         `INSERT INTO automations (id, repository_id, name, prompt, schedule_kind, next_run_at)
 		 VALUES (601, 101, 'Nightly', 'do the thing', 'daily', '2026-01-01T00:00:00Z'),
 		        (602, 202, 'Theirs', 'not mine', 'daily', '2026-01-01T00:00:00Z')`,
       ),
-      database().prepare(
+      testDatabase().prepare(
         `INSERT INTO automation_runs (automation_id, cost_usd, created_at)
 		 VALUES (601, 0.25, '2026-03-04 05:06:07'),
 		        (602, 9.99, '2026-03-04 05:06:07')`,
@@ -539,8 +541,8 @@ describe('pipeline cost by month', () => {
   });
 
   it('orders months newest first', async () => {
-    await database().batch([
-      database().prepare(
+    await testDatabase().batch([
+      testDatabase().prepare(
         `INSERT INTO reviews (repository_id, installation_id, pr_number, trigger_event, cost_usd, created_at)
 		 VALUES (101, 1001, 7, 'opened', 0.5, '2026-01-15 00:00:00'),
 		        (101, 1001, 8, 'opened', 0.75, '2026-02-15 00:00:00')`,

@@ -3,7 +3,7 @@
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
 
 import { env } from 'cloudflare:workers';
-import { database } from '../data/postgres.ts';
+import { testDatabase } from '../test/database-fixture.ts';
 // Transport-level coverage for authenticated GitHub deliveries.
 import { Hono } from 'hono';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
@@ -70,12 +70,12 @@ async function postWebhook(app: Hono, event: string, payload: JsonObject): Promi
 }
 
 async function seedRepo(opts: { autoFix?: boolean } = {}): Promise<void> {
-  await database().batch([
-    database().prepare(
+  await testDatabase().batch([
+    testDatabase().prepare(
       `INSERT INTO installations (id, account_login, account_id, account_type)
 		 VALUES (1001, 'acme', 2001, 'Organization')`,
     ),
-    database()
+    testDatabase()
       .prepare(
         `INSERT INTO repositories (id, installation_id, owner, name, review_on_push, auto_fix)
 		 VALUES (101, 1001, 'acme', 'api', 1, ?1)`,
@@ -102,7 +102,9 @@ beforeEach(async () => {
     'installations',
     'user',
   ];
-  await database().batch(tables.map((table) => database().prepare(`DELETE FROM "${table}"`)));
+  await testDatabase().batch(
+    tables.map((table) => testDatabase().prepare(`DELETE FROM "${table}"`)),
+  );
 });
 
 describe('GitHub webhook authentication and mirroring', () => {
@@ -127,7 +129,9 @@ describe('GitHub webhook authentication and mirroring', () => {
 
     expect(response.status).toBe(401);
     expect(
-      await database().prepare('SELECT COUNT(*) AS n FROM installations').first<{ n: number }>(),
+      await testDatabase()
+        .prepare('SELECT COUNT(*) AS n FROM installations')
+        .first<{ n: number }>(),
     ).toMatchObject({ n: 0 });
   });
 
@@ -143,10 +147,10 @@ describe('GitHub webhook authentication and mirroring', () => {
     expect((await postWebhook(webhookApp(), 'installation', created)).status).toBe(200);
     expect((await postWebhook(webhookApp(), 'installation', created)).status).toBe(200);
 
-    const counts = await database().batch<{ n: number }>([
-      database().prepare('SELECT COUNT(*) AS n FROM installations'),
-      database().prepare('SELECT COUNT(*) AS n FROM repositories'),
-      database().prepare('SELECT COUNT(*) AS n FROM agents'),
+    const counts = await testDatabase().batch<{ n: number }>([
+      testDatabase().prepare('SELECT COUNT(*) AS n FROM installations'),
+      testDatabase().prepare('SELECT COUNT(*) AS n FROM repositories'),
+      testDatabase().prepare('SELECT COUNT(*) AS n FROM agents'),
     ]);
     expect(counts.map((result) => result.results[0].n)).toEqual([1, 1, 4]);
 
@@ -155,7 +159,7 @@ describe('GitHub webhook authentication and mirroring', () => {
       installation: created.installation,
     };
     expect((await postWebhook(webhookApp(), 'installation', suspended)).status).toBe(200);
-    const installation = await database()
+    const installation = await testDatabase()
       .prepare('SELECT suspended FROM installations WHERE id = 1001')
       .first<{ suspended: number }>();
     expect(installation?.suspended).toBe(1);
@@ -164,7 +168,7 @@ describe('GitHub webhook authentication and mirroring', () => {
   it('provisions a linked organization and records the installer as owner', async () => {
     // The installer already has a better-auth user row (they signed in to
     // reach the settings page before installing the app on GitHub).
-    await database()
+    await testDatabase()
       .prepare(
         `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt", login, "githubId")
 			 VALUES ('u1', 'octocat', 'octocat@example.test', true, '2026-01-01T00:00:00.000Z',
@@ -183,12 +187,12 @@ describe('GitHub webhook authentication and mirroring', () => {
     };
     expect((await postWebhook(webhookApp(), 'installation', created)).status).toBe(200);
 
-    const org = await database()
+    const org = await testDatabase()
       .prepare('SELECT id, name, "installationId" AS installation_id FROM "organization"')
       .first<{ id: string; name: string; installation_id: number }>();
     expect(org).toMatchObject({ name: 'acme', installation_id: 1001 });
 
-    const member = await database()
+    const member = await testDatabase()
       .prepare('SELECT role FROM "member" WHERE "organizationId" = ?1 AND "userId" = ?2')
       .bind(org?.id, 'u1')
       .first<{ role: string }>();
@@ -207,7 +211,7 @@ describe('GitHub webhook authentication and mirroring', () => {
     };
     expect((await postWebhook(webhookApp(), 'installation', created)).status).toBe(200);
 
-    const org = await database()
+    const org = await testDatabase()
       .prepare('SELECT COUNT(*) AS n FROM "organization" WHERE "installationId" = 1002')
       .first<{ n: number }>();
     expect(org?.n).toBe(0);
@@ -225,11 +229,11 @@ describe('GitHub webhook authentication and mirroring', () => {
     };
     expect((await postWebhook(webhookApp(), 'installation', created)).status).toBe(200);
 
-    const org = await database()
+    const org = await testDatabase()
       .prepare('SELECT id FROM "organization" WHERE "installationId" = 1001')
       .first<{ id: string }>();
     expect(org).toBeTruthy();
-    const memberCount = await database()
+    const memberCount = await testDatabase()
       .prepare('SELECT COUNT(*) AS n FROM "member" WHERE "organizationId" = ?1')
       .bind(org?.id)
       .first<{ n: number }>();
@@ -237,7 +241,7 @@ describe('GitHub webhook authentication and mirroring', () => {
 
     // …but the installer's identity is recorded, so the deferred owner
     // bootstrap (ensureInstallerOwner) can promote them once they sign in.
-    const installation = await database()
+    const installation = await testDatabase()
       .prepare('SELECT installer_github_id FROM installations WHERE id = 1001')
       .first<{ installer_github_id: number | null }>();
     expect(installation?.installer_github_id).toBe(9999);
@@ -263,7 +267,7 @@ describe('GitHub webhook authentication and mirroring', () => {
       (await postWebhook(webhookApp(), 'installation_repositories', reposChanged)).status,
     ).toBe(200);
 
-    const installation = await database()
+    const installation = await testDatabase()
       .prepare('SELECT installer_github_id FROM installations WHERE id = 1001')
       .first<{ installer_github_id: number | null }>();
     expect(installation?.installer_github_id).toBe(9999);

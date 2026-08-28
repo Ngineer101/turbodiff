@@ -1,5 +1,6 @@
 import { env } from 'cloudflare:workers';
-import { database } from '../data/postgres.ts';
+import { sql } from 'drizzle-orm';
+import { queryOne } from '../data/database.ts';
 import { auth, type AuthUser } from '../integrations/auth/better-auth.ts';
 import {
   installationAccessSnapshot,
@@ -288,16 +289,16 @@ async function resolveAuthedUser(user: AuthUser): Promise<AuthedUser | null> {
 export async function requireMcpUser(request: Request): Promise<AuthedUser | null> {
   const session = await auth().api.getMcpSession({ headers: request.headers });
   if (!session?.userId) return null;
-  const row = await database()
-    .prepare('SELECT "id", "name", "email", "login", "githubId" FROM "user" WHERE "id" = ?1')
-    .bind(session.userId)
-    .first<{
-      id: string;
-      name: string;
-      email: string;
-      login: string | null;
-      githubId: number | null;
-    }>();
+  const row = await queryOne<{
+    id: string;
+    name: string;
+    email: string;
+    login: string | null;
+    githubId: number | null;
+  }>(sql`
+    SELECT id, name, email, login, "githubId"
+    FROM auth."user" WHERE id = ${session.userId}
+  `);
   if (!row) return null;
   return resolveAuthedUser(row);
 }

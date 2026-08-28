@@ -1,18 +1,21 @@
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
+import { drizzle } from 'drizzle-orm/pglite';
+import { migrate } from 'drizzle-orm/pglite/migrator';
 
 const db = new PGlite();
 const directory = path.resolve('db/migrations');
 const files = (await readdir(directory)).filter((file) => file.endsWith('.sql')).sort();
 
-for (const file of files) {
-  const sql = await readFile(path.join(directory, file), 'utf8');
-  try {
-    await db.exec(sql);
-  } catch (error) {
-    throw new Error(`Fresh schema failed at ${file}`, { cause: error });
-  }
+try {
+  await migrate(drizzle(db), {
+    migrationsFolder: directory,
+    migrationsSchema: 'public',
+    migrationsTable: 'schema_migrations',
+  });
+} catch (error) {
+  throw new Error('Fresh Drizzle schema migration failed', { cause: error });
 }
 
 const schemas = await db.query(`
@@ -27,6 +30,11 @@ const counts = new Map(schemas.rows.map((row) => [row.table_schema, row.count]))
 if (counts.get('app') !== 30) throw new Error(`Expected 30 app tables, found ${counts.get('app')}`);
 if (counts.get('auth') !== 10)
   throw new Error(`Expected 10 auth tables, found ${counts.get('auth')}`);
+
+const ledger = await db.query('SELECT COUNT(*)::int AS count FROM public.schema_migrations');
+if (ledger.rows[0]?.count !== files.length) {
+  throw new Error(`Expected ${files.length} Drizzle ledger rows, found ${ledger.rows[0]?.count}`);
+}
 
 const missingForeignKeyIndexes = await db.query(`
   SELECT c.conrelid::regclass::text AS table_name, c.conname
@@ -151,6 +159,23 @@ try {
 }
 if (!providerMismatchRejected)
   throw new Error('Installation/repository provider mismatch was accepted');
+
+await db.exec(`
+  INSERT INTO change_requests
+    (repository_id, number, title, source_branch, target_branch, updated_at)
+  VALUES
+    (3001, app.next_change_request_number(3001), 'First', 'feature/one', 'main', '2020-01-01'),
+    (3001, app.next_change_request_number(3001), 'Second', 'feature/two', 'main', '2020-01-01');
+  UPDATE change_requests SET title = 'Touched' WHERE repository_id = 3001 AND number = 1;
+`);
+const changeRequests = await db.query(`
+  SELECT number, updated_at > '2020-01-01'::timestamptz AS touched
+  FROM change_requests WHERE repository_id = 3001 ORDER BY number
+`);
+if (changeRequests.rows[0]?.number !== 1 || changeRequests.rows[1]?.number !== 2) {
+  throw new Error('Atomic change-request numbering did not allocate 1, 2');
+}
+if (!changeRequests.rows[0]?.touched) throw new Error('updated_at trigger did not run');
 
 const version = await db.query('SELECT last_value::bigint AS version FROM app.factory_version_seq');
 if (Number(version.rows[0]?.version) <= 1)

@@ -1,8 +1,21 @@
 import { env } from 'cloudflare:workers';
 import { betterAuth } from 'better-auth';
+import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { mcp } from 'better-auth/plugins';
 import { organization } from 'better-auth/plugins/organization';
-import { Pool } from 'pg';
+import { authDatabase } from '../../data/database.ts';
+import {
+  account,
+  invitation,
+  member,
+  oauthAccessToken,
+  oauthApplication,
+  oauthConsent,
+  organization as organizationTable,
+  session,
+  user,
+  verification,
+} from '../../data/schema.ts';
 import { sendInvitationEmail } from '../notifications/email.ts';
 import { orgAc, orgRoles } from './organization-access.ts';
 
@@ -64,7 +77,7 @@ import { orgAc, orgRoles } from './organization-access.ts';
 //     and tracks GitHub username renames).
 //   - The mcp plugin turns this instance into an OAuth 2.1 authorization
 //     server for the inbound /mcp endpoint (tables in
-//     db/migrations/0001_foundation_and_auth.sql). Its authorize/token/register endpoints
+//     src/data/schema.ts). Its authorize/token/register endpoints
 //     (/api/auth/mcp/authorize|token|register) and .well-known documents ride
 //     the existing GET|POST /api/auth/* catch-all in app.ts — no new mounts
 //     needed there, and neither the closed /update-user route nor the
@@ -84,13 +97,22 @@ function createAuth() {
     baseURL: env.PUBLIC_BASE_URL,
     basePath: '/api/auth',
     secret: env.SESSION_SECRET,
-    database: new Pool({
-      connectionString: env.HYPERDRIVE.connectionString,
-      options: '-c search_path=auth,app,public',
-      max: 5,
-      connectionTimeoutMillis: 10_000,
-      idleTimeoutMillis: 30_000,
-      application_name: 'turbodiff-auth',
+    database: drizzleAdapter(authDatabase(), {
+      provider: 'pg',
+      camelCase: true,
+      transaction: true,
+      schema: {
+        account,
+        invitation,
+        member,
+        oauthAccessToken,
+        oauthApplication,
+        oauthConsent,
+        organization: organizationTable,
+        session,
+        user,
+        verification,
+      },
     }),
     session: {
       expiresIn: SESSION_DAYS * 24 * 60 * 60,

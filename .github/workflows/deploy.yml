@@ -43,6 +43,9 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
+      - name: Validate Drizzle migrations
+        run: pnpm vp run db:check
+
       - name: Fresh PostgreSQL schema test
         run: pnpm vp run test:schema
 

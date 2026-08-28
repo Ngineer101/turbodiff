@@ -8,14 +8,14 @@ Workers at <https://turbodiff.dev> (repo: <https://github.com/Ngineer101/turbodi
 
 - `src/ai/` — the generic `PrReviewer` agent, GitHub tools, review dispatch/metering, sandbox runners, runtime support, and durable Workflows. `runtime/` owns shared runner authentication, sandbox access, redaction, skill mounting, and repository-workspace mechanics; stage orchestration stays explicit in `runners/` and `workflows/`. A module whose first line is `'use agent'` exports durable agent identities. Review instance ids are `<agent-slug>--<owner>--<repo>--<pr>`.
 - `src/domain/` — pure policies and value logic: personas, scheduling, attribution, prompt security, and skill rendering.
-- `src/data/` — PostgreSQL persistence through Cloudflare Hyperdrive. `db.ts` is the stable facade; queries and row types are split across repositories, factory, agents, connections, reviews, usage, credentials, board, and automations. `postgres.ts` owns the short-lived Hyperdrive client adapter.
+- `src/data/` — Drizzle/PostgreSQL persistence through Cloudflare Hyperdrive. `schema.ts` is the schema source of truth, `database.ts` owns short-lived Hyperdrive clients, and `db.ts` is the stable facade; queries and row types are split across repositories, factory, agents, connections, reviews, usage, credentials, board, and automations.
 - `src/services/` — application use cases and authorization. The GitHub webhook service mirrors installations/repos and drives review/fix policy without depending on Hono. Queue producers use the typed `factory-queue.ts` gateway.
 - `src/integrations/` — GitHub, better-auth, MCP, notification, and cryptographic adapters. External protocol and credential-refresh details belong here or in a coordinating service, never in data queries. GitHub REST JSON and pagination go through `integrations/github/client.ts`.
 - `src/http/` — Hono routes, middleware adapters, and server-rendered views. `api.ts` is the session-cookie JSON API; `api-support.ts` owns its presentation, validation, and resource-authorization helpers. The landing page's injected script string must not contain backticks or `${` sequences.
 - `src/client/` — the signed-in SPA: TanStack Router (code-based routes in `main.tsx`), TanStack Query (loaders + polling while agents run), Tailwind v4 tokens in `styles.css`, shared primitives in `components/ui/`, one file per page in `pages/`. Built by `vite.client.config.ts` into `public/app` (fixed entry names `app.js`/`app.css`, referenced by the shell in ui.ts); the `@pierre/diffs` cockpit is a lazy route. `npm run build:app` builds it; `dev`/`build`/`deploy` run it first.
 - `src/app.ts` — the HTTP composition root; provider setup and route mounting only. `/internal/*` is implemented in `src/http/internal.ts` and requires `Authorization: Bearer $REVIEW_SECRET`.
 - `src/cloudflare.ts` — Worker-level exports and non-HTTP handlers.
-- `db/migrations/` — fresh PostgreSQL schema split into `app` and `auth`. Apply through a direct `DATABASE_URL` with `vp run db:migrate`; verify with `vp run db:verify`. Worker traffic uses the `HYPERDRIVE` binding.
+- `db/migrations/` — Drizzle migrations for the PostgreSQL `app` and `auth` schemas. Generate from `src/data/schema.ts` with `vp exec drizzle-kit generate --name=<name>`, apply through a direct `DATABASE_URL` with `vp run db:migrate`, and verify with `vp run db:verify`. Worker traffic uses the `HYPERDRIVE` binding.
 - `public/` — static assets (logo), auto-served by the Cloudflare Vite plugin.
 - `wrangler.jsonc` — Worker config; every agent needs a Durable Object migration entry.
 
@@ -37,6 +37,7 @@ package.json script names, which is why dev/build/deploy exist only as tasks).
   move the `test` block into it).
 - `vp run test:schema` — apply every migration to an embedded fresh PostgreSQL instance and verify structural invariants.
 - `vp run test:worker` — migrate `DATABASE_URL`, then run Worker integration tests against PostgreSQL through Hyperdrive.
+- `vp run db:check` — validate the Drizzle migration snapshots.
 - `vp run db:migrate` / `vp run db:status` / `vp run db:verify` — operate the direct PostgreSQL migration connection.
 - `vp lint` / `vp fmt` — Oxlint / Oxfmt (fmt configured for the repo's tabs + single
   quotes in `vite.config.ts`).

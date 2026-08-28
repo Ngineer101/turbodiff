@@ -87,6 +87,7 @@ export default defineConfig({
       deploy: { command: 'wrangler deploy', dependsOn: ['build'] },
       'db:migrate': { command: 'node scripts/db-migrate.mjs up', cache: false },
       'db:status': { command: 'node scripts/db-migrate.mjs status', cache: false },
+      'db:check': { command: 'drizzle-kit check' },
       'db:verify': { command: 'node scripts/db-verify.mjs', cache: false },
       'db:reset-test': {
         command: 'node scripts/db-reset-test.mjs',

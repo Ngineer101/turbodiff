@@ -2,7 +2,7 @@
 /// <reference path="../../worker-configuration.d.ts" />
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
 
-import { database } from '../data/postgres.ts';
+import { testDatabase } from '../test/database-fixture.ts';
 import { beforeAll, describe, expect, it } from 'vite-plus/test';
 import {
   createArtifactsInstallation,
@@ -14,19 +14,19 @@ import {
 import { applyArtifactsEvent } from './artifacts.ts';
 
 beforeAll(async () => {
-  await database()
+  await testDatabase()
     .prepare(
       `DELETE FROM installations
 		 WHERE id = 1001 OR (provider = 'artifacts' AND account_login IN ('hosted-org', 'other-org'))`,
     )
     .run();
   // A GitHub tenant, to prove the two id spaces coexist.
-  await database().batch([
-    database().prepare(
+  await testDatabase().batch([
+    testDatabase().prepare(
       `INSERT INTO installations (id, account_login, account_id, account_type)
 			 VALUES (1001, 'acme', 2001, 'Organization')`,
     ),
-    database().prepare(
+    testDatabase().prepare(
       `INSERT INTO repositories (id, installation_id, owner, name)
 			 VALUES (101, 1001, 'acme', 'api')`,
     ),

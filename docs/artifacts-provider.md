@@ -16,7 +16,7 @@ branch; everything here is production code.
   access model via installation/repository rows. PostgreSQL allocates their
   IDs from a dedicated high-range sequence, while provider identity remains
   an explicit column rather than an ID convention. Schema in
-  `db/migrations/0002_tenant_and_repository.sql`; allocation in
+  `src/data/schema.ts`; allocation in
   `src/data/repositories.ts`.
 - **Provisioning** — `POST /internal/projects {owner, name, description?}`
   creates the Artifacts repo (collision-suffixed name `owner--name`), seeds an
@@ -79,7 +79,7 @@ curl -sX POST https://turbodiff.dev/internal/repos/clone-token -H "$AUTH" \
 The forge layer itself, no GitHub underneath:
 
 - **Records** — `change_requests` / `cr_comments` / `cr_checks` (schema in
-  `db/migrations/0004_collaboration_and_access.sql`), diffs cached in R2 under the private `crs/` prefix. Data layer in
+  `src/data/schema.ts`), diffs cached in R2 under the private `crs/` prefix. Data layer in
   `src/data/change-requests.ts`, orchestration in
   `src/services/change-requests.ts`.
 - **Engine** — `src/ai/runtime/cr-engine.ts` (production port of the

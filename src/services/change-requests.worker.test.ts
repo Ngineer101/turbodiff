@@ -3,7 +3,7 @@
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
 
 import { beforeAll, describe, expect, it } from 'vite-plus/test';
-import { database } from '../data/postgres.ts';
+import { testDatabase } from '../test/database-fixture.ts';
 import {
   createArtifactsInstallation,
   createArtifactsRepository,
@@ -23,7 +23,7 @@ import { computeRiskTierFromFiles } from './review-policy.ts';
 let repo: RepositoryRow;
 
 beforeAll(async () => {
-  await database()
+  await testDatabase()
     .prepare(`DELETE FROM installations WHERE provider = 'artifacts' AND account_login = 'cr-org'`)
     .run();
   const installation = await createArtifactsInstallation('cr-org');

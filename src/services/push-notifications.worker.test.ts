@@ -2,7 +2,7 @@
 /// <reference path="../../worker-configuration.d.ts" />
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
 
-import { database } from '../data/postgres.ts';
+import { testDatabase } from '../test/database-fixture.ts';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { createPlan, upsertPushSubscription } from '../data/db.ts';
 import { notifyPlanUsers, sendPushToSubscription } from './push-notifications.ts';
@@ -16,17 +16,17 @@ const P256DH =
 const AUTH = 'QhkWkXwEh4Tj7XFNfBQnVg';
 
 async function seedTenant(): Promise<void> {
-  await database().batch([
-    database().prepare(
+  await testDatabase().batch([
+    testDatabase().prepare(
       `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt", "githubId")
        VALUES ('push-user', 'Push User', 'push@example.test', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 3001),
               ('push-user-2', 'Push User 2', 'push-2@example.test', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 4001)`,
     ),
-    database().prepare(
+    testDatabase().prepare(
       `INSERT INTO installations (id, account_login, account_id, account_type)
 		 VALUES (1001, 'acme', 2001, 'Organization')`,
     ),
-    database().prepare(
+    testDatabase().prepare(
       `INSERT INTO repositories (id, installation_id, owner, name)
 		 VALUES (101, 1001, 'acme', 'api')`,
     ),
@@ -42,7 +42,9 @@ beforeEach(async () => {
     'installations',
     'user',
   ];
-  await database().batch(tables.map((table) => database().prepare(`DELETE FROM "${table}"`)));
+  await testDatabase().batch(
+    tables.map((table) => testDatabase().prepare(`DELETE FROM "${table}"`)),
+  );
   await seedTenant();
 });
 
@@ -253,7 +255,7 @@ describe('notifyPlanUsers', () => {
       vi.unstubAllGlobals();
     }
 
-    const remaining = await database()
+    const remaining = await testDatabase()
       .prepare('SELECT endpoint FROM push_subscriptions ORDER BY endpoint')
       .all<{ endpoint: string }>();
     expect(remaining.results.map((r) => r.endpoint)).toEqual([

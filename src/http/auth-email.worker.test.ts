@@ -2,7 +2,7 @@
 /// <reference path="../../worker-configuration.d.ts" />
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
 
-import { database } from '../data/postgres.ts';
+import { testDatabase } from '../test/database-fixture.ts';
 // Transport-level coverage for email sign-up.
 import { Hono } from 'hono';
 import { describe, expect, it } from 'vite-plus/test';
@@ -30,7 +30,7 @@ describe('email/password sign-up', () => {
     // autoSignIn: the sign-up response carries the session cookie.
     expect(response.headers.get('set-cookie')).toContain('turbodiff.session_token');
 
-    const user = await database()
+    const user = await testDatabase()
       .prepare('SELECT name, login, "githubId" FROM "user" WHERE email = ?1')
       .bind('pat@example.test')
       .first<{ name: string; login: string | null; githubId: number | null }>();
@@ -50,7 +50,7 @@ describe('email/password sign-up', () => {
     });
     expect(response.status).toBe(200);
 
-    const user = await database()
+    const user = await testDatabase()
       .prepare('SELECT login, "githubId" FROM "user" WHERE email = ?1')
       .bind('mallory@example.test')
       .first<{ login: string | null; githubId: number | null }>();

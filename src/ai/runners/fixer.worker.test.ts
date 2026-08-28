@@ -2,7 +2,7 @@
 /// <reference path="../../../worker-configuration.d.ts" />
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
 
-import { database } from '../../data/postgres.ts';
+import { testDatabase } from '../../test/database-fixture.ts';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { createFeature, setInstallationSuspended, updateFeature } from '../../data/db.ts';
 import {
@@ -32,12 +32,12 @@ const noChanges: FixOutcome = {
 };
 
 async function seedOpenFactoryPr(): Promise<number> {
-  await database().batch([
-    database().prepare(
+  await testDatabase().batch([
+    testDatabase().prepare(
       `INSERT INTO installations (id, account_login, account_id, account_type)
 		 VALUES (1001, 'acme', 2001, 'Organization')`,
     ),
-    database().prepare(
+    testDatabase().prepare(
       `INSERT INTO repositories (id, installation_id, owner, name, enabled, auto_fix)
 		 VALUES (101, 1001, 'acme', 'api', 1, 1)`,
     ),
@@ -56,7 +56,9 @@ beforeEach(async () => {
     'repositories',
     'installations',
   ];
-  await database().batch(tables.map((table) => database().prepare(`DELETE FROM "${table}"`)));
+  await testDatabase().batch(
+    tables.map((table) => testDatabase().prepare(`DELETE FROM "${table}"`)),
+  );
 });
 
 describe('CI fix queue consumption', () => {
@@ -77,7 +79,7 @@ describe('CI fix queue consumption', () => {
         workflowRunId: 9001,
       }),
     );
-    const attempt = await database()
+    const attempt = await testDatabase()
       .prepare(
         'SELECT "trigger", status FROM fix_attempts WHERE repository_id = 101 AND pr_number = 42',
       )
@@ -97,7 +99,7 @@ describe('CI fix queue consumption', () => {
     await processFixMessage(ciMessage, { runFix });
 
     expect(runFix).not.toHaveBeenCalled();
-    const count = await database()
+    const count = await testDatabase()
       .prepare(
         'SELECT COUNT(*) AS n FROM fix_attempts WHERE repository_id = 101 AND pr_number = 42',
       )

@@ -1,5 +1,5 @@
-import { database } from './postgres.ts';
-import { placeholderList } from './sql.ts';
+import { sql } from 'drizzle-orm';
+import { execute, queryOne, queryRows } from './database.ts';
 
 // --- kanban board: todos (unstarted backlog cards) + task archiving ---
 
@@ -16,16 +16,15 @@ export interface TodoRow {
 
 export async function listTodos(installationIds: number[]): Promise<TodoRow[]> {
   if (installationIds.length === 0) return [];
-  const placeholders = placeholderList(installationIds.length);
-  const res = await database()
-    .prepare(
-      `SELECT * FROM todos
-		 WHERE installation_id IN (${placeholders}) AND plan_id IS NULL
-		 ORDER BY id DESC`,
-    )
-    .bind(...installationIds)
-    .all<TodoRow>();
-  return res.results;
+  return queryRows<TodoRow>(sql`
+    SELECT * FROM app.todos
+    WHERE installation_id IN (${sql.join(
+      installationIds.map((id) => sql`${id}`),
+      sql`, `,
+    )})
+      AND plan_id IS NULL
+    ORDER BY id DESC
+  `);
 }
 
 export async function createTodo(
@@ -34,27 +33,25 @@ export async function createTodo(
   notes: string | null,
   createdBy?: { login: string; id: number },
 ): Promise<number> {
-  const row = await database()
-    .prepare(
-      `INSERT INTO todos (installation_id, title, notes, created_by_login, created_by_id)
-		 VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id`,
+  const row = await queryOne<{ id: number }>(sql`
+    INSERT INTO app.todos (installation_id, title, notes, created_by_login, created_by_id)
+    VALUES (
+      ${installationId}, ${title}, ${notes},
+      ${createdBy?.login ?? null}, ${createdBy?.id ?? null}
     )
-    .bind(installationId, title, notes, createdBy?.login ?? null, createdBy?.id ?? null)
-    .first<{ id: number }>();
+    RETURNING id
+  `);
   return row!.id;
 }
 
 export async function getTodo(id: number): Promise<TodoRow | null> {
-  return database().prepare('SELECT * FROM todos WHERE id = ?1').bind(id).first<TodoRow>();
+  return queryOne<TodoRow>(sql`SELECT * FROM app.todos WHERE id = ${id}`);
 }
 
 export async function deleteTodo(id: number): Promise<void> {
-  await database().prepare('DELETE FROM todos WHERE id = ?1').bind(id).run();
+  await execute(sql`DELETE FROM app.todos WHERE id = ${id}`);
 }
 
 export async function setPlanArchived(id: number, archived: boolean): Promise<void> {
-  await database()
-    .prepare('UPDATE plans SET archived = ?2 WHERE id = ?1')
-    .bind(id, archived ? 1 : 0)
-    .run();
+  await execute(sql`UPDATE app.plans SET archived = ${archived ? 1 : 0} WHERE id = ${id}`);
 }
