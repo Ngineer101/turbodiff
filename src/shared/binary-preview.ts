@@ -8,7 +8,7 @@ export type BinaryPreviewKind = 'image' | 'pdf' | 'font';
 // extension (lowercase, no dot) -> { kind, mime }. SVG is deliberately NOT
 // here — it's text, delivered via `text` and previewed by the client from
 // that, so the server never ships base64 for it.
-const PREVIEWABLE: Record<string, { kind: BinaryPreviewKind; mime: string }> = {
+const PREVIEWABLE = {
   png: { kind: 'image', mime: 'image/png' },
   jpg: { kind: 'image', mime: 'image/jpeg' },
   jpeg: { kind: 'image', mime: 'image/jpeg' },
@@ -22,7 +22,11 @@ const PREVIEWABLE: Record<string, { kind: BinaryPreviewKind; mime: string }> = {
   otf: { kind: 'font', mime: 'font/otf' },
   woff: { kind: 'font', mime: 'font/woff' },
   woff2: { kind: 'font', mime: 'font/woff2' },
-};
+} satisfies Record<string, { kind: BinaryPreviewKind; mime: string }>;
+
+function isPreviewableExtension(ext: string): ext is keyof typeof PREVIEWABLE {
+  return ext in PREVIEWABLE;
+}
 
 // Extension after the last `.` of the last path segment, lowercased. No dot,
 // a trailing dot, and dotfiles (`.gitignore`) all mean no previewable kind.
@@ -32,7 +36,8 @@ export function binaryPreviewKind(
   const name = path.slice(path.lastIndexOf('/') + 1);
   const dot = name.lastIndexOf('.');
   if (dot <= 0 || dot === name.length - 1) return null;
-  return PREVIEWABLE[name.slice(dot + 1).toLowerCase()] ?? null;
+  const ext = name.slice(dot + 1).toLowerCase();
+  return isPreviewableExtension(ext) ? PREVIEWABLE[ext] : null;
 }
 
 export function isSvgPath(path: string): boolean {
