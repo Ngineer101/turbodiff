@@ -69,7 +69,9 @@ async function seedTenants(): Promise<void> {
     testDatabase().prepare(
       `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt", login, "githubId")
 		 VALUES ('u1', 'octocat', 'octocat@example.test', true, '2026-01-01T00:00:00.000Z',
-		         '2026-01-01T00:00:00.000Z', 'octocat', 3001)`,
+		         '2026-01-01T00:00:00.000Z', 'octocat', 3001),
+		        ('u2', 'hubot', 'hubot@example.test', true, '2026-01-01T00:00:00.000Z',
+		         '2026-01-01T00:00:00.000Z', 'hubot', 4001)`,
     ),
   ]);
 }
@@ -265,8 +267,9 @@ describe('pipeline cost reporting', () => {
         `INSERT INTO verifications (feature_id, cost_usd) VALUES (501, 0.0004)`,
       ),
       testDatabase().prepare(
-        `INSERT INTO automations (id, repository_id, name, prompt, schedule_kind, next_run_at)
-			 VALUES (601, 101, 'Nightly', 'do the thing', 'daily', '2026-01-01T00:00:00Z')`,
+        `INSERT INTO automations
+           (id, repository_id, name, prompt, schedule_kind, time_of_day, next_run_at)
+				 VALUES (601, 101, 'Nightly', 'do the thing', 'daily', '09:00', '2026-01-01T00:00:00Z')`,
       ),
       testDatabase().prepare(
         `INSERT INTO automation_runs (automation_id, cost_usd) VALUES (601, 0.00005)`,
@@ -908,13 +911,23 @@ describe('push subscriptions', () => {
 // worker pool also lacks — those are deployment-smoke territory; only the
 // paths that resolve before the sandbox are covered here.
 describe('repo code browser', () => {
+  const artifactsUser: AuthedUser = {
+    ...acmeUser,
+    installationIds: [...acmeUser.installationIds, 3003],
+  };
+
   async function seedArtifactsRepo(): Promise<void> {
-    await testDatabase()
-      .prepare(
+    await testDatabase().batch([
+      testDatabase().prepare(
+        `INSERT INTO installations
+           (id, account_login, account_id, account_type, provider)
+         VALUES (3003, 'acme-artifacts', 3003, 'Organization', 'artifacts')`,
+      ),
+      testDatabase().prepare(
         `INSERT INTO repositories (id, installation_id, owner, name, provider, artifacts_repo, default_branch)
-			 VALUES (303, 1001, 'acme', 'hosted', 'artifacts', 'acme--hosted', 'main')`,
-      )
-      .run();
+				 VALUES (303, 3003, 'acme', 'hosted', 'artifacts', 'acme--hosted', 'main')`,
+      ),
+    ]);
   }
 
   const validSave = {
@@ -958,7 +971,11 @@ describe('repo code browser', () => {
   it('rejects mode "pr" for an artifacts-hosted repo before auth', async () => {
     await seedArtifactsRepo();
     const canPush = vi.fn(async () => true);
-    const response = await authenticatedApi(canPush).request(
+    const response = await apiApp({
+      authenticate: async () => artifactsUser,
+      canPushToRepo: canPush,
+      orgAdmin: async () => true,
+    }).request(
       'https://turbodiff.test/api/repos/303/file',
       {
         method: 'PUT',
@@ -979,7 +996,11 @@ describe('repo code browser', () => {
     // orgAdmin false: the caller has no member row and the org heal denies
     // elevation, so the 'settings' capability check fails.
     const canPushSpy = vi.fn(async () => true);
-    const response = await authenticatedApi(canPushSpy, async () => false).request(
+    const response = await apiApp({
+      authenticate: async () => artifactsUser,
+      canPushToRepo: canPushSpy,
+      orgAdmin: async () => false,
+    }).request(
       'https://turbodiff.test/api/repos/303/file',
       {
         method: 'PUT',

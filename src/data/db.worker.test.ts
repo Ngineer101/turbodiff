@@ -283,7 +283,8 @@ describe('cockpit chat messages', () => {
   it('returns recent history oldest-first and persists the chat session id', async () => {
     const featureId = await createFeature(101, 'Feature', 'Spec');
     for (let i = 0; i < 25; i++) {
-      await createUserChatMessage(featureId, `msg ${i}`, 'octocat', 1);
+      const messageId = await createUserChatMessage(featureId, `msg ${i}`, 'octocat', 1);
+      await setChatMessageStatus(messageId, 'done');
     }
     const history = await recentChatHistory(featureId, 20);
     expect(history).toHaveLength(20);
@@ -585,9 +586,10 @@ describe('pipeline cost by month', () => {
 		 VALUES (202, 2002, 'other', 'private')`,
       ),
       testDatabase().prepare(
-        `INSERT INTO automations (id, repository_id, name, prompt, schedule_kind, next_run_at)
-		 VALUES (601, 101, 'Nightly', 'do the thing', 'daily', '2026-01-01T00:00:00Z'),
-		        (602, 202, 'Theirs', 'not mine', 'daily', '2026-01-01T00:00:00Z')`,
+        `INSERT INTO automations
+           (id, repository_id, name, prompt, schedule_kind, time_of_day, next_run_at)
+         VALUES (601, 101, 'Nightly', 'do the thing', 'daily', '09:00', '2026-01-01T00:00:00Z'),
+                (602, 202, 'Theirs', 'not mine', 'daily', '09:00', '2026-01-01T00:00:00Z')`,
       ),
       testDatabase().prepare(
         `INSERT INTO automation_runs (automation_id, cost_usd, created_at)

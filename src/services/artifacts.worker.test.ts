@@ -12,6 +12,7 @@ import {
   getRepoByFullName,
 } from '../data/db.ts';
 import { applyArtifactsEvent } from './artifacts.ts';
+import { parseUtc } from '../shared/time.ts';
 
 beforeAll(async () => {
   await testDatabase()
@@ -91,8 +92,8 @@ describe('applyArtifactsEvent', () => {
       eventTimestamp: '2026-08-21T10:00:00.000Z',
     });
     expect(outcome).toContain('hosted-org/shop');
-    expect((await getRepoByArtifactsName('hosted-org--shop'))?.last_push_at).toBe(
-      '2026-08-21T10:00:00.000Z',
+    expect(parseUtc((await getRepoByArtifactsName('hosted-org--shop'))!.last_push_at!)).toBe(
+      Date.parse('2026-08-21T10:00:00.000Z'),
     );
 
     const ignored = await applyArtifactsEvent({
