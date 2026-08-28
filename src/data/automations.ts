@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { STALL_CUTOFF_MODIFIER } from '../shared/time.ts';
 import type { CliUsage } from '../shared/usage.ts';
-import { execute, queryOne, queryRows } from './database.ts';
+import { execute, queryOne, queryRows, withDatabase } from './database.ts';
 import type { AgentRunRow } from './factory.ts';
 
 // --- Automations: recurring per-repo prompt runs ---
@@ -161,25 +161,25 @@ export async function claimAutomation(
 // skips a beat instead of piling up runs. Sweeps stale 'running' rows first
 // (a consumer killed mid-run never finishes its row), mirroring
 // tryRecordFixAttempt minus the attempt cap — the schedule itself throttles.
+// The partial unique index arbitrates concurrent claims after the stale sweep.
 export async function tryRecordAutomationRun(automationId: number): Promise<number | null> {
-  const row = await queryOne<{ id: number }>(sql`
-    WITH stale AS (
-      UPDATE app.automation_runs
-      SET status = 'failed', error = 'stale: consumer killed before completion'
-      WHERE automation_id = ${automationId} AND status = 'running'
-        AND created_at < CURRENT_TIMESTAMP + ${STALL_CUTOFF_MODIFIER}::interval
-      RETURNING id
-    )
-    INSERT INTO app.automation_runs (automation_id)
-    SELECT ${automationId}
-    WHERE NOT EXISTS (
-      SELECT 1 FROM app.automation_runs
-      WHERE automation_id = ${automationId} AND status = 'running'
-    )
-    ON CONFLICT DO NOTHING
-    RETURNING id
-  `);
-  return row?.id ?? null;
+  return withDatabase((database) =>
+    database.transaction(async (transaction) => {
+      await transaction.execute(sql`
+        UPDATE app.automation_runs
+        SET status = 'failed', error = 'stale: consumer killed before completion'
+        WHERE automation_id = ${automationId} AND status = 'running'
+          AND created_at < CURRENT_TIMESTAMP + ${STALL_CUTOFF_MODIFIER}::interval
+      `);
+      const result = await transaction.execute<{ id: number }>(sql`
+        INSERT INTO app.automation_runs (automation_id)
+        VALUES (${automationId})
+        ON CONFLICT DO NOTHING
+        RETURNING id
+      `);
+      return result.rows[0]?.id ?? null;
+    }),
+  );
 }
 
 export async function finishAutomationRun(

@@ -837,6 +837,30 @@ describe('push subscriptions', () => {
     expect(response.status).toBe(400);
   });
 
+  it('rejects push setup cleanly until an email/password user connects GitHub', async () => {
+    const emailUser: AuthedUser = {
+      session: { authUserId: 'email-user', userId: 0, login: '' },
+      installationIds: [],
+      githubConnected: false,
+      name: 'Email User',
+    };
+    const response = await apiApp({ authenticate: async () => emailUser }).request(
+      'https://turbodiff.test/api/push/subscribe',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          endpoint: 'https://push.example/email-only',
+          keys: { p256dh: 'p256dh-key', auth: 'auth-key' },
+        }),
+      },
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: 'connect GitHub before enabling push notifications',
+    });
+  });
+
   it('deletes only the calling user’s subscription by endpoint', async () => {
     await testDatabase()
       .prepare(

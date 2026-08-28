@@ -122,7 +122,7 @@ import {
   userIsGithubOrgAdmin,
 } from '../services/auth.ts';
 import { APIError } from 'better-auth';
-import { auth } from '../integrations/auth/better-auth.ts';
+import { withAuth } from '../integrations/auth/better-auth.ts';
 import { certificateUrl } from '../services/certificates.ts';
 import { memberRole } from '../services/access-control.ts';
 import {
@@ -442,6 +442,10 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   // Web Push subscription (src/services/push-notifications.ts). Body shape matches
   // PushSubscription.toJSON() natively — no client-side reshaping needed.
   app.post('/push/subscribe', async (c) => {
+    const user = c.get('user');
+    if (!user.githubConnected || user.session.userId <= 0) {
+      return c.json({ error: 'connect GitHub before enabling push notifications' }, 409);
+    }
     const body = await c.req
       .json<{ endpoint?: string; keys?: { p256dh?: string; auth?: string } }>()
       .catch(() => null);
@@ -451,7 +455,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (!endpoint || !p256dh || !auth) {
       return c.json({ error: 'body must be {"endpoint", "keys": {"p256dh", "auth"}}' }, 400);
     }
-    await upsertPushSubscription(c.get('user').session.userId, { endpoint, p256dh, auth });
+    await upsertPushSubscription(user.session.userId, { endpoint, p256dh, auth });
     return c.json({ ok: true });
   });
 
@@ -2845,10 +2849,12 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       );
     }
     try {
-      const invitation = await auth().api.createInvitation({
-        headers: c.req.raw.headers,
-        body: { email, role, organizationId: resolved.orgId },
-      });
+      const invitation = await withAuth((instance) =>
+        instance.api.createInvitation({
+          headers: c.req.raw.headers,
+          body: { email, role, organizationId: resolved.orgId },
+        }),
+      );
       return c.json<ApiInvitation>({
         id: invitation.id,
         email: invitation.email,
@@ -2869,10 +2875,12 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const denied = await requireCapability(c, resolved.installationId, 'member', orgAdmin);
     if (denied) return denied;
     try {
-      await auth().api.removeMember({
-        headers: c.req.raw.headers,
-        body: { memberIdOrEmail: c.req.param('memberId'), organizationId: resolved.orgId },
-      });
+      await withAuth((instance) =>
+        instance.api.removeMember({
+          headers: c.req.raw.headers,
+          body: { memberIdOrEmail: c.req.param('memberId'), organizationId: resolved.orgId },
+        }),
+      );
       return c.json({ ok: true });
     } catch (err) {
       return orgApiErrorResponse(c, err);
@@ -2890,10 +2898,12 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       return c.json({ error: 'body must be {"role": "owner"|"admin"|"member"}' }, 400);
     }
     try {
-      await auth().api.updateMemberRole({
-        headers: c.req.raw.headers,
-        body: { memberId: c.req.param('memberId'), role, organizationId: resolved.orgId },
-      });
+      await withAuth((instance) =>
+        instance.api.updateMemberRole({
+          headers: c.req.raw.headers,
+          body: { memberId: c.req.param('memberId'), role, organizationId: resolved.orgId },
+        }),
+      );
       return c.json({ ok: true });
     } catch (err) {
       return orgApiErrorResponse(c, err);

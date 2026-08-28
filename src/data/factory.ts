@@ -331,9 +331,8 @@ export async function countFixAttempts(repositoryId: number, prNumber: number): 
 }
 
 // Records an attempt only while under the cap and only when no attempt is
-// already running for this PR, in a single statement so two concurrent
-// consumers (any trigger — a cockpit batch submit, the blocking_review
-// webhook) can't both slip past either check and clobber the same sandbox.
+// already running for this PR. The partial unique index is the concurrency
+// guard, so two consumers can't both claim the same sandbox.
 // Returns null when blocked. Sweeps zombie rows first: a consumer killed at
 // the platform's wall clock never finishes its row, so old 'running' rows
 // are closed as failed rather than lying on the dashboard (and blocking new
@@ -352,32 +351,30 @@ export async function tryRecordFixAttempt(
   // and hold that lock like any other attempt.
   capTrigger?: string,
 ): Promise<number | null> {
-  const row = await queryOne<{ id: number }>(sql`
-    WITH stale AS (
-      UPDATE app.fix_attempts
-      SET status = 'failed', error = 'stale: consumer killed before completion'
-      WHERE repository_id = ${repositoryId} AND pr_number = ${prNumber}
-        AND status = 'running'
-        AND created_at < CURRENT_TIMESTAMP + ${STALL_CUTOFF_MODIFIER}::interval
-      RETURNING id
-    )
-    INSERT INTO app.fix_attempts (repository_id, pr_number, "trigger")
-    SELECT ${repositoryId}, ${prNumber}, ${trigger}
-    WHERE (
-      SELECT COUNT(*) FROM app.fix_attempts
-      WHERE repository_id = ${repositoryId} AND pr_number = ${prNumber}
-        AND ((${capTrigger ?? null}::text IS NOT NULL AND "trigger" = ${capTrigger ?? null})
-          OR (${capTrigger ?? null}::text IS NULL AND "trigger" <> 'chat'))
-    ) < ${cap}
-      AND NOT EXISTS (
-        SELECT 1 FROM app.fix_attempts
+  return withDatabase((database) =>
+    database.transaction(async (transaction) => {
+      await transaction.execute(sql`
+        UPDATE app.fix_attempts
+        SET status = 'failed', error = 'stale: consumer killed before completion'
         WHERE repository_id = ${repositoryId} AND pr_number = ${prNumber}
           AND status = 'running'
-      )
-    ON CONFLICT DO NOTHING
-    RETURNING id
-  `);
-  return row?.id ?? null;
+          AND created_at < CURRENT_TIMESTAMP + ${STALL_CUTOFF_MODIFIER}::interval
+      `);
+      const result = await transaction.execute<{ id: number }>(sql`
+        INSERT INTO app.fix_attempts (repository_id, pr_number, "trigger")
+        SELECT ${repositoryId}, ${prNumber}, ${trigger}
+        WHERE (
+          SELECT COUNT(*) FROM app.fix_attempts
+          WHERE repository_id = ${repositoryId} AND pr_number = ${prNumber}
+            AND ((${capTrigger ?? null}::text IS NOT NULL AND "trigger" = ${capTrigger ?? null})
+              OR (${capTrigger ?? null}::text IS NULL AND "trigger" <> 'chat'))
+        ) < ${cap}
+        ON CONFLICT DO NOTHING
+        RETURNING id
+      `);
+      return result.rows[0]?.id ?? null;
+    }),
+  );
 }
 
 // Open factory PRs on repos that opted into auto conflict resolution — the
@@ -1042,7 +1039,8 @@ export async function finishFixAttempt(
 // every completion/usage write resolves "the row to update" by instance id +
 // status='running', so a duplicate row causes writes to land on the wrong
 // dispatch. Mirrors tryRecordFixAttempt / tryRecordAutomationRun: sweep stale
-// rows, then insert atomically guarded by NOT EXISTS. Returns null when
+// rows in the same transaction, then let the partial unique index guard the
+// insert. Returns null when
 // another dispatch for this exact instance is already in flight. The sweep
 // threshold is STALL_CUTOFF_MODIFIER (shared/time.ts), the same cutoff that
 // drives the 'stalled' UI label.
@@ -1055,26 +1053,25 @@ export async function tryRecordReview(
   agentInstanceId: string,
   riskTier: string | null = null,
 ): Promise<number | null> {
-  const row = await queryOne<{ id: number }>(sql`
-    WITH stale AS (
-      UPDATE app.reviews SET status = 'failed', completed_at = CURRENT_TIMESTAMP
-      WHERE agent_instance_id = ${agentInstanceId} AND status = 'running'
-        AND created_at < CURRENT_TIMESTAMP + ${STALL_CUTOFF_MODIFIER}::interval
-      RETURNING id
-    )
-    INSERT INTO app.reviews
-      (repository_id, installation_id, pr_number, trigger_event, status,
-       agent_slug, agent_instance_id, risk_tier)
-    SELECT ${repositoryId}, ${installationId}, ${prNumber}, ${trigger},
-      'running', ${agentSlug}, ${agentInstanceId}, ${riskTier}
-    WHERE NOT EXISTS (
-      SELECT 1 FROM app.reviews
-      WHERE agent_instance_id = ${agentInstanceId} AND status = 'running'
-    )
-    ON CONFLICT DO NOTHING
-    RETURNING id
-  `);
-  return row?.id ?? null;
+  return withDatabase((database) =>
+    database.transaction(async (transaction) => {
+      await transaction.execute(sql`
+        UPDATE app.reviews SET status = 'failed', completed_at = CURRENT_TIMESTAMP
+        WHERE agent_instance_id = ${agentInstanceId} AND status = 'running'
+          AND created_at < CURRENT_TIMESTAMP + ${STALL_CUTOFF_MODIFIER}::interval
+      `);
+      const result = await transaction.execute<{ id: number }>(sql`
+        INSERT INTO app.reviews
+          (repository_id, installation_id, pr_number, trigger_event, status,
+           agent_slug, agent_instance_id, risk_tier)
+        VALUES (${repositoryId}, ${installationId}, ${prNumber}, ${trigger},
+          'running', ${agentSlug}, ${agentInstanceId}, ${riskTier})
+        ON CONFLICT DO NOTHING
+        RETURNING id
+      `);
+      return result.rows[0]?.id ?? null;
+    }),
+  );
 }
 
 // Called by the post_review tool once the agent has published to GitHub.

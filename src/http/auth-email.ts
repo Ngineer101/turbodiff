@@ -1,5 +1,5 @@
 import type { Context } from 'hono';
-import { auth } from '../integrations/auth/better-auth.ts';
+import { withAuth } from '../integrations/auth/better-auth.ts';
 import type { JsonObject } from '../shared/json.ts';
 
 // HTTP email/password sign-up accepts user additionalFields as client input for
@@ -14,11 +14,13 @@ export async function handleEmailSignUp(c: Context): Promise<Response> {
   const { name, email, password, callbackURL, rememberMe } = body;
   const headers = new Headers(c.req.raw.headers);
   headers.delete('content-length');
-  return auth().handler(
-    new Request(c.req.url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ name, email, password, callbackURL, rememberMe }),
-    }),
+  return withAuth((instance) =>
+    instance.handler(
+      new Request(c.req.url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ name, email, password, callbackURL, rememberMe }),
+      }),
+    ),
   );
 }

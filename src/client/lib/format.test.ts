@@ -38,7 +38,17 @@ describe('ago', () => {
 });
 
 describe('parseUtc', () => {
-  it('reads PostgreSQL adapter output as UTC', () => {
+  it('reads ISO UTC timestamps', () => {
     expect(parseUtc('2026-08-07T12:00:00.000Z')).toBe(Date.parse('2026-08-07T12:00:00Z'));
+  });
+
+  it('reads raw node-postgres timestamptz output without corrupting its offset', () => {
+    expect(parseUtc('2026-08-28 10:00:00.123456+00')).toBe(
+      Date.parse('2026-08-28T10:00:00.123Z'),
+    );
+  });
+
+  it('treats legacy zone-less database timestamps as UTC', () => {
+    expect(parseUtc('2026-08-28 10:00:00')).toBe(Date.parse('2026-08-28T10:00:00Z'));
   });
 });

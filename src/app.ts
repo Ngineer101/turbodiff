@@ -15,7 +15,7 @@ import { handleMcpProxy } from './http/mcp-proxy.ts';
 import { createUiRoutes } from './http/ui.ts';
 import { createWebhookRoutes } from './http/webhooks.ts';
 import { oAuthDiscoveryMetadata, oAuthProtectedResourceMetadata } from 'better-auth/plugins';
-import { auth } from './integrations/auth/better-auth.ts';
+import { withAuth } from './integrations/auth/better-auth.ts';
 import { verifyArtifactSig } from './integrations/security/crypto.ts';
 import { certificateSigKey, loadCertificateData } from './services/certificates.ts';
 
@@ -135,10 +135,10 @@ app.route('/mcp', createMcpRoutes());
 // the UI mount to preserve this file's ordering discipline, though
 // createUiRoutes registers no competing GET.
 app.get('/.well-known/oauth-authorization-server', (c) =>
-  oAuthDiscoveryMetadata(auth())(c.req.raw),
+  withAuth((instance) => oAuthDiscoveryMetadata(instance)(c.req.raw)),
 );
 app.get('/.well-known/oauth-protected-resource', (c) =>
-  oAuthProtectedResourceMetadata(auth())(c.req.raw),
+  withAuth((instance) => oAuthProtectedResourceMetadata(instance)(c.req.raw)),
 );
 
 // better-auth (sessions, OAuth callback, sign-out). Registered before the
@@ -156,7 +156,9 @@ app.on(['GET', 'POST'], '/api/auth/update-user', (c) => c.json({ error: 'not fou
 // handleEmailSignUp).
 app.post('/api/auth/sign-up/email', handleEmailSignUp);
 
-app.on(['GET', 'POST'], '/api/auth/*', (c) => auth().handler(c.req.raw));
+app.on(['GET', 'POST'], '/api/auth/*', (c) =>
+  withAuth((instance) => instance.handler(c.req.raw)),
+);
 
 // SPA data plane (session cookie auth, JSON in/out).
 app.route('/api', createApiRoutes());

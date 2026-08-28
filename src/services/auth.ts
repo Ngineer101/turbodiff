@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { sql } from 'drizzle-orm';
 import { queryOne } from '../data/database.ts';
-import { auth, type AuthUser } from '../integrations/auth/better-auth.ts';
+import { withAuth, type AuthUser } from '../integrations/auth/better-auth.ts';
 import {
   installationAccessSnapshot,
   storeInstallationAccessSnapshot,
@@ -75,9 +75,11 @@ async function githubToken(userId: string): Promise<string> {
   const cached = tokenCache.get(userId);
   if (cached && cached.exp > Date.now()) return cached.token;
   try {
-    const { accessToken } = await auth().api.getAccessToken({
-      body: { providerId: 'github', userId },
-    });
+    const { accessToken } = await withAuth((instance) =>
+      instance.api.getAccessToken({
+        body: { providerId: 'github', userId },
+      }),
+    );
     if (!accessToken) return '';
     tokenCache.set(userId, { token: accessToken, exp: Date.now() + TOKEN_TTL_MS });
     return accessToken;
@@ -233,7 +235,9 @@ export async function requireUser(request: Request): Promise<AuthedUser | null> 
       devFake: true,
     };
   }
-  const found = await auth().api.getSession({ headers: request.headers });
+  const found = await withAuth((instance) =>
+    instance.api.getSession({ headers: request.headers }),
+  );
   if (!found) return null;
   const user = found.user;
   // better-auth's static session type erases the login/githubId
@@ -287,7 +291,9 @@ async function resolveAuthedUser(user: AuthUser): Promise<AuthedUser | null> {
 // direct PostgreSQL query (precedent: services/access-control.ts queries better-auth
 // tables directly).
 export async function requireMcpUser(request: Request): Promise<AuthedUser | null> {
-  const session = await auth().api.getMcpSession({ headers: request.headers });
+  const session = await withAuth((instance) =>
+    instance.api.getMcpSession({ headers: request.headers }),
+  );
   if (!session?.userId) return null;
   const row = await queryOne<{
     id: string;

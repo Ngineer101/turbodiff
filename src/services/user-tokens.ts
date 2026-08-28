@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { queryOne } from '../data/database.ts';
-import { auth } from '../integrations/auth/better-auth.ts';
+import { withAuth } from '../integrations/auth/better-auth.ts';
 import { encryptionConfigured, openToken, sealToken } from '../integrations/security/crypto.ts';
 import { deleteUserRefreshToken, getUserRefreshToken, saveUserRefreshToken } from '../data/db.ts';
 import { refreshUserToken } from '../integrations/github/app.ts';
@@ -23,9 +23,11 @@ export async function mintUserToken(userId: number): Promise<string | null> {
   `);
   if (baUser) {
     try {
-      const { accessToken } = await auth().api.getAccessToken({
-        body: { providerId: 'github', userId: baUser.id },
-      });
+      const { accessToken } = await withAuth((instance) =>
+        instance.api.getAccessToken({
+          body: { providerId: 'github', userId: baUser.id },
+        }),
+      );
       if (accessToken) return accessToken;
     } catch {
       // fall through to the legacy store

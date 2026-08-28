@@ -39,6 +39,7 @@ import {
   tryRecordFixAttempt,
   tryRecordReview,
   updatePlan,
+  upsertInstallation,
   upsertPushSubscription,
   finishInstallationRepoSync,
   storeInstallationAccessSnapshot,
@@ -103,6 +104,32 @@ beforeEach(async () => {
     tables.map((table) => testDatabase().prepare(`DELETE FROM "${table}"`)),
   );
   await seedTenant();
+});
+
+describe('installation mirroring', () => {
+  it('replaces a stale GitHub installation when the account is reinstalled with a new id', async () => {
+    await upsertInstallation(1002, { login: 'acme', id: 2001, type: 'Organization' }, 3001);
+
+    const installations = await testDatabase()
+      .prepare(
+        `SELECT id, account_login, account_id, installer_github_id
+         FROM installations ORDER BY id`,
+      )
+      .all<{
+        id: number;
+        account_login: string;
+        account_id: number;
+        installer_github_id: number | null;
+      }>();
+    expect(installations.results).toEqual([
+      { id: 1002, account_login: 'acme', account_id: 2001, installer_github_id: 3001 },
+    ]);
+
+    const oldRepos = await testDatabase()
+      .prepare('SELECT COUNT(*) AS count FROM repositories WHERE installation_id = 1001')
+      .first<{ count: number }>();
+    expect(oldRepos?.count).toBe(0);
+  });
 });
 
 describe('performance state', () => {
@@ -377,6 +404,41 @@ describe('single-flight database claims', () => {
     );
     expect(runs.filter((id) => id !== null)).toHaveLength(1);
   });
+
+  it('fails a stale automation run before admitting its replacement', async () => {
+    const automationId = await createAutomation(
+      101,
+      {
+        name: 'Dependency update',
+        prompt: 'Update dependencies',
+        schedule_kind: 'daily',
+        time_of_day: '09:00',
+        day_of_week: null,
+      },
+      '2026-08-14T09:00:00Z',
+    );
+    const stale = await tryRecordAutomationRun(automationId);
+    await testDatabase()
+      .prepare(
+        `UPDATE automation_runs
+         SET created_at = CURRENT_TIMESTAMP - INTERVAL '21 minutes'
+         WHERE id = ?1`,
+      )
+      .bind(stale)
+      .run();
+
+    const replacement = await tryRecordAutomationRun(automationId);
+    expect(replacement).not.toBeNull();
+    expect(replacement).not.toBe(stale);
+    const old = await testDatabase()
+      .prepare('SELECT status, error FROM automation_runs WHERE id = ?1')
+      .bind(stale)
+      .first<{ status: string; error: string | null }>();
+    expect(old).toMatchObject({
+      status: 'failed',
+      error: 'stale: consumer killed before completion',
+    });
+  });
 });
 
 describe('paid-work idempotency', () => {
@@ -456,7 +518,7 @@ describe('paid-work idempotency', () => {
         )
         .bind(planId)
         .run(),
-    ).rejects.toThrow(/UNIQUE constraint failed/);
+    ).rejects.toThrow(/unique/i);
   });
 });
 

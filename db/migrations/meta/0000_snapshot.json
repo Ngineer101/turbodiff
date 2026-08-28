@@ -3644,8 +3644,8 @@
           "primaryKey": false,
           "notNull": true
         },
-        "p256Dh": {
-          "name": "p256Dh",
+        "p256dh": {
+          "name": "p256dh",
           "type": "text",
           "primaryKey": false,
           "notNull": true

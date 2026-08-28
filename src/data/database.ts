@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
-import { Client, Pool, types, type QueryResultRow } from 'pg';
+import { Client, types, type QueryResultRow } from 'pg';
 import type { SQL } from 'drizzle-orm';
 import * as schema from './schema.ts';
 
@@ -9,12 +9,10 @@ import * as schema from './schema.ts';
 types.setTypeParser(20, Number);
 types.setTypeParser(1700, Number);
 types.setTypeParser(1083, (value) => value.slice(0, 5));
-types.setTypeParser(1114, (value) => new Date(`${value}Z`).toISOString());
-types.setTypeParser(1184, (value) => new Date(value).toISOString());
 types.setTypeParser(114, (value) => value);
 types.setTypeParser(3802, (value) => value);
 
-type Database = NodePgDatabase<typeof schema>;
+export type Database = NodePgDatabase<typeof schema>;
 
 /**
  * Run one logical data-layer operation on a fresh Hyperdrive connection.
@@ -55,24 +53,4 @@ export async function queryOne<Row extends QueryResultRow>(query: SQL): Promise<
 
 export async function execute(query: SQL): Promise<number> {
   return withDatabase(async (database) => (await database.execute(query)).rowCount ?? 0);
-}
-
-// Better Auth owns several queries per request, so its Drizzle adapter uses a
-// small Pool instead of opening and closing a Client between adapter calls.
-// Hyperdrive remains the actual connection pool in front of PlanetScale.
-let authDb: Database | undefined;
-
-export function authDatabase(): Database {
-  authDb ??= drizzle(
-    new Pool({
-      connectionString: env.HYPERDRIVE.connectionString,
-      options: '-c search_path=auth,app,public',
-      max: 5,
-      connectionTimeoutMillis: 10_000,
-      idleTimeoutMillis: 30_000,
-      application_name: 'turbodiff-auth',
-    }),
-    { schema },
-  );
-  return authDb;
 }

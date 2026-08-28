@@ -1,5 +1,8 @@
 import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
 import { defineConfig } from 'vite-plus/test/config';
+import { builtinModules } from 'node:module';
+
+const nodeBuiltins = [...builtinModules, ...builtinModules.map((module) => `node:${module}`)];
 
 export default defineConfig({
   plugins: [
@@ -27,6 +30,17 @@ export default defineConfig({
   ],
   test: {
     include: ['src/**/*.worker.test.ts'],
+    // Vite 8 otherwise hands pg's CommonJS graph to workerd as ESM. Prebundle
+    // pg while leaving the Node built-ins for the Workers nodejs_compat layer.
+    deps: {
+      optimizer: {
+        ssr: {
+          enabled: true,
+          include: ['pg'],
+          rolldownOptions: { external: nodeBuiltins },
+        },
+      },
+    },
     // Worker files share one local PostgreSQL database. Serializing files
     // keeps each suite's explicit fixture cleanup isolated and deterministic.
     fileParallelism: false,

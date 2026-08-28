@@ -3,7 +3,7 @@ import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { mcp } from 'better-auth/plugins';
 import { organization } from 'better-auth/plugins/organization';
-import { authDatabase } from '../../data/database.ts';
+import { withDatabase, type Database } from '../../data/database.ts';
 import {
   account,
   invitation,
@@ -28,7 +28,7 @@ import { orgAc, orgRoles } from './organization-access.ts';
 //     any failed GitHub call; see requireUser in auth.ts for the other half).
 //   - Two ways in: GitHub OAuth and email/password (emailAndPassword). A
 //     password user has no login/githubId until they link GitHub from
-//     /onboarding (auth().api.linkSocialAccount); requireUser treats that as
+//     /onboarding (linkSocialAccount); requireUser treats that as
 //     a valid session with zero installations, not as signed out. Email
 //     verification and password reset wait on an email provider (Resend,
 //     separate PR) — sign-ups are unverified for now.
@@ -92,12 +92,12 @@ const SESSION_DAYS = 30;
 // Inference must own the instance type: betterAuth is deeply generic over its
 // options, and annotating with ReturnType<typeof betterAuth> collapses that
 // to Auth<BetterAuthOptions>, which the concrete instance doesn't satisfy.
-function createAuth() {
+function createAuth(database: Database) {
   return betterAuth({
     baseURL: env.PUBLIC_BASE_URL,
     basePath: '/api/auth',
     secret: env.SESSION_SECRET,
-    database: drizzleAdapter(authDatabase(), {
+    database: drizzleAdapter(database, {
       provider: 'pg',
       camelCase: true,
       transaction: true,
@@ -211,15 +211,19 @@ function createAuth() {
   });
 }
 
-let instance: ReturnType<typeof createAuth> | undefined;
+type AuthInstance = ReturnType<typeof createAuth>;
 
-export function auth() {
-  instance ??= createAuth();
-  return instance;
+// Better Auth may issue several queries or a transaction for one API call.
+// Keep all of them on one fresh Hyperdrive Client and close it before the
+// operation returns; no socket or request-bound I/O survives in module scope.
+export function withAuth<Result>(
+  operation: (instance: AuthInstance) => Result | Promise<Result>,
+): Promise<Result> {
+  return withDatabase(async (database) => operation(createAuth(database)));
 }
 
 // The better-auth user with Turbodiff's additional fields, as returned by
-// auth().api.getSession — typed here once instead of casting at call sites.
+// Better Auth's getSession result — typed here once instead of casting at call sites.
 // login/githubId are null until a GitHub account is linked (email/password
 // sign-ups start without one).
 export interface AuthUser {

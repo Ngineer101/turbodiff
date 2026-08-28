@@ -9,7 +9,7 @@ import { testDatabase } from '../test/database-fixture.ts';
 import { Hono } from 'hono';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { oAuthDiscoveryMetadata, oAuthProtectedResourceMetadata } from 'better-auth/plugins';
-import { auth } from '../integrations/auth/better-auth.ts';
+import { withAuth } from '../integrations/auth/better-auth.ts';
 import type { AuthedUser } from '../services/auth.ts';
 import { isJsonArray, isJsonObject, isString, parseJson, type JsonObject } from '../shared/json.ts';
 import { createMcpRoutes, type McpRouteDependencies } from './mcp.ts';
@@ -272,10 +272,10 @@ describe('OAuth discovery documents', () => {
   function discoveryApp() {
     const app = new Hono();
     app.get('/.well-known/oauth-authorization-server', (c) =>
-      oAuthDiscoveryMetadata(auth())(c.req.raw),
+      withAuth((instance) => oAuthDiscoveryMetadata(instance)(c.req.raw)),
     );
     app.get('/.well-known/oauth-protected-resource', (c) =>
-      oAuthProtectedResourceMetadata(auth())(c.req.raw),
+      withAuth((instance) => oAuthProtectedResourceMetadata(instance)(c.req.raw)),
     );
     return app;
   }

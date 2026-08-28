@@ -57,18 +57,34 @@ export async function upsertInstallation(
 ): Promise<void> {
   // COALESCE keeps a recorded installer through deliveries that carry no
   // sender (installation_repositories) — only the `installation created`
-  // delivery may set it.
-  await execute(sql`
-    INSERT INTO app.installations
-      (id, account_login, account_id, account_type, suspended, installer_github_id)
-    VALUES (${id}, ${account.login}, ${account.id}, ${account.type}, 0, ${installerGithubId ?? null})
-    ON CONFLICT(id) DO UPDATE SET
-      account_login = excluded.account_login,
-      account_id = excluded.account_id,
-      account_type = excluded.account_type,
-      suspended = 0,
-      installer_github_id = COALESCE(excluded.installer_github_id, installations.installer_github_id)
-  `);
+  // delivery may set it. A reinstall receives a new installation id; remove
+  // a stale row for the same GitHub account first so the provider/account
+  // uniqueness constraints cannot permanently reject webhook retries.
+  await withDatabase((database) =>
+    database.transaction(async (transaction) => {
+      await transaction.execute(sql`
+        DELETE FROM app.installations
+        WHERE provider = 'github' AND id <> ${id}
+          AND (account_id = ${account.id} OR account_login = ${account.login})
+      `);
+      await transaction.execute(sql`
+        INSERT INTO app.installations
+          (id, account_login, account_id, account_type, suspended, installer_github_id)
+        VALUES (
+          ${id}, ${account.login}, ${account.id}, ${account.type}, 0, ${installerGithubId ?? null}
+        )
+        ON CONFLICT(id) DO UPDATE SET
+          account_login = excluded.account_login,
+          account_id = excluded.account_id,
+          account_type = excluded.account_type,
+          suspended = 0,
+          installer_github_id = COALESCE(
+            excluded.installer_github_id,
+            installations.installer_github_id
+          )
+      `);
+    }),
+  );
 }
 
 export async function deleteInstallation(id: number): Promise<void> {
