@@ -70,7 +70,7 @@ export async function dispatchConflictResolution(
   repo: RepositoryRow,
   prNumber: number,
 ): Promise<boolean> {
-  if (repo.enabled !== 1 || repo.auto_resolve_conflicts !== 1) return false;
+  if (!repo.enabled || !repo.auto_resolve_conflicts) return false;
   const msg: ConflictResolveQueueMessage = {
     kind: 'resolve_conflict',
     repoId: repo.id,
@@ -92,7 +92,7 @@ export async function maybeResolveConflict(
   prNumber: number,
   opts?: { retryOnUnknown?: boolean },
 ): Promise<void> {
-  if (repo.enabled !== 1) return;
+  if (!repo.enabled) return;
   // Conflict state for Artifacts CRs is native (engine dry-runs + the
   // post-merge ripple) — this GitHub mergeable_state path never applies.
   if (repo.provider !== 'github') return;

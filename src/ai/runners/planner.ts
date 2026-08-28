@@ -212,9 +212,7 @@ const ATTACH_DIR = '/workspace/plan-attachments';
 // User-uploaded context files (R2) pulled into the sandbox with the same
 // signed /artifacts capability URLs verification uses. Returns sandbox paths.
 async function fetchPlanAttachments(sandbox: Sandbox, plan: PlanRow): Promise<string[]> {
-  const atts: { key: string; name: string }[] = plan.attachments
-    ? JSON.parse(plan.attachments)
-    : [];
+  const atts = plan.attachments ?? [];
   if (atts.length === 0) return [];
   await sandbox.exec(`rm -rf ${ATTACH_DIR} && mkdir -p ${ATTACH_DIR}`);
   const paths: string[] = [];
@@ -354,7 +352,7 @@ export async function runPlanAnalyze(planId: number): Promise<void> {
   const plan = await getPlan(planId);
   if (!plan) return;
   const repos = await listReposForPlan(planId);
-  const disabled = repos.find((r) => r.enabled !== 1);
+  const disabled = repos.find((r) => !r.enabled);
   if (repos.length === 0 || disabled) {
     await updatePlan(planId, {
       status: 'failed',
@@ -401,9 +399,9 @@ export async function runPlanAnalyze(planId: number): Promise<void> {
       await updatePlan(planId, {
         status: 'plan_ready',
         analysis,
-        questions: '[]',
+        questions: [],
         plan: planMd,
-        acceptance: JSON.stringify(acceptance),
+        acceptance,
       });
       await notifyPlanUsers(planId, {
         title: plan.title,
@@ -414,7 +412,7 @@ export async function runPlanAnalyze(planId: number): Promise<void> {
       await updatePlan(planId, {
         status: 'awaiting_answers',
         analysis,
-        questions: JSON.stringify(questions),
+        questions,
       });
       await notifyPlanUsers(planId, {
         title: plan.title,
@@ -444,7 +442,7 @@ export async function runPlanRefine(planId: number): Promise<void> {
   const plan = await getPlan(planId);
   if (!plan) return;
   const repos = await listReposForPlan(planId);
-  const disabled = repos.find((r) => r.enabled !== 1);
+  const disabled = repos.find((r) => !r.enabled);
   if (repos.length === 0 || disabled) {
     await updatePlan(planId, {
       status: 'failed',
@@ -455,8 +453,8 @@ export async function runPlanRefine(planId: number): Promise<void> {
     return;
   }
   const full = repos.map((r) => `${r.owner}/${r.name}`).join(', ');
-  const questions: Question[] = plan.questions ? JSON.parse(plan.questions) : [];
-  const answers: string[] = plan.answers ? JSON.parse(plan.answers) : [];
+  const questions: Question[] = plan.questions ?? [];
+  const answers = plan.answers ?? [];
   const qa =
     questions.length > 0
       ? '\n## Clarifying questions and answers\n' +
@@ -492,7 +490,7 @@ export async function runPlanRefine(planId: number): Promise<void> {
     await updatePlan(planId, {
       status: 'plan_ready',
       plan: planMd,
-      acceptance: JSON.stringify(acceptance),
+      acceptance,
       // Consumed — a later answers-driven refine must not replay it.
       feedback: '[]',
     });
@@ -531,7 +529,7 @@ export async function approvePlan(
   const plan = await getPlan(planId);
   if (!plan || plan.status !== 'plan_ready' || !plan.plan) return null;
   const repos = await listReposForPlan(planId);
-  const acceptance: string[] = plan.acceptance ? JSON.parse(plan.acceptance) : [];
+  const acceptance = plan.acceptance ?? [];
   const spec =
     `${plan.plan}\n\n## Acceptance criteria\n\n` +
     (acceptance.length ? acceptance.map((c) => `- ${c}`).join('\n') : '(none specified)') +

@@ -233,7 +233,7 @@ export const installations = appSchema.table(
     accountLogin: text('account_login').notNull(),
     accountId: bigint('account_id', { mode: 'number' }).notNull(),
     accountType: text('account_type').notNull(),
-    suspended: smallint().default(0).notNull(),
+    suspended: boolean().default(false).notNull(),
     provider: text().default('github').notNull(),
     installerGithubId: bigint('installer_github_id', { mode: 'number' }),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
@@ -251,7 +251,6 @@ export const installations = appSchema.table(
       'installations_account_type_check',
       sql`account_type = ANY (ARRAY['Organization'::text, 'User'::text])`,
     ),
-    check('installations_suspended_check', sql`suspended = ANY (ARRAY[0, 1])`),
     check(
       'installations_provider_check',
       sql`provider = ANY (ARRAY['github'::text, 'artifacts'::text])`,
@@ -273,18 +272,18 @@ export const repositories = appSchema.table(
     artifactsRepo: text('artifacts_repo'),
     defaultBranch: text('default_branch'),
     lastPushAt: timestamp('last_push_at', { withTimezone: true, mode: 'string' }),
-    enabled: smallint().default(1).notNull(),
+    enabled: boolean().default(true).notNull(),
     model: text(),
-    reviewOnPush: smallint('review_on_push').default(0).notNull(),
-    blockingReviews: smallint('blocking_reviews').default(0).notNull(),
-    autoFix: smallint('auto_fix').default(0).notNull(),
+    reviewOnPush: boolean('review_on_push').default(false).notNull(),
+    blockingReviews: boolean('blocking_reviews').default(false).notNull(),
+    autoFix: boolean('auto_fix').default(false).notNull(),
     checkCommand: text('check_command'),
     runCommand: text('run_command'),
     appPort: integer('app_port'),
-    autoMerge: smallint('auto_merge').default(0).notNull(),
-    demoVideos: smallint('demo_videos').default(1).notNull(),
-    launchable: smallint(),
-    autoResolveConflicts: smallint('auto_resolve_conflicts').default(0).notNull(),
+    autoMerge: boolean('auto_merge').default(false).notNull(),
+    demoVideos: boolean('demo_videos').default(true).notNull(),
+    launchable: boolean(),
+    autoResolveConflicts: boolean('auto_resolve_conflicts').default(false).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .default(sql`CURRENT_TIMESTAMP`)
       .notNull(),
@@ -295,7 +294,7 @@ export const repositories = appSchema.table(
       .where(sql`(artifacts_repo IS NOT NULL)`),
     index('repositories_enabled_idx')
       .using('btree', table.installationId, table.id)
-      .where(sql`(enabled = 1)`),
+      .where(sql`enabled`),
     index('repositories_installation_idx').using(
       'btree',
       table.installationId,
@@ -314,18 +313,7 @@ export const repositories = appSchema.table(
       'repositories_provider_check',
       sql`provider = ANY (ARRAY['github'::text, 'artifacts'::text])`,
     ),
-    check('repositories_enabled_check', sql`enabled = ANY (ARRAY[0, 1])`),
-    check('repositories_review_on_push_check', sql`review_on_push = ANY (ARRAY[0, 1])`),
-    check('repositories_blocking_reviews_check', sql`blocking_reviews = ANY (ARRAY[0, 1])`),
-    check('repositories_auto_fix_check', sql`auto_fix = ANY (ARRAY[0, 1])`),
     check('repositories_app_port_check', sql`(app_port >= 1) AND (app_port <= 65535)`),
-    check('repositories_auto_merge_check', sql`auto_merge = ANY (ARRAY[0, 1])`),
-    check('repositories_demo_videos_check', sql`demo_videos = ANY (ARRAY[0, 1])`),
-    check('repositories_launchable_check', sql`launchable = ANY (ARRAY[0, 1])`),
-    check(
-      'repositories_auto_resolve_conflicts_check',
-      sql`auto_resolve_conflicts = ANY (ARRAY[0, 1])`,
-    ),
     check(
       'repositories_artifacts_shape',
       sql`((provider = 'artifacts'::text) AND (artifacts_repo IS NOT NULL) AND (default_branch IS NOT NULL)) OR ((provider = 'github'::text) AND (artifacts_repo IS NULL))`,
@@ -361,7 +349,7 @@ export const agents = appSchema.table(
     description: text(),
     instructions: text().notNull(),
     model: text().default('cloudflare/anthropic/claude-sonnet-5').notNull(),
-    isBuiltin: smallint('is_builtin').default(0).notNull(),
+    isBuiltin: boolean('is_builtin').default(false).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .default(sql`CURRENT_TIMESTAMP`)
       .notNull(),
@@ -374,7 +362,6 @@ export const agents = appSchema.table(
     }).onDelete('cascade'),
     unique('agents_id_installation_unique').on(table.id, table.installationId),
     unique('agents_installation_slug_unique').on(table.installationId, table.slug),
-    check('agents_is_builtin_check', sql`is_builtin = ANY (ARRAY[0, 1])`),
     check('agents_slug_format', sql`slug ~ '^[a-z0-9]+(?:-[a-z0-9]+)*$'::text`),
   ],
 );
@@ -418,15 +405,15 @@ export const connections = appSchema.table(
     url: text().notNull(),
     toolAllowlist: jsonb('tool_allowlist').$type<JsonValue>(),
     authCiphertext: text('auth_ciphertext'),
-    optional: smallint().default(1).notNull(),
+    optional: boolean().default(true).notNull(),
     authType: text('auth_type').default('none').notNull(),
     authConfigCiphertext: text('auth_config_ciphertext'),
     oauthTokenExpiresAt: timestamp('oauth_token_expires_at', {
       withTimezone: true,
       mode: 'string',
     }),
-    oauthNeedsReauth: smallint('oauth_needs_reauth').default(0).notNull(),
-    oauthHasRefreshToken: smallint('oauth_has_refresh_token').default(0).notNull(),
+    oauthNeedsReauth: boolean('oauth_needs_reauth').default(false).notNull(),
+    oauthHasRefreshToken: boolean('oauth_has_refresh_token').default(false).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .default(sql`CURRENT_TIMESTAMP`)
       .notNull(),
@@ -440,15 +427,9 @@ export const connections = appSchema.table(
     unique('connections_id_installation_unique').on(table.id, table.installationId),
     unique('connections_installation_name_unique').on(table.installationId, table.name),
     check('connections_kind_check', sql`kind = ANY (ARRAY['mcp'::text, 'api'::text])`),
-    check('connections_optional_check', sql`optional = ANY (ARRAY[0, 1])`),
     check(
       'connections_auth_type_check',
       sql`auth_type = ANY (ARRAY['none'::text, 'bearer'::text, 'api_key'::text, 'client_credentials'::text, 'oauth'::text])`,
-    ),
-    check('connections_oauth_needs_reauth_check', sql`oauth_needs_reauth = ANY (ARRAY[0, 1])`),
-    check(
-      'connections_oauth_has_refresh_token_check',
-      sql`oauth_has_refresh_token = ANY (ARRAY[0, 1])`,
     ),
   ],
 );
@@ -508,7 +489,7 @@ export const plans = appSchema.table(
     createdByLogin: text('created_by_login'),
     createdById: bigint('created_by_id', { mode: 'number' }),
     tier: text(),
-    archived: smallint().default(0).notNull(),
+    archived: boolean().default(false).notNull(),
     feedback: text(),
     attachments: jsonb().$type<JsonValue>(),
     runnerModel: text('runner_model'),
@@ -522,7 +503,7 @@ export const plans = appSchema.table(
   (table) => [
     index('plans_active_idx')
       .using('btree', table.repositoryId, table.id.desc())
-      .where(sql`(archived = 0)`),
+      .where(sql`(NOT archived)`),
     index('plans_feature_idx')
       .using('btree', table.featureId)
       .where(sql`(feature_id IS NOT NULL)`),
@@ -541,7 +522,6 @@ export const plans = appSchema.table(
       'plans_status_check',
       sql`status = ANY (ARRAY['analyzing'::text, 'awaiting_answers'::text, 'refining'::text, 'plan_ready'::text, 'approving'::text, 'approved'::text, 'failed'::text])`,
     ),
-    check('plans_archived_check', sql`archived = ANY (ARRAY[0, 1])`),
   ],
 );
 
@@ -579,7 +559,7 @@ export const features = appSchema.table(
       (): AnyPgColumn => changeRequests.id,
       { onDelete: 'set null' },
     ),
-    criteriaConflict: smallint('criteria_conflict').default(0).notNull(),
+    criteriaConflict: boolean('criteria_conflict').default(false).notNull(),
     acceptanceUpdatedAt: timestamp('acceptance_updated_at', { withTimezone: true, mode: 'string' }),
     proposedAcceptance: jsonb('proposed_acceptance').$type<JsonValue>(),
     chatSessionId: text('chat_session_id'),
@@ -620,7 +600,6 @@ export const features = appSchema.table(
     check('features_cache_read_tokens_check', sql`cache_read_tokens >= 0`),
     check('features_cache_write_tokens_check', sql`cache_write_tokens >= 0`),
     check('features_cost_usd_check', sql`cost_usd >= (0)::numeric`),
-    check('features_criteria_conflict_check', sql`criteria_conflict = ANY (ARRAY[0, 1])`),
   ],
 );
 
@@ -900,7 +879,7 @@ export const automations = appSchema.table(
     scheduleKind: text('schedule_kind').notNull(),
     timeOfDay: time('time_of_day'),
     dayOfWeek: smallint('day_of_week'),
-    enabled: smallint().default(1).notNull(),
+    enabled: boolean().default(true).notNull(),
     nextRunAt: timestamp('next_run_at', { withTimezone: true, mode: 'string' }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .default(sql`CURRENT_TIMESTAMP`)
@@ -909,7 +888,7 @@ export const automations = appSchema.table(
   (table) => [
     index('automations_due_idx')
       .using('btree', table.nextRunAt)
-      .where(sql`(enabled = 1)`),
+      .where(sql`enabled`),
     index('automations_repository_idx').using('btree', table.repositoryId, table.id),
     foreignKey({
       columns: [table.repositoryId],
@@ -921,7 +900,6 @@ export const automations = appSchema.table(
       sql`schedule_kind = ANY (ARRAY['hourly'::text, 'daily'::text, 'weekly'::text])`,
     ),
     check('automations_day_of_week_check', sql`(day_of_week >= 0) AND (day_of_week <= 6)`),
-    check('automations_enabled_check', sql`enabled = ANY (ARRAY[0, 1])`),
     check(
       'automations_schedule_shape',
       sql`((schedule_kind = 'hourly'::text) AND (time_of_day IS NULL) AND (day_of_week IS NULL)) OR ((schedule_kind = 'daily'::text) AND (time_of_day IS NOT NULL) AND (day_of_week IS NULL)) OR ((schedule_kind = 'weekly'::text) AND (time_of_day IS NOT NULL) AND (day_of_week IS NOT NULL))`,
@@ -989,7 +967,7 @@ export const agentRuns = appSchema.table(
     fixAttemptId: bigint('fix_attempt_id', { mode: 'number' }),
     automationRunId: bigint('automation_run_id', { mode: 'number' }),
     logKey: text('log_key').notNull(),
-    success: smallint().notNull(),
+    success: boolean().notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .default(sql`CURRENT_TIMESTAMP`)
       .notNull(),
@@ -1031,7 +1009,6 @@ export const agentRuns = appSchema.table(
       'agent_runs_kind_check',
       sql`kind = ANY (ARRAY['plan_analyze'::text, 'plan_refine'::text, 'generate'::text, 'verify'::text, 'fix'::text, 'automation'::text, 'chat'::text, 'resolve_conflict'::text])`,
     ),
-    check('agent_runs_success_check', sql`success = ANY (ARRAY[0, 1])`),
     check(
       'agent_runs_owner',
       sql`num_nonnulls(plan_id, feature_id, fix_attempt_id, automation_run_id) >= 1`,
@@ -1220,11 +1197,11 @@ export const changeRequests = appSchema.table(
     sourceHead: text('source_head'),
     targetHead: text('target_head'),
     mergeBase: text('merge_base'),
-    mergeable: smallint(),
+    mergeable: boolean(),
     conflictFiles: jsonb('conflict_files').$type<JsonValue>(),
     files: jsonb().$type<JsonValue>(),
     diffKey: text('diff_key'),
-    patchTruncated: smallint('patch_truncated').default(0).notNull(),
+    patchTruncated: boolean('patch_truncated').default(false).notNull(),
     reviewStatus: text('review_status'),
     mergedHead: text('merged_head'),
     openedBy: text('opened_by').default('factory').notNull(),
@@ -1259,8 +1236,6 @@ export const changeRequests = appSchema.table(
       'change_requests_status_check',
       sql`status = ANY (ARRAY['open'::text, 'merged'::text, 'closed'::text])`,
     ),
-    check('change_requests_mergeable_check', sql`mergeable = ANY (ARRAY[0, 1])`),
-    check('change_requests_patch_truncated_check', sql`patch_truncated = ANY (ARRAY[0, 1])`),
     check(
       'change_requests_review_status_check',
       sql`(review_status IS NULL) OR (review_status = ANY (ARRAY['approved'::text, 'changes_requested'::text]))`,
@@ -1411,7 +1386,7 @@ export const repoAgents = appSchema.table(
     repositoryId: bigint('repository_id', { mode: 'number' }).notNull(),
     agentId: bigint('agent_id', { mode: 'number' }).notNull(),
     installationId: bigint('installation_id', { mode: 'number' }).notNull(),
-    enabled: smallint().default(1).notNull(),
+    enabled: boolean().default(true).notNull(),
   },
   (table) => [
     index('repo_agents_agent_tenant_idx').using('btree', table.agentId, table.installationId),
@@ -1431,7 +1406,6 @@ export const repoAgents = appSchema.table(
       name: 'repo_agents_agent_tenant_fk',
     }).onDelete('cascade'),
     primaryKey({ columns: [table.repositoryId, table.agentId], name: 'repo_agents_pkey' }),
-    check('repo_agents_enabled_check', sql`enabled = ANY (ARRAY[0, 1])`),
   ],
 );
 
@@ -1441,7 +1415,7 @@ export const repoSkills = appSchema.table(
     repositoryId: bigint('repository_id', { mode: 'number' }).notNull(),
     skillId: bigint('skill_id', { mode: 'number' }).notNull(),
     installationId: bigint('installation_id', { mode: 'number' }).notNull(),
-    enabled: smallint().default(1).notNull(),
+    enabled: boolean().default(true).notNull(),
   },
   (table) => [
     index('repo_skills_repository_tenant_idx').using(
@@ -1461,7 +1435,6 @@ export const repoSkills = appSchema.table(
       name: 'repo_skills_skill_tenant_fk',
     }).onDelete('cascade'),
     primaryKey({ columns: [table.repositoryId, table.skillId], name: 'repo_skills_pkey' }),
-    check('repo_skills_enabled_check', sql`enabled = ANY (ARRAY[0, 1])`),
   ],
 );
 
@@ -1471,8 +1444,8 @@ export const repoConnections = appSchema.table(
     repositoryId: bigint('repository_id', { mode: 'number' }).notNull(),
     connectionId: bigint('connection_id', { mode: 'number' }).notNull(),
     installationId: bigint('installation_id', { mode: 'number' }).notNull(),
-    reviews: smallint().default(1).notNull(),
-    automations: smallint().default(1).notNull(),
+    reviews: boolean().default(true).notNull(),
+    automations: boolean().default(true).notNull(),
   },
   (table) => [
     index('repo_connections_connection_tenant_idx').using(
@@ -1499,7 +1472,5 @@ export const repoConnections = appSchema.table(
       columns: [table.repositoryId, table.connectionId],
       name: 'repo_connections_pkey',
     }),
-    check('repo_connections_reviews_check', sql`reviews = ANY (ARRAY[0, 1])`),
-    check('repo_connections_automations_check', sql`automations = ANY (ARRAY[0, 1])`),
   ],
 );

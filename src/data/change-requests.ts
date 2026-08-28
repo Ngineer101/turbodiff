@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import type { CrFileChange } from '../ai/runtime/cr-engine.ts';
 import { execute, queryOne, queryRows } from './database.ts';
 
 // Typed layer over the native change-request store (docs/artifacts-provider.md).
@@ -17,11 +18,11 @@ export interface ChangeRequestRow {
   source_head: string | null;
   target_head: string | null;
   merge_base: string | null;
-  mergeable: number | null; // NULL unknown, 1 clean, 0 conflicts
-  conflict_files: string | null; // JSON string[]
-  files: string | null; // JSON CrFileChange[]
+  mergeable: boolean | null;
+  conflict_files: string[] | null;
+  files: CrFileChange[] | null;
   diff_key: string | null;
-  patch_truncated: number;
+  patch_truncated: boolean;
   review_status: string | null; // 'approved' | 'changes_requested'
   merged_head: string | null;
   opened_by: string;
@@ -119,7 +120,7 @@ export interface ChangeRequestStatePatch {
   mergeBase: string;
   mergeable: boolean;
   conflictFiles: string[];
-  filesJson: string;
+  files: CrFileChange[];
   diffKey: string;
   patchTruncated: boolean;
 }
@@ -132,10 +133,10 @@ export async function updateChangeRequestState(
   await execute(sql`
     UPDATE app.change_requests SET
       source_head = ${state.sourceHead}, target_head = ${state.targetHead},
-      merge_base = ${state.mergeBase}, mergeable = ${state.mergeable ? 1 : 0},
+      merge_base = ${state.mergeBase}, mergeable = ${state.mergeable},
       conflict_files = ${JSON.stringify(state.conflictFiles)}::jsonb,
-      files = ${state.filesJson}::jsonb, diff_key = ${state.diffKey},
-      patch_truncated = ${state.patchTruncated ? 1 : 0}
+      files = ${JSON.stringify(state.files)}::jsonb, diff_key = ${state.diffKey},
+      patch_truncated = ${state.patchTruncated}
     WHERE id = ${id}
   `);
 }
@@ -152,7 +153,7 @@ export async function setChangeRequestReviewStatus(
 export async function markChangeRequestMerged(id: number, mergedHead: string): Promise<void> {
   await execute(sql`
     UPDATE app.change_requests SET status = 'merged', merged_head = ${mergedHead},
-      mergeable = 1, conflict_files = '[]'::jsonb
+      mergeable = TRUE, conflict_files = '[]'::jsonb
     WHERE id = ${id}
   `);
 }

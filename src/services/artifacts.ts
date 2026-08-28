@@ -187,7 +187,7 @@ export async function applyArtifactsEvent(event: ArtifactsEvent): Promise<string
       try {
         await refreshChangeRequest(row, cr);
         refreshed += 1;
-        if (cr.source_branch === branch && row.review_on_push === 1) {
+        if (cr.source_branch === branch && row.review_on_push) {
           await enqueueFactoryMessage({ kind: 'cr_review', changeRequestId: cr.id });
         }
       } catch (err) {

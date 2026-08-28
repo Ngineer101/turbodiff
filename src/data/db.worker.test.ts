@@ -480,13 +480,13 @@ describe('paid-work idempotency', () => {
     await updatePlan(planId, {
       status: 'plan_ready',
       plan: '## acme/api\nChange API.\n\n## acme/web\nChange web.',
-      acceptance: '["The feature works"]',
+      acceptance: ['The feature works'],
     });
     const features = [101, 102].map((repositoryId) => ({
       repositoryId,
       title: 'Ship feature',
       spec: 'Implementation spec',
-      acceptance: '["The feature works"]',
+      acceptance: ['The feature works'],
       authorLogin: 'approver',
       authorId: 2,
       coauthorLogin: 'creator',

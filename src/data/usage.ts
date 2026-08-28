@@ -2,13 +2,7 @@ import { sql, type SQL } from 'drizzle-orm';
 import type { VerificationRow } from './factory.ts';
 import { queryOne, queryRows } from './database.ts';
 import type { ReviewActivityRow } from './reviews.ts';
-
-function idList(ids: number[]): SQL {
-  return sql.join(
-    ids.map((id) => sql`${id}`),
-    sql`, `,
-  );
-}
+import { bigintArray } from './sql.ts';
 
 // --- Usage page (Phase 3 redesign): features-shipped accordion + pipeline-wide cost ---
 
@@ -45,7 +39,7 @@ export async function listRecentFeaturesForUsage(
       f.cost_usd, f.model
     FROM app.features f
     JOIN app.repositories repo ON repo.id = f.repository_id
-    WHERE repo.installation_id IN (${idList(installationIds)})
+    WHERE repo.installation_id = ANY(${bigintArray(installationIds)})
     ORDER BY f.id DESC
     LIMIT ${limit}
   `);
@@ -119,7 +113,7 @@ export async function listVerificationsForFeatures(
   if (featureIds.length === 0) return [];
   return queryRows<VerificationRow>(sql`
     SELECT * FROM app.verifications
-    WHERE feature_id IN (${idList(featureIds)}) ORDER BY created_at ASC
+    WHERE feature_id = ANY(${bigintArray(featureIds)}) ORDER BY created_at ASC
   `);
 }
 
@@ -149,7 +143,7 @@ export async function automationUsageForMonth(
     JOIN app.automation_runs ar
       ON ar.automation_id = a.id
       AND to_char(ar.created_at AT TIME ZONE 'UTC', 'YYYY-MM') = ${month}
-    WHERE repo.installation_id IN (${idList(installationIds)})
+    WHERE repo.installation_id = ANY(${bigintArray(installationIds)})
     GROUP BY a.id, a.name, repo.owner, repo.name
     ORDER BY cost_usd DESC
   `);
@@ -167,21 +161,21 @@ function pipelineCostUnion(installationIds: number[]): SQL {
     SELECT to_char(r.created_at AT TIME ZONE 'UTC', 'YYYY-MM') AS month,
       SUM(r.cost_usd) AS cost
     FROM app.reviews r
-    WHERE r.installation_id IN (${idList(installationIds)})
+    WHERE r.installation_id = ANY(${bigintArray(installationIds)})
     GROUP BY month
     UNION ALL
     SELECT to_char(f.created_at AT TIME ZONE 'UTC', 'YYYY-MM') AS month,
       SUM(f.cost_usd) AS cost
     FROM app.features f
     JOIN app.repositories repo ON repo.id = f.repository_id
-    WHERE repo.installation_id IN (${idList(installationIds)})
+    WHERE repo.installation_id = ANY(${bigintArray(installationIds)})
     GROUP BY month
     UNION ALL
     SELECT to_char(fa.created_at AT TIME ZONE 'UTC', 'YYYY-MM') AS month,
       SUM(fa.cost_usd) AS cost
     FROM app.fix_attempts fa
     JOIN app.repositories repo ON repo.id = fa.repository_id
-    WHERE repo.installation_id IN (${idList(installationIds)})
+    WHERE repo.installation_id = ANY(${bigintArray(installationIds)})
     GROUP BY month
     UNION ALL
     SELECT to_char(v.created_at AT TIME ZONE 'UTC', 'YYYY-MM') AS month,
@@ -189,7 +183,7 @@ function pipelineCostUnion(installationIds: number[]): SQL {
     FROM app.verifications v
     JOIN app.features f ON f.id = v.feature_id
     JOIN app.repositories repo ON repo.id = f.repository_id
-    WHERE repo.installation_id IN (${idList(installationIds)})
+    WHERE repo.installation_id = ANY(${bigintArray(installationIds)})
     GROUP BY month
     UNION ALL
     SELECT to_char(ar.created_at AT TIME ZONE 'UTC', 'YYYY-MM') AS month,
@@ -197,7 +191,7 @@ function pipelineCostUnion(installationIds: number[]): SQL {
     FROM app.automation_runs ar
     JOIN app.automations a ON a.id = ar.automation_id
     JOIN app.repositories repo ON repo.id = a.repository_id
-    WHERE repo.installation_id IN (${idList(installationIds)})
+    WHERE repo.installation_id = ANY(${bigintArray(installationIds)})
     GROUP BY month
   `;
 }

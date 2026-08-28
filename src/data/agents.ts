@@ -3,6 +3,7 @@ import { BUILTIN_PERSONAS, DEFAULT_AGENT_SLUG, DEFAULT_MODEL } from '../domain/p
 import { execute, queryOne, queryRows, withDatabase } from './database.ts';
 import type { RepositoryRow } from './repositories.ts';
 import { agents } from './schema.ts';
+import { bigintArray } from './sql.ts';
 
 // --- Custom agents (design in docs/custom-agents-design.md) ---
 
@@ -14,7 +15,7 @@ export interface AgentRow {
   description: string | null;
   instructions: string;
   model: string;
-  is_builtin: number;
+  is_builtin: boolean;
   created_at: string;
 }
 
@@ -33,7 +34,7 @@ export async function ensureBuiltinAgents(installationId: number): Promise<void>
           description: persona.description,
           instructions: persona.instructions,
           model: DEFAULT_MODEL,
-          isBuiltin: 1,
+          isBuiltin: true,
         })),
       )
       .onConflictDoNothing({ target: [agents.installationId, agents.slug] });
@@ -44,10 +45,7 @@ export async function listAgents(installationIds: number[]): Promise<AgentRow[]>
   if (installationIds.length === 0) return [];
   return queryRows<AgentRow>(sql`
     SELECT * FROM app.agents
-    WHERE installation_id IN (${sql.join(
-      installationIds.map((id) => sql`${id}`),
-      sql`, `,
-    )})
+    WHERE installation_id = ANY(${bigintArray(installationIds)})
     ORDER BY is_builtin DESC, name
   `);
 }
@@ -74,7 +72,7 @@ export async function createAgent(
       (installation_id, slug, name, description, instructions, model, is_builtin)
     VALUES (
       ${installationId}, ${fields.slug}, ${fields.name}, ${fields.description},
-      ${fields.instructions}, ${fields.model}, 0
+      ${fields.instructions}, ${fields.model}, FALSE
     )
   `);
 }
@@ -93,26 +91,24 @@ export async function updateAgent(
 
 // Custom agents only — built-ins are permanent (they re-seed anyway).
 export async function deleteAgent(id: number): Promise<void> {
-  await withDatabase(async (database) => {
-    await database.transaction(async (transaction) => {
-      await transaction.execute(sql`DELETE FROM app.repo_agents WHERE agent_id = ${id}`);
-      await transaction.execute(sql`DELETE FROM app.agents WHERE id = ${id} AND is_builtin = 0`);
-    });
-  });
+  await execute(sql`DELETE FROM app.agents WHERE id = ${id} AND NOT is_builtin`);
 }
 
 // Enablement semantics: an explicit repo_agents row wins; with no row, the
 // built-in 'review' agent defaults on (preserving single-agent behavior) and
 // everything else defaults off.
-export function resolveAgentEnabled(agent: AgentRow, override: number | null | undefined): boolean {
-  if (override !== null && override !== undefined) return override === 1;
-  return agent.is_builtin === 1 && agent.slug === DEFAULT_AGENT_SLUG;
+export function resolveAgentEnabled(
+  agent: AgentRow,
+  override: boolean | null | undefined,
+): boolean {
+  if (override !== null && override !== undefined) return override;
+  return agent.is_builtin && agent.slug === DEFAULT_AGENT_SLUG;
 }
 
 export interface RepoAgentOverride {
   repository_id: number;
   agent_id: number;
-  enabled: number;
+  enabled: boolean;
 }
 
 // All explicit repo × agent overrides for these installations, for UIs that
@@ -125,21 +121,18 @@ export async function listRepoAgentOverrides(
     SELECT ra.repository_id, ra.agent_id, ra.enabled
     FROM app.repo_agents ra
     JOIN app.repositories r ON r.id = ra.repository_id
-    WHERE r.installation_id IN (${sql.join(
-      installationIds.map((id) => sql`${id}`),
-      sql`, `,
-    )})
+    WHERE r.installation_id = ANY(${bigintArray(installationIds)})
   `);
 }
 
 export interface RepoAgentRow extends AgentRow {
-  repo_enabled: number | null; // raw repo_agents.enabled; null = no row
+  repo_enabled: boolean | null; // raw repo_agents.enabled; null = no row
   enabled: boolean; // resolved per agentEnabledForRepo
 }
 
 export async function listAgentsForRepo(repo: RepositoryRow): Promise<RepoAgentRow[]> {
   await ensureBuiltinAgents(repo.installation_id);
-  const rows = await queryRows<AgentRow & { repo_enabled: number | null }>(sql`
+  const rows = await queryRows<AgentRow & { repo_enabled: boolean | null }>(sql`
     SELECT a.*, ra.enabled AS repo_enabled
     FROM app.agents a
     LEFT JOIN app.repo_agents ra ON ra.agent_id = a.id AND ra.repository_id = ${repo.id}
@@ -159,7 +152,7 @@ export async function setRepoAgentEnabled(
 ): Promise<void> {
   const changes = await execute(sql`
     INSERT INTO app.repo_agents (repository_id, agent_id, installation_id, enabled)
-    SELECT r.id, a.id, r.installation_id, ${enabled ? 1 : 0}
+    SELECT r.id, a.id, r.installation_id, ${enabled}
     FROM app.repositories r
     JOIN app.agents a ON a.id = ${agentId} AND a.installation_id = r.installation_id
     WHERE r.id = ${repositoryId}
@@ -184,10 +177,7 @@ export async function listSkills(installationIds: number[]): Promise<SkillRow[]>
   if (installationIds.length === 0) return [];
   return queryRows<SkillRow>(sql`
     SELECT * FROM app.skills
-    WHERE installation_id IN (${sql.join(
-      installationIds.map((id) => sql`${id}`),
-      sql`, `,
-    )})
+    WHERE installation_id = ANY(${bigintArray(installationIds)})
     ORDER BY name
   `);
 }
@@ -231,24 +221,19 @@ export async function updateSkill(
 }
 
 export async function deleteSkill(id: number): Promise<void> {
-  await withDatabase(async (database) => {
-    await database.transaction(async (transaction) => {
-      await transaction.execute(sql`DELETE FROM app.repo_skills WHERE skill_id = ${id}`);
-      await transaction.execute(sql`DELETE FROM app.skills WHERE id = ${id}`);
-    });
-  });
+  await execute(sql`DELETE FROM app.skills WHERE id = ${id}`);
 }
 
 // Enablement semantics: no built-in default (unlike agents) — a skill is
 // enabled for a repo only via an explicit repo_skills row.
-export function resolveSkillEnabled(override: number | null | undefined): boolean {
-  return override === 1;
+export function resolveSkillEnabled(override: boolean | null | undefined): boolean {
+  return override === true;
 }
 
 export interface RepoSkillOverride {
   repository_id: number;
   skill_id: number;
-  enabled: number;
+  enabled: boolean;
 }
 
 // All explicit repo × skill overrides for these installations, for UIs that
@@ -261,10 +246,7 @@ export async function listRepoSkillOverrides(
     SELECT rs.repository_id, rs.skill_id, rs.enabled
     FROM app.repo_skills rs
     JOIN app.repositories r ON r.id = rs.repository_id
-    WHERE r.installation_id IN (${sql.join(
-      installationIds.map((id) => sql`${id}`),
-      sql`, `,
-    )})
+    WHERE r.installation_id = ANY(${bigintArray(installationIds)})
   `);
 }
 
@@ -275,7 +257,7 @@ export async function setRepoSkillEnabled(
 ): Promise<void> {
   const changes = await execute(sql`
     INSERT INTO app.repo_skills (repository_id, skill_id, installation_id, enabled)
-    SELECT r.id, s.id, r.installation_id, ${enabled ? 1 : 0}
+    SELECT r.id, s.id, r.installation_id, ${enabled}
     FROM app.repositories r
     JOIN app.skills s ON s.id = ${skillId} AND s.installation_id = r.installation_id
     WHERE r.id = ${repositoryId}
@@ -288,7 +270,7 @@ export async function listEnabledSkillsForRepo(repositoryId: number): Promise<Sk
   return queryRows<SkillRow>(sql`
     SELECT s.* FROM app.skills s
     JOIN app.repo_skills rs ON rs.skill_id = s.id
-    WHERE rs.repository_id = ${repositoryId} AND rs.enabled = 1
+    WHERE rs.repository_id = ${repositoryId} AND rs.enabled
     ORDER BY s.name
   `);
 }

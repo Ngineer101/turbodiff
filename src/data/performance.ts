@@ -1,6 +1,7 @@
 import { eq, sql } from 'drizzle-orm';
 import { execute, queryOne, queryRows, withDatabase } from './database.ts';
 import { userInstallationAccess } from './schema.ts';
+import { minutesAgo } from './sql.ts';
 
 export interface InstallationAccessSnapshot {
   installationIds: number[];
@@ -100,7 +101,7 @@ export async function claimInstallationRepoSync(
         OR installation_repo_sync.syncing_until < CURRENT_TIMESTAMP)
       AND (installation_repo_sync.last_synced_at IS NULL
         OR installation_repo_sync.last_synced_at
-          < CURRENT_TIMESTAMP - (${intervalMinutes}::double precision * INTERVAL '1 minute'))
+          < ${minutesAgo(intervalMinutes)})
     RETURNING installation_id
   `);
   return row !== null;

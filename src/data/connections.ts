@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
-import { execute, queryOne, queryRows, withDatabase } from './database.ts';
+import { execute, queryOne, queryRows } from './database.ts';
+import { bigintArray } from './sql.ts';
 
 // --- External MCP tool connections per repository ---
 
@@ -14,15 +15,15 @@ export interface ConnectionRow {
   name: string;
   kind: string; // 'mcp' (agent-mountable) | 'api' (stored bearer integration)
   url: string;
-  tool_allowlist: string | null; // JSON string array; null = all tools
+  tool_allowlist: string[] | null; // null = all tools
   auth_ciphertext: string | null; // sealed bearer token, when auth_type = 'bearer'
-  optional: number;
+  optional: boolean;
   created_at: string;
   auth_type: string; // 'none' | 'bearer' | 'api_key' | 'client_credentials' | 'oauth'
   auth_config_ciphertext: string | null; // sealed JSON blob, shape depends on auth_type
   oauth_token_expires_at: string | null;
-  oauth_needs_reauth: number;
-  oauth_has_refresh_token: number;
+  oauth_needs_reauth: boolean;
+  oauth_has_refresh_token: boolean;
 }
 
 // MCP connections attached to one repository and enabled for the given
@@ -35,7 +36,7 @@ export async function listRepoConnections(
   return queryRows<ConnectionRow>(sql`
     SELECT c.* FROM app.connections c
     JOIN app.repo_connections l ON l.connection_id = c.id
-    WHERE l.repository_id = ${repositoryId} AND ${enabledColumn} = 1 AND c.kind = 'mcp'
+    WHERE l.repository_id = ${repositoryId} AND ${enabledColumn} AND c.kind = 'mcp'
     ORDER BY c.name
   `);
 }
@@ -44,10 +45,7 @@ export async function listConnections(installationIds: number[]): Promise<Connec
   if (installationIds.length === 0) return [];
   return queryRows<ConnectionRow>(sql`
     SELECT * FROM app.connections
-    WHERE installation_id IN (${sql.join(
-      installationIds.map((id) => sql`${id}`),
-      sql`, `,
-    )})
+    WHERE installation_id = ANY(${bigintArray(installationIds)})
     ORDER BY name
   `);
 }
@@ -73,7 +71,7 @@ export async function createConnection(fields: {
     VALUES (
       ${fields.installationId}, ${fields.name}, ${fields.kind}, ${fields.url},
       ${fields.toolAllowlist ? JSON.stringify(fields.toolAllowlist) : null}::jsonb,
-      ${fields.authCiphertext}, 1, ${fields.authType}, ${fields.authConfigCiphertext}
+      ${fields.authCiphertext}, TRUE, ${fields.authType}, ${fields.authConfigCiphertext}
     )
   `);
 }
@@ -99,11 +97,11 @@ export async function updateConnectionAuth(
       auth_config_ciphertext = COALESCE(${fields.authConfigCiphertext ?? null}, auth_config_ciphertext),
       oauth_token_expires_at = COALESCE(${fields.oauthTokenExpiresAt ?? null}, oauth_token_expires_at),
       oauth_needs_reauth = COALESCE(
-        ${fields.oauthNeedsReauth === undefined ? null : fields.oauthNeedsReauth ? 1 : 0},
+        ${fields.oauthNeedsReauth ?? null},
         oauth_needs_reauth
       ),
       oauth_has_refresh_token = COALESCE(
-        ${fields.oauthHasRefreshToken === undefined ? null : fields.oauthHasRefreshToken ? 1 : 0},
+        ${fields.oauthHasRefreshToken ?? null},
         oauth_has_refresh_token
       )
     WHERE id = ${id}
@@ -111,19 +109,14 @@ export async function updateConnectionAuth(
 }
 
 export async function deleteConnection(id: number): Promise<void> {
-  await withDatabase(async (database) => {
-    await database.transaction(async (transaction) => {
-      await transaction.execute(sql`DELETE FROM app.repo_connections WHERE connection_id = ${id}`);
-      await transaction.execute(sql`DELETE FROM app.connections WHERE id = ${id}`);
-    });
-  });
+  await execute(sql`DELETE FROM app.connections WHERE id = ${id}`);
 }
 
 export interface RepoConnectionLink {
   repository_id: number;
   connection_id: number;
-  reviews: number;
-  automations: number;
+  reviews: boolean;
+  automations: boolean;
 }
 
 export async function listRepoConnectionLinks(
@@ -134,10 +127,7 @@ export async function listRepoConnectionLinks(
     SELECT l.repository_id, l.connection_id, l.reviews, l.automations
     FROM app.repo_connections l
     JOIN app.connections c ON c.id = l.connection_id
-    WHERE c.installation_id IN (${sql.join(
-      installationIds.map((id) => sql`${id}`),
-      sql`, `,
-    )})
+    WHERE c.installation_id = ANY(${bigintArray(installationIds)})
   `);
 }
 
@@ -152,7 +142,7 @@ export async function setRepoConnectionLink(
     const changes = await execute(sql`
       INSERT INTO app.repo_connections
         (repository_id, connection_id, installation_id, reviews, automations)
-      SELECT r.id, c.id, r.installation_id, ${link.reviews ? 1 : 0}, ${link.automations ? 1 : 0}
+      SELECT r.id, c.id, r.installation_id, ${link.reviews}, ${link.automations}
       FROM app.repositories r
       JOIN app.connections c
         ON c.id = ${connectionId} AND c.installation_id = r.installation_id

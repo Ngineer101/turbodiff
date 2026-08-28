@@ -29,10 +29,9 @@ CREATE TABLE "app"."agent_runs" (
 	"fix_attempt_id" bigint,
 	"automation_run_id" bigint,
 	"log_key" text NOT NULL,
-	"success" smallint NOT NULL,
+	"success" boolean NOT NULL,
 	"created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	CONSTRAINT "agent_runs_kind_check" CHECK (kind = ANY (ARRAY['plan_analyze'::text, 'plan_refine'::text, 'generate'::text, 'verify'::text, 'fix'::text, 'automation'::text, 'chat'::text, 'resolve_conflict'::text])),
-	CONSTRAINT "agent_runs_success_check" CHECK (success = ANY (ARRAY[0, 1])),
 	CONSTRAINT "agent_runs_owner" CHECK (num_nonnulls(plan_id, feature_id, fix_attempt_id, automation_run_id) >= 1)
 );
 --> statement-breakpoint
@@ -44,11 +43,10 @@ CREATE TABLE "app"."agents" (
 	"description" text,
 	"instructions" text NOT NULL,
 	"model" text DEFAULT 'cloudflare/anthropic/claude-sonnet-5' NOT NULL,
-	"is_builtin" smallint DEFAULT 0 NOT NULL,
+	"is_builtin" boolean DEFAULT false NOT NULL,
 	"created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	CONSTRAINT "agents_id_installation_unique" UNIQUE("id","installation_id"),
 	CONSTRAINT "agents_installation_slug_unique" UNIQUE("installation_id","slug"),
-	CONSTRAINT "agents_is_builtin_check" CHECK (is_builtin = ANY (ARRAY[0, 1])),
 	CONSTRAINT "agents_slug_format" CHECK (slug ~ '^[a-z0-9]+(?:-[a-z0-9]+)*$'::text)
 );
 --> statement-breakpoint
@@ -83,12 +81,11 @@ CREATE TABLE "app"."automations" (
 	"schedule_kind" text NOT NULL,
 	"time_of_day" time,
 	"day_of_week" smallint,
-	"enabled" smallint DEFAULT 1 NOT NULL,
+	"enabled" boolean DEFAULT true NOT NULL,
 	"next_run_at" timestamp with time zone NOT NULL,
 	"created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	CONSTRAINT "automations_schedule_kind_check" CHECK (schedule_kind = ANY (ARRAY['hourly'::text, 'daily'::text, 'weekly'::text])),
 	CONSTRAINT "automations_day_of_week_check" CHECK ((day_of_week >= 0) AND (day_of_week <= 6)),
-	CONSTRAINT "automations_enabled_check" CHECK (enabled = ANY (ARRAY[0, 1])),
 	CONSTRAINT "automations_schedule_shape" CHECK (((schedule_kind = 'hourly'::text) AND (time_of_day IS NULL) AND (day_of_week IS NULL)) OR ((schedule_kind = 'daily'::text) AND (time_of_day IS NOT NULL) AND (day_of_week IS NULL)) OR ((schedule_kind = 'weekly'::text) AND (time_of_day IS NOT NULL) AND (day_of_week IS NOT NULL)))
 );
 --> statement-breakpoint
@@ -110,11 +107,11 @@ CREATE TABLE "app"."change_requests" (
 	"source_head" text,
 	"target_head" text,
 	"merge_base" text,
-	"mergeable" smallint,
+	"mergeable" boolean,
 	"conflict_files" jsonb,
 	"files" jsonb,
 	"diff_key" text,
-	"patch_truncated" smallint DEFAULT 0 NOT NULL,
+	"patch_truncated" boolean DEFAULT false NOT NULL,
 	"review_status" text,
 	"merged_head" text,
 	"opened_by" text DEFAULT 'factory' NOT NULL,
@@ -123,8 +120,6 @@ CREATE TABLE "app"."change_requests" (
 	CONSTRAINT "change_requests_repo_number_unique" UNIQUE("repository_id","number"),
 	CONSTRAINT "change_requests_number_check" CHECK (number > 0),
 	CONSTRAINT "change_requests_status_check" CHECK (status = ANY (ARRAY['open'::text, 'merged'::text, 'closed'::text])),
-	CONSTRAINT "change_requests_mergeable_check" CHECK (mergeable = ANY (ARRAY[0, 1])),
-	CONSTRAINT "change_requests_patch_truncated_check" CHECK (patch_truncated = ANY (ARRAY[0, 1])),
 	CONSTRAINT "change_requests_review_status_check" CHECK ((review_status IS NULL) OR (review_status = ANY (ARRAY['approved'::text, 'changes_requested'::text])))
 );
 --> statement-breakpoint
@@ -170,20 +165,17 @@ CREATE TABLE "app"."connections" (
 	"url" text NOT NULL,
 	"tool_allowlist" jsonb,
 	"auth_ciphertext" text,
-	"optional" smallint DEFAULT 1 NOT NULL,
+	"optional" boolean DEFAULT true NOT NULL,
 	"auth_type" text DEFAULT 'none' NOT NULL,
 	"auth_config_ciphertext" text,
 	"oauth_token_expires_at" timestamp with time zone,
-	"oauth_needs_reauth" smallint DEFAULT 0 NOT NULL,
-	"oauth_has_refresh_token" smallint DEFAULT 0 NOT NULL,
+	"oauth_needs_reauth" boolean DEFAULT false NOT NULL,
+	"oauth_has_refresh_token" boolean DEFAULT false NOT NULL,
 	"created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	CONSTRAINT "connections_id_installation_unique" UNIQUE("id","installation_id"),
 	CONSTRAINT "connections_installation_name_unique" UNIQUE("installation_id","name"),
 	CONSTRAINT "connections_kind_check" CHECK (kind = ANY (ARRAY['mcp'::text, 'api'::text])),
-	CONSTRAINT "connections_optional_check" CHECK (optional = ANY (ARRAY[0, 1])),
-	CONSTRAINT "connections_auth_type_check" CHECK (auth_type = ANY (ARRAY['none'::text, 'bearer'::text, 'api_key'::text, 'client_credentials'::text, 'oauth'::text])),
-	CONSTRAINT "connections_oauth_needs_reauth_check" CHECK (oauth_needs_reauth = ANY (ARRAY[0, 1])),
-	CONSTRAINT "connections_oauth_has_refresh_token_check" CHECK (oauth_has_refresh_token = ANY (ARRAY[0, 1]))
+	CONSTRAINT "connections_auth_type_check" CHECK (auth_type = ANY (ARRAY['none'::text, 'bearer'::text, 'api_key'::text, 'client_credentials'::text, 'oauth'::text]))
 );
 --> statement-breakpoint
 CREATE TABLE "app"."cr_checks" (
@@ -239,7 +231,7 @@ CREATE TABLE "app"."features" (
 	"model" text,
 	"runner_model" text,
 	"change_request_id" bigint,
-	"criteria_conflict" smallint DEFAULT 0 NOT NULL,
+	"criteria_conflict" boolean DEFAULT false NOT NULL,
 	"acceptance_updated_at" timestamp with time zone,
 	"proposed_acceptance" jsonb,
 	"chat_session_id" text,
@@ -251,8 +243,7 @@ CREATE TABLE "app"."features" (
 	CONSTRAINT "features_output_tokens_check" CHECK (output_tokens >= 0),
 	CONSTRAINT "features_cache_read_tokens_check" CHECK (cache_read_tokens >= 0),
 	CONSTRAINT "features_cache_write_tokens_check" CHECK (cache_write_tokens >= 0),
-	CONSTRAINT "features_cost_usd_check" CHECK (cost_usd >= (0)::numeric),
-	CONSTRAINT "features_criteria_conflict_check" CHECK (criteria_conflict = ANY (ARRAY[0, 1]))
+	CONSTRAINT "features_cost_usd_check" CHECK (cost_usd >= (0)::numeric)
 );
 --> statement-breakpoint
 CREATE TABLE "app"."fix_attempts" (
@@ -290,7 +281,7 @@ CREATE TABLE "app"."installations" (
 	"account_login" text NOT NULL,
 	"account_id" bigint NOT NULL,
 	"account_type" text NOT NULL,
-	"suspended" smallint DEFAULT 0 NOT NULL,
+	"suspended" boolean DEFAULT false NOT NULL,
 	"provider" text DEFAULT 'github' NOT NULL,
 	"installer_github_id" bigint,
 	"created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
@@ -298,7 +289,6 @@ CREATE TABLE "app"."installations" (
 	CONSTRAINT "installations_provider_login_unique" UNIQUE("provider","account_login"),
 	CONSTRAINT "installations_provider_account_unique" UNIQUE("provider","account_id"),
 	CONSTRAINT "installations_account_type_check" CHECK (account_type = ANY (ARRAY['Organization'::text, 'User'::text])),
-	CONSTRAINT "installations_suspended_check" CHECK (suspended = ANY (ARRAY[0, 1])),
 	CONSTRAINT "installations_provider_check" CHECK (provider = ANY (ARRAY['github'::text, 'artifacts'::text]))
 );
 --> statement-breakpoint
@@ -404,15 +394,14 @@ CREATE TABLE "app"."plans" (
 	"created_by_login" text,
 	"created_by_id" bigint,
 	"tier" text,
-	"archived" smallint DEFAULT 0 NOT NULL,
+	"archived" boolean DEFAULT false NOT NULL,
 	"feedback" text,
 	"attachments" jsonb,
 	"runner_model" text,
 	"created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	"feature_id" bigint,
 	CONSTRAINT "plans_todo_unique" UNIQUE("todo_id"),
-	CONSTRAINT "plans_status_check" CHECK (status = ANY (ARRAY['analyzing'::text, 'awaiting_answers'::text, 'refining'::text, 'plan_ready'::text, 'approving'::text, 'approved'::text, 'failed'::text])),
-	CONSTRAINT "plans_archived_check" CHECK (archived = ANY (ARRAY[0, 1]))
+	CONSTRAINT "plans_status_check" CHECK (status = ANY (ARRAY['analyzing'::text, 'awaiting_answers'::text, 'refining'::text, 'plan_ready'::text, 'approving'::text, 'approved'::text, 'failed'::text]))
 );
 --> statement-breakpoint
 CREATE TABLE "app"."push_subscriptions" (
@@ -429,29 +418,25 @@ CREATE TABLE "app"."repo_agents" (
 	"repository_id" bigint NOT NULL,
 	"agent_id" bigint NOT NULL,
 	"installation_id" bigint NOT NULL,
-	"enabled" smallint DEFAULT 1 NOT NULL,
-	CONSTRAINT "repo_agents_pkey" PRIMARY KEY("repository_id","agent_id"),
-	CONSTRAINT "repo_agents_enabled_check" CHECK (enabled = ANY (ARRAY[0, 1]))
+	"enabled" boolean DEFAULT true NOT NULL,
+	CONSTRAINT "repo_agents_pkey" PRIMARY KEY("repository_id","agent_id")
 );
 --> statement-breakpoint
 CREATE TABLE "app"."repo_connections" (
 	"repository_id" bigint NOT NULL,
 	"connection_id" bigint NOT NULL,
 	"installation_id" bigint NOT NULL,
-	"reviews" smallint DEFAULT 1 NOT NULL,
-	"automations" smallint DEFAULT 1 NOT NULL,
-	CONSTRAINT "repo_connections_pkey" PRIMARY KEY("repository_id","connection_id"),
-	CONSTRAINT "repo_connections_reviews_check" CHECK (reviews = ANY (ARRAY[0, 1])),
-	CONSTRAINT "repo_connections_automations_check" CHECK (automations = ANY (ARRAY[0, 1]))
+	"reviews" boolean DEFAULT true NOT NULL,
+	"automations" boolean DEFAULT true NOT NULL,
+	CONSTRAINT "repo_connections_pkey" PRIMARY KEY("repository_id","connection_id")
 );
 --> statement-breakpoint
 CREATE TABLE "app"."repo_skills" (
 	"repository_id" bigint NOT NULL,
 	"skill_id" bigint NOT NULL,
 	"installation_id" bigint NOT NULL,
-	"enabled" smallint DEFAULT 1 NOT NULL,
-	CONSTRAINT "repo_skills_pkey" PRIMARY KEY("repository_id","skill_id"),
-	CONSTRAINT "repo_skills_enabled_check" CHECK (enabled = ANY (ARRAY[0, 1]))
+	"enabled" boolean DEFAULT true NOT NULL,
+	CONSTRAINT "repo_skills_pkey" PRIMARY KEY("repository_id","skill_id")
 );
 --> statement-breakpoint
 CREATE TABLE "app"."repositories" (
@@ -463,31 +448,23 @@ CREATE TABLE "app"."repositories" (
 	"artifacts_repo" text,
 	"default_branch" text,
 	"last_push_at" timestamp with time zone,
-	"enabled" smallint DEFAULT 1 NOT NULL,
+	"enabled" boolean DEFAULT true NOT NULL,
 	"model" text,
-	"review_on_push" smallint DEFAULT 0 NOT NULL,
-	"blocking_reviews" smallint DEFAULT 0 NOT NULL,
-	"auto_fix" smallint DEFAULT 0 NOT NULL,
+	"review_on_push" boolean DEFAULT false NOT NULL,
+	"blocking_reviews" boolean DEFAULT false NOT NULL,
+	"auto_fix" boolean DEFAULT false NOT NULL,
 	"check_command" text,
 	"run_command" text,
 	"app_port" integer,
-	"auto_merge" smallint DEFAULT 0 NOT NULL,
-	"demo_videos" smallint DEFAULT 1 NOT NULL,
-	"launchable" smallint,
-	"auto_resolve_conflicts" smallint DEFAULT 0 NOT NULL,
+	"auto_merge" boolean DEFAULT false NOT NULL,
+	"demo_videos" boolean DEFAULT true NOT NULL,
+	"launchable" boolean,
+	"auto_resolve_conflicts" boolean DEFAULT false NOT NULL,
 	"created_at" timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	CONSTRAINT "repositories_id_installation_unique" UNIQUE("id","installation_id"),
 	CONSTRAINT "repositories_owner_name_unique" UNIQUE("owner","name"),
 	CONSTRAINT "repositories_provider_check" CHECK (provider = ANY (ARRAY['github'::text, 'artifacts'::text])),
-	CONSTRAINT "repositories_enabled_check" CHECK (enabled = ANY (ARRAY[0, 1])),
-	CONSTRAINT "repositories_review_on_push_check" CHECK (review_on_push = ANY (ARRAY[0, 1])),
-	CONSTRAINT "repositories_blocking_reviews_check" CHECK (blocking_reviews = ANY (ARRAY[0, 1])),
-	CONSTRAINT "repositories_auto_fix_check" CHECK (auto_fix = ANY (ARRAY[0, 1])),
 	CONSTRAINT "repositories_app_port_check" CHECK ((app_port >= 1) AND (app_port <= 65535)),
-	CONSTRAINT "repositories_auto_merge_check" CHECK (auto_merge = ANY (ARRAY[0, 1])),
-	CONSTRAINT "repositories_demo_videos_check" CHECK (demo_videos = ANY (ARRAY[0, 1])),
-	CONSTRAINT "repositories_launchable_check" CHECK (launchable = ANY (ARRAY[0, 1])),
-	CONSTRAINT "repositories_auto_resolve_conflicts_check" CHECK (auto_resolve_conflicts = ANY (ARRAY[0, 1])),
 	CONSTRAINT "repositories_artifacts_shape" CHECK (((provider = 'artifacts'::text) AND (artifacts_repo IS NOT NULL) AND (default_branch IS NOT NULL)) OR ((provider = 'github'::text) AND (artifacts_repo IS NULL)))
 );
 --> statement-breakpoint
@@ -700,7 +677,7 @@ CREATE INDEX "agent_runs_fix_attempt_idx" ON "app"."agent_runs" USING btree ("fi
 CREATE INDEX "agent_runs_plan_idx" ON "app"."agent_runs" USING btree ("plan_id") WHERE (plan_id IS NOT NULL);--> statement-breakpoint
 CREATE INDEX "automation_runs_automation_idx" ON "app"."automation_runs" USING btree ("automation_id","created_at" DESC NULLS LAST);--> statement-breakpoint
 CREATE UNIQUE INDEX "automation_runs_one_running_idx" ON "app"."automation_runs" USING btree ("automation_id") WHERE (status = 'running'::text);--> statement-breakpoint
-CREATE INDEX "automations_due_idx" ON "app"."automations" USING btree ("next_run_at") WHERE (enabled = 1);--> statement-breakpoint
+CREATE INDEX "automations_due_idx" ON "app"."automations" USING btree ("next_run_at") WHERE enabled;--> statement-breakpoint
 CREATE INDEX "automations_repository_idx" ON "app"."automations" USING btree ("repository_id","id");--> statement-breakpoint
 CREATE INDEX "change_requests_feature_idx" ON "app"."change_requests" USING btree ("feature_id") WHERE (feature_id IS NOT NULL);--> statement-breakpoint
 CREATE UNIQUE INDEX "change_requests_open_branches_unique" ON "app"."change_requests" USING btree ("repository_id","source_branch","target_branch") WHERE (status = 'open'::text);--> statement-breakpoint
@@ -731,7 +708,7 @@ CREATE INDEX "oauth_application_user_id_idx" ON "auth"."oauthApplication" USING 
 CREATE INDEX "oauth_consent_client_id_idx" ON "auth"."oauthConsent" USING btree ("clientId");--> statement-breakpoint
 CREATE INDEX "oauth_consent_user_id_idx" ON "auth"."oauthConsent" USING btree ("userId");--> statement-breakpoint
 CREATE INDEX "plan_repositories_repository_idx" ON "app"."plan_repositories" USING btree ("repository_id");--> statement-breakpoint
-CREATE INDEX "plans_active_idx" ON "app"."plans" USING btree ("repository_id","id" DESC NULLS LAST) WHERE (archived = 0);--> statement-breakpoint
+CREATE INDEX "plans_active_idx" ON "app"."plans" USING btree ("repository_id","id" DESC NULLS LAST) WHERE (NOT archived);--> statement-breakpoint
 CREATE INDEX "plans_feature_idx" ON "app"."plans" USING btree ("feature_id") WHERE (feature_id IS NOT NULL);--> statement-breakpoint
 CREATE INDEX "plans_repository_created_idx" ON "app"."plans" USING btree ("repository_id","created_at" DESC NULLS LAST);--> statement-breakpoint
 CREATE INDEX "push_subscriptions_user_idx" ON "app"."push_subscriptions" USING btree ("user_github_id");--> statement-breakpoint
@@ -742,7 +719,7 @@ CREATE INDEX "repo_connections_repository_tenant_idx" ON "app"."repo_connections
 CREATE INDEX "repo_skills_repository_tenant_idx" ON "app"."repo_skills" USING btree ("repository_id","installation_id");--> statement-breakpoint
 CREATE INDEX "repo_skills_skill_tenant_idx" ON "app"."repo_skills" USING btree ("skill_id","installation_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "repositories_artifacts_repo_unique" ON "app"."repositories" USING btree ("artifacts_repo") WHERE (artifacts_repo IS NOT NULL);--> statement-breakpoint
-CREATE INDEX "repositories_enabled_idx" ON "app"."repositories" USING btree ("installation_id","id") WHERE (enabled = 1);--> statement-breakpoint
+CREATE INDEX "repositories_enabled_idx" ON "app"."repositories" USING btree ("installation_id","id") WHERE enabled;--> statement-breakpoint
 CREATE INDEX "repositories_installation_idx" ON "app"."repositories" USING btree ("installation_id","provider","owner","name");--> statement-breakpoint
 CREATE INDEX "repository_refs_head_idx" ON "app"."repository_refs" USING btree ("repository_id","head_sha");--> statement-breakpoint
 CREATE INDEX "reviews_agent_instance_idx" ON "app"."reviews" USING btree ("agent_instance_id");--> statement-breakpoint

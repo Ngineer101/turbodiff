@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { execute, queryOne, queryRows } from './database.ts';
+import { bigintArray } from './sql.ts';
 
 // --- kanban board: todos (unstarted backlog cards) + task archiving ---
 
@@ -18,10 +19,7 @@ export async function listTodos(installationIds: number[]): Promise<TodoRow[]> {
   if (installationIds.length === 0) return [];
   return queryRows<TodoRow>(sql`
     SELECT * FROM app.todos
-    WHERE installation_id IN (${sql.join(
-      installationIds.map((id) => sql`${id}`),
-      sql`, `,
-    )})
+    WHERE installation_id = ANY(${bigintArray(installationIds)})
       AND plan_id IS NULL
     ORDER BY id DESC
   `);
@@ -53,5 +51,5 @@ export async function deleteTodo(id: number): Promise<void> {
 }
 
 export async function setPlanArchived(id: number, archived: boolean): Promise<void> {
-  await execute(sql`UPDATE app.plans SET archived = ${archived ? 1 : 0} WHERE id = ${id}`);
+  await execute(sql`UPDATE app.plans SET archived = ${archived} WHERE id = ${id}`);
 }

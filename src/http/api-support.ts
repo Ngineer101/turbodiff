@@ -186,25 +186,15 @@ export function groupByRepoPr<T extends { repository_id: number; pr_number: numb
 
 export function verificationSummary(
   status: string | null,
-  resultsJson: string | null,
+  results: { verdict: string }[] | null,
 ): ApiVerificationSummary | null {
   if (!status) return null;
-  let total = 0;
-  let failed = 0;
-  try {
-    // SAFETY: verifications.results is written only by the verify pipeline as a
-    // serialized {index, verdict, note}[]; anything unparsable lands in catch.
-    const results = JSON.parse(resultsJson ?? '[]') as { verdict: string }[];
-    total = results.length;
-    failed = results.filter((r) => r.verdict === 'fail').length;
-  } catch {
-    // results unparsable — report the bare status
-  }
-  return { status, total, failed };
+  const rows = results ?? [];
+  return { status, total: rows.length, failed: rows.filter((r) => r.verdict === 'fail').length };
 }
 
 export function serializeAgentRun(r: AgentRunRow): ApiAgentRun {
-  return { id: r.id, kind: r.kind, success: r.success === 1, created_at: r.created_at };
+  return { id: r.id, kind: r.kind, success: r.success, created_at: r.created_at };
 }
 
 type CockpitFixStatus = NonNullable<ApiCockpitComment['fix_status']>;
@@ -261,14 +251,9 @@ export function serializeTask(
   // task page passes true.
   opts: { includePlan: boolean } = { includePlan: true },
 ): ApiPlan {
-  // SAFETY: plans.questions is written only by the planner (planner.ts) as a
-  // serialized question array matching ApiPlanQuestion.
-  const questions = p.questions ? (JSON.parse(p.questions) as ApiPlanQuestion[]) : [];
-  // SAFETY: plans.acceptance is written only by the planner as a serialized string[].
-  const acceptance = p.acceptance ? (JSON.parse(p.acceptance) as string[]) : [];
-  // SAFETY: plans.attachments is written only by POST /todos/:id/start as a
-  // serialized {key, name, content_type}[] — name is the only field read back.
-  const attachments = p.attachments ? (JSON.parse(p.attachments) as { name: string }[]) : [];
+  const questions: ApiPlanQuestion[] = p.questions ?? [];
+  const acceptance = p.acceptance ?? [];
+  const attachments = p.attachments ?? [];
   return {
     id: p.id,
     title: p.title,
@@ -278,7 +263,7 @@ export function serializeTask(
     questions,
     acceptance,
     plan: opts.includePlan ? p.plan : null,
-    archived: p.archived === 1,
+    archived: p.archived,
     model: p.runner_model ?? DEFAULT_RUNNER_MODEL,
     attachments: attachments.map((a) => ({ name: a.name })),
     repos: repoStatuses
@@ -416,7 +401,7 @@ export function serializeAutomation(
     schedule_kind: a.schedule_kind as ApiAutomationSummary['schedule_kind'],
     time_of_day: a.time_of_day,
     day_of_week: a.day_of_week,
-    enabled: a.enabled === 1,
+    enabled: a.enabled,
     next_run_at: a.next_run_at,
     last_run: lastRun,
   };

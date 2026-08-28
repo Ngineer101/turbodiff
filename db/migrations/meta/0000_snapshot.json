@@ -1,5 +1,5 @@
 {
-  "id": "43f0c992-0c58-4d37-8f08-f6d283dbad5d",
+  "id": "a426ccb3-9a46-4254-a1ea-049561e47fea",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -110,8 +110,12 @@
           "tableFrom": "account",
           "tableTo": "user",
           "schemaTo": "auth",
-          "columnsFrom": ["userId"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -121,7 +125,10 @@
         "account_provider_identity_unique": {
           "name": "account_provider_identity_unique",
           "nullsNotDistinct": false,
-          "columns": ["accountId", "providerId"]
+          "columns": [
+            "accountId",
+            "providerId"
+          ]
         }
       },
       "policies": {},
@@ -187,7 +194,7 @@
         },
         "success": {
           "name": "success",
-          "type": "smallint",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true
         },
@@ -271,8 +278,12 @@
           "tableFrom": "agent_runs",
           "tableTo": "plans",
           "schemaTo": "app",
-          "columnsFrom": ["plan_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "plan_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -281,8 +292,12 @@
           "tableFrom": "agent_runs",
           "tableTo": "features",
           "schemaTo": "app",
-          "columnsFrom": ["feature_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "feature_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -291,8 +306,12 @@
           "tableFrom": "agent_runs",
           "tableTo": "fix_attempts",
           "schemaTo": "app",
-          "columnsFrom": ["fix_attempt_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "fix_attempt_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -301,8 +320,12 @@
           "tableFrom": "agent_runs",
           "tableTo": "automation_runs",
           "schemaTo": "app",
-          "columnsFrom": ["automation_run_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "automation_run_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -314,10 +337,6 @@
         "agent_runs_kind_check": {
           "name": "agent_runs_kind_check",
           "value": "kind = ANY (ARRAY['plan_analyze'::text, 'plan_refine'::text, 'generate'::text, 'verify'::text, 'fix'::text, 'automation'::text, 'chat'::text, 'resolve_conflict'::text])"
-        },
-        "agent_runs_success_check": {
-          "name": "agent_runs_success_check",
-          "value": "success = ANY (ARRAY[0, 1])"
         },
         "agent_runs_owner": {
           "name": "agent_runs_owner",
@@ -386,10 +405,10 @@
         },
         "is_builtin": {
           "name": "is_builtin",
-          "type": "smallint",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": 0
+          "default": false
         },
         "created_at": {
           "name": "created_at",
@@ -406,8 +425,12 @@
           "tableFrom": "agents",
           "tableTo": "installations",
           "schemaTo": "app",
-          "columnsFrom": ["installation_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "installation_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -417,20 +440,22 @@
         "agents_id_installation_unique": {
           "name": "agents_id_installation_unique",
           "nullsNotDistinct": false,
-          "columns": ["id", "installation_id"]
+          "columns": [
+            "id",
+            "installation_id"
+          ]
         },
         "agents_installation_slug_unique": {
           "name": "agents_installation_slug_unique",
           "nullsNotDistinct": false,
-          "columns": ["installation_id", "slug"]
+          "columns": [
+            "installation_id",
+            "slug"
+          ]
         }
       },
       "policies": {},
       "checkConstraints": {
-        "agents_is_builtin_check": {
-          "name": "agents_is_builtin_check",
-          "value": "is_builtin = ANY (ARRAY[0, 1])"
-        },
         "agents_slug_format": {
           "name": "agents_slug_format",
           "value": "slug ~ '^[a-z0-9]+(?:-[a-z0-9]+)*$'::text"
@@ -584,8 +609,12 @@
           "tableFrom": "automation_runs",
           "tableTo": "automations",
           "schemaTo": "app",
-          "columnsFrom": ["automation_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "automation_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -684,10 +713,10 @@
         },
         "enabled": {
           "name": "enabled",
-          "type": "smallint",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": 1
+          "default": true
         },
         "next_run_at": {
           "name": "next_run_at",
@@ -715,7 +744,7 @@
             }
           ],
           "isUnique": false,
-          "where": "(enabled = 1)",
+          "where": "enabled",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -748,8 +777,12 @@
           "tableFrom": "automations",
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsFrom": ["repository_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "repository_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -765,10 +798,6 @@
         "automations_day_of_week_check": {
           "name": "automations_day_of_week_check",
           "value": "(day_of_week >= 0) AND (day_of_week <= 6)"
-        },
-        "automations_enabled_check": {
-          "name": "automations_enabled_check",
-          "value": "enabled = ANY (ARRAY[0, 1])"
         },
         "automations_schedule_shape": {
           "name": "automations_schedule_shape",
@@ -801,8 +830,12 @@
           "tableFrom": "change_request_counters",
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsFrom": ["repository_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "repository_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -902,7 +935,7 @@
         },
         "mergeable": {
           "name": "mergeable",
-          "type": "smallint",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": false
         },
@@ -926,10 +959,10 @@
         },
         "patch_truncated": {
           "name": "patch_truncated",
-          "type": "smallint",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": 0
+          "default": false
         },
         "review_status": {
           "name": "review_status",
@@ -1044,8 +1077,12 @@
           "tableFrom": "change_requests",
           "tableTo": "features",
           "schemaTo": "app",
-          "columnsFrom": ["feature_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "feature_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -1054,8 +1091,12 @@
           "tableFrom": "change_requests",
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsFrom": ["repository_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "repository_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1065,7 +1106,10 @@
         "change_requests_repo_number_unique": {
           "name": "change_requests_repo_number_unique",
           "nullsNotDistinct": false,
-          "columns": ["repository_id", "number"]
+          "columns": [
+            "repository_id",
+            "number"
+          ]
         }
       },
       "policies": {},
@@ -1077,14 +1121,6 @@
         "change_requests_status_check": {
           "name": "change_requests_status_check",
           "value": "status = ANY (ARRAY['open'::text, 'merged'::text, 'closed'::text])"
-        },
-        "change_requests_mergeable_check": {
-          "name": "change_requests_mergeable_check",
-          "value": "mergeable = ANY (ARRAY[0, 1])"
-        },
-        "change_requests_patch_truncated_check": {
-          "name": "change_requests_patch_truncated_check",
-          "value": "patch_truncated = ANY (ARRAY[0, 1])"
         },
         "change_requests_review_status_check": {
           "name": "change_requests_review_status_check",
@@ -1222,8 +1258,12 @@
           "tableFrom": "chat_messages",
           "tableTo": "features",
           "schemaTo": "app",
-          "columnsFrom": ["feature_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "feature_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1377,8 +1417,12 @@
           "tableFrom": "cockpit_comments",
           "tableTo": "features",
           "schemaTo": "app",
-          "columnsFrom": ["feature_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "feature_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1387,8 +1431,12 @@
           "tableFrom": "cockpit_comments",
           "tableTo": "fix_attempts",
           "schemaTo": "app",
-          "columnsFrom": ["fix_attempt_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "fix_attempt_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -1472,10 +1520,10 @@
         },
         "optional": {
           "name": "optional",
-          "type": "smallint",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": 1
+          "default": true
         },
         "auth_type": {
           "name": "auth_type",
@@ -1498,17 +1546,17 @@
         },
         "oauth_needs_reauth": {
           "name": "oauth_needs_reauth",
-          "type": "smallint",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": 0
+          "default": false
         },
         "oauth_has_refresh_token": {
           "name": "oauth_has_refresh_token",
-          "type": "smallint",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": 0
+          "default": false
         },
         "created_at": {
           "name": "created_at",
@@ -1525,8 +1573,12 @@
           "tableFrom": "connections",
           "tableTo": "installations",
           "schemaTo": "app",
-          "columnsFrom": ["installation_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "installation_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1536,12 +1588,18 @@
         "connections_id_installation_unique": {
           "name": "connections_id_installation_unique",
           "nullsNotDistinct": false,
-          "columns": ["id", "installation_id"]
+          "columns": [
+            "id",
+            "installation_id"
+          ]
         },
         "connections_installation_name_unique": {
           "name": "connections_installation_name_unique",
           "nullsNotDistinct": false,
-          "columns": ["installation_id", "name"]
+          "columns": [
+            "installation_id",
+            "name"
+          ]
         }
       },
       "policies": {},
@@ -1550,21 +1608,9 @@
           "name": "connections_kind_check",
           "value": "kind = ANY (ARRAY['mcp'::text, 'api'::text])"
         },
-        "connections_optional_check": {
-          "name": "connections_optional_check",
-          "value": "optional = ANY (ARRAY[0, 1])"
-        },
         "connections_auth_type_check": {
           "name": "connections_auth_type_check",
           "value": "auth_type = ANY (ARRAY['none'::text, 'bearer'::text, 'api_key'::text, 'client_credentials'::text, 'oauth'::text])"
-        },
-        "connections_oauth_needs_reauth_check": {
-          "name": "connections_oauth_needs_reauth_check",
-          "value": "oauth_needs_reauth = ANY (ARRAY[0, 1])"
-        },
-        "connections_oauth_has_refresh_token_check": {
-          "name": "connections_oauth_has_refresh_token_check",
-          "value": "oauth_has_refresh_token = ANY (ARRAY[0, 1])"
         }
       },
       "isRLSEnabled": false
@@ -1636,8 +1682,12 @@
           "tableFrom": "cr_checks",
           "tableTo": "change_requests",
           "schemaTo": "app",
-          "columnsFrom": ["change_request_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "change_request_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1647,7 +1697,10 @@
         "cr_checks_name_unique": {
           "name": "cr_checks_name_unique",
           "nullsNotDistinct": false,
-          "columns": ["change_request_id", "name"]
+          "columns": [
+            "change_request_id",
+            "name"
+          ]
         }
       },
       "policies": {},
@@ -1760,8 +1813,12 @@
           "tableFrom": "cr_comments",
           "tableTo": "change_requests",
           "schemaTo": "app",
-          "columnsFrom": ["change_request_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "change_request_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1956,10 +2013,10 @@
         },
         "criteria_conflict": {
           "name": "criteria_conflict",
-          "type": "smallint",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": 0
+          "default": false
         },
         "acceptance_updated_at": {
           "name": "acceptance_updated_at",
@@ -2114,8 +2171,12 @@
           "tableFrom": "features",
           "tableTo": "plans",
           "schemaTo": "app",
-          "columnsFrom": ["plan_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "plan_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -2124,8 +2185,12 @@
           "tableFrom": "features",
           "tableTo": "change_requests",
           "schemaTo": "app",
-          "columnsFrom": ["change_request_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "change_request_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -2134,8 +2199,12 @@
           "tableFrom": "features",
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsFrom": ["repository_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "repository_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2145,7 +2214,10 @@
         "features_plan_repository_unique": {
           "name": "features_plan_repository_unique",
           "nullsNotDistinct": false,
-          "columns": ["plan_id", "repository_id"]
+          "columns": [
+            "plan_id",
+            "repository_id"
+          ]
         }
       },
       "policies": {},
@@ -2177,10 +2249,6 @@
         "features_cost_usd_check": {
           "name": "features_cost_usd_check",
           "value": "cost_usd >= (0)::numeric"
-        },
-        "features_criteria_conflict_check": {
-          "name": "features_criteria_conflict_check",
-          "value": "criteria_conflict = ANY (ARRAY[0, 1])"
         }
       },
       "isRLSEnabled": false
@@ -2349,8 +2417,12 @@
           "tableFrom": "fix_attempts",
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsFrom": ["repository_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "repository_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2420,8 +2492,12 @@
           "tableFrom": "installation_repo_sync",
           "tableTo": "installations",
           "schemaTo": "app",
-          "columnsFrom": ["installation_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "installation_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2463,10 +2539,10 @@
         },
         "suspended": {
           "name": "suspended",
-          "type": "smallint",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": 0
+          "default": false
         },
         "provider": {
           "name": "provider",
@@ -2513,17 +2589,26 @@
         "installations_id_provider_unique": {
           "name": "installations_id_provider_unique",
           "nullsNotDistinct": false,
-          "columns": ["id", "provider"]
+          "columns": [
+            "id",
+            "provider"
+          ]
         },
         "installations_provider_login_unique": {
           "name": "installations_provider_login_unique",
           "nullsNotDistinct": false,
-          "columns": ["provider", "account_login"]
+          "columns": [
+            "provider",
+            "account_login"
+          ]
         },
         "installations_provider_account_unique": {
           "name": "installations_provider_account_unique",
           "nullsNotDistinct": false,
-          "columns": ["provider", "account_id"]
+          "columns": [
+            "provider",
+            "account_id"
+          ]
         }
       },
       "policies": {},
@@ -2531,10 +2616,6 @@
         "installations_account_type_check": {
           "name": "installations_account_type_check",
           "value": "account_type = ANY (ARRAY['Organization'::text, 'User'::text])"
-        },
-        "installations_suspended_check": {
-          "name": "installations_suspended_check",
-          "value": "suspended = ANY (ARRAY[0, 1])"
         },
         "installations_provider_check": {
           "name": "installations_provider_check",
@@ -2684,8 +2765,12 @@
           "tableFrom": "invitation",
           "tableTo": "organization",
           "schemaTo": "auth",
-          "columnsFrom": ["organizationId"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "organizationId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2694,8 +2779,12 @@
           "tableFrom": "invitation",
           "tableTo": "user",
           "schemaTo": "auth",
-          "columnsFrom": ["inviterId"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "inviterId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2774,8 +2863,12 @@
           "tableFrom": "member",
           "tableTo": "organization",
           "schemaTo": "auth",
-          "columnsFrom": ["organizationId"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "organizationId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2784,8 +2877,12 @@
           "tableFrom": "member",
           "tableTo": "user",
           "schemaTo": "auth",
-          "columnsFrom": ["userId"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2795,7 +2892,10 @@
         "member_organization_user_unique": {
           "name": "member_organization_user_unique",
           "nullsNotDistinct": false,
-          "columns": ["organizationId", "userId"]
+          "columns": [
+            "organizationId",
+            "userId"
+          ]
         }
       },
       "policies": {},
@@ -2925,8 +3025,12 @@
           "tableFrom": "oauthAccessToken",
           "tableTo": "oauthApplication",
           "schemaTo": "auth",
-          "columnsFrom": ["clientId"],
-          "columnsTo": ["clientId"],
+          "columnsFrom": [
+            "clientId"
+          ],
+          "columnsTo": [
+            "clientId"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2935,8 +3039,12 @@
           "tableFrom": "oauthAccessToken",
           "tableTo": "user",
           "schemaTo": "auth",
-          "columnsFrom": ["userId"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2946,12 +3054,16 @@
         "oauthAccessToken_accessToken_key": {
           "name": "oauthAccessToken_accessToken_key",
           "nullsNotDistinct": false,
-          "columns": ["accessToken"]
+          "columns": [
+            "accessToken"
+          ]
         },
         "oauthAccessToken_refreshToken_key": {
           "name": "oauthAccessToken_refreshToken_key",
           "nullsNotDistinct": false,
-          "columns": ["refreshToken"]
+          "columns": [
+            "refreshToken"
+          ]
         }
       },
       "policies": {},
@@ -3059,8 +3171,12 @@
           "tableFrom": "oauthApplication",
           "tableTo": "user",
           "schemaTo": "auth",
-          "columnsFrom": ["userId"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3070,7 +3186,9 @@
         "oauthApplication_clientId_key": {
           "name": "oauthApplication_clientId_key",
           "nullsNotDistinct": false,
-          "columns": ["clientId"]
+          "columns": [
+            "clientId"
+          ]
         }
       },
       "policies": {},
@@ -3163,8 +3281,12 @@
           "tableFrom": "oauthConsent",
           "tableTo": "oauthApplication",
           "schemaTo": "auth",
-          "columnsFrom": ["clientId"],
-          "columnsTo": ["clientId"],
+          "columnsFrom": [
+            "clientId"
+          ],
+          "columnsTo": [
+            "clientId"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3173,8 +3295,12 @@
           "tableFrom": "oauthConsent",
           "tableTo": "user",
           "schemaTo": "auth",
-          "columnsFrom": ["userId"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3184,7 +3310,10 @@
         "oauth_consent_client_user_unique": {
           "name": "oauth_consent_client_user_unique",
           "nullsNotDistinct": false,
-          "columns": ["clientId", "userId"]
+          "columns": [
+            "clientId",
+            "userId"
+          ]
         }
       },
       "policies": {},
@@ -3245,8 +3374,12 @@
           "tableFrom": "organization",
           "tableTo": "installations",
           "schemaTo": "app",
-          "columnsFrom": ["installationId"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "installationId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3256,12 +3389,16 @@
         "organization_slug_key": {
           "name": "organization_slug_key",
           "nullsNotDistinct": false,
-          "columns": ["slug"]
+          "columns": [
+            "slug"
+          ]
         },
         "organization_installationId_key": {
           "name": "organization_installationId_key",
           "nullsNotDistinct": false,
-          "columns": ["installationId"]
+          "columns": [
+            "installationId"
+          ]
         }
       },
       "policies": {},
@@ -3314,8 +3451,12 @@
           "tableFrom": "plan_repositories",
           "tableTo": "plans",
           "schemaTo": "app",
-          "columnsFrom": ["plan_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "plan_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3324,8 +3465,12 @@
           "tableFrom": "plan_repositories",
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsFrom": ["repository_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "repository_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3333,14 +3478,20 @@
       "compositePrimaryKeys": {
         "plan_repositories_pkey": {
           "name": "plan_repositories_pkey",
-          "columns": ["plan_id", "repository_id"]
+          "columns": [
+            "plan_id",
+            "repository_id"
+          ]
         }
       },
       "uniqueConstraints": {
         "plan_repositories_position_unique": {
           "name": "plan_repositories_position_unique",
           "nullsNotDistinct": false,
-          "columns": ["plan_id", "position"]
+          "columns": [
+            "plan_id",
+            "position"
+          ]
         }
       },
       "policies": {},
@@ -3460,10 +3611,10 @@
         },
         "archived": {
           "name": "archived",
-          "type": "smallint",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": 0
+          "default": false
         },
         "feedback": {
           "name": "feedback",
@@ -3515,7 +3666,7 @@
             }
           ],
           "isUnique": false,
-          "where": "(archived = 0)",
+          "where": "(NOT archived)",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -3564,8 +3715,12 @@
           "tableFrom": "plans",
           "tableTo": "todos",
           "schemaTo": "app",
-          "columnsFrom": ["todo_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "todo_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -3574,8 +3729,12 @@
           "tableFrom": "plans",
           "tableTo": "features",
           "schemaTo": "app",
-          "columnsFrom": ["feature_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "feature_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -3584,8 +3743,12 @@
           "tableFrom": "plans",
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsFrom": ["repository_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "repository_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3595,7 +3758,9 @@
         "plans_todo_unique": {
           "name": "plans_todo_unique",
           "nullsNotDistinct": false,
-          "columns": ["todo_id"]
+          "columns": [
+            "todo_id"
+          ]
         }
       },
       "policies": {},
@@ -3603,10 +3768,6 @@
         "plans_status_check": {
           "name": "plans_status_check",
           "value": "status = ANY (ARRAY['analyzing'::text, 'awaiting_answers'::text, 'refining'::text, 'plan_ready'::text, 'approving'::text, 'approved'::text, 'failed'::text])"
-        },
-        "plans_archived_check": {
-          "name": "plans_archived_check",
-          "value": "archived = ANY (ARRAY[0, 1])"
         }
       },
       "isRLSEnabled": false
@@ -3687,8 +3848,12 @@
           "tableFrom": "push_subscriptions",
           "tableTo": "user",
           "schemaTo": "auth",
-          "columnsFrom": ["user_github_id"],
-          "columnsTo": ["githubId"],
+          "columnsFrom": [
+            "user_github_id"
+          ],
+          "columnsTo": [
+            "githubId"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3698,7 +3863,9 @@
         "push_subscriptions_endpoint_key": {
           "name": "push_subscriptions_endpoint_key",
           "nullsNotDistinct": false,
-          "columns": ["endpoint"]
+          "columns": [
+            "endpoint"
+          ]
         }
       },
       "policies": {},
@@ -3729,10 +3896,10 @@
         },
         "enabled": {
           "name": "enabled",
-          "type": "smallint",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": 1
+          "default": true
         }
       },
       "indexes": {
@@ -3785,8 +3952,14 @@
           "tableFrom": "repo_agents",
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsFrom": ["repository_id", "installation_id"],
-          "columnsTo": ["id", "installation_id"],
+          "columnsFrom": [
+            "repository_id",
+            "installation_id"
+          ],
+          "columnsTo": [
+            "id",
+            "installation_id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3795,8 +3968,14 @@
           "tableFrom": "repo_agents",
           "tableTo": "agents",
           "schemaTo": "app",
-          "columnsFrom": ["agent_id", "installation_id"],
-          "columnsTo": ["id", "installation_id"],
+          "columnsFrom": [
+            "agent_id",
+            "installation_id"
+          ],
+          "columnsTo": [
+            "id",
+            "installation_id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3804,17 +3983,15 @@
       "compositePrimaryKeys": {
         "repo_agents_pkey": {
           "name": "repo_agents_pkey",
-          "columns": ["repository_id", "agent_id"]
+          "columns": [
+            "repository_id",
+            "agent_id"
+          ]
         }
       },
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {
-        "repo_agents_enabled_check": {
-          "name": "repo_agents_enabled_check",
-          "value": "enabled = ANY (ARRAY[0, 1])"
-        }
-      },
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "app.repo_connections": {
@@ -3841,17 +4018,17 @@
         },
         "reviews": {
           "name": "reviews",
-          "type": "smallint",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": 1
+          "default": true
         },
         "automations": {
           "name": "automations",
-          "type": "smallint",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": 1
+          "default": true
         }
       },
       "indexes": {
@@ -3904,8 +4081,14 @@
           "tableFrom": "repo_connections",
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsFrom": ["repository_id", "installation_id"],
-          "columnsTo": ["id", "installation_id"],
+          "columnsFrom": [
+            "repository_id",
+            "installation_id"
+          ],
+          "columnsTo": [
+            "id",
+            "installation_id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3914,8 +4097,14 @@
           "tableFrom": "repo_connections",
           "tableTo": "connections",
           "schemaTo": "app",
-          "columnsFrom": ["connection_id", "installation_id"],
-          "columnsTo": ["id", "installation_id"],
+          "columnsFrom": [
+            "connection_id",
+            "installation_id"
+          ],
+          "columnsTo": [
+            "id",
+            "installation_id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3923,21 +4112,15 @@
       "compositePrimaryKeys": {
         "repo_connections_pkey": {
           "name": "repo_connections_pkey",
-          "columns": ["repository_id", "connection_id"]
+          "columns": [
+            "repository_id",
+            "connection_id"
+          ]
         }
       },
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {
-        "repo_connections_reviews_check": {
-          "name": "repo_connections_reviews_check",
-          "value": "reviews = ANY (ARRAY[0, 1])"
-        },
-        "repo_connections_automations_check": {
-          "name": "repo_connections_automations_check",
-          "value": "automations = ANY (ARRAY[0, 1])"
-        }
-      },
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "app.repo_skills": {
@@ -3964,10 +4147,10 @@
         },
         "enabled": {
           "name": "enabled",
-          "type": "smallint",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": 1
+          "default": true
         }
       },
       "indexes": {
@@ -4020,8 +4203,14 @@
           "tableFrom": "repo_skills",
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsFrom": ["repository_id", "installation_id"],
-          "columnsTo": ["id", "installation_id"],
+          "columnsFrom": [
+            "repository_id",
+            "installation_id"
+          ],
+          "columnsTo": [
+            "id",
+            "installation_id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -4030,8 +4219,14 @@
           "tableFrom": "repo_skills",
           "tableTo": "skills",
           "schemaTo": "app",
-          "columnsFrom": ["skill_id", "installation_id"],
-          "columnsTo": ["id", "installation_id"],
+          "columnsFrom": [
+            "skill_id",
+            "installation_id"
+          ],
+          "columnsTo": [
+            "id",
+            "installation_id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -4039,17 +4234,15 @@
       "compositePrimaryKeys": {
         "repo_skills_pkey": {
           "name": "repo_skills_pkey",
-          "columns": ["repository_id", "skill_id"]
+          "columns": [
+            "repository_id",
+            "skill_id"
+          ]
         }
       },
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {
-        "repo_skills_enabled_check": {
-          "name": "repo_skills_enabled_check",
-          "value": "enabled = ANY (ARRAY[0, 1])"
-        }
-      },
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "app.repositories": {
@@ -4108,10 +4301,10 @@
         },
         "enabled": {
           "name": "enabled",
-          "type": "smallint",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": 1
+          "default": true
         },
         "model": {
           "name": "model",
@@ -4121,24 +4314,24 @@
         },
         "review_on_push": {
           "name": "review_on_push",
-          "type": "smallint",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": 0
+          "default": false
         },
         "blocking_reviews": {
           "name": "blocking_reviews",
-          "type": "smallint",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": 0
+          "default": false
         },
         "auto_fix": {
           "name": "auto_fix",
-          "type": "smallint",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": 0
+          "default": false
         },
         "check_command": {
           "name": "check_command",
@@ -4160,30 +4353,30 @@
         },
         "auto_merge": {
           "name": "auto_merge",
-          "type": "smallint",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": 0
+          "default": false
         },
         "demo_videos": {
           "name": "demo_videos",
-          "type": "smallint",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": 1
+          "default": true
         },
         "launchable": {
           "name": "launchable",
-          "type": "smallint",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": false
         },
         "auto_resolve_conflicts": {
           "name": "auto_resolve_conflicts",
-          "type": "smallint",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": 0
+          "default": false
         },
         "created_at": {
           "name": "created_at",
@@ -4227,7 +4420,7 @@
             }
           ],
           "isUnique": false,
-          "where": "(enabled = 1)",
+          "where": "enabled",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -4272,8 +4465,14 @@
           "tableFrom": "repositories",
           "tableTo": "installations",
           "schemaTo": "app",
-          "columnsFrom": ["installation_id", "provider"],
-          "columnsTo": ["id", "provider"],
+          "columnsFrom": [
+            "installation_id",
+            "provider"
+          ],
+          "columnsTo": [
+            "id",
+            "provider"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -4283,12 +4482,18 @@
         "repositories_id_installation_unique": {
           "name": "repositories_id_installation_unique",
           "nullsNotDistinct": false,
-          "columns": ["id", "installation_id"]
+          "columns": [
+            "id",
+            "installation_id"
+          ]
         },
         "repositories_owner_name_unique": {
           "name": "repositories_owner_name_unique",
           "nullsNotDistinct": false,
-          "columns": ["owner", "name"]
+          "columns": [
+            "owner",
+            "name"
+          ]
         }
       },
       "policies": {},
@@ -4297,41 +4502,9 @@
           "name": "repositories_provider_check",
           "value": "provider = ANY (ARRAY['github'::text, 'artifacts'::text])"
         },
-        "repositories_enabled_check": {
-          "name": "repositories_enabled_check",
-          "value": "enabled = ANY (ARRAY[0, 1])"
-        },
-        "repositories_review_on_push_check": {
-          "name": "repositories_review_on_push_check",
-          "value": "review_on_push = ANY (ARRAY[0, 1])"
-        },
-        "repositories_blocking_reviews_check": {
-          "name": "repositories_blocking_reviews_check",
-          "value": "blocking_reviews = ANY (ARRAY[0, 1])"
-        },
-        "repositories_auto_fix_check": {
-          "name": "repositories_auto_fix_check",
-          "value": "auto_fix = ANY (ARRAY[0, 1])"
-        },
         "repositories_app_port_check": {
           "name": "repositories_app_port_check",
           "value": "(app_port >= 1) AND (app_port <= 65535)"
-        },
-        "repositories_auto_merge_check": {
-          "name": "repositories_auto_merge_check",
-          "value": "auto_merge = ANY (ARRAY[0, 1])"
-        },
-        "repositories_demo_videos_check": {
-          "name": "repositories_demo_videos_check",
-          "value": "demo_videos = ANY (ARRAY[0, 1])"
-        },
-        "repositories_launchable_check": {
-          "name": "repositories_launchable_check",
-          "value": "launchable = ANY (ARRAY[0, 1])"
-        },
-        "repositories_auto_resolve_conflicts_check": {
-          "name": "repositories_auto_resolve_conflicts_check",
-          "value": "auto_resolve_conflicts = ANY (ARRAY[0, 1])"
         },
         "repositories_artifacts_shape": {
           "name": "repositories_artifacts_shape",
@@ -4398,8 +4571,12 @@
           "tableFrom": "repository_refs",
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsFrom": ["repository_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "repository_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -4407,7 +4584,10 @@
       "compositePrimaryKeys": {
         "repository_refs_pkey": {
           "name": "repository_refs_pkey",
-          "columns": ["repository_id", "ref"]
+          "columns": [
+            "repository_id",
+            "ref"
+          ]
         }
       },
       "uniqueConstraints": {},
@@ -4682,8 +4862,14 @@
           "tableFrom": "reviews",
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsFrom": ["repository_id", "installation_id"],
-          "columnsTo": ["id", "installation_id"],
+          "columnsFrom": [
+            "repository_id",
+            "installation_id"
+          ],
+          "columnsTo": [
+            "id",
+            "installation_id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -4848,8 +5034,12 @@
           "tableFrom": "session",
           "tableTo": "user",
           "schemaTo": "auth",
-          "columnsFrom": ["userId"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "userId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -4858,8 +5048,12 @@
           "tableFrom": "session",
           "tableTo": "organization",
           "schemaTo": "auth",
-          "columnsFrom": ["activeOrganizationId"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "activeOrganizationId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -4869,7 +5063,9 @@
         "session_token_key": {
           "name": "session_token_key",
           "nullsNotDistinct": false,
-          "columns": ["token"]
+          "columns": [
+            "token"
+          ]
         }
       },
       "policies": {},
@@ -4942,8 +5138,12 @@
           "tableFrom": "skills",
           "tableTo": "installations",
           "schemaTo": "app",
-          "columnsFrom": ["installation_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "installation_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -4953,12 +5153,18 @@
         "skills_id_installation_unique": {
           "name": "skills_id_installation_unique",
           "nullsNotDistinct": false,
-          "columns": ["id", "installation_id"]
+          "columns": [
+            "id",
+            "installation_id"
+          ]
         },
         "skills_installation_slug_unique": {
           "name": "skills_installation_slug_unique",
           "nullsNotDistinct": false,
-          "columns": ["installation_id", "slug"]
+          "columns": [
+            "installation_id",
+            "slug"
+          ]
         }
       },
       "policies": {},
@@ -5016,8 +5222,12 @@
           "tableFrom": "todo_repositories",
           "tableTo": "todos",
           "schemaTo": "app",
-          "columnsFrom": ["todo_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "todo_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -5026,8 +5236,12 @@
           "tableFrom": "todo_repositories",
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsFrom": ["repository_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "repository_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -5035,14 +5249,20 @@
       "compositePrimaryKeys": {
         "todo_repositories_pkey": {
           "name": "todo_repositories_pkey",
-          "columns": ["todo_id", "repository_id"]
+          "columns": [
+            "todo_id",
+            "repository_id"
+          ]
         }
       },
       "uniqueConstraints": {
         "todo_repositories_position_unique": {
           "name": "todo_repositories_position_unique",
           "nullsNotDistinct": false,
-          "columns": ["todo_id", "position"]
+          "columns": [
+            "todo_id",
+            "position"
+          ]
         }
       },
       "policies": {},
@@ -5165,8 +5385,12 @@
           "tableFrom": "todos",
           "tableTo": "plans",
           "schemaTo": "app",
-          "columnsFrom": ["plan_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "plan_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -5175,8 +5399,12 @@
           "tableFrom": "todos",
           "tableTo": "installations",
           "schemaTo": "app",
-          "columnsFrom": ["installation_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "installation_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -5254,12 +5482,16 @@
         "user_email_unique": {
           "name": "user_email_unique",
           "nullsNotDistinct": false,
-          "columns": ["email"]
+          "columns": [
+            "email"
+          ]
         },
         "user_github_id_unique": {
           "name": "user_github_id_unique",
           "nullsNotDistinct": false,
-          "columns": ["githubId"]
+          "columns": [
+            "githubId"
+          ]
         }
       },
       "policies": {},
@@ -5298,8 +5530,12 @@
           "tableFrom": "user_installation_access",
           "tableTo": "user",
           "schemaTo": "auth",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -5601,8 +5837,12 @@
           "tableFrom": "verifications",
           "tableTo": "features",
           "schemaTo": "app",
-          "columnsFrom": ["feature_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "feature_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }

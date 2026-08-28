@@ -82,22 +82,20 @@ describe('change request records', () => {
       mergeBase: 'c'.repeat(40),
       mergeable: false,
       conflictFiles: ['src/pricing.ts'],
-      filesJson: JSON.stringify([
-        { path: 'src/pricing.ts', status: 'modified', additions: 5, deletions: 2 },
-      ]),
+      files: [{ path: 'src/pricing.ts', status: 'modified', additions: 5, deletions: 2 }],
       diffKey: `crs/${repo.id}/${cr.id}/aaaaaaaaaaaa.patch`,
       patchTruncated: false,
     });
     let reread = (await getChangeRequest(cr.id))!;
-    expect(reread.mergeable).toBe(0);
-    expect(JSON.parse(reread.conflict_files!)).toEqual(['src/pricing.ts']);
+    expect(reread.mergeable).toBe(false);
+    expect(reread.conflict_files).toEqual(['src/pricing.ts']);
 
     await setChangeRequestReviewStatus(cr.id, 'changes_requested');
     await markChangeRequestMerged(cr.id, 'd'.repeat(40));
     reread = (await getChangeRequest(cr.id))!;
     expect(reread.status).toBe('merged');
     expect(reread.merged_head).toBe('d'.repeat(40));
-    expect(reread.mergeable).toBe(1);
+    expect(reread.mergeable).toBe(true);
     expect(reread.review_status).toBe('changes_requested');
   });
 
@@ -115,14 +113,14 @@ describe('change request records', () => {
 describe('maybeAutoMergeCr gates', () => {
   it('never merges when the repo has not opted in or the CR is not clean', async () => {
     const cr = (await getOpenChangeRequest(repo.id, 'turbodiff/feat-2', 'main'))!;
-    // Repo has auto_merge = 0 (default): no-op even with green checks.
+    // Repo has auto_merge = false (default): no-op even with green checks.
     await maybeAutoMergeCr(repo, cr.id);
     expect((await getChangeRequest(cr.id))!.status).toBe('open');
 
     // Opted in, but no review verdict yet: still a no-op. (The full-green
     // path reaches the sandbox engine and is exercised in deployment smoke
     // tests, not here.)
-    const optedIn = { ...repo, auto_merge: 1 };
+    const optedIn = { ...repo, auto_merge: true };
     await maybeAutoMergeCr(optedIn, cr.id);
     expect((await getChangeRequest(cr.id))!.status).toBe('open');
   });

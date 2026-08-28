@@ -235,9 +235,9 @@ describe('authenticated tenant isolation', () => {
     const repo = await testDatabase()
       .prepare('SELECT enabled FROM repositories WHERE id = 101')
       .first<{
-        enabled: number;
+        enabled: boolean;
       }>();
-    expect(repo?.enabled).toBe(0);
+    expect(repo?.enabled).toBe(false);
   });
 });
 
@@ -979,14 +979,11 @@ describe('repo code browser', () => {
       authenticate: async () => artifactsUser,
       canPushToRepo: canPush,
       orgAdmin: async () => true,
-    }).request(
-      'https://turbodiff.test/api/repos/303/file',
-      {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ ...validSave, mode: 'pr' }),
-      },
-    );
+    }).request('https://turbodiff.test/api/repos/303/file', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...validSave, mode: 'pr' }),
+    });
     expect(response.status).toBe(400);
     const body = parseJson(await response.text());
     expect(
@@ -1004,14 +1001,11 @@ describe('repo code browser', () => {
       authenticate: async () => artifactsUser,
       canPushToRepo: canPushSpy,
       orgAdmin: async () => false,
-    }).request(
-      'https://turbodiff.test/api/repos/303/file',
-      {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(validSave),
-      },
-    );
+    }).request('https://turbodiff.test/api/repos/303/file', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(validSave),
+    });
     expect(response.status).toBe(403);
     expect(canPushSpy).not.toHaveBeenCalled();
   });

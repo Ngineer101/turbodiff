@@ -66,6 +66,12 @@ export async function installationToken(installationId: number): Promise<string>
   return data.token;
 }
 
+export async function installationDetails(installationId: number): Promise<{
+  account: { login: string; id: number; type: string };
+}> {
+  return githubJson(await appJwt(), `/app/installations/${installationId}`);
+}
+
 // Least-privilege token for code that runs inside a sandbox next to untrusted
 // content: scoped to ONE repository and the given permissions (typically just
 // contents), so a compromised or prompt-injected agent run cannot touch other

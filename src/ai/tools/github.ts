@@ -346,12 +346,11 @@ export const makePostReview = (agentInstanceId: string, pin: RepoPin = null) =>
       // changes, a clean or P2-only review approves. Off posts plain
       // comments — today's behavior. The bot's latest review state wins on
       // GitHub, so a re-review that finds the P1s fixed clears the block.
-      const event =
-        row.blocking_reviews !== 1
-          ? 'COMMENT'
-          : data.findings.map(findingSeverity).includes('P1')
-            ? 'REQUEST_CHANGES'
-            : 'APPROVE';
+      const event = !row.blocking_reviews
+        ? 'COMMENT'
+        : data.findings.map(findingSeverity).includes('P1')
+          ? 'REQUEST_CHANGES'
+          : 'APPROVE';
       const path = `/repos/${data.owner}/${data.repo}/pulls/${data.number}/reviews`;
       const comments = data.findings.map((f) => {
         const comment: ReviewComment = { path: f.path, line: f.line, side: f.side, body: f.body };
@@ -414,7 +413,7 @@ export const makePostReview = (agentInstanceId: string, pin: RepoPin = null) =>
       // Factory-PR gate: a blocking verdict on a self-authored PR never fires
       // the pull_request_review webhook trigger (the posted state is COMMENT),
       // so enqueue the fix directly. The consumer re-validates toggle and cap.
-      if (intended === 'REQUEST_CHANGES' && postEvent === 'COMMENT' && row.auto_fix === 1) {
+      if (intended === 'REQUEST_CHANGES' && postEvent === 'COMMENT' && row.auto_fix) {
         await enqueueFactoryMessage({
           kind: 'fix',
           repoId: row.id,

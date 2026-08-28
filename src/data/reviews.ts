@@ -1,13 +1,7 @@
 import { sql } from 'drizzle-orm';
-import { STALL_CUTOFF_MODIFIER } from '../shared/time.ts';
+import { STALL_AFTER_MINUTES } from '../shared/time.ts';
 import { execute, queryOne, queryRows } from './database.ts';
-
-function idList(ids: number[]) {
-  return sql.join(
-    ids.map((id) => sql`${id}`),
-    sql`, `,
-  );
-}
+import { bigintArray, minutesAgo } from './sql.ts';
 
 export interface AgentUsageRow {
   agent_slug: string | null;
@@ -25,7 +19,7 @@ export async function agentUsageForMonth(
   return queryRows<AgentUsageRow>(sql`
     SELECT agent_slug, COUNT(*) AS reviews, SUM(cost_usd) AS cost_usd
     FROM app.reviews
-    WHERE installation_id IN (${idList(installationIds)})
+    WHERE installation_id = ANY(${bigintArray(installationIds)})
       AND to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM') = ${month}
     GROUP BY agent_slug
     ORDER BY cost_usd DESC
@@ -66,7 +60,7 @@ export async function listRecentReviews(
     SELECT r.*, repo.owner AS repo_owner, repo.name AS repo_name
     FROM app.reviews r
     LEFT JOIN app.repositories repo ON repo.id = r.repository_id
-    WHERE r.installation_id IN (${idList(installationIds)})
+    WHERE r.installation_id = ANY(${bigintArray(installationIds)})
     ORDER BY r.id DESC
     LIMIT ${limit} OFFSET ${offset}
   `);
@@ -75,7 +69,8 @@ export async function listRecentReviews(
 export async function countReviews(installationIds: number[]): Promise<number> {
   if (installationIds.length === 0) return 0;
   const row = await queryOne<{ n: number }>(sql`
-    SELECT COUNT(*) AS n FROM app.reviews WHERE installation_id IN (${idList(installationIds)})
+    SELECT COUNT(*) AS n FROM app.reviews
+    WHERE installation_id = ANY(${bigintArray(installationIds)})
   `);
   return row?.n ?? 0;
 }
@@ -100,7 +95,7 @@ export async function monthlyUsage(
       SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens) AS total_tokens,
       SUM(cost_usd) AS cost_usd
     FROM app.reviews
-    WHERE installation_id IN (${idList(installationIds)})
+    WHERE installation_id = ANY(${bigintArray(installationIds)})
     GROUP BY month
     ORDER BY month DESC
     LIMIT ${months}
@@ -130,7 +125,7 @@ export async function repoUsageForMonth(
       SUM(r.cost_usd) AS cost_usd
     FROM app.reviews r
     LEFT JOIN app.repositories repo ON repo.id = r.repository_id
-    WHERE r.installation_id IN (${idList(installationIds)})
+    WHERE r.installation_id = ANY(${bigintArray(installationIds)})
       AND to_char(r.created_at AT TIME ZONE 'UTC', 'YYYY-MM') = ${month}
     GROUP BY r.repository_id, repo.owner, repo.name
     ORDER BY cost_usd DESC
@@ -182,10 +177,10 @@ export async function dashboardStats(installationIds: number[]): Promise<Dashboa
       ) AS avg_findings,
       COUNT(*) FILTER (
         WHERE status = 'running'
-          AND created_at > CURRENT_TIMESTAMP + ${STALL_CUTOFF_MODIFIER}::interval
+          AND created_at > ${minutesAgo(STALL_AFTER_MINUTES)}
       ) AS running
     FROM app.reviews
-    WHERE installation_id IN (${idList(installationIds)})
+    WHERE installation_id = ANY(${bigintArray(installationIds)})
   `);
   return row ?? empty;
 }
@@ -217,7 +212,7 @@ export async function hasActiveReview(
     SELECT id FROM app.reviews
     WHERE repository_id = ${repositoryId} AND pr_number = ${prNumber}
       AND agent_slug = ${agentSlug} AND status = 'running'
-      AND created_at > CURRENT_TIMESTAMP + ${STALL_CUTOFF_MODIFIER}::interval
+      AND created_at > ${minutesAgo(STALL_AFTER_MINUTES)}
     LIMIT 1
   `);
   return row !== null;
@@ -236,7 +231,7 @@ export async function reviewedRecently(
     SELECT id FROM app.reviews
     WHERE repository_id = ${repositoryId} AND pr_number = ${prNumber}
       AND agent_slug = ${agentSlug}
-      AND created_at > CURRENT_TIMESTAMP - (${windowMinutes}::double precision * INTERVAL '1 minute')
+      AND created_at > ${minutesAgo(windowMinutes)}
     LIMIT 1
   `);
   return row !== null;

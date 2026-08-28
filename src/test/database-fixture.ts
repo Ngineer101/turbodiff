@@ -1,13 +1,11 @@
-import { env } from 'cloudflare:workers';
-import { Client, types, type QueryResultRow } from 'pg';
-import { isJsonObject, type JsonValue } from '../shared/json.ts';
+import { sql, type SQL } from 'drizzle-orm';
+import type { QueryResultRow } from 'pg';
+import { execute, queryOne, queryRows, withTransaction } from '../data/database.ts';
+import type { JsonValue } from '../shared/json.ts';
 
-// Test-only raw SQL fixture for arranging rows and inspecting side effects.
-// Production data access lives in src/data/database.ts and uses Drizzle.
-types.setTypeParser(20, Number);
-types.setTypeParser(1700, Number);
-types.setTypeParser(1083, (value) => value.slice(0, 5));
-
+// Small D1-shaped test adapter retained so existing fixtures remain readable.
+// It deliberately executes through the production Drizzle connection helpers,
+// keeping connection configuration and PostgreSQL result parsing in one place.
 interface QueryMeta {
   changes: number;
 }
@@ -24,47 +22,19 @@ interface QueryRowsResult<Row> {
 }
 
 type BindValue = JsonValue | undefined | Uint8Array | Date | readonly number[];
-type DriverValue = JsonValue | Date | Uint8Array;
 
-function postgresSql(sql: string): string {
-  return sql.replace(/\?(\d+)/g, (_match, index: string) => `$${index}`);
-}
-
-function normalizeValue<Value extends DriverValue>(value: Value): JsonValue | Uint8Array {
-  if (value instanceof Date) return value.toISOString();
-  if (value instanceof Uint8Array) return value;
-  if (Array.isArray(value)) return JSON.stringify(value);
-  if (isJsonObject(value)) return JSON.stringify(value);
-  return value;
-}
-
-function normalizeRow<Row>(row: QueryResultRow): Row {
-  // SAFETY: callers supply the row interface paired with their static SELECT;
-  // this adapter preserves column names and only normalizes transport values.
-  return Object.fromEntries(
-    Object.entries(row).map(([key, value]) => [key, normalizeValue(value)]),
-  ) as Row;
-}
-
-function client(): Client {
-  return new Client({
-    connectionString: env.HYPERDRIVE.connectionString,
-    options: '-c search_path=app,auth,public',
-    connectionTimeoutMillis: 10_000,
-    query_timeout: 55_000,
-    statement_timeout: 55_000,
-    application_name: 'turbodiff-worker',
-  });
-}
-
-async function withClient<Result>(operation: (sql: Client) => Promise<Result>): Promise<Result> {
-  const sql = client();
-  await sql.connect();
-  try {
-    return await operation(sql);
-  } finally {
-    await sql.end();
+function boundSql(text: string, values: BindValue[]): SQL {
+  const chunks: SQL[] = [];
+  let cursor = 0;
+  for (const match of text.matchAll(/\?(\d+)/g)) {
+    const offset = match.index;
+    chunks.push(sql.raw(text.slice(cursor, offset)));
+    const value = values[Number(match[1]) - 1];
+    chunks.push(sql`${value === undefined ? null : value}`);
+    cursor = offset + match[0].length;
   }
+  chunks.push(sql.raw(text.slice(cursor)));
+  return sql.join(chunks, sql.empty());
 }
 
 class PreparedQuery {
@@ -72,7 +42,7 @@ class PreparedQuery {
   readonly values: BindValue[];
 
   constructor(text: string, values: BindValue[] = []) {
-    this.text = postgresSql(text);
+    this.text = text;
     this.values = values;
   }
 
@@ -80,30 +50,22 @@ class PreparedQuery {
     return new PreparedQuery(this.text, values);
   }
 
-  async first<Row>(): Promise<Row | null> {
-    return withClient(async (sql) => {
-      const result = await sql.query(this.text, this.values);
-      const row = result.rows[0];
-      return row ? normalizeRow<Row>(row) : null;
-    });
+  statement(): SQL {
+    return boundSql(this.text, this.values);
   }
 
-  async all<Row>(): Promise<QueryRowsResult<Row>> {
-    return withClient(async (sql) => {
-      const result = await sql.query(this.text, this.values);
-      return {
-        success: true,
-        results: result.rows.map((row) => normalizeRow<Row>(row)),
-        meta: { changes: result.rowCount ?? 0 },
-      };
-    });
+  async first<Row extends QueryResultRow>(): Promise<Row | null> {
+    return queryOne<Row>(this.statement());
+  }
+
+  async all<Row extends QueryResultRow>(): Promise<QueryRowsResult<Row>> {
+    const results = await queryRows<Row>(this.statement());
+    return { success: true, results, meta: { changes: results.length } };
   }
 
   async run(): Promise<QueryRunResult> {
-    return withClient(async (sql) => {
-      const result = await sql.query(this.text, this.values);
-      return { success: true, meta: { changes: result.rowCount ?? 0 } };
-    });
+    const changes = await execute(this.statement());
+    return { success: true, meta: { changes } };
   }
 }
 
@@ -116,24 +78,18 @@ class TestDatabaseFixture {
     queries: PreparedQuery[],
   ): Promise<QueryRowsResult<Row>[]> {
     if (queries.length === 0) return [];
-    return withClient(async (sql) => {
-      await sql.query('BEGIN');
-      try {
-        const results: QueryRowsResult<Row>[] = [];
-        for (const query of queries) {
-          const result = await sql.query(query.text, query.values);
-          results.push({
-            success: true,
-            results: result.rows.map((row) => normalizeRow<Row>(row)),
-            meta: { changes: result.rowCount ?? 0 },
-          });
-        }
-        await sql.query('COMMIT');
-        return results;
-      } catch (error) {
-        await sql.query('ROLLBACK');
-        throw error;
+    return withTransaction(async (transaction) => {
+      const results: QueryRowsResult<Row>[] = [];
+      for (const query of queries) {
+        const result = await transaction.execute<Row>(query.statement());
+        // SAFETY: the generic row type is supplied alongside each fixture's static SQL projection.
+        results.push({
+          success: true,
+          results: result.rows as Row[],
+          meta: { changes: result.rowCount ?? 0 },
+        });
       }
+      return results;
     });
   }
 }

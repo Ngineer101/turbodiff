@@ -1,7 +1,8 @@
 import { sql } from 'drizzle-orm';
-import { STALL_CUTOFF_MODIFIER } from '../shared/time.ts';
+import { STALL_AFTER_MINUTES } from '../shared/time.ts';
 import type { CliUsage } from '../shared/usage.ts';
-import { execute, queryOne, queryRows, withDatabase } from './database.ts';
+import { execute, queryOne, queryRows, withTransaction } from './database.ts';
+import { bigintArray, minutesAgo } from './sql.ts';
 import type { AgentRunRow } from './factory.ts';
 
 // --- Automations: recurring per-repo prompt runs ---
@@ -14,7 +15,7 @@ export interface AutomationRow {
   schedule_kind: string; // 'hourly' | 'daily' | 'weekly'
   time_of_day: string | null; // 'HH:MM' UTC
   day_of_week: number | null; // 0 (Sun) - 6 (Sat)
-  enabled: number;
+  enabled: boolean;
   next_run_at: string;
   created_at: string;
 }
@@ -73,12 +74,7 @@ export async function listAutomationsForInstallations(
       SELECT id FROM app.automation_runs
       WHERE automation_id = a.id ORDER BY id DESC LIMIT 1
     )
-    WHERE r.installation_id IN (
-      ${sql.join(
-        installationIds.map((id) => sql`${id}`),
-        sql`, `,
-      )}
-    )
+    WHERE r.installation_id = ANY(${bigintArray(installationIds)})
     ORDER BY r.owner, r.name, a.name
   `);
   return rows.map((row) => ({
@@ -124,7 +120,7 @@ export async function updateAutomation(
     UPDATE app.automations SET
       name = ${fields.name}, prompt = ${fields.prompt},
       schedule_kind = ${fields.schedule_kind}, time_of_day = ${fields.time_of_day},
-      day_of_week = ${fields.day_of_week}, enabled = ${fields.enabled ? 1 : 0},
+      day_of_week = ${fields.day_of_week}, enabled = ${fields.enabled},
       next_run_at = ${nextRunAt}
     WHERE id = ${id}
   `);
@@ -137,7 +133,7 @@ export async function deleteAutomation(id: number): Promise<void> {
 
 export async function listDueAutomations(nowIso: string): Promise<AutomationRow[]> {
   return queryRows<AutomationRow>(sql`
-    SELECT * FROM app.automations WHERE enabled = 1 AND next_run_at <= ${nowIso}
+    SELECT * FROM app.automations WHERE enabled AND next_run_at <= ${nowIso}
   `);
 }
 
@@ -150,7 +146,7 @@ export async function claimAutomation(
 ): Promise<boolean> {
   const row = await queryOne<{ id: number }>(sql`
     UPDATE app.automations SET next_run_at = ${nextRunAt}
-    WHERE id = ${id} AND enabled = 1 AND next_run_at <= ${nowIso}
+    WHERE id = ${id} AND enabled AND next_run_at <= ${nowIso}
     RETURNING id
   `);
   return row !== null;
@@ -163,23 +159,21 @@ export async function claimAutomation(
 // tryRecordFixAttempt minus the attempt cap — the schedule itself throttles.
 // The partial unique index arbitrates concurrent claims after the stale sweep.
 export async function tryRecordAutomationRun(automationId: number): Promise<number | null> {
-  return withDatabase((database) =>
-    database.transaction(async (transaction) => {
-      await transaction.execute(sql`
+  return withTransaction(async (transaction) => {
+    await transaction.execute(sql`
         UPDATE app.automation_runs
         SET status = 'failed', error = 'stale: consumer killed before completion'
         WHERE automation_id = ${automationId} AND status = 'running'
-          AND created_at < CURRENT_TIMESTAMP + ${STALL_CUTOFF_MODIFIER}::interval
+          AND created_at < ${minutesAgo(STALL_AFTER_MINUTES)}
       `);
-      const result = await transaction.execute<{ id: number }>(sql`
+    const result = await transaction.execute<{ id: number }>(sql`
         INSERT INTO app.automation_runs (automation_id)
         VALUES (${automationId})
         ON CONFLICT DO NOTHING
         RETURNING id
       `);
-      return result.rows[0]?.id ?? null;
-    }),
-  );
+    return result.rows[0]?.id ?? null;
+  });
 }
 
 export async function finishAutomationRun(

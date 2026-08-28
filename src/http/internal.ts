@@ -208,7 +208,7 @@ export function createInternalRoutes() {
     }
     await updatePlan(id, {
       status: 'refining',
-      answers: JSON.stringify(payload.answers.map(String)),
+      answers: payload.answers.map(String),
     });
     await enqueueFactoryMessage({ kind: 'plan_refine', planId: id });
     return c.json({ accepted: true, plan_id: id, status_url: `/internal/plans/${id}` });

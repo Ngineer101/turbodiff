@@ -78,9 +78,9 @@ async function seedRepo(opts: { autoFix?: boolean } = {}): Promise<void> {
     testDatabase()
       .prepare(
         `INSERT INTO repositories (id, installation_id, owner, name, review_on_push, auto_fix)
-		 VALUES (101, 1001, 'acme', 'api', 1, ?1)`,
+       VALUES (101, 1001, 'acme', 'api', TRUE, ?1)`,
       )
-      .bind(opts.autoFix ? 1 : 0),
+      .bind(opts.autoFix),
   ]);
 }
 
@@ -161,8 +161,8 @@ describe('GitHub webhook authentication and mirroring', () => {
     expect((await postWebhook(webhookApp(), 'installation', suspended)).status).toBe(200);
     const installation = await testDatabase()
       .prepare('SELECT suspended FROM installations WHERE id = 1001')
-      .first<{ suspended: number }>();
-    expect(installation?.suspended).toBe(1);
+      .first<{ suspended: boolean }>();
+    expect(installation?.suspended).toBe(true);
   });
 
   it('provisions a linked organization and records the installer as owner', async () => {

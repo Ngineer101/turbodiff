@@ -35,7 +35,7 @@ async function seedOpenFactoryPr(): Promise<number> {
     ),
     testDatabase().prepare(
       `INSERT INTO repositories (id, installation_id, owner, name, enabled, auto_fix)
-		 VALUES (101, 1001, 'acme', 'api', 1, 0)`,
+       VALUES (101, 1001, 'acme', 'api', TRUE, FALSE)`,
     ),
   ]);
   const featureId = await createFeature(101, 'Factory feature', 'Implementation spec');

@@ -14,7 +14,7 @@ import {
   tierModelOverride,
   type RiskFileEntry,
 } from '../../services/review-policy.ts';
-import { parseCrFiles } from '../../services/change-requests.ts';
+import { changeRequestFiles } from '../../services/change-requests.ts';
 import { dispatchReviewAgent } from './dispatch.ts';
 
 // Native change-request review dispatch (docs/artifacts-provider.md): the
@@ -26,7 +26,7 @@ export async function dispatchNativeCrReviews(changeRequestId: number): Promise<
   const cr = await getChangeRequest(changeRequestId);
   if (!cr || cr.status !== 'open') return;
   const repo = await getRepoById(cr.repository_id);
-  if (!repo || repo.enabled !== 1) return;
+  if (!repo?.enabled) return;
 
   const installation = await getInstallation(repo.installation_id);
   if (!installation || installation.suspended) return;
@@ -34,7 +34,7 @@ export async function dispatchNativeCrReviews(changeRequestId: number): Promise<
   const enabled = (await listAgentsForRepo(repo)).filter((a) => a.enabled);
   if (enabled.length === 0) return;
 
-  const files: RiskFileEntry[] = parseCrFiles(cr).map((f) => ({
+  const files: RiskFileEntry[] = changeRequestFiles(cr).map((f) => ({
     filename: f.path,
     additions: f.additions ?? 0,
     deletions: f.deletions ?? 0,

@@ -2,7 +2,7 @@ import { setProvider } from '@flue/runtime';
 import { cloudflareBindingProvider } from '@flue/runtime/cloudflare/workers-ai';
 import { env } from 'cloudflare:workers';
 import { sql } from 'drizzle-orm';
-import { execute } from './data/database.ts';
+import { execute, withDatabaseScope } from './data/database.ts';
 import { Hono } from 'hono';
 import { dispatchReviewAgent } from './ai/review/dispatch.ts';
 import { registerReviewMetering } from './ai/review/metering.ts';
@@ -35,6 +35,11 @@ registerReviewMetering();
 const startedAt = Date.now();
 
 const app = new Hono();
+
+// One lazy pg.Client per HTTP invocation. Data-free routes never connect;
+// database-heavy routes share one Hyperdrive edge connection across all
+// repository calls and Better Auth queries.
+app.use('*', (_c, next) => withDatabaseScope(next));
 
 // Baseline security headers. Every HTML page — the cockpit shell above all —
 // refuses framing: the Merge/Abandon buttons are session-authed clickjacking
@@ -156,9 +161,7 @@ app.on(['GET', 'POST'], '/api/auth/update-user', (c) => c.json({ error: 'not fou
 // handleEmailSignUp).
 app.post('/api/auth/sign-up/email', handleEmailSignUp);
 
-app.on(['GET', 'POST'], '/api/auth/*', (c) =>
-  withAuth((instance) => instance.handler(c.req.raw)),
-);
+app.on(['GET', 'POST'], '/api/auth/*', (c) => withAuth((instance) => instance.handler(c.req.raw)));
 
 // SPA data plane (session cookie auth, JSON in/out).
 app.route('/api', createApiRoutes());

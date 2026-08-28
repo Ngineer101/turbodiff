@@ -6,9 +6,9 @@
 // null for "merge".
 
 export interface AutoMergeFacts {
-  // repo.auto_merge === 1
+  // repo.auto_merge
   optedIn: boolean;
-  // repo.blocking_reviews === 1 — auto-merge is only meaningful when the
+  // repo.blocking_reviews — auto-merge is only meaningful when the
   // review gate exists at all.
   blockingReviews: boolean;
   // The change belongs to a factory feature with acceptance criteria; trust

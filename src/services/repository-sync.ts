@@ -5,8 +5,9 @@ import {
   getInstallation,
   listRepositoryIdsForInstallation,
   removeRepositories,
+  upsertInstallation,
 } from '../data/db.ts';
-import { installationToken } from '../integrations/github/app.ts';
+import { installationDetails, installationToken } from '../integrations/github/app.ts';
 import { githubPaginate } from '../integrations/github/client.ts';
 
 // Webhooks keep the PostgreSQL repository mirror current, but a missed
@@ -20,7 +21,11 @@ export async function syncInstallationRepos(installationId: number): Promise<voi
   // identity is explicit; numeric id ranges must never carry application
   // semantics.
   const installation = await getInstallation(installationId);
-  if (installation?.provider !== 'github') return;
+  if (installation?.provider === 'artifacts') return;
+  if (!installation) {
+    const remote = await installationDetails(installationId);
+    await upsertInstallation(installationId, remote.account);
+  }
   if (!(await claimInstallationRepoSync(installationId))) return;
 
   try {

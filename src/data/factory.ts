@@ -1,15 +1,11 @@
-import { sql, type SQL } from 'drizzle-orm';
-import { STALL_CUTOFF_MODIFIER } from '../shared/time.ts';
+import { sql } from 'drizzle-orm';
+import type { CriterionResult } from '../domain/verification.ts';
+import type { ApiPlanQuestion } from '../shared/api-types.ts';
+import { STALL_AFTER_MINUTES } from '../shared/time.ts';
 import type { CliUsage } from '../shared/usage.ts';
-import { execute, queryOne, queryRows, withDatabase } from './database.ts';
+import { execute, queryOne, queryRows, withTransaction } from './database.ts';
 import type { RepositoryRow } from './repositories.ts';
-
-function idList(ids: number[]): SQL {
-  return sql.join(
-    ids.map((id) => sql`${id}`),
-    sql`, `,
-  );
-}
+import { bigintArray, minutesAgo } from './sql.ts';
 
 // --- verifications (Phase 4: empirical acceptance-criteria checks) ---
 
@@ -17,9 +13,9 @@ export interface VerificationRow {
   id: number;
   feature_id: number;
   status: string;
-  results: string | null;
+  results: CriterionResult[] | null;
   summary: string | null;
-  demo: string | null; // JSON {"video": r2Key, "caption": string}
+  demo: { video?: string; caption?: string } | null;
   error: string | null;
   created_at: string;
   input_tokens: number;
@@ -84,7 +80,7 @@ export async function linkCommentsToFixAttempt(
   if (commentIds.length === 0) return;
   await execute(sql`
     UPDATE app.cockpit_comments SET fix_attempt_id = ${attemptId}
-    WHERE id IN (${idList(commentIds)})
+    WHERE id = ANY(${bigintArray(commentIds)})
   `);
 }
 
@@ -115,18 +111,16 @@ export async function listCockpitComments(featureId: number): Promise<CockpitCom
 // Replaces a todo's repo list wholesale (delete-then-insert), so repeated
 // calls with a different array simply replace the prior selection.
 export async function setTodoRepositories(todoId: number, repositoryIds: number[]): Promise<void> {
-  await withDatabase(async (database) => {
-    await database.transaction(async (transaction) => {
-      await transaction.execute(sql`
+  await withTransaction(async (transaction) => {
+    await transaction.execute(sql`
         DELETE FROM app.todo_repositories WHERE todo_id = ${todoId}
       `);
-      for (const [position, repositoryId] of repositoryIds.entries()) {
-        await transaction.execute(sql`
+    for (const [position, repositoryId] of repositoryIds.entries()) {
+      await transaction.execute(sql`
           INSERT INTO app.todo_repositories (todo_id, repository_id, position)
           VALUES (${todoId}, ${repositoryId}, ${position})
         `);
-      }
-    });
+    }
   });
 }
 
@@ -154,7 +148,7 @@ export async function todoRepositoriesForTodos(todoIds: number[]): Promise<TodoR
     SELECT tr.todo_id, tr.repository_id, r.owner, r.name
     FROM app.todo_repositories tr
     JOIN app.repositories r ON r.id = tr.repository_id
-    WHERE tr.todo_id IN (${idList(todoIds)})
+    WHERE tr.todo_id = ANY(${bigintArray(todoIds)})
     ORDER BY tr.todo_id, tr.position
   `);
 }
@@ -168,7 +162,7 @@ export async function boardTodoRepositories(installationIds: number[]): Promise<
     FROM app.todo_repositories tr
     JOIN app.todos t ON t.id = tr.todo_id
     JOIN app.repositories r ON r.id = tr.repository_id
-    WHERE t.installation_id IN (${idList(installationIds)}) AND t.plan_id IS NULL
+    WHERE t.installation_id = ANY(${bigintArray(installationIds)}) AND t.plan_id IS NULL
     ORDER BY tr.todo_id, tr.position
   `);
 }
@@ -193,7 +187,7 @@ export interface TaskRepoStatusRow {
   pr_number: number | null;
   provider: string;
   verification_status: string | null;
-  verification_results: string | null;
+  verification_results: CriterionResult[] | null;
 }
 
 // One row per repo attached to each of the given plans — the board/task
@@ -212,7 +206,7 @@ export async function getTaskRepoStatuses(planIds: number[]): Promise<TaskRepoSt
     LEFT JOIN app.verifications v ON v.id = (
       SELECT MAX(id) FROM app.verifications WHERE feature_id = f.id
     )
-    WHERE pr.plan_id IN (${idList(planIds)})
+    WHERE pr.plan_id = ANY(${bigintArray(planIds)})
     ORDER BY pr.plan_id, pr.position
   `);
 }
@@ -235,7 +229,7 @@ export async function boardTaskRepoStatuses(
     LEFT JOIN app.verifications v ON v.id = (
       SELECT MAX(id) FROM app.verifications WHERE feature_id = f.id
     )
-    WHERE r.installation_id IN (${idList(installationIds)}) AND p.archived = 0
+    WHERE r.installation_id = ANY(${bigintArray(installationIds)}) AND NOT p.archived
     ORDER BY pr.plan_id, pr.position
   `);
 }
@@ -271,7 +265,7 @@ export async function failStrandedVerifications(): Promise<number> {
     UPDATE app.verifications SET status = 'error',
       error = 'verification run was killed before finishing — re-run it from the PR or wait for the next push'
     WHERE status = 'running'
-      AND created_at < CURRENT_TIMESTAMP - (${VERIFICATION_STRAND_MINUTES} * INTERVAL '1 minute')
+      AND created_at < ${minutesAgo(VERIFICATION_STRAND_MINUTES)}
   `);
 }
 
@@ -286,18 +280,19 @@ export async function finishVerification(
   id: number,
   status: string,
   fields: {
-    results?: string;
+    results?: CriterionResult[];
     summary?: string;
     error?: string;
-    demo?: string;
+    demo?: { video?: string; caption?: string };
     usage?: CliUsage;
   } = {},
 ): Promise<void> {
   await execute(sql`
     UPDATE app.verifications SET
-      status = ${status}, results = ${fields.results ?? null}::jsonb,
+      status = ${status},
+      results = ${fields.results ? JSON.stringify(fields.results) : null}::jsonb,
       summary = ${fields.summary ?? null}, error = ${fields.error ?? null},
-      demo = ${fields.demo ?? null}::jsonb,
+      demo = ${fields.demo ? JSON.stringify(fields.demo) : null}::jsonb,
       input_tokens = ${fields.usage?.inputTokens ?? 0},
       output_tokens = ${fields.usage?.outputTokens ?? 0},
       cache_read_tokens = ${fields.usage?.cacheReadTokens ?? 0},
@@ -351,16 +346,15 @@ export async function tryRecordFixAttempt(
   // and hold that lock like any other attempt.
   capTrigger?: string,
 ): Promise<number | null> {
-  return withDatabase((database) =>
-    database.transaction(async (transaction) => {
-      await transaction.execute(sql`
+  return withTransaction(async (transaction) => {
+    await transaction.execute(sql`
         UPDATE app.fix_attempts
         SET status = 'failed', error = 'stale: consumer killed before completion'
         WHERE repository_id = ${repositoryId} AND pr_number = ${prNumber}
           AND status = 'running'
-          AND created_at < CURRENT_TIMESTAMP + ${STALL_CUTOFF_MODIFIER}::interval
+          AND created_at < ${minutesAgo(STALL_AFTER_MINUTES)}
       `);
-      const result = await transaction.execute<{ id: number }>(sql`
+    const result = await transaction.execute<{ id: number }>(sql`
         INSERT INTO app.fix_attempts (repository_id, pr_number, "trigger")
         SELECT ${repositoryId}, ${prNumber}, ${trigger}
         WHERE (
@@ -372,9 +366,8 @@ export async function tryRecordFixAttempt(
         ON CONFLICT DO NOTHING
         RETURNING id
       `);
-      return result.rows[0]?.id ?? null;
-    }),
-  );
+    return result.rows[0]?.id ?? null;
+  });
 }
 
 // Open factory PRs on repos that opted into auto conflict resolution — the
@@ -387,7 +380,7 @@ export async function listOpenFactoryPrConflictCandidates(): Promise<
     FROM app.features f
     JOIN app.repositories r ON r.id = f.repository_id
     WHERE f.pr_number IS NOT NULL AND f.status = 'pr_opened'
-      AND r.enabled = 1 AND r.auto_resolve_conflicts = 1
+      AND r.enabled AND r.auto_resolve_conflicts
       AND r.provider = 'github'
   `);
   return rows.map(({ factory_pr_number, ...repo }) => ({
@@ -411,7 +404,7 @@ export type AgentRunKind =
 export interface AgentRunRow {
   id: number;
   kind: AgentRunKind;
-  success: number;
+  success: boolean;
   created_at: string;
 }
 
@@ -427,7 +420,7 @@ export async function recordAgentRun(
     VALUES (
       ${kind}, ${owner.planId ?? null}, ${owner.featureId ?? null},
       ${owner.fixAttemptId ?? null}, ${owner.automationRunId ?? null},
-      ${logKey}, ${success ? 1 : 0}
+      ${logKey}, ${success}
     )
   `);
 }
@@ -491,13 +484,13 @@ export interface FeatureRow {
   repository_id: number;
   title: string;
   spec: string;
-  acceptance: string | null; // JSON array of acceptance criteria strings
+  acceptance: string[] | null;
   branch: string | null;
   pr_number: number | null;
   change_request_id: number | null; // native CR the feature opened (Artifacts)
-  criteria_conflict: number; // 1 = awaiting a human criteria-vs-comment decision
+  criteria_conflict: boolean; // awaiting a human criteria-vs-comment decision
   acceptance_updated_at: string | null; // last human edit of the criteria (conflict guard)
-  proposed_acceptance: string | null; // JSON string[]: drafted criteria awaiting approval
+  proposed_acceptance: string[] | null;
   status: string;
   error: string | null;
   created_at: string;
@@ -521,9 +514,8 @@ export async function createFeature(
   repositoryId: number,
   title: string,
   spec: string,
-  // JSON array of acceptance criteria strings; the verify step checks these
-  // empirically against the generated branch.
-  acceptance?: string,
+  // Acceptance criteria checked empirically against the generated branch.
+  acceptance?: string[],
   // Commit attribution (src/domain/attribution.ts): author = the instructing
   // user (plan approver), coauthor = the plan creator when they differ.
   // Null for operator/API intakes — the generator commits as the bot.
@@ -540,7 +532,8 @@ export async function createFeature(
       (repository_id, title, spec, acceptance, author_login, author_id,
        coauthor_login, coauthor_id, tier, plan_id)
     VALUES (
-      ${repositoryId}, ${title}, ${spec}, ${acceptance ?? null}::jsonb,
+      ${repositoryId}, ${title}, ${spec},
+      ${acceptance ? JSON.stringify(acceptance) : null}::jsonb,
       ${author?.login ?? null}, ${author?.id ?? null}, ${coauthor?.login ?? null},
       ${coauthor?.id ?? null}, ${tier ?? null}, ${planId ?? null}
     )
@@ -553,7 +546,7 @@ export interface ApprovedFeatureFields {
   repositoryId: number;
   title: string;
   spec: string;
-  acceptance: string | null;
+  acceptance: string[] | null;
   authorLogin: string | null;
   authorId: number | null;
   coauthorLogin: string | null;
@@ -569,24 +562,24 @@ export async function approvePlanFeatures(
   features: ApprovedFeatureFields[],
 ): Promise<number[] | null> {
   if (features.length === 0) return null;
-  return withDatabase(async (database) =>
-    database.transaction(async (transaction) => {
-      const claimed = await transaction.execute<{ id: number }>(sql`
+  return withTransaction(async (transaction) => {
+    const claimed = await transaction.execute<{ id: number }>(sql`
         UPDATE app.plans SET status = 'approving'
         WHERE id = ${planId} AND status = 'plan_ready' AND plan IS NOT NULL
         RETURNING id
       `);
-      if (!claimed.rows[0]) return null;
+    if (!claimed.rows[0]) return null;
 
-      // runner_model snapshots from the plan so every downstream run
-      // (generation, repair, fix) reads the feature row alone.
-      for (const feature of features) {
-        await transaction.execute(sql`
+    // runner_model snapshots from the plan so every downstream run
+    // (generation, repair, fix) reads the feature row alone.
+    for (const feature of features) {
+      await transaction.execute(sql`
           INSERT INTO app.features
             (repository_id, title, spec, acceptance, author_login, author_id,
              coauthor_login, coauthor_id, tier, plan_id, runner_model)
           SELECT ${feature.repositoryId}, ${feature.title}, ${feature.spec},
-            ${feature.acceptance}::jsonb, ${feature.authorLogin}, ${feature.authorId},
+            ${feature.acceptance ? JSON.stringify(feature.acceptance) : null}::jsonb,
+            ${feature.authorLogin}, ${feature.authorId},
             ${feature.coauthorLogin}, ${feature.coauthorId}, ${feature.tier}, ${planId},
             p.runner_model
           FROM app.plans p
@@ -595,9 +588,9 @@ export async function approvePlanFeatures(
           WHERE p.id = ${planId} AND p.status = 'approving'
           ON CONFLICT(plan_id, repository_id) DO NOTHING
         `);
-      }
+    }
 
-      await transaction.execute(sql`
+    await transaction.execute(sql`
         UPDATE app.plans
         SET status = 'approved',
           feature_id = (
@@ -607,16 +600,15 @@ export async function approvePlanFeatures(
           )
         WHERE id = ${planId} AND status = 'approving'
       `);
-      const created = await transaction.execute<{ id: number }>(sql`
+    const created = await transaction.execute<{ id: number }>(sql`
         SELECT f.id FROM app.features f
         JOIN app.plan_repositories pr
           ON pr.plan_id = f.plan_id AND pr.repository_id = f.repository_id
         WHERE f.plan_id = ${planId}
         ORDER BY pr.position
       `);
-      return created.rows.map((row) => row.id);
-    }),
-  );
+    return created.rows.map((row) => row.id);
+  });
 }
 
 export async function getFeature(id: number): Promise<FeatureRow | null> {
@@ -645,8 +637,7 @@ export async function failStrandedGeneration(): Promise<number> {
     UPDATE app.features SET status = 'failed',
       error = 'generation run was killed before finishing (platform wall clock or runtime interruption) — retry'
     WHERE status = 'generating'
-      AND COALESCE(run_started_at, created_at)
-        < CURRENT_TIMESTAMP - (${GENERATION_STRAND_MINUTES} * INTERVAL '1 minute')
+      AND COALESCE(run_started_at, created_at) < ${minutesAgo(GENERATION_STRAND_MINUTES)}
   `);
 }
 
@@ -695,7 +686,7 @@ export async function updateFeature(
 
 export async function setFeatureCriteriaConflict(id: number, conflict: boolean): Promise<void> {
   await execute(sql`
-    UPDATE app.features SET criteria_conflict = ${conflict ? 1 : 0} WHERE id = ${id}
+    UPDATE app.features SET criteria_conflict = ${conflict} WHERE id = ${id}
   `);
 }
 
@@ -712,7 +703,7 @@ export async function setProposedAcceptance(id: number, criteria: string[] | nul
 export async function updateFeatureAcceptance(id: number, criteria: string[]): Promise<void> {
   await execute(sql`
     UPDATE app.features SET acceptance = ${JSON.stringify(criteria)}::jsonb,
-      criteria_conflict = 0, acceptance_updated_at = CURRENT_TIMESTAMP,
+      criteria_conflict = FALSE, acceptance_updated_at = CURRENT_TIMESTAMP,
       proposed_acceptance = NULL
     WHERE id = ${id}
   `);
@@ -740,10 +731,10 @@ export interface PlanRow {
   title: string;
   requirements: string;
   analysis: string | null;
-  questions: string | null; // JSON array of { text, options?, recommended? } objects
-  answers: string | null; // JSON array of strings
+  questions: ApiPlanQuestion[] | null;
+  answers: string[] | null;
   plan: string | null;
-  acceptance: string | null; // JSON array of strings
+  acceptance: string[] | null;
   feature_id: number | null;
   status: string;
   error: string | null;
@@ -751,9 +742,9 @@ export interface PlanRow {
   created_by_login: string | null; // signed-in submitter; null = operator/API
   created_by_id: number | null;
   tier: string | null; // trivial | standard; null = pre-tiering (standard)
-  archived: number; // started tasks are never deleted, only hidden
+  archived: boolean; // started tasks are never deleted, only hidden
   feedback: string | null; // JSON [{snippet, comment}] awaiting a revise run
-  attachments: string | null; // JSON [{key, name, content_type}] in R2
+  attachments: { key: string; name: string; content_type: string }[] | null;
   todo_id: number | null; // unique origin todo; prevents concurrent double-start
   runner_model: string | null; // requested model for this task's runs; null = default
 }
@@ -769,32 +760,29 @@ export async function createPlan(
   // The signed-in user who submitted the requirements; null for operator/API
   // intakes. Carried onto the feature at approval for commit attribution.
   createdBy?: { login: string; id: number },
-  // JSON [{key, name, content_type}] of user-uploaded context files.
-  attachments?: string,
+  attachments?: { key: string; name: string; content_type: string }[],
 ): Promise<number> {
   const primaryRepositoryId = repositoryIds[0];
   if (primaryRepositoryId === undefined) throw new Error('a plan requires at least one repository');
-  return withDatabase(async (database) =>
-    database.transaction(async (transaction) => {
-      const inserted = await transaction.execute<{ id: number }>(sql`
+  return withTransaction(async (transaction) => {
+    const inserted = await transaction.execute<{ id: number }>(sql`
         INSERT INTO app.plans
           (repository_id, title, requirements, created_by_login, created_by_id, attachments)
         VALUES (
           ${primaryRepositoryId}, ${title}, ${requirements}, ${createdBy?.login ?? null},
-          ${createdBy?.id ?? null}, ${attachments ?? null}::jsonb
+          ${createdBy?.id ?? null}, ${attachments ? JSON.stringify(attachments) : null}::jsonb
         )
         RETURNING id
       `);
-      const planId = inserted.rows[0]!.id;
-      for (const [position, repositoryId] of repositoryIds.entries()) {
-        await transaction.execute(sql`
+    const planId = inserted.rows[0]!.id;
+    for (const [position, repositoryId] of repositoryIds.entries()) {
+      await transaction.execute(sql`
           INSERT INTO app.plan_repositories (plan_id, repository_id, position)
           VALUES (${planId}, ${repositoryId}, ${position})
         `);
-      }
-      return planId;
-    }),
-  );
+    }
+    return planId;
+  });
 }
 
 export interface CreatePlanForTodoResult {
@@ -812,63 +800,60 @@ export async function createPlanForTodo(
   title: string,
   requirements: string,
   createdBy?: { login: string; id: number },
-  attachments?: string,
+  attachments?: { key: string; name: string; content_type: string }[],
   // Model for this task's sandboxed runs; null = the default.
   runnerModel?: string,
 ): Promise<CreatePlanForTodoResult | null> {
   if (repositoryIds.length === 0) return null;
   const primaryRepositoryId = repositoryIds[0]!;
-  return withDatabase(async (database) =>
-    database.transaction(async (transaction) => {
-      const inserted = await transaction.execute<{ id: number }>(sql`
+  return withTransaction(async (transaction) => {
+    const inserted = await transaction.execute<{ id: number }>(sql`
         INSERT INTO app.plans
           (repository_id, title, requirements, created_by_login, created_by_id,
            attachments, todo_id, runner_model)
         SELECT ${primaryRepositoryId}, ${title}, ${requirements},
           ${createdBy?.login ?? null}, ${createdBy?.id ?? null},
-          ${attachments ?? null}::jsonb, ${todoId}, ${runnerModel ?? null}
+          ${attachments ? JSON.stringify(attachments) : null}::jsonb,
+          ${todoId}, ${runnerModel ?? null}
         FROM app.todos WHERE id = ${todoId} AND plan_id IS NULL
         ON CONFLICT(todo_id) DO NOTHING
         RETURNING id
       `);
-      const created = inserted.rows[0] ?? null;
-      const existing = created
-        ? null
-        : await transaction.execute<{ id: number }>(sql`
+    const created = inserted.rows[0] ?? null;
+    const existing = created
+      ? null
+      : await transaction.execute<{ id: number }>(sql`
             SELECT id FROM app.plans WHERE todo_id = ${todoId}
           `);
-      const planId = created?.id ?? existing?.rows[0]?.id;
-      if (!planId) return null;
+    const planId = created?.id ?? existing?.rows[0]?.id;
+    if (!planId) return null;
 
-      for (const [position, repositoryId] of repositoryIds.entries()) {
-        await transaction.execute(sql`
+    for (const [position, repositoryId] of repositoryIds.entries()) {
+      await transaction.execute(sql`
           INSERT INTO app.plan_repositories (plan_id, repository_id, position)
           VALUES (${planId}, ${repositoryId}, ${position})
           ON CONFLICT(plan_id, repository_id) DO NOTHING
         `);
-      }
-      await transaction.execute(sql`
+    }
+    await transaction.execute(sql`
         UPDATE app.todos SET plan_id = ${planId}
         WHERE id = ${todoId} AND (plan_id IS NULL OR plan_id = ${planId})
       `);
-      return { planId, created: created !== null };
-    }),
-  );
+    return { planId, created: created !== null };
+  });
 }
 
 // Change the task's model after start. Propagates to its already-created
 // features (they snapshot the plan value at approval) so retries and fix
 // runs pick it up; runs already in flight keep the model they launched with.
 export async function setTaskRunnerModel(planId: number, model: string): Promise<void> {
-  await withDatabase(async (database) => {
-    await database.transaction(async (transaction) => {
-      await transaction.execute(sql`
+  await withTransaction(async (transaction) => {
+    await transaction.execute(sql`
         UPDATE app.plans SET runner_model = ${model} WHERE id = ${planId}
       `);
-      await transaction.execute(sql`
+    await transaction.execute(sql`
         UPDATE app.features SET runner_model = ${model} WHERE plan_id = ${planId}
       `);
-    });
   });
 }
 
@@ -884,8 +869,8 @@ export interface PlanWithRepo extends PlanRow {
   feature_status: string | null; // the linked feature's lifecycle status
   feature_error: string | null; // its failure detail, when generation failed
   verification_status: string | null; // latest verification for the feature
-  verification_results: string | null; // its per-criterion results JSON
-  verification_demo: string | null; // its demo JSON {"video": r2Key}
+  verification_results: CriterionResult[] | null;
+  verification_demo: { video?: string; caption?: string } | null;
 }
 
 // Plans across the given installations, newest first, with repo + generated-PR
@@ -906,7 +891,7 @@ export async function listPlansForInstallations(
     LEFT JOIN app.verifications v ON v.id = (
       SELECT MAX(id) FROM app.verifications WHERE feature_id = p.feature_id
     )
-    WHERE r.installation_id IN (${idList(installationIds)})
+    WHERE r.installation_id = ANY(${bigintArray(installationIds)})
     ORDER BY p.id DESC
     LIMIT ${limit}
   `);
@@ -935,10 +920,10 @@ export async function updatePlan(
   fields: {
     status?: string;
     analysis?: string;
-    questions?: string;
-    answers?: string;
+    questions?: ApiPlanQuestion[];
+    answers?: string[];
     plan?: string;
-    acceptance?: string;
+    acceptance?: string[];
     featureId?: number;
     error?: string;
     tier?: string;
@@ -949,10 +934,10 @@ export async function updatePlan(
     UPDATE app.plans SET
       status = COALESCE(${fields.status ?? null}::text, status),
       analysis = COALESCE(${fields.analysis ?? null}::text, analysis),
-      questions = COALESCE(${fields.questions ?? null}::jsonb, questions),
-      answers = COALESCE(${fields.answers ?? null}::jsonb, answers),
+      questions = COALESCE(${fields.questions ? JSON.stringify(fields.questions) : null}::jsonb, questions),
+      answers = COALESCE(${fields.answers ? JSON.stringify(fields.answers) : null}::jsonb, answers),
       plan = COALESCE(${fields.plan ?? null}::text, plan),
-      acceptance = COALESCE(${fields.acceptance ?? null}::jsonb, acceptance),
+      acceptance = COALESCE(${fields.acceptance ? JSON.stringify(fields.acceptance) : null}::jsonb, acceptance),
       feature_id = COALESCE(${fields.featureId ?? null}::bigint, feature_id),
       error = COALESCE(${fields.error ?? null}::text, error),
       tier = COALESCE(${fields.tier ?? null}::text, tier),
@@ -1042,7 +1027,7 @@ export async function finishFixAttempt(
 // rows in the same transaction, then let the partial unique index guard the
 // insert. Returns null when
 // another dispatch for this exact instance is already in flight. The sweep
-// threshold is STALL_CUTOFF_MODIFIER (shared/time.ts), the same cutoff that
+// threshold is STALL_AFTER_MINUTES (shared/time.ts), the same cutoff that
 // drives the 'stalled' UI label.
 export async function tryRecordReview(
   repositoryId: number,
@@ -1053,14 +1038,13 @@ export async function tryRecordReview(
   agentInstanceId: string,
   riskTier: string | null = null,
 ): Promise<number | null> {
-  return withDatabase((database) =>
-    database.transaction(async (transaction) => {
-      await transaction.execute(sql`
+  return withTransaction(async (transaction) => {
+    await transaction.execute(sql`
         UPDATE app.reviews SET status = 'failed', completed_at = CURRENT_TIMESTAMP
         WHERE agent_instance_id = ${agentInstanceId} AND status = 'running'
-          AND created_at < CURRENT_TIMESTAMP + ${STALL_CUTOFF_MODIFIER}::interval
+          AND created_at < ${minutesAgo(STALL_AFTER_MINUTES)}
       `);
-      const result = await transaction.execute<{ id: number }>(sql`
+    const result = await transaction.execute<{ id: number }>(sql`
         INSERT INTO app.reviews
           (repository_id, installation_id, pr_number, trigger_event, status,
            agent_slug, agent_instance_id, risk_tier)
@@ -1069,9 +1053,8 @@ export async function tryRecordReview(
         ON CONFLICT DO NOTHING
         RETURNING id
       `);
-      return result.rows[0]?.id ?? null;
-    }),
-  );
+    return result.rows[0]?.id ?? null;
+  });
 }
 
 // Called by the post_review tool once the agent has published to GitHub.

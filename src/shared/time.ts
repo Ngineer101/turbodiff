@@ -23,5 +23,3 @@ export function parseUtc(ts: string): number {
 // running counts must all agree on this cutoff, so they all derive from here.
 export const STALL_AFTER_MINUTES = 20;
 export const STALL_AFTER_MS = STALL_AFTER_MINUTES * 60 * 1000;
-// PostgreSQL interval literal for the same cutoff, interpolated into data-layer queries.
-export const STALL_CUTOFF_MODIFIER = `-${STALL_AFTER_MINUTES} minutes`;
