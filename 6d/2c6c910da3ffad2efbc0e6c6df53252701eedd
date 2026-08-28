@@ -1,0 +1,23 @@
+src/http/api.worker.test.ts
+  s_140622c634f845::t_00cb0a115ac6e1 72-74,270-272,914-918,920-926,928-930,974-978,999-1003
+src/services/artifacts.worker.test.ts
+  s_140622c634f845::t_00cb0a115ac6e1 15,95-96
+src/data/db.worker.test.ts
+  s_140622c634f845::t_00cb0a115ac6e1 286-287,589-592
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "6d2c6c910da3ffad2efbc0e6c6df53252701eedd",
+  "prompts": {},
+  "sessions": {
+    "s_140622c634f845": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a048c4-df71-7811-aa11-c17f78944a00",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
