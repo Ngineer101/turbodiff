@@ -1,6 +1,7 @@
 import type { RepositoryRow } from '../data/db.ts';
 import { githubJson, githubJsonCached, githubPaginate } from '../integrations/github/client.ts';
 import type { ApiFileSave, ApiRepoFile, ApiRepoTree, ApiTreeEntry } from '../shared/api-types.ts';
+import { binaryPreviewKind } from '../shared/binary-preview.ts';
 import { isString } from '../shared/json.ts';
 
 // Browser codebase viewer/editor: all repo content is read and written
@@ -138,7 +139,16 @@ export async function readFile(
     // thrown message by githubRequest. v1 shows a notice instead of falling
     // back to git/blobs.
     if (err instanceof Error && err.message.includes('too_large')) {
-      return { path, ref, sha: '', size: 0, text: null, binary: false, too_large: true };
+      return {
+        path,
+        ref,
+        sha: '',
+        size: 0,
+        text: null,
+        binary: false,
+        too_large: true,
+        content_base64: null,
+      };
     }
     throw err;
   }
@@ -151,12 +161,20 @@ export async function readFile(
     text: null,
     binary: false,
     too_large: false,
+    content_base64: null,
   };
   // Symlinks/submodules (and any response without base64 content) have no
   // text to show — render as binary rather than erroring.
   if (!isString(data.content) || data.encoding !== 'base64') {
     file.binary = true;
     return file;
+  }
+  // Previewable types ship their bytes regardless of UTF-8 validity — a
+  // small uncompressed PDF can be pure ASCII and still needs a preview.
+  // GitHub's contents API base64 contains newlines; strip them so the
+  // client can atob directly.
+  if (binaryPreviewKind(path)) {
+    file.content_base64 = data.content.replace(/\s+/g, '');
   }
   const text = decodeBase64Text(data.content);
   if (text === null) file.binary = true;

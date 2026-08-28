@@ -4,6 +4,8 @@ import {
   ArrowLeft,
   Check,
   ChevronDown,
+  Code,
+  Eye,
   GitBranch,
   PanelLeftClose,
   PanelLeftOpen,
@@ -14,6 +16,7 @@ import { lazy, Suspense, useMemo, useRef, useState } from 'react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { toast } from 'sonner';
 import type { ApiFileSave, ApiRepoCode } from '../../shared/api-types.ts';
+import { binaryPreviewKind, isSvgPath } from '../../shared/binary-preview.ts';
 import { api, ApiError } from '../lib/api.ts';
 import {
   DIFF_PREVIEW_MAX_LINES,
@@ -24,6 +27,12 @@ import {
 } from '../lib/line-diff.ts';
 import { repoCodeQuery, repoFileQuery } from '../lib/queries.ts';
 import { cn } from '../lib/utils.ts';
+import {
+  FontPreview,
+  ImagePreview,
+  PdfPreview,
+  SvgPreview,
+} from '../components/binary-preview.tsx';
 import { RepoTree } from '../components/repo-tree.tsx';
 import { EmptyState, Muted, PageTitle } from '../components/section.tsx';
 import { Button, buttonVariants } from '../components/ui/button.tsx';
@@ -338,6 +347,10 @@ function FilePane({
     setWrapState(next);
     localStorage.setItem(WRAP_KEY, next ? 'on' : 'off');
   };
+  // SVG opens as a rendered preview by default, toggleable to the editable
+  // source view; editing always shows the editor.
+  const isSvg = isSvgPath(path);
+  const [svgSource, setSvgSource] = useState(false);
 
   const loadedText = file?.text ?? '';
   const dirty = editing && buffer !== (editBase.current?.text ?? '');
@@ -525,6 +538,34 @@ function FilePane({
       </div>
     );
   }
+  // Previewable binaries (images, PDFs, fonts) render in the editor's frame.
+  // Keyed on content_base64 presence, not `binary`, so symlinks/submodules
+  // (no content on either provider) and stale cached JSON without the field
+  // fall through to the card below. No Edit button here — the text-only save
+  // flow stays unreachable for binaries, exactly like today's card.
+  const binaryPreview = binaryPreviewKind(path);
+  if (binaryPreview && file.content_base64) {
+    return (
+      <div className="lg:flex lg:h-full lg:min-h-0 lg:flex-col">
+        <div className="flex flex-wrap items-center gap-2 pb-2">
+          {backButton}
+          <Muted className="ml-auto font-mono text-xs">{file.size} bytes</Muted>
+        </div>
+        <div className="h-[calc(100dvh-16rem)] min-h-96 overflow-hidden rounded-lg border border-line bg-surface lg:h-auto lg:min-h-0 lg:flex-1">
+          {binaryPreview.kind === 'image' ? (
+            <ImagePreview base64={file.content_base64} mime={binaryPreview.mime} alt={path} />
+          ) : binaryPreview.kind === 'pdf' ? (
+            <PdfPreview base64={file.content_base64} title={path} />
+          ) : (
+            <FontPreview
+              base64={file.content_base64}
+              family={`preview-${file.sha.slice(0, 8)}`}
+            />
+          )}
+        </div>
+      </div>
+    );
+  }
   if (file.binary || file.text === null) {
     return (
       <div>
@@ -563,6 +604,26 @@ function FilePane({
               Unsaved changes
             </span>
           ) : null}
+          {isSvg && !editing ? (
+            <button
+              type="button"
+              onClick={() => setSvgSource(!svgSource)}
+              aria-pressed={!svgSource}
+              title={svgSource ? 'Preview' : 'View source'}
+              className={cn(
+                'cursor-pointer rounded-md p-1.5 transition-colors',
+                !svgSource
+                  ? 'bg-accent/10 text-accent-bright'
+                  : 'text-mute hover:bg-raised/60 hover:text-ink',
+              )}
+            >
+              {svgSource ? (
+                <Eye className="size-3.5" aria-hidden />
+              ) : (
+                <Code className="size-3.5" aria-hidden />
+              )}
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={() => setWrap(!wrap)}
@@ -595,20 +656,26 @@ function FilePane({
         </span>
       </div>
       <div className="h-[calc(100dvh-16rem)] min-h-96 overflow-hidden rounded-lg border border-line bg-surface lg:h-auto lg:min-h-0 lg:flex-1">
-        <Suspense
-          fallback={<div className="h-full animate-pulse bg-surface" aria-label="Loading editor" />}
-        >
-          <CodeEditor
-            value={editing ? buffer : loadedText}
-            onChange={setBuffer}
-            path={path}
-            readOnly={!editing}
-            wrap={wrap}
-            onSave={() => {
-              if (editing && dirty) openSave();
-            }}
-          />
-        </Suspense>
+        {isSvg && !svgSource && !editing ? (
+          <SvgPreview text={loadedText} alt={path} />
+        ) : (
+          <Suspense
+            fallback={
+              <div className="h-full animate-pulse bg-surface" aria-label="Loading editor" />
+            }
+          >
+            <CodeEditor
+              value={editing ? buffer : loadedText}
+              onChange={setBuffer}
+              path={path}
+              readOnly={!editing}
+              wrap={wrap}
+              onSave={() => {
+                if (editing && dirty) openSave();
+              }}
+            />
+          </Suspense>
+        )}
       </div>
 
       <Dialog open={saveOpen} onOpenChange={setSaveOpen}>

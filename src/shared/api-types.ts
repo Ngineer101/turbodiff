@@ -550,6 +550,9 @@ export interface ApiRepoFile {
   text: string | null; // null when binary or too_large
   binary: boolean;
   too_large: boolean; // > 1 MB (both providers) — viewer shows a notice
+  // Base64 blob bytes, set only for previewable binary types (see
+  // shared/binary-preview.ts) under the 1 MB cap — null otherwise.
+  content_base64: string | null;
 }
 
 export interface ApiFileSave {

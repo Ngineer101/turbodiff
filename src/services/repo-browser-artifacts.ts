@@ -8,6 +8,7 @@ import { readArtifactsTreeDirect } from '../integrations/artifacts/content.ts';
 import { resolveWorkspaceRemote } from '../integrations/git/provider.ts';
 import type { WorkspaceRemote } from '../integrations/git/remotes.ts';
 import type { ApiFileSave, ApiRepoFile, ApiRepoTree } from '../shared/api-types.ts';
+import { binaryPreviewKind } from '../shared/binary-preview.ts';
 import { parseLsTreeZ } from './ls-tree.ts';
 import {
   decodeBase64Text,
@@ -212,16 +213,47 @@ export async function readFileArtifacts(
   if (type === 'tree') throw new RepoBrowserError('path is a directory, not a file', 400);
   if (type !== 'blob') {
     // Submodule (commit) entries have no text to show — render as binary.
-    return { path, ref, sha, size: 0, text: null, binary: true, too_large: false };
+    return {
+      path,
+      ref,
+      sha,
+      size: 0,
+      text: null,
+      binary: true,
+      too_large: false,
+      content_base64: null,
+    };
   }
   const size = Number(sizeRaw);
   if (size > FILE_CAP) {
-    return { path, ref, sha, size, text: null, binary: false, too_large: true };
+    return {
+      path,
+      ref,
+      sha,
+      size,
+      text: null,
+      binary: false,
+      too_large: true,
+      content_base64: null,
+    };
   }
   // The same exec emitted the bounded blob as base64 after the metadata,
   // avoiding a third Sandbox round trip for every file click.
-  const text = decodeBase64Text(encoded.join('').trim());
-  return { path, ref, sha, size, text, binary: text === null, too_large: false };
+  const b64 = encoded.join('').trim();
+  const text = decodeBase64Text(b64);
+  return {
+    path,
+    ref,
+    sha,
+    size,
+    text,
+    binary: text === null,
+    too_large: false,
+    // Previewable types ship their bytes regardless of UTF-8 validity (a
+    // small uncompressed PDF can be pure ASCII). The exec only emits the
+    // blob under FILE_CAP, so `b64 === ''` also covers the unemitted case.
+    content_base64: b64 !== '' && binaryPreviewKind(path) ? b64 : null,
+  };
 }
 
 const STALE_SAVE = 'file changed on the branch since you opened it — reload and reapply your edit';
