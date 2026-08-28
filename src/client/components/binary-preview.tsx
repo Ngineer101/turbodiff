@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 // Mirror of the decode in repo-browser.ts (decodeBase64Text), minus the
 // text step — the server already strips whitespace from the base64.
-function base64ToBytes(b64: string): Uint8Array {
+function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
   const bin = atob(b64);
   return Uint8Array.from(bin, (char) => char.charCodeAt(0));
 }
