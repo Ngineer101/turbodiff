@@ -32,6 +32,11 @@ vp run db:verify
 Every migration runs in its own transaction. The runner serializes deploys with a PostgreSQL
 advisory lock and refuses to continue if an already-applied migration's checksum changed.
 
+The production deployment workflow runs `db:migrate` and `db:verify` against the existing
+PlanetScale database using the `POSTGRES_DATABASE_URL` repository secret before it deploys the
+Worker. These steps only evolve the schema; neither PlanetScale nor Hyperdrive is provisioned by
+the pipeline.
+
 The database user used by Hyperdrive needs `USAGE` on the `app` and `auth` schemas and normal
 `SELECT`, `INSERT`, `UPDATE`, and `DELETE` privileges on their tables and sequences. It should not
 be a superuser or own the database. Run migrations with a separate owner role.

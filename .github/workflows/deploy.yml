@@ -1,10 +1,12 @@
 # Production deploy: every push to main first passes the same quality, test,
-# build, and dry-run gates as a pull request. PlanetScale and Hyperdrive are
-# externally managed; this workflow only deploys the Worker + sandbox image.
+# build, and dry-run gates as a pull request. It then migrates the existing
+# PlanetScale database before deploying the Worker + sandbox image. It never
+# provisions a database or Hyperdrive configuration.
 #
-# Requires two repository secrets:
+# Requires three repository secrets:
 #   CLOUDFLARE_API_TOKEN   — Workers Scripts:Edit, Containers:Edit
 #   CLOUDFLARE_ACCOUNT_ID
+#   POSTGRES_DATABASE_URL  — direct PlanetScale PostgreSQL connection
 name: Deploy
 
 on:
@@ -65,6 +67,16 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      - name: Apply PostgreSQL migrations
+        run: pnpm vp run db:migrate
+        env:
+          DATABASE_URL: ${{ secrets.POSTGRES_DATABASE_URL }}
+
+      - name: Verify PostgreSQL schema
+        run: pnpm vp run db:verify
+        env:
+          DATABASE_URL: ${{ secrets.POSTGRES_DATABASE_URL }}
 
       - name: Deploy
         run: pnpm vp run deploy

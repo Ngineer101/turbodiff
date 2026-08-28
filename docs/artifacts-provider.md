@@ -59,8 +59,8 @@ branch; everything here is production code.
    fails to provision otherwise).
 2. Namespace `turbodiff-repos` — must match `ARTIFACTS_NAMESPACE` in
    `src/integrations/git/remotes.ts` and the `triggers.events` filters.
-3. Apply PostgreSQL migrations explicitly to PlanetScale, then use the normal CI path to validate
-   and deploy the Worker. The pipeline does not provision or mutate database resources.
+3. The deployment pipeline applies PostgreSQL migrations to the existing PlanetScale database
+   before deploying the Worker. It does not provision PlanetScale or Hyperdrive resources.
 
 Smoke test after deploy:
 

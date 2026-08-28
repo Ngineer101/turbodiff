@@ -315,11 +315,10 @@ body in `x-hub-signature-256: sha256=<hex>`).
 ## Deploy
 
 Every commit to `main` deploys automatically via
-[GitHub Actions](.github/workflows/deploy.yml). The workflow validates and deploys only the
-Worker and sandbox container image; PlanetScale and Hyperdrive are managed outside the pipeline.
-Apply and verify schema migrations explicitly before a Worker release that depends on them. The
-workflow needs `CLOUDFLARE_API_TOKEN` (Workers Scripts:Edit, Containers:Edit) and
-`CLOUDFLARE_ACCOUNT_ID`.
+[GitHub Actions](.github/workflows/deploy.yml). The workflow applies and verifies migrations on
+the existing PlanetScale database, then deploys the Worker and sandbox container image. It does
+not provision PlanetScale or Hyperdrive. The workflow needs `POSTGRES_DATABASE_URL`,
+`CLOUDFLARE_API_TOKEN` (Workers Scripts:Edit, Containers:Edit), and `CLOUDFLARE_ACCOUNT_ID`.
 
 Pull requests from branches in this repository (not forks) also get a
 preview: [`preview.yml`](.github/workflows/preview.yml) uploads a Worker
