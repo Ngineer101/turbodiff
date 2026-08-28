@@ -23,6 +23,7 @@ import {
   type DiffHunk,
 } from '../lib/line-diff.ts';
 import { repoCodeQuery, repoFileQuery } from '../lib/queries.ts';
+import { useIsDesktop } from '../lib/use-is-desktop.ts';
 import { cn } from '../lib/utils.ts';
 import { RepoTree } from '../components/repo-tree.tsx';
 import { EmptyState, Muted, PageTitle } from '../components/section.tsx';
@@ -112,15 +113,14 @@ function Browser({
       search: { ref },
     });
 
-  // The desktop tree panel collapses to a thin rail; remembered across
-  // visits since it's a workspace-layout preference (same as the cockpit).
-  const [treeOpen, setTreeOpenState] = useState(
-    () => localStorage.getItem('turbodiff.codeTree') !== 'closed',
-  );
-  const setTreeOpen = (open: boolean) => {
-    setTreeOpenState(open);
-    localStorage.setItem('turbodiff.codeTree', open ? 'open' : 'closed');
-  };
+  // Entering the code browser always opens the tree — it's the point of
+  // focus (see RepoTree autoFocus) — so the old turbodiff.codeTree
+  // persistence no longer has anywhere to take effect; drop it.
+  const [treeOpen, setTreeOpen] = useState(true);
+  // Focus hand-off is desktop-only: on mobile the tree is either the whole
+  // screen (no file) or hidden entirely, and moving focus there is wrong
+  // both ways.
+  const isDesktop = useIsDesktop();
 
   const segments = filePath ? filePath.split('/') : [];
 
@@ -193,6 +193,7 @@ function Browser({
               repoId={repoId}
               treeRef={refName}
               activePath={filePath || null}
+              autoFocus={isDesktop}
               onSelectFile={(path) => goTo(path)}
               fileHref={(path) =>
                 `/repos/${repoId}/code/${path}?ref=${encodeURIComponent(refName)}`

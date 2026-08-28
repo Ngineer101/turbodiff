@@ -80,6 +80,7 @@ export function ShortcutHelp({
   useHotkeys('?', onToggle, { useKey: true, enabled }, [isDesktop]);
   const navRows: ShortcutRow[] = [
     { keys: ['⌘K'], label: 'Jump to a page, task, or repo' },
+    { keys: ['⌘B'], label: 'Collapse / expand the sidebar' },
     ...navShortcuts(nav).map((s) => ({ keys: [s.key], label: s.label })),
     { keys: ['?'], label: 'Keyboard shortcuts' },
   ];

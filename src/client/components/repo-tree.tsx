@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { ApiTreeEntry } from '../../shared/api-types.ts';
 import { repoTreeQuery } from '../lib/queries.ts';
 import { cn } from '../lib/utils.ts';
@@ -39,6 +39,7 @@ export function RepoTree({
   onSelectFile,
   fileHref,
   onPrefetchFile,
+  autoFocus = false,
 }: {
   repoId: number;
   // The branch (git ref) — named treeRef because `ref` is reserved in React.
@@ -50,9 +51,34 @@ export function RepoTree({
   // Hover/focus intent: warm the file query before the click (same idea as
   // the router's preload-on-intent, one level deeper).
   onPrefetchFile: (path: string) => void;
+  // Once rows exist, move keyboard focus to the active (or first) row —
+  // the tree is the code page's point of entry on desktop.
+  autoFocus?: boolean;
 }) {
+  const navRef = useRef<HTMLElement>(null);
+  const didFocus = useRef(false);
+  // Rows render as directory queries resolve, so retry after every render
+  // (no dependency array on purpose) until the target row exists. Deep
+  // links wait for the active file's row (its ancestor dirs start
+  // expanded); a bare tree takes the first row. The didFocus ref makes it
+  // one-shot, so later activePath changes never re-steal focus.
+  useEffect(() => {
+    if (!autoFocus || didFocus.current || !navRef.current) return;
+    const target = navRef.current.querySelector<HTMLElement>(
+      activePath ? '[data-tree-row][aria-current="true"]' : '[data-tree-row]',
+    );
+    if (!target) return;
+    didFocus.current = true;
+    // Don't steal focus the user has already placed somewhere.
+    if (document.activeElement === document.body) target.focus();
+  });
   return (
-    <nav aria-label="Repository files" className="font-mono" onKeyDown={onTreeKeyDown}>
+    <nav
+      ref={navRef}
+      aria-label="Repository files"
+      className="font-mono"
+      onKeyDown={onTreeKeyDown}
+    >
       <DirContents
         repoId={repoId}
         treeRef={treeRef}

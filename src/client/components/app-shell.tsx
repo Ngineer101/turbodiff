@@ -5,6 +5,8 @@ import {
   Keyboard,
   LayoutDashboard,
   LogOut,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plug,
   Repeat,
   Search,
@@ -45,6 +47,9 @@ export const SIDEBAR_NAV = [
   { to: '/settings', label: 'Settings', icon: Settings },
 ] as const;
 
+// Sidebar collapse preference (shadcn-style icon rail; see AppShell).
+const SIDEBAR_KEY = 'turbodiff.sidebar';
+
 const BOTTOM_NAV = [
   { to: '/', label: 'Board', short: 'Board', exact: true, icon: LayoutDashboard },
   { to: '/agents', label: 'Agents', short: 'Agents', icon: Bot },
@@ -72,7 +77,7 @@ function isActive(pathname: string, to: string, exact?: boolean): boolean {
   return exact ? pathname === to : pathname.startsWith(to);
 }
 
-function SidebarNav() {
+function SidebarNav({ collapsed }: { collapsed: boolean }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   return (
     <nav aria-label="Main" className="flex flex-col gap-0.5">
@@ -83,16 +88,22 @@ function SidebarNav() {
             key={to}
             to={to}
             aria-current={active ? 'page' : undefined}
+            // Collapsed rows lose their visible label, but keep the digit
+            // shortcut hint in the tooltip (the hotkeys themselves are bound
+            // in AppShell, so they work either way).
+            title={collapsed ? `${label} (${i + 1})` : undefined}
+            aria-label={collapsed ? label : undefined}
             className={cn(
-              'flex items-center gap-2.5 border-l-2 px-3 py-[7px] font-mono text-[11px] tracking-[0.14em] uppercase transition-colors',
+              'flex items-center border-l-2 font-mono text-[11px] tracking-[0.14em] uppercase transition-colors',
+              collapsed ? 'justify-center px-0 py-2' : 'gap-2.5 px-3 py-[7px]',
               active
                 ? 'border-accent-bright bg-surface text-ink'
                 : 'border-transparent text-mute hover:bg-surface/60 hover:text-ink-dim',
             )}
           >
             <Icon className="size-3.5" aria-hidden />
-            {label}
-            <Kbd className="ml-auto">{i + 1}</Kbd>
+            <span className={cn(collapsed && 'hidden')}>{label}</span>
+            <Kbd className={cn('ml-auto', collapsed && 'hidden')}>{i + 1}</Kbd>
           </Link>
         );
       })}
@@ -135,19 +146,23 @@ function BottomTabs() {
   );
 }
 
-function UserBlock({ me }: { me: ApiMe }) {
+function UserBlock({ me, collapsed = false }: { me: ApiMe; collapsed?: boolean }) {
   return (
-    <div className="flex items-center justify-between gap-2">
-      <span className="truncate font-mono text-xs text-mute">
+    <div className={cn('flex items-center gap-2', collapsed ? 'justify-center' : 'justify-between')}>
+      <span className={cn('truncate font-mono text-xs text-mute', collapsed && 'hidden')}>
         {me.login ? `@${me.login}` : me.name}
       </span>
       <form method="post" action="/auth/logout">
         <button
-          className="flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-xs text-mute hover:bg-raised hover:text-ink"
+          className={cn(
+            'flex cursor-pointer items-center gap-1.5 rounded-md text-xs text-mute hover:bg-raised hover:text-ink',
+            collapsed ? 'p-1.5' : 'px-2 py-1',
+          )}
           title="Sign out"
+          aria-label="Sign out"
         >
           <LogOut className="size-3.5" aria-hidden />
-          Sign out
+          <span className={cn(collapsed && 'hidden')}>Sign out</span>
         </button>
       </form>
     </div>
@@ -191,43 +206,117 @@ export function AppShell({ me, children }: { me: ApiMe; children: ReactNode }) {
     { preventDefault: true, enableOnFormTags: true },
     [],
   );
-  // The cockpit's diff pane needs room; the code browser gets the whole
-  // viewport — a full-width, full-height workspace on desktop. codeRoute
-  // lives in lib/layout.ts: Artifacts repos have negative ids, which a
-  // bare \d+ here silently dropped into the reading-width container.
-  const wide = pathname.startsWith('/factory/features/');
+  // The code browser gets the whole viewport — a full-width, full-height
+  // workspace on desktop — and forces the sidebar collapsed (below).
+  // codeRoute lives in lib/layout.ts: Artifacts repos have negative ids,
+  // which a bare \d+ here silently dropped into the reading-width container.
+  // pathname above is the *resolved* location, so the sidebar snaps
+  // collapsed in the same frame the code page commits, matching the
+  // container-width behavior.
   const code = codeRoute(pathname);
+  // Sidebar collapse, shadcn-style (icon rail + ⌘B + persistence + a
+  // data-state attribute on the aside), hand-rolled with the repo's tokens.
+  // Saved preference — every route except the code browser.
+  const [prefOpen, setPrefOpen] = useState(() => localStorage.getItem(SIDEBAR_KEY) !== 'closed');
+  // Route-local override for the code browser: entering always starts
+  // collapsed (the editor wants the room); toggling there is remembered only
+  // while on the route and never touches the saved preference.
+  const [codeOpen, setCodeOpen] = useState(false);
+  // Reset the override on every non-code → code transition (React's
+  // adjust-state-during-render pattern — no effect, so there's no
+  // one-frame flash of the stale state).
+  const [prevCode, setPrevCode] = useState(code);
+  if (code !== prevCode) {
+    setPrevCode(code);
+    if (code) setCodeOpen(false);
+  }
+  const sidebarOpen = code ? codeOpen : prefOpen;
+  const toggleSidebar = () => {
+    if (code) {
+      setCodeOpen((prev) => !prev);
+    } else {
+      setPrefOpen((prev) => {
+        localStorage.setItem(SIDEBAR_KEY, prev ? 'closed' : 'open');
+        return !prev;
+      });
+    }
+  };
+  useHotkeys(
+    'mod+b',
+    toggleSidebar,
+    { enabled: () => isDesktop && noOverlayOpen(), preventDefault: true },
+    [isDesktop, code],
+  );
+  // The cockpit's diff pane needs room, so that route gets a much wider
+  // container than the reading-width default.
+  const wide = pathname.startsWith('/factory/features/');
   // The board's three lanes need more room than the reading-width default.
   const board = pathname === '/';
   return (
     <div className="min-h-dvh md:flex">
-      <aside className="sticky top-0 hidden h-dvh w-52 shrink-0 flex-col justify-between border-r border-line bg-surface/50 p-4 md:flex">
+      <aside
+        data-state={sidebarOpen ? 'expanded' : 'collapsed'}
+        className={cn(
+          'sticky top-0 hidden h-dvh shrink-0 flex-col justify-between border-r border-line bg-surface/50 transition-[width] duration-200 md:flex',
+          sidebarOpen ? 'w-52 p-4' : 'w-12 items-center p-2',
+        )}
+      >
         <div className="space-y-6">
-          <Logo />
+          <div
+            className={cn('flex items-center', sidebarOpen ? 'justify-between' : 'justify-center')}
+          >
+            {sidebarOpen ? <Logo /> : null}
+            <button
+              type="button"
+              onClick={toggleSidebar}
+              title={sidebarOpen ? 'Collapse sidebar (⌘B)' : 'Expand sidebar (⌘B)'}
+              aria-label={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+              aria-expanded={sidebarOpen}
+              className="cursor-pointer rounded-md p-1 text-mute transition-colors hover:bg-raised/60 hover:text-ink"
+            >
+              {sidebarOpen ? (
+                <PanelLeftClose className="size-3.5" aria-hidden />
+              ) : (
+                <PanelLeftOpen className="size-3.5" aria-hidden />
+              )}
+            </button>
+          </div>
           <div className="space-y-3">
             <button
               type="button"
               onClick={() => setPaletteOpen(true)}
-              className="flex w-full cursor-pointer items-center gap-2 rounded-md border border-line-2/70 bg-bg/60 px-2.5 py-1.5 font-mono text-[11px] text-mute transition-colors hover:border-line-2 hover:text-ink"
+              title={sidebarOpen ? undefined : 'Jump to… (⌘K)'}
+              aria-label={sidebarOpen ? undefined : 'Jump to…'}
+              className={cn(
+                'flex cursor-pointer items-center rounded-md font-mono text-[11px] text-mute transition-colors',
+                sidebarOpen
+                  ? 'w-full gap-2 border border-line-2/70 bg-bg/60 px-2.5 py-1.5 hover:border-line-2 hover:text-ink'
+                  : 'p-1.5 hover:bg-raised/60 hover:text-ink',
+              )}
             >
               <Search className="size-3" aria-hidden />
-              Jump to&hellip;
-              <Kbd className="ml-auto">⌘K</Kbd>
+              <span className={cn(!sidebarOpen && 'hidden')}>Jump to&hellip;</span>
+              <Kbd className={cn('ml-auto', !sidebarOpen && 'hidden')}>⌘K</Kbd>
             </button>
-            <SidebarNav />
+            <SidebarNav collapsed={!sidebarOpen} />
           </div>
         </div>
         <div className="space-y-2">
           <button
             type="button"
             onClick={() => setHelpOpen(true)}
-            className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1 font-mono text-[11px] text-mute transition-colors hover:bg-raised/60 hover:text-ink"
+            title={sidebarOpen ? undefined : 'Shortcuts (?)'}
+            aria-label={sidebarOpen ? undefined : 'Shortcuts'}
+            className={cn(
+              'flex cursor-pointer items-center rounded-md font-mono text-[11px] text-mute transition-colors hover:bg-raised/60 hover:text-ink',
+              sidebarOpen ? 'w-full gap-2 px-2 py-1' : 'p-1.5',
+            )}
           >
             <Keyboard className="size-3.5" aria-hidden />
-            Shortcuts
-            <Kbd className="ml-auto">?</Kbd>
+            <span className={cn(!sidebarOpen && 'hidden')}>Shortcuts</span>
+            <Kbd className={cn('ml-auto', !sidebarOpen && 'hidden')}>?</Kbd>
           </button>
-          <UserBlock me={me} />
+          <UserBlock me={me} collapsed={!sidebarOpen} />
         </div>
       </aside>
 
