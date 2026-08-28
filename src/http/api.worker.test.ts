@@ -289,7 +289,7 @@ describe('pipeline cost reporting', () => {
     // exercises; the assertions below fail on any drift in that shape.
     const usage = (await usageResponse.json()) as ApiUsage;
 
-    // SQLite sums doubles in its own order, so never compare these exactly.
+    // Decimal aggregation and JSON serialization can differ at the least-significant digits.
     expect(board.stats.month_pipeline_cost_usd).toBeCloseTo(0.12345, 6);
     expect(board.stats.month_pipeline_cost_usd).toBeCloseTo(usage.stats.month_pipeline_cost_usd, 6);
 

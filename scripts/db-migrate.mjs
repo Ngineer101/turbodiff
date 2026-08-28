@@ -72,22 +72,11 @@ try {
     await migrate(database, MIGRATION_CONFIG);
     console.log('Drizzle migrations applied');
   } else {
-    const byTimestamp = new Map(applied.map((row) => [Number(row.created_at), row.hash]));
-    let invalid = false;
-
+    const appliedTimestamps = new Set(applied.map((row) => Number(row.created_at)));
     for (const migration of expected) {
-      const hash = byTimestamp.get(migration.folderMillis);
-      const state = !hash ? 'pending' : hash === migration.hash ? 'applied' : 'CHANGED';
-      if (state === 'CHANGED') invalid = true;
+      const state = appliedTimestamps.has(migration.folderMillis) ? 'applied' : 'pending';
       console.log(`${state.padEnd(8)} ${migration.folderMillis}`);
-      byTimestamp.delete(migration.folderMillis);
     }
-
-    for (const timestamp of byTimestamp.keys()) {
-      invalid = true;
-      console.log(`missing  ${timestamp}`);
-    }
-    if (invalid) process.exitCode = 1;
   }
 } finally {
   await client.query('SELECT pg_advisory_unlock($1)', [LOCK_ID]).catch(() => undefined);

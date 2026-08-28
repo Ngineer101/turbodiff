@@ -14,18 +14,7 @@ types.setTypeParser(1184, (value) => new Date(value).toISOString());
 types.setTypeParser(114, (value) => value);
 types.setTypeParser(3802, (value) => value);
 
-export type Database = NodePgDatabase<typeof schema>;
-
-function client(applicationName: string): Client {
-  return new Client({
-    connectionString: env.HYPERDRIVE.connectionString,
-    options: '-c search_path=app,auth,public',
-    connectionTimeoutMillis: 10_000,
-    query_timeout: 55_000,
-    statement_timeout: 55_000,
-    application_name: applicationName,
-  });
-}
+type Database = NodePgDatabase<typeof schema>;
 
 /**
  * Run one logical data-layer operation on a fresh Hyperdrive connection.
@@ -35,7 +24,14 @@ function client(applicationName: string): Client {
 export async function withDatabase<Result>(
   operation: (database: Database) => Promise<Result>,
 ): Promise<Result> {
-  const connection = client('turbodiff-worker');
+  const connection = new Client({
+    connectionString: env.HYPERDRIVE.connectionString,
+    options: '-c search_path=app,auth,public',
+    connectionTimeoutMillis: 10_000,
+    query_timeout: 55_000,
+    statement_timeout: 55_000,
+    application_name: 'turbodiff-worker',
+  });
   await connection.connect();
   try {
     return await operation(drizzle(connection, { schema }));
@@ -64,18 +60,19 @@ export async function execute(query: SQL): Promise<number> {
 // Better Auth owns several queries per request, so its Drizzle adapter uses a
 // small Pool instead of opening and closing a Client between adapter calls.
 // Hyperdrive remains the actual connection pool in front of PlanetScale.
-let authPool: Pool | undefined;
 let authDb: Database | undefined;
 
 export function authDatabase(): Database {
-  authPool ??= new Pool({
-    connectionString: env.HYPERDRIVE.connectionString,
-    options: '-c search_path=auth,app,public',
-    max: 5,
-    connectionTimeoutMillis: 10_000,
-    idleTimeoutMillis: 30_000,
-    application_name: 'turbodiff-auth',
-  });
-  authDb ??= drizzle(authPool, { schema });
+  authDb ??= drizzle(
+    new Pool({
+      connectionString: env.HYPERDRIVE.connectionString,
+      options: '-c search_path=auth,app,public',
+      max: 5,
+      connectionTimeoutMillis: 10_000,
+      idleTimeoutMillis: 30_000,
+      application_name: 'turbodiff-auth',
+    }),
+    { schema },
+  );
   return authDb;
 }

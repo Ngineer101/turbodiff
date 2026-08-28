@@ -66,9 +66,8 @@ function repoPrTupleList(pairs: { repositoryId: number; prNumber: number }[]): S
   );
 }
 
-// Reviews/fix attempts belonging to the exact (repository, PR) pairs. Native
-// PostgreSQL row constructors avoid the broader Cartesian candidate set the
-// former SQLite query had to fetch and filter in application code.
+// PostgreSQL row constructors constrain these queries to the exact
+// (repository, PR) pairs instead of a broader Cartesian candidate set.
 export async function listReviewsForRepoPrs(
   pairs: { repositoryId: number; prNumber: number }[],
 ): Promise<ReviewActivityRow[]> {

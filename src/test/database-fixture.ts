@@ -8,16 +8,16 @@ types.setTypeParser(20, Number);
 types.setTypeParser(1700, Number);
 types.setTypeParser(1083, (value) => value.slice(0, 5));
 
-export interface QueryMeta {
+interface QueryMeta {
   changes: number;
 }
 
-export interface QueryRunResult {
+interface QueryRunResult {
   success: true;
   meta: QueryMeta;
 }
 
-export interface QueryRowsResult<Row> {
+interface QueryRowsResult<Row> {
   success: true;
   results: Row[];
   meta: QueryMeta;
@@ -67,7 +67,7 @@ async function withClient<Result>(operation: (sql: Client) => Promise<Result>): 
   }
 }
 
-export class PreparedQuery {
+class PreparedQuery {
   readonly text: string;
   readonly values: BindValue[];
 
@@ -107,7 +107,7 @@ export class PreparedQuery {
   }
 }
 
-export class TestDatabaseFixture {
+class TestDatabaseFixture {
   prepare(text: string): PreparedQuery {
     return new PreparedQuery(text);
   }
