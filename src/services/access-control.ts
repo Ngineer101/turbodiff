@@ -172,7 +172,7 @@ async function ensureGithubAdminOwner(
   accountLogin: string,
   isOrgAdmin: typeof userIsGithubOrgAdmin,
 ): Promise<void> {
-  if (user.devFake || !user.session.ghToken) return;
+  if (user.devFake) return;
   if (await hasMemberRow(organizationId, user.session.userId)) return;
   if (!(await isOrgAdmin(user, accountLogin))) return;
   await ensureOwnerMember(organizationId, user.session.userId);

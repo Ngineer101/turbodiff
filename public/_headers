@@ -1,12 +1,12 @@
 # Cache policy for Workers Static Assets (consumed by the platform, not
-# served). Content-hashed chunks and fonts are immutable; app.js/app.css
-# keep fixed names (the Worker shell references them statically) so they
-# stay on the platform default ETag revalidation — a chunk importing
-# "../app.js" would otherwise pin a stale entry forever.
+# served). Vite content-hashes every JS/CSS asset; the Worker resolves the
+# current names from /app/manifest.json when it renders the shell.
 /app/chunks/*
   Cache-Control: public, max-age=31536000, immutable
 /app/assets/*
   Cache-Control: public, max-age=31536000, immutable
+/app/manifest.json
+  Cache-Control: no-store
 /fonts/*
   Cache-Control: public, max-age=31536000, immutable
 /logo.png

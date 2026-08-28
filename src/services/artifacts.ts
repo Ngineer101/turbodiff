@@ -21,6 +21,7 @@ import {
   ARTIFACTS_REPO_DELETED,
   type ArtifactsEvent,
 } from '../shared/artifacts-events.ts';
+import { deleteRepositoryRef, recordRepositoryRef } from '../data/performance.ts';
 import { listChangeRequestsForRepo } from '../data/db.ts';
 import { refreshChangeRequest } from './change-requests.ts';
 import { enqueueFactoryMessage } from './factory-queue.ts';
@@ -170,16 +171,16 @@ export async function mintArtifactsCloneToken(
 // must stay idempotent (workflow steps can be retried).
 export async function applyArtifactsEvent(event: ArtifactsEvent): Promise<string> {
   if (isArtifactsPushedEvent(event)) {
-    const row = await recordArtifactsPush(
-      event.repoName,
-      event.eventTimestamp ?? new Date().toISOString(),
-    );
+    const pushedAt = event.eventTimestamp ?? new Date().toISOString();
+    const row = await recordArtifactsPush(event.repoName, pushedAt);
     if (!row) return `push to untracked repo ${event.repoName} ignored`;
     // Native CR upkeep — the PR-synchronize webhook replacement: a moved
     // source branch refreshes its CR (and re-reviews when the repo opted
     // into review-on-push); a moved target branch (e.g. a merge landed)
     // refreshes every open CR against it.
     const branch = event.ref.replace(/^refs\/heads\//, '');
+    if (/^0+$/.test(event.after)) await deleteRepositoryRef(row.id, branch);
+    else await recordRepositoryRef(row.id, branch, event.after, pushedAt);
     let refreshed = 0;
     for (const cr of await listChangeRequestsForRepo(row.id, 'open')) {
       if (cr.source_branch !== branch && cr.target_branch !== branch) continue;

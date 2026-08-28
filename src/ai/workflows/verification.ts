@@ -2,6 +2,7 @@ import { env, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from '
 import { getFeature, latestVerificationForFeature } from '../../data/db.ts';
 import { runVerification } from '../runners/verifier.ts';
 import { parseUtc } from '../../shared/time.ts';
+import { notifyFeatureLive } from '../../services/live-updates.ts';
 
 // Verification as a durable Workflow, for the same reason generation is one:
 // the queue consumer's 15-minute wall clock silently killed long verify runs
@@ -23,6 +24,7 @@ export class VerificationWorkflow extends WorkflowEntrypoint<unknown, Verificati
       { retries: { limit: 1, delay: '5 minutes' }, timeout: '40 minutes' },
       async () => {
         await runVerification(featureId);
+        await notifyFeatureLive(featureId);
       },
     );
     return 'done';

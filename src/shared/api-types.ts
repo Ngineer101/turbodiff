@@ -234,6 +234,9 @@ export interface ApiFeatureDetail {
   };
   repo: string; // "owner/name"
   provider: string; // 'github' | 'artifacts'
+  // Source-branch head for the immutable diff snapshot. A new commit changes
+  // the query key; comments/status-only updates keep the existing patch data.
+  diff_version: string | null;
   // Native change-request number for Artifacts repos ("CR #3").
   cr_number: number | null;
   // Native check runs (Artifacts repos): repo check, review verdict, verify.
@@ -275,6 +278,15 @@ export interface ApiFeatureDetail {
   verification: ApiVerificationSummary | null;
   // Every generate/verify/fix run recorded for this feature, chronological.
   runs: ApiAgentRun[];
+}
+
+// The cockpit paints its controls, status, evidence, and conversations from
+// the summary response. Large patch strings arrive independently so they do
+// not block the first useful frame or get re-downloaded on every live update.
+export interface ApiFeatureDiff {
+  version: string | null;
+  files: ApiFeatureDetail['files'];
+  more_files: number;
 }
 
 export interface ApiAgentSummary {
@@ -355,6 +367,7 @@ export interface ApiMe {
   github_connected: boolean;
   github_app_slug: string;
   vapid_public_key: string;
+  installation_ids: number[];
 }
 
 // Native org roles (migrations/0031_organizations.sql), scoped per

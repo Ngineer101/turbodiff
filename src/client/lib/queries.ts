@@ -10,6 +10,7 @@ import type {
   ApiBoard,
   ApiChatList,
   ApiFeatureDetail,
+  ApiFeatureDiff,
   ApiIntegrations,
   ApiMe,
   ApiOrgMembers,
@@ -108,6 +109,19 @@ export const featureQuery = (id: number) =>
       if (fixInFlight) return LIVE_POLL_MS;
       return false;
     },
+  });
+
+export const featureDiffQuery = (id: number, version: string | null) =>
+  queryOptions({
+    queryKey: ['feature-diff', id, version],
+    queryFn: () =>
+      api.get<ApiFeatureDiff>(
+        `/api/factory/features/${id}/diff${version ? `?v=${encodeURIComponent(version)}` : ''}`,
+      ),
+    // A PR/CR diff is a snapshot. Mutations that push a new commit explicitly
+    // invalidate this key; status/comment refreshes leave it untouched.
+    staleTime: Infinity,
+    gcTime: 30 * 60_000,
   });
 
 // A user chat message in one of these states has a turn in flight — the

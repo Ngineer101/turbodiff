@@ -23,10 +23,12 @@ import { runPlanAnalyze, runPlanRefine } from './ai/runners/planner.ts';
 import { dispatchNativeCrReviews } from './ai/review/native-dispatch.ts';
 import { runQueuedCrMerge } from './services/change-requests.ts';
 import { startVerification, VerificationWorkflow } from './ai/workflows/verification.ts';
+import { notifyPlanLive } from './services/live-updates.ts';
 
 // The fixer sandbox container (docs/software-factory-design.md). Declared in
 // wrangler.jsonc under containers/durable_objects with migration tag v2.
 export { Sandbox } from '@cloudflare/sandbox';
+export { LiveUpdates } from './live-updates.ts';
 
 // Generation, verification, and automations run as durable Workflows
 // (bindings GEN_WORKFLOW / VERIFY_WORKFLOW / AUTOMATION_WORKFLOW in
@@ -57,9 +59,11 @@ export default {
           break;
         case 'plan_analyze':
           await runPlanAnalyze(body.planId);
+          await notifyPlanLive(body.planId);
           break;
         case 'plan_refine':
           await runPlanRefine(body.planId);
+          await notifyPlanLive(body.planId);
           break;
         case 'verify':
           // Just creates a durable workflow instance — verify runs exceed

@@ -11,7 +11,7 @@ import {
   Settings,
   Sparkles,
 } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { lazy, Suspense, useState, type ReactNode } from 'react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import type { ApiMe } from '../../shared/api-types.ts';
 import { codeRoute } from '../lib/layout.ts';
@@ -19,10 +19,15 @@ import { navShortcuts, noOverlayOpen } from '../lib/shortcuts.ts';
 import { useIsDesktop } from '../lib/use-is-desktop.ts';
 import { useLiveRefresh } from '../lib/use-live-refresh.ts';
 import { cn } from '../lib/utils.ts';
-import { CommandPalette } from './command-palette.tsx';
 import { Lamp } from './identity.tsx';
-import { ShortcutHelp } from './shortcut-help.tsx';
 import { Kbd } from './ui/kbd.tsx';
+
+const CommandPalette = lazy(() =>
+  import('./command-palette.tsx').then((module) => ({ default: module.CommandPalette })),
+);
+const ShortcutHelp = lazy(() =>
+  import('./shortcut-help.tsx').then((module) => ({ default: module.ShortcutHelp })),
+);
 
 // Control-room nav: every destination is a station with a distinct icon,
 // lit where you are, dark elsewhere. Settings is the single admin
@@ -166,7 +171,7 @@ export function AppShell({ me, children }: { me: ApiMe; children: ReactNode }) {
   const isDesktop = useIsDesktop();
   // App-wide live updates: one tiny version poll instead of per-page
   // full-payload polling (see use-live-refresh.ts).
-  useLiveRefresh();
+  useLiveRefresh(me.installation_ids);
   useHotkeys(
     NAV_SHORTCUTS.map((s) => s.key).join(','),
     (_e, hk) => {
@@ -266,13 +271,21 @@ export function AppShell({ me, children }: { me: ApiMe; children: ReactNode }) {
       </main>
 
       <BottomTabs />
-      <ShortcutHelp
-        nav={SIDEBAR_NAV}
-        open={helpOpen}
-        onOpenChange={setHelpOpen}
-        onToggle={() => setHelpOpen((prev) => !prev)}
-      />
-      <CommandPalette nav={SIDEBAR_NAV} open={paletteOpen} onOpenChange={setPaletteOpen} />
+      {helpOpen ? (
+        <Suspense fallback={null}>
+          <ShortcutHelp
+            nav={SIDEBAR_NAV}
+            open={helpOpen}
+            onOpenChange={setHelpOpen}
+            onToggle={() => setHelpOpen((prev) => !prev)}
+          />
+        </Suspense>
+      ) : null}
+      {paletteOpen ? (
+        <Suspense fallback={null}>
+          <CommandPalette nav={SIDEBAR_NAV} open={paletteOpen} onOpenChange={setPaletteOpen} />
+        </Suspense>
+      ) : null}
     </div>
   );
 }

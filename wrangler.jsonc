@@ -1,7 +1,10 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "turbodiff",
-  "compatibility_date": "2026-06-01",
+  "compatibility_date": "2026-08-08",
+  "assets": {
+    "binding": "ASSETS",
+  },
   "compatibility_flags": ["nodejs_compat"],
   // Version preview URLs (<version-prefix>-turbodiff.<subdomain>.workers.dev)
   // for the per-PR previews uploaded by .github/workflows/preview.yml. This
@@ -93,7 +96,10 @@
     },
   ],
   "durable_objects": {
-    "bindings": [{ "class_name": "Sandbox", "name": "Sandbox" }],
+    "bindings": [
+      { "class_name": "Sandbox", "name": "Sandbox" },
+      { "class_name": "LiveUpdates", "name": "LIVE_UPDATES" },
+    ],
   },
   // Generation runs as a durable Workflow (src/ai/workflows/generation.ts):
   // each stage is a memoized step with bounded retries, so a killed isolate
@@ -185,5 +191,6 @@
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["FluePrReviewerAgent"] },
     { "tag": "v2", "new_sqlite_classes": ["Sandbox"] },
+    { "tag": "v3", "new_sqlite_classes": ["LiveUpdates"] },
   ],
 }

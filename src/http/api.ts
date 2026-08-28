@@ -7,6 +7,8 @@ import { formatUnmetCriteriaFindings, type CriterionResult } from '../domain/ver
 import {
   agentUsageForMonth,
   automationUsageForMonth,
+  boardTaskRepoStatuses,
+  boardTodoRepositories,
   closeChangeRequest,
   countReviews,
   createAgent,
@@ -74,6 +76,7 @@ import {
   pipelineCostByMonth,
   pipelineCostForMonth,
   repoUsageForMonth,
+  repositoryRef,
   resolveAgentEnabled,
   resolveSkillEnabled,
   setRepoConnectionLink,
@@ -90,7 +93,6 @@ import {
   setRepoSkillEnabled,
   setTaskRunnerModel,
   setTodoRepositories,
-  todoRepositoriesForTodos,
   updateAgent,
   updateAutomation,
   updateFeature,
@@ -109,10 +111,16 @@ import {
   resolveConnectionAuth,
   startOAuthConnect,
 } from '../services/connections.ts';
+import { notifyInstallationsLive } from '../services/live-updates.ts';
 import { transcriptKey } from '../ai/runtime/agent-runs.ts';
 import { isRunnerModel } from '../shared/runner-models.ts';
 import { computeNextRunAt } from '../domain/automation-schedule.ts';
-import { requireUser, userCanPushToRepo, userIsGithubOrgAdmin } from '../services/auth.ts';
+import {
+  githubTokenForUser,
+  requireUser,
+  userCanPushToRepo,
+  userIsGithubOrgAdmin,
+} from '../services/auth.ts';
 import { APIError } from 'better-auth';
 import { auth } from '../integrations/auth/better-auth.ts';
 import { certificateUrl } from '../services/certificates.ts';
@@ -179,6 +187,7 @@ import type {
   ApiChatList,
   ApiConnectionTest,
   ApiFeatureDetail,
+  ApiFeatureDiff,
   ApiIntegrations,
   ApiInvitation,
   ApiMe,
@@ -196,6 +205,58 @@ import type {
   ApiFileSave,
   ApiRepoCode,
 } from '../shared/api-types.ts';
+
+interface DeferredExecution {
+  waitUntil(promise: Promise<void>): void;
+}
+
+const fallbackExecution: DeferredExecution = {
+  waitUntil(promise) {
+    // Hono's direct-request test harness has no Worker ExecutionContext.
+    // The operation has already started; consume a background rejection so
+    // response semantics remain the same as production waitUntil.
+    void promise.catch(() => {});
+  },
+};
+
+function deferredExecution(c: Context): DeferredExecution {
+  try {
+    return c.executionCtx;
+  } catch {
+    return fallbackExecution;
+  }
+}
+
+async function immutableRepoJson<T>(
+  executionCtx: DeferredExecution,
+  cacheKey: string | null,
+  load: () => Promise<T>,
+): Promise<T> {
+  if (!cacheKey) return load();
+  const request = new Request(`https://repo-read-cache.turbodiff.internal/${cacheKey}`);
+  try {
+    const cached = await caches.default.match(request);
+    if (cached) return cached.json<T>();
+  } catch {
+    // Cache API is best-effort (and absent in some unit harnesses).
+  }
+  const value = await load();
+  try {
+    executionCtx.waitUntil(
+      caches.default
+        .put(
+          request,
+          Response.json(value, {
+            headers: { 'cache-control': 'public, max-age=31536000, immutable' },
+          }),
+        )
+        .catch(() => {}),
+    );
+  } catch {
+    // The read result remains valid when the edge cache is unavailable.
+  }
+  return value;
+}
 
 // JSON API for the SPA (src/client). Session-cookie authed — the same
 // requireUser gate as the old server-rendered pages, but failures answer
@@ -247,6 +308,28 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   const orgAdmin = dependencies.orgAdmin ?? userIsGithubOrgAdmin;
   const enqueueFactory = dependencies.enqueueFactory ?? enqueueFactoryMessage;
 
+  // Every API response exposes its Worker time to DevTools. Slow paths emit a
+  // structured event into Workers Observability with a stable 250ms budget.
+  app.use('*', async (c, next) => {
+    const started = performance.now();
+    await next();
+    const durationMs = performance.now() - started;
+    if (c.res.status !== 101) {
+      c.res.headers.append('server-timing', `worker;dur=${durationMs.toFixed(1)}`);
+    }
+    if (durationMs >= 250) {
+      console.warn(
+        JSON.stringify({
+          event: 'api_latency_budget_exceeded',
+          method: c.req.method,
+          path: c.req.path,
+          status: c.res.status,
+          duration_ms: Math.round(durationMs),
+        }),
+      );
+    }
+  });
+
   // CSRF gate for the cookie-authed data plane: browsers attach Origin to
   // every POST (same-origin and cross-site alike), so a mismatched Origin is
   // a forged cross-site request regardless of cookie SameSite behavior —
@@ -264,10 +347,26 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     await next();
   });
 
+  // Successful writes publish a tiny invalidation to this user's
+  // installation hubs. The RPC is deferred so mutation latency never waits
+  // for connected browsers; background jobs can call the same service.
+  app.use('*', async (c, next) => {
+    await next();
+    if (SAFE_METHODS.has(c.req.method) || c.req.path === '/performance' || c.res.status >= 400) {
+      return;
+    }
+    deferredExecution(c).waitUntil(
+      notifyInstallationsLive(c.get('user').installationIds).catch((err) => {
+        console.warn('turbodiff: live write invalidation failed', err);
+      }),
+    );
+  });
+
   app.use('*', async (c, next) => {
     const user = await authenticate(c.req.raw);
     if (!user) return c.json({ error: 'unauthorized' }, 401);
     c.set('user', user);
+    if (user.membershipRefresh) deferredExecution(c).waitUntil(user.membershipRefresh());
     await next();
   });
 
@@ -300,7 +399,44 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       github_connected: user.githubConnected,
       github_app_slug: env.GITHUB_APP_SLUG,
       vapid_public_key: env.VAPID_PUBLIC_KEY,
+      installation_ids: user.installationIds,
     });
+  });
+
+  app.get('/live/:installationId', async (c) => {
+    const installationId = Number(c.req.param('installationId'));
+    const origin = c.req.header('origin');
+    if (origin && origin !== new URL(c.req.url).origin) {
+      return c.json({ error: 'cross-origin websocket rejected' }, 403);
+    }
+    if (
+      !Number.isInteger(installationId) ||
+      !c.get('user').installationIds.includes(installationId)
+    ) {
+      return c.json({ error: 'unknown installation' }, 404);
+    }
+    return await env.LIVE_UPDATES.getByName(String(installationId)).fetch(c.req.raw);
+  });
+
+  app.post('/performance', async (c) => {
+    const body = await c.req.json<JsonObject>().catch(() => null);
+    if (!body || !isString(body.path) || !isJsonObject(body.metrics)) {
+      return c.json({ error: 'invalid performance sample' }, 400);
+    }
+    const allowed = new Set(['ttfb', 'dom_interactive', 'lcp', 'inp', 'cls']);
+    const metrics = Object.fromEntries(
+      Object.entries(body.metrics).filter(
+        ([name, value]) => allowed.has(name) && isNumber(value) && Number.isFinite(value),
+      ),
+    );
+    console.log(
+      JSON.stringify({
+        event: 'client_performance',
+        path: body.path.slice(0, 160),
+        metrics,
+      }),
+    );
+    return c.json({ ok: true });
   });
 
   // Web Push subscription (src/services/push-notifications.ts). Body shape matches
@@ -459,49 +595,75 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
 
   app.get('/board', async (c) => {
     const { installationIds } = c.get('user');
-    // The board deliberately shows /api/usage's pipeline figure, not the
-    // review-only one dashboardStats computes — same number, both surfaces.
-    const [groups, plans, todos, stats, pipelineCost] = await Promise.all([
-      listInstallationsWithRepos(installationIds),
-      listPlansForInstallations(installationIds),
-      listTodos(installationIds),
-      dashboardStats(installationIds),
-      pipelineCostForMonth(installationIds, currentMonth()),
-    ]);
-    // Batched per-task/per-todo repo reads — one query each, not per-row.
-    const [repoStatuses, todoRepos] = await Promise.all([
-      getTaskRepoStatuses(plans.map((p) => p.id)),
-      todoRepositoriesForTodos(todos.map((t) => t.id)),
-    ]);
-    return c.json<ApiBoard>({
-      stats: { month_pipeline_cost_usd: pipelineCost, running: stats.running },
-      todos: todos.map((t) => ({
-        id: t.id,
-        installation_id: t.installation_id,
-        title: t.title,
-        notes: t.notes,
-        created_at: t.created_at,
-        repos: todoRepos
-          .filter((r) => r.todo_id === t.id)
-          .map((r) => ({ id: r.repository_id, owner: r.owner, name: r.name })),
-      })),
-      tasks: plans
-        .filter((p) => p.archived !== 1)
-        .map((p) => serializeTask(p, repoStatuses, { includePlan: false })),
-      installations: groups.map(({ installation }) => ({
-        id: installation.id,
-        account_login: installation.account_login,
-      })),
-      repos: groups
-        .flatMap((g) => g.repos)
-        .filter((r) => r.enabled === 1)
-        .map((r) => ({
-          id: r.id,
-          owner: r.owner,
-          name: r.name,
-          installation_id: r.installation_id,
-        })),
-    });
+    const version = await factoryVersion();
+    const tenantKey = installationIds
+      .slice()
+      .sort((a, b) => a - b)
+      .join(',');
+    const board = await immutableRepoJson(
+      deferredExecution(c),
+      `board/${encodeURIComponent(tenantKey)}/${version}`,
+      async (): Promise<ApiBoard> => {
+        // All D1 rollups start in one wave. The repo-link queries are scoped
+        // directly by installation rather than waiting for plan/todo ids.
+        const [groups, plans, todos, stats, pipelineCost, repoStatuses, todoRepos] =
+          await Promise.all([
+            listInstallationsWithRepos(installationIds),
+            listPlansForInstallations(installationIds),
+            listTodos(installationIds),
+            dashboardStats(installationIds),
+            pipelineCostForMonth(installationIds, currentMonth()),
+            boardTaskRepoStatuses(installationIds),
+            boardTodoRepositories(installationIds),
+          ]);
+        const statusesByPlan = new Map<number, typeof repoStatuses>();
+        for (const status of repoStatuses) {
+          const rows = statusesByPlan.get(status.plan_id) ?? [];
+          rows.push(status);
+          statusesByPlan.set(status.plan_id, rows);
+        }
+        const reposByTodo = new Map<number, typeof todoRepos>();
+        for (const repo of todoRepos) {
+          const rows = reposByTodo.get(repo.todo_id) ?? [];
+          rows.push(repo);
+          reposByTodo.set(repo.todo_id, rows);
+        }
+        return {
+          stats: { month_pipeline_cost_usd: pipelineCost, running: stats.running },
+          todos: todos.map((todo) => ({
+            id: todo.id,
+            installation_id: todo.installation_id,
+            title: todo.title,
+            notes: todo.notes,
+            created_at: todo.created_at,
+            repos: (reposByTodo.get(todo.id) ?? []).map((repo) => ({
+              id: repo.repository_id,
+              owner: repo.owner,
+              name: repo.name,
+            })),
+          })),
+          tasks: plans
+            .filter((plan) => plan.archived !== 1)
+            .map((plan) =>
+              serializeTask(plan, statusesByPlan.get(plan.id) ?? [], { includePlan: false }),
+            ),
+          installations: groups.map(({ installation }) => ({
+            id: installation.id,
+            account_login: installation.account_login,
+          })),
+          repos: groups
+            .flatMap((group) => group.repos)
+            .filter((repo) => repo.enabled === 1)
+            .map((repo) => ({
+              id: repo.id,
+              owner: repo.owner,
+              name: repo.name,
+              installation_id: repo.installation_id,
+            })),
+        };
+      },
+    );
+    return c.json(board);
   });
 
   // A backlog card targets 1-3 repos from the same installation (multi-repo
@@ -886,8 +1048,15 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         const token = await installationToken(repo.installation_id);
         return c.json(await readTree(token, repo, ref, path));
       }
-      // Artifacts mints its own credential inside (resolveWorkspaceRemote).
-      return c.json(await readTreeArtifacts(repo, ref, path));
+      const recorded = await repositoryRef(repo.id, ref);
+      const data = await immutableRepoJson(
+        deferredExecution(c),
+        recorded
+          ? `artifacts/tree/${repo.id}/${recorded.head_sha}/${encodeURIComponent(path)}`
+          : null,
+        () => readTreeArtifacts(repo, ref, path),
+      );
+      return c.json(data);
     } catch (err) {
       if (err instanceof RepoBrowserError) return c.json({ error: err.message }, err.status);
       console.error('turbodiff: tree read failed:', err);
@@ -907,7 +1076,15 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         const token = await installationToken(repo.installation_id);
         return c.json(await readFile(token, repo, ref, path));
       }
-      return c.json(await readFileArtifacts(repo, ref, path));
+      const recorded = await repositoryRef(repo.id, ref);
+      const data = await immutableRepoJson(
+        deferredExecution(c),
+        recorded
+          ? `artifacts/file/${repo.id}/${recorded.head_sha}/${encodeURIComponent(path)}`
+          : null,
+        () => readFileArtifacts(repo, ref, path),
+      );
+      return c.json(data);
     } catch (err) {
       if (err instanceof RepoBrowserError) return c.json({ error: err.message }, err.status);
       console.error('turbodiff: file read failed:', err);
@@ -1038,6 +1215,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       },
       repo: `${repo.owner}/${repo.name}`,
       provider: repo.provider,
+      diff_version: null,
       cr_number: null,
       checks: [],
       plan: null,
@@ -1063,7 +1241,6 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       latestVerificationForFeature(feature.id),
       listCockpitComments(feature.id),
     ]);
-    const MAX_FILES = 50;
     if (repo.provider === 'artifacts') {
       // Native change request: same response shape as the GitHub path,
       // sourced from the CR row and the R2 diff cache.
@@ -1071,22 +1248,9 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         ? await getChangeRequest(feature.change_request_id)
         : null;
       if (cr) {
+        base.diff_version = cr.source_head;
         base.cr_number = cr.number;
-        const patchByPath = new Map(
-          splitPatchByFile(await getCrDiffPatch(cr)).map((f) => [f.path, f.patch]),
-        );
         const crFiles = parseCrFiles(cr);
-        base.files = crFiles.slice(0, MAX_FILES).map((f) => {
-          const filePatch = patchByPath.get(f.path);
-          return {
-            filename: f.path,
-            status: f.status,
-            additions: f.additions ?? 0,
-            deletions: f.deletions ?? 0,
-            patch: filePatch && filePatch.length < 100_000 ? filePatch : null,
-          };
-        });
-        base.more_files = Math.max(0, crFiles.length - MAX_FILES);
         base.pr = {
           state: cr.status,
           html_url: null,
@@ -1137,7 +1301,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       // Conditional requests (githubJsonCached): between polls these three
       // reads are usually unchanged — GitHub's 304s cost no rate-limit
       // credit and skip re-downloading up to 100 file patches.
-      const [prMeta, prFiles, prReviews] = await Promise.all([
+      const [prMeta, prReviews] = await Promise.all([
         githubJsonCached<{
           state: string;
           merged: boolean;
@@ -1146,35 +1310,14 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
           deletions: number;
           changed_files: number;
           mergeable_state: string | null;
+          head: { sha: string };
         }>(token, `${ghBase}/pulls/${feature.pr_number}`),
-        githubJsonCached<
-          {
-            filename: string;
-            status: string;
-            additions: number;
-            deletions: number;
-            patch?: string;
-          }[]
-        >(token, `${ghBase}/pulls/${feature.pr_number}/files?per_page=100`),
         githubJsonCached<{ state: string; body: string; user: { login: string } | null }[]>(
           token,
           `${ghBase}/pulls/${feature.pr_number}/reviews?per_page=100`,
         ),
       ]);
 
-      // GitHub's per-file patch lacks git headers, so wrap it into a minimal
-      // single-file patch for @pierre/diffs (rendered client-side).
-      base.files = prFiles.slice(0, MAX_FILES).map((f) => ({
-        filename: f.filename,
-        status: f.status,
-        additions: f.additions,
-        deletions: f.deletions,
-        patch:
-          f.patch && f.patch.length < 100_000
-            ? `diff --git a/${f.filename} b/${f.filename}\n--- a/${f.filename}\n+++ b/${f.filename}\n${f.patch}\n`
-            : null,
-      }));
-      base.more_files = Math.max(0, prFiles.length - MAX_FILES);
       base.pr = {
         state: prMeta.merged ? 'merged' : prMeta.state,
         html_url: prMeta.html_url,
@@ -1183,6 +1326,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         changed_files: prMeta.changed_files,
         mergeable_state: prMeta.mergeable_state,
       };
+      base.diff_version = prMeta.head.sha;
       base.reviews = prReviews.map((r) => ({
         state: r.state,
         body: r.body,
@@ -1227,6 +1371,88 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       verification?.results ?? null,
     );
     return c.json(base);
+  });
+
+  // Diff snapshot: intentionally separate from the volatile cockpit summary.
+  // Comments, checks, and run statuses can refresh without re-fetching or
+  // re-parsing hundreds of kilobytes of patches. This endpoint is loaded only
+  // after the summary has painted.
+  app.get('/factory/features/:id/diff', async (c) => {
+    const id = Number(c.req.param('id'));
+    const feature = Number.isInteger(id) ? await getFeature(id) : null;
+    const repo = feature ? await getRepoById(feature.repository_id) : null;
+    if (!feature || !repo || !c.get('user').installationIds.includes(repo.installation_id)) {
+      return c.json({ error: 'unknown feature' }, 404);
+    }
+    const rawVersion = c.req.query('v');
+    // Versioned snapshots are immutable, but only accept commit-like client
+    // versions so an authenticated caller cannot create unbounded cache keys.
+    const requestedVersion =
+      rawVersion && /^[0-9a-f]{7,64}$/i.test(rawVersion) ? rawVersion.toLowerCase() : null;
+    const artifactsCr =
+      repo.provider === 'artifacts' && feature.change_request_id
+        ? await getChangeRequest(feature.change_request_id)
+        : null;
+    const diffVersion = artifactsCr?.source_head ?? requestedVersion;
+    const empty: ApiFeatureDiff = { version: diffVersion, files: [], more_files: 0 };
+    if (!feature.pr_number) return c.json(empty);
+
+    const MAX_FILES = 50;
+    const load = async (): Promise<ApiFeatureDiff> => {
+      if (repo.provider === 'artifacts') {
+        if (!artifactsCr) return empty;
+        const patchByPath = new Map(
+          splitPatchByFile(await getCrDiffPatch(artifactsCr)).map((file) => [
+            file.path,
+            file.patch,
+          ]),
+        );
+        const crFiles = parseCrFiles(artifactsCr);
+        return {
+          version: artifactsCr.source_head,
+          files: crFiles.slice(0, MAX_FILES).map((file) => {
+            const patch = patchByPath.get(file.path);
+            return {
+              filename: file.path,
+              status: file.status,
+              additions: file.additions ?? 0,
+              deletions: file.deletions ?? 0,
+              patch: patch && patch.length < 100_000 ? patch : null,
+            };
+          }),
+          more_files: Math.max(0, crFiles.length - MAX_FILES),
+        };
+      }
+
+      const token = await installationToken(repo.installation_id);
+      const files = await githubJsonCached<
+        {
+          filename: string;
+          status: string;
+          additions: number;
+          deletions: number;
+          patch?: string;
+        }[]
+      >(token, `/repos/${repo.owner}/${repo.name}/pulls/${feature.pr_number}/files?per_page=100`);
+      return {
+        version: requestedVersion,
+        files: files.slice(0, MAX_FILES).map((file) => ({
+          filename: file.filename,
+          status: file.status,
+          additions: file.additions,
+          deletions: file.deletions,
+          patch:
+            file.patch && file.patch.length < 100_000
+              ? `diff --git a/${file.filename} b/${file.filename}\n--- a/${file.filename}\n+++ b/${file.filename}\n${file.patch}\n`
+              : null,
+        })),
+        more_files: Math.max(0, files.length - MAX_FILES),
+      };
+    };
+    const cacheKey = diffVersion
+      ? `feature-diff/${feature.id}/${encodeURIComponent(diffVersion)}`
+      : null;
+    return c.json(await immutableRepoJson(deferredExecution(c), cacheKey, load));
   });
 
   // Line-anchored review comment from the cockpit diff. This only records
@@ -1670,7 +1896,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         409,
       );
     }
-    const userToken = c.get('user').session.ghToken;
+    const userToken = await githubTokenForUser(c.get('user'));
     try {
       await mergePullRequest(userToken || appToken, repo.owner, repo.name, feature.pr_number);
     } catch (err) {
@@ -1723,7 +1949,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const denied = await requireRepoPush(c, repo, canPushToRepo);
     if (denied) return denied;
     const appToken = await installationToken(repo.installation_id);
-    const userToken = c.get('user').session.ghToken;
+    const userToken = await githubTokenForUser(c.get('user'));
     const closePath = `/repos/${repo.owner}/${repo.name}/pulls/${feature.pr_number}`;
     const closeBody = { method: 'PATCH' as const, body: JSON.stringify({ state: 'closed' }) };
     try {
@@ -1781,8 +2007,19 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   // installation can enable any agent.
   app.get('/agents', async (c) => {
     const { installationIds } = c.get('user');
-    await Promise.all(installationIds.map((id) => ensureBuiltinAgents(id)));
     const agents = await listAgents(installationIds);
+    // Installation webhooks own normal seeding. Keep this best-effort repair
+    // path off the response's critical path for legacy or partially mirrored
+    // installations.
+    deferredExecution(c).waitUntil(
+      Promise.all(
+        installationIds.map((id) =>
+          ensureBuiltinAgents(id).catch((err) =>
+            console.warn(`turbodiff: agent repair failed for installation ${id}:`, err),
+          ),
+        ),
+      ).then(() => undefined),
+    );
     const seen = new Set<string>();
     return c.json<ApiAgentsList>({
       github_app_slug: env.GITHUB_APP_SLUG,
@@ -2451,14 +2688,15 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     // Self-heal the repo mirror against GitHub — a missed
     // installation_repositories webhook otherwise leaves stale repos here
     // (and on every other page reading the repositories table) forever.
-    await Promise.all(
-      installationIds.map((id) =>
-        syncInstallationRepos(id).catch((err) =>
-          console.warn(`turbodiff: repo sync failed for installation ${id}:`, err),
+    deferredExecution(c).waitUntil(
+      Promise.all(
+        installationIds.map((id) =>
+          syncInstallationRepos(id).catch((err) =>
+            console.warn(`turbodiff: repo sync failed for installation ${id}:`, err),
+          ),
         ),
-      ),
+      ).then(() => undefined),
     );
-    await Promise.all(installationIds.map((id) => ensureBuiltinAgents(id)));
     const [groups, agents, overrides, skills, skillOverrides] = await Promise.all([
       listInstallationsWithRepos(installationIds),
       listAgents(installationIds),
@@ -2466,6 +2704,15 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       listSkills(installationIds),
       listRepoSkillOverrides(installationIds),
     ]);
+    deferredExecution(c).waitUntil(
+      Promise.all(
+        installationIds.map((id) =>
+          ensureBuiltinAgents(id).catch((err) =>
+            console.warn(`turbodiff: agent repair failed for installation ${id}:`, err),
+          ),
+        ),
+      ).then(() => undefined),
+    );
     const overrideMap = new Map(
       overrides.map((o) => [`${o.repository_id}:${o.agent_id}`, o.enabled]),
     );

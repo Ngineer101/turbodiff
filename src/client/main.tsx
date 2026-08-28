@@ -44,8 +44,6 @@ import {
   taskQuery,
   usageQuery,
 } from './lib/queries.ts';
-import { BoardPage } from './pages/board.tsx';
-import { TaskPage } from './pages/task.tsx';
 import './styles.css';
 
 function ShellLayout() {
@@ -139,14 +137,14 @@ const boardRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/',
   loader: () => queryClient.ensureQueryData(boardQuery),
-  component: BoardPage,
+  component: lazyRouteComponent(() => import('./pages/board.tsx'), 'BoardPage'),
 });
 
 const taskRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/tasks/$taskId',
   loader: ({ params }) => queryClient.ensureQueryData(taskQuery(Number(params.taskId))),
-  component: TaskPage,
+  component: lazyRouteComponent(() => import('./pages/task.tsx'), 'TaskPage'),
 });
 
 const usageRoute = createRoute({
@@ -334,6 +332,17 @@ declare module '@tanstack/react-router' {
 }
 
 void registerServiceWorker();
+// Monitoring is a post-boot concern: keep it out of the interaction-critical
+// graph and initialize it only when the browser has idle time.
+const startMonitoring = () =>
+  void import('./lib/performance.ts').then(({ startPerformanceMonitoring }) =>
+    startPerformanceMonitoring(),
+  );
+if ('requestIdleCallback' in window) {
+  window.requestIdleCallback(startMonitoring, { timeout: 5_000 });
+} else {
+  setTimeout(startMonitoring, 2_000);
+}
 
 // Warm-boot persistence: the last-known payloads of the cheap, list-shaped
 // queries hydrate from localStorage before first render, so a reload paints
@@ -350,7 +359,7 @@ const PERSISTED_KEYS = new Set([
   'usage',
 ]);
 // Bump to drop persisted caches whose shape no longer matches the client.
-const PERSIST_BUSTER = 'v1';
+const PERSIST_BUSTER = 'v2';
 const persistOptions: PersistQueryClientOptions = {
   queryClient,
   persister: createSyncStoragePersister({

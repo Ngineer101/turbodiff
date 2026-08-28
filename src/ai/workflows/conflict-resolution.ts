@@ -1,6 +1,7 @@
 import { env, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { processResolveConflictMessage } from '../runners/conflict-resolver.ts';
 import type { ConflictResolveQueueMessage } from '../../shared/factory-messages.ts';
+import { notifyRepositoryLive } from '../../services/live-updates.ts';
 
 // Conflict resolution runs as a durable Workflow, same as fix — an
 // agent-driven merge conflict resolution can exceed a queue consumer's wall
@@ -20,6 +21,7 @@ export class ConflictResolveWorkflow extends WorkflowEntrypoint<unknown, Conflic
       { retries: { limit: 1, delay: '5 minutes' }, timeout: '40 minutes' },
       async () => {
         await processResolveConflictMessage(event.payload.message);
+        await notifyRepositoryLive(event.payload.message.repoId);
       },
     );
     return 'done';

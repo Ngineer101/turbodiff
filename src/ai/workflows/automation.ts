@@ -35,6 +35,7 @@ import {
   installationToken,
 } from '../../integrations/github/app.ts';
 import { UNTRUSTED_CONTENT_RULES } from '../../domain/prompt-security.ts';
+import { notifyAutomationLive } from '../../services/live-updates.ts';
 
 // A recurring, clock-driven counterpart to the generation workflow: a
 // user-authored prompt runs on a schedule (src/services/automation-poll.ts) against
@@ -249,6 +250,7 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
             undefined,
             agentRan.usage ?? undefined,
           );
+          await notifyAutomationLive(automationId);
         });
         return 'no_changes';
       }
@@ -289,6 +291,7 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
               checks.output,
               agentRan.usage ?? undefined,
             );
+            await notifyAutomationLive(automationId);
           });
           return 'checks_failed';
         }
@@ -349,6 +352,7 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
           undefined,
           agentRan.usage ?? undefined,
         );
+        await notifyAutomationLive(automationId);
       });
 
       await step.do(
@@ -381,6 +385,7 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
           },
           async () => {
             await finishAutomationRun(failedRunId, 'failed', undefined, undefined, message);
+            await notifyAutomationLive(automationId);
           },
         );
       }

@@ -1,5 +1,9 @@
 import { env } from 'cloudflare:workers';
 import { auth, type AuthUser } from '../integrations/auth/better-auth.ts';
+import {
+  installationAccessSnapshot,
+  storeInstallationAccessSnapshot,
+} from '../data/performance.ts';
 import { syntheticInstallationIds } from './access-control.ts';
 import {
   fetchUserCanPush,
@@ -22,12 +26,16 @@ export type AuthedUser = {
   // repo-scoped query answers empty and every push check fails closed; the
   // attribution paths that read userId/login all sit behind an installation
   // check a GitHub-less user can't pass.
-  session: { userId: number; login: string; ghToken: string };
+  session: { authUserId: string; userId: number; login: string };
   installationIds: number[];
   githubConnected: boolean;
   // Display identity for the shell — the GitHub login when connected, the
   // sign-up name otherwise.
   name: string;
+  // A stale-but-authorized request may refresh its durable membership
+  // snapshot after responding. HTTP middleware attaches this to waitUntil;
+  // non-HTTP callers simply use the bounded stale snapshot.
+  membershipRefresh?: () => Promise<void>;
   // Local DEV_FAKE_INSTALLATIONS session — no GitHub token to verify repo
   // permissions with, so permission checks pass by construction.
   devFake?: boolean;
@@ -42,6 +50,7 @@ const INSTALLATIONS_TTL_MS = 5 * 60_000;
 const INSTALLATIONS_STALE_MAX_MS = 60 * 60_000;
 const tokenCache = new Map<string, { token: string; exp: number }>();
 const installationsCache = new Map<string, { ids: number[]; fetchedAt: number }>();
+const installationRefreshes = new Map<string, Promise<number[] | null>>();
 // Synthetic (Artifacts) installation ids were the one uncached D1 read on
 // every API request — same TTL discipline as the GitHub installation list,
 // with the same bounded staleness on membership revocation.
@@ -78,20 +87,70 @@ async function githubToken(userId: string): Promise<string> {
 // GitHub-verified installation ids, cached for 5 minutes and served stale
 // (up to an hour) when GitHub is unreachable. Null only when there is no
 // answer at all — fresh fetch failed and nothing usable is cached.
-async function installationIds(userId: string, ghToken: string): Promise<number[] | null> {
-  const cached = installationsCache.get(userId);
-  if (cached && Date.now() - cached.fetchedAt < INSTALLATIONS_TTL_MS) return cached.ids;
-  if (ghToken) {
+async function refreshInstallationIds(userId: string): Promise<number[] | null> {
+  const running = installationRefreshes.get(userId);
+  if (running) return running;
+  const refresh = (async () => {
+    const ghToken = await githubToken(userId);
+    if (!ghToken) return null;
     try {
       const ids = await fetchUserInstallationIds(ghToken);
+      await storeInstallationAccessSnapshot(userId, ids);
       installationsCache.set(userId, { ids, fetchedAt: Date.now() });
       return ids;
     } catch {
-      // fall through to the stale answer
+      return null;
+    }
+  })();
+  installationRefreshes.set(userId, refresh);
+  try {
+    return await refresh;
+  } finally {
+    if (installationRefreshes.get(userId) === refresh) installationRefreshes.delete(userId);
+  }
+}
+
+interface InstallationResolution {
+  ids: number[];
+  refresh?: () => Promise<void>;
+}
+
+async function installationIds(userId: string): Promise<InstallationResolution | null> {
+  const cached = installationsCache.get(userId);
+  if (cached && Date.now() - cached.fetchedAt < INSTALLATIONS_TTL_MS) {
+    return { ids: cached.ids };
+  }
+
+  const durable = await installationAccessSnapshot(userId);
+  const now = Date.now();
+  if (durable) {
+    installationsCache.set(userId, {
+      ids: durable.installationIds,
+      fetchedAt: durable.verifiedAt,
+    });
+    const age = now - durable.verifiedAt;
+    if (age < INSTALLATIONS_TTL_MS) return { ids: durable.installationIds };
+    if (age < INSTALLATIONS_STALE_MAX_MS) {
+      return {
+        ids: durable.installationIds,
+        refresh: async () => {
+          await refreshInstallationIds(userId);
+        },
+      };
     }
   }
-  if (cached && Date.now() - cached.fetchedAt < INSTALLATIONS_STALE_MAX_MS) return cached.ids;
+
+  const fresh = await refreshInstallationIds(userId);
+  if (fresh) return { ids: fresh };
+  if (cached && now - cached.fetchedAt < INSTALLATIONS_STALE_MAX_MS) {
+    return { ids: cached.ids };
+  }
   return null;
+}
+
+export async function githubTokenForUser(user: AuthedUser): Promise<string> {
+  if (user.devFake || !user.session.authUserId) return '';
+  return githubToken(user.session.authUserId);
 }
 
 // Whether GitHub says this user can push to the repo, checked with the
@@ -112,7 +171,8 @@ export async function userCanPushToRepo(
   name: string,
 ): Promise<boolean> {
   if (user.devFake) return true;
-  const { userId, ghToken } = user.session;
+  const { userId } = user.session;
+  const ghToken = await githubTokenForUser(user);
   if (!ghToken) return false;
   const key = `${userId}:${owner}/${name}`;
   const cached = repoPermCache.get(key);
@@ -134,7 +194,8 @@ const orgAdminCache = new Map<string, { admin: boolean; fetchedAt: number }>();
 // call (including a missing App org-members permission) answers false.
 export async function userIsGithubOrgAdmin(user: AuthedUser, orgLogin: string): Promise<boolean> {
   if (user.devFake) return true;
-  const { userId, ghToken } = user.session;
+  const { userId } = user.session;
+  const ghToken = await githubTokenForUser(user);
   if (!ghToken) return false;
   const key = `${userId}:${orgLogin}`;
   const cached = orgAdminCache.get(key);
@@ -160,7 +221,7 @@ export async function requireUser(request: Request): Promise<AuthedUser | null> 
   const host = new URL(request.url).hostname;
   if (fake && (host === 'localhost' || host === '127.0.0.1')) {
     return {
-      session: { userId: 0, login: 'dev', ghToken: '' },
+      session: { authUserId: '', userId: 0, login: 'dev' },
       installationIds: fake
         .split(',')
         .map(Number)
@@ -192,24 +253,26 @@ async function resolveAuthedUser(user: AuthUser): Promise<AuthedUser | null> {
   // repo-scoped answers empty, push checks fail closed.
   if (!login || githubId === null) {
     return {
-      session: { userId: 0, login: '', ghToken: '' },
+      session: { authUserId: user.id, userId: 0, login: '' },
       installationIds: [],
       githubConnected: false,
       name: user.name || user.email,
     };
   }
 
-  const ghToken = await githubToken(user.id);
-  const ids = await installationIds(user.id, ghToken);
-  if (ids === null) return null;
+  const [resolved, synthetic] = await Promise.all([
+    installationIds(user.id),
+    cachedSyntheticInstallationIds(githubId),
+  ]);
+  if (resolved === null) return null;
   // Artifacts-hosted projects ride on synthetic negative-id installations;
   // GitHub can't know about them, so membership-derived ids are unioned in.
-  const synthetic = await cachedSyntheticInstallationIds(githubId);
   return {
-    session: { userId: githubId, login, ghToken },
-    installationIds: [...new Set([...ids, ...synthetic])],
+    session: { authUserId: user.id, userId: githubId, login },
+    installationIds: [...new Set([...resolved.ids, ...synthetic])],
     githubConnected: true,
     name: login,
+    membershipRefresh: resolved.refresh,
   };
 }
 

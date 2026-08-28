@@ -1,6 +1,6 @@
-import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { useParams } from '@tanstack/react-router';
-import { PatchDiff, type DiffLineAnnotation, type SelectedLineRange } from '@pierre/diffs/react';
+import type { DiffLineAnnotation, SelectedLineRange } from '@pierre/diffs/react';
 import {
   ChevronDown,
   ChevronRight,
@@ -8,19 +8,24 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { ApiCockpitComment, ApiFeatureDetail, ApiMe } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
 import { useDictation } from '../lib/dictation.ts';
 import { sentence } from '../lib/format.ts';
 import { applyOptimistic, optimisticId, optimisticNow } from '../lib/optimistic.ts';
-import { featureQuery, FIX_TERMINAL, GENERATION_STOPPED } from '../lib/queries.ts';
+import {
+  featureDiffQuery,
+  featureQuery,
+  FIX_TERMINAL,
+  GENERATION_STOPPED,
+} from '../lib/queries.ts';
 import { cn } from '../lib/utils.ts';
 import { AgentRunLog } from '../components/agent-run-log.tsx';
 import { ChatPanel } from '../components/chat-panel.tsx';
 import { ConfirmButton } from '../components/confirm-button.tsx';
-import { ensureDiffStyles } from '../components/diff-styles.ts';
+import type { CockpitCommentMeta } from '../components/cockpit-patch-diff.tsx';
 import { CertStrip, Lamp, Serial, Stamp, type LampTone } from '../components/identity.tsx';
 import { FILE_STATUS_DOT, FileTree } from '../components/file-tree.tsx';
 import { Markdown } from '../components/markdown.tsx';
@@ -47,17 +52,23 @@ import { Textarea } from '../components/ui/input.tsx';
 
 type CockpitFile = ApiFeatureDetail['files'][number];
 
+const CockpitPatchDiff = lazy(() =>
+  import('../components/cockpit-patch-diff.tsx').then((module) => ({
+    default: module.CockpitPatchDiff,
+  })),
+);
+const CockpitDiffWorkspace = lazy(() =>
+  import('../components/cockpit-patch-diff.tsx').then((module) => ({
+    default: module.CockpitDiffWorkspace,
+  })),
+);
+
 type Selection = {
   file: string;
   startLine: number;
   endLine: number;
   side: 'additions' | 'deletions';
 };
-
-interface CommentMeta {
-  comment?: ApiCockpitComment;
-  composer?: boolean;
-}
 
 function onApiError<T>(err: T) {
   toast.error(err instanceof ApiError ? err.message : 'Request failed');
@@ -350,25 +361,26 @@ function Composer({
 }
 
 function FileDiff({
-  data,
+  featureId,
+  comments,
+  prOpen,
   file,
   diffStyle,
 }: {
-  data: ApiFeatureDetail;
+  featureId: number;
+  comments: ApiCockpitComment[];
+  prOpen: boolean;
   file: CockpitFile;
   diffStyle: 'split' | 'unified';
 }) {
   const [selection, setSelection] = useState<Selection | null>(null);
-  const prOpen = data.pr?.state === 'open';
 
   const annotations = useMemo(() => {
-    const list: DiffLineAnnotation<CommentMeta>[] = data.comments
-      .filter((c) => c.path === file.filename)
-      .map((c) => ({
-        side: c.side === 'deletions' ? 'deletions' : 'additions',
-        lineNumber: c.line,
-        metadata: { comment: c },
-      }));
+    const list: DiffLineAnnotation<CockpitCommentMeta>[] = comments.map((c) => ({
+      side: c.side === 'deletions' ? 'deletions' : 'additions',
+      lineNumber: c.line,
+      metadata: { comment: c },
+    }));
     if (selection) {
       list.push({
         side: selection.side,
@@ -377,7 +389,7 @@ function FileDiff({
       });
     }
     return list;
-  }, [data.comments, file.filename, selection]);
+  }, [comments, selection]);
 
   const onSelectionEnd = useCallback(
     (range: SelectedLineRange | null) => {
@@ -400,15 +412,15 @@ function FileDiff({
     );
   }
   return (
-    <div className="diffs-scope rounded-none border-0">
-      <PatchDiff
+    <Suspense fallback={<div className="h-64 animate-pulse bg-surface" />}>
+      <CockpitPatchDiff
         patch={file.patch}
-        lineAnnotations={annotations}
-        renderAnnotation={(a: DiffLineAnnotation<CommentMeta>) =>
+        annotations={annotations}
+        renderAnnotation={(a: DiffLineAnnotation<CockpitCommentMeta>) =>
           a.metadata?.composer && selection ? (
             <Composer
               selection={selection}
-              featureId={data.feature.id}
+              featureId={featureId}
               onDone={() => setSelection(null)}
               onCancel={() => setSelection(null)}
             />
@@ -416,23 +428,20 @@ function FileDiff({
             <CommentCard comment={a.metadata.comment} />
           ) : null
         }
-        options={{
-          theme: 'pierre-dark',
-          diffStyle,
-          // The card header (FileSection) owns the filename/stats row.
-          disableFileHeader: true,
-          enableLineSelection: prOpen,
-          onLineSelectionEnd: onSelectionEnd,
-        }}
+        diffStyle={diffStyle}
+        prOpen={prOpen}
+        onSelectionEnd={onSelectionEnd}
       />
-    </div>
+    </Suspense>
   );
 }
 
 // One collapsible file card: sticky header (path, status, ±counts, comment
 // count) over the diff surface.
-function FileSection({
-  data,
+const FileSection = memo(function FileSection({
+  featureId,
+  comments,
+  prOpen,
   file,
   collapsed,
   commentCount,
@@ -440,7 +449,9 @@ function FileSection({
   onToggle,
   sectionRef,
 }: {
-  data: ApiFeatureDetail;
+  featureId: number;
+  comments: ApiCockpitComment[];
+  prOpen: boolean;
   file: CockpitFile;
   collapsed: boolean;
   commentCount: number;
@@ -456,7 +467,7 @@ function FileSection({
     <section
       ref={sectionRef}
       data-file={file.filename}
-      className="mt-3 scroll-mt-3 overflow-clip rounded-lg border border-line bg-surface"
+      className="mt-3 scroll-mt-3 overflow-clip rounded-lg border border-line bg-surface [contain-intrinsic-size:auto_600px] [content-visibility:auto]"
     >
       <button
         type="button"
@@ -497,17 +508,36 @@ function FileSection({
           {file.deletions > 0 ? <span className="text-danger">−{file.deletions}</span> : null}
         </span>
       </button>
-      {collapsed ? null : <FileDiff data={data} file={file} diffStyle={diffStyle} />}
+      {collapsed ? null : (
+        <FileDiff
+          featureId={featureId}
+          comments={comments}
+          prOpen={prOpen}
+          file={file}
+          diffStyle={diffStyle}
+        />
+      )}
     </section>
   );
-}
+});
 
 export default function FeaturePage() {
-  ensureDiffStyles();
   const { featureId } = useParams({ from: '/shell/factory/features/$featureId' });
   const id = Number(featureId);
   const queryClient = useQueryClient();
-  const { data } = useSuspenseQuery(featureQuery(id));
+  const { data: summary } = useSuspenseQuery(featureQuery(id));
+  const diffQuery = useQuery({
+    ...featureDiffQuery(id, summary.diff_version),
+    enabled: summary.pr !== null,
+  });
+  const data = useMemo<ApiFeatureDetail>(
+    () => ({
+      ...summary,
+      files: diffQuery.data?.files ?? [],
+      more_files: diffQuery.data?.more_files ?? 0,
+    }),
+    [summary, diffQuery.data],
+  );
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['feature', id] });
   };
@@ -548,11 +578,19 @@ export default function FeaturePage() {
   };
   const sectionEls = useRef(new Map<string, HTMLElement>());
 
-  const commentCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const c of data.comments) counts.set(c.path, (counts.get(c.path) ?? 0) + 1);
-    return counts;
+  const commentsByFile = useMemo(() => {
+    const comments = new Map<string, ApiCockpitComment[]>();
+    for (const comment of data.comments) {
+      const existing = comments.get(comment.path) ?? [];
+      existing.push(comment);
+      comments.set(comment.path, existing);
+    }
+    return comments;
   }, [data.comments]);
+  const commentCounts = useMemo(
+    () => new Map([...commentsByFile].map(([path, comments]) => [path, comments.length])),
+    [commentsByFile],
+  );
 
   const toggleFile = (filename: string) =>
     setCollapsed((prev) => {
@@ -1065,21 +1103,49 @@ export default function FeaturePage() {
             </AccordionItem>
           </Accordion>
 
-          {data.files.map((f) => (
-            <FileSection
-              key={f.filename}
-              data={data}
-              file={f}
-              diffStyle={diffStyle}
-              collapsed={collapsed.has(f.filename)}
-              commentCount={commentCounts.get(f.filename) ?? 0}
-              onToggle={() => toggleFile(f.filename)}
-              sectionRef={(el) => {
-                if (el) sectionEls.current.set(f.filename, el);
-                else sectionEls.current.delete(f.filename);
-              }}
+          {diffQuery.isPending ? (
+            <div
+              className="mt-3 h-80 animate-pulse rounded-lg border border-line bg-surface"
+              role="status"
+              aria-label="Loading diff"
             />
-          ))}
+          ) : null}
+          {diffQuery.isError ? (
+            <Card className="mt-3">
+              <p className="text-sm text-danger">The diff could not be loaded.</p>
+              <Button
+                variant="secondary"
+                size="sm"
+                className="mt-3"
+                onClick={() => void diffQuery.refetch()}
+              >
+                Retry
+              </Button>
+            </Card>
+          ) : null}
+          {data.files.length > 0 ? (
+            <Suspense fallback={<div className="mt-3 h-80 animate-pulse bg-surface" />}>
+              <CockpitDiffWorkspace>
+                {data.files.map((f) => (
+                  <FileSection
+                    key={f.filename}
+                    featureId={data.feature.id}
+                    comments={commentsByFile.get(f.filename) ?? []}
+                    prOpen={prState === 'open'}
+                    file={f}
+                    diffStyle={diffStyle}
+                    collapsed={collapsed.has(f.filename)}
+                    commentCount={commentsByFile.get(f.filename)?.length ?? 0}
+                    onToggle={() => toggleFile(f.filename)}
+                    sectionRef={(el) => {
+                      if (el) sectionEls.current.set(f.filename, el);
+                      else sectionEls.current.delete(f.filename);
+                    }}
+                  />
+                ))}
+              </CockpitDiffWorkspace>
+            </Suspense>
+          ) : null}
           {data.more_files > 0 ? (
             <Muted className="mt-3 block">
               …and {data.more_files} more files — see the PR on GitHub.

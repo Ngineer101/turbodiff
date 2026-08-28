@@ -11,3 +11,4 @@ export * from './usage.ts';
 export * from './credentials.ts';
 export * from './board.ts';
 export * from './automations.ts';
+export * from './performance.ts';

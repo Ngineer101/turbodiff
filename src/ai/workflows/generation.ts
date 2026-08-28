@@ -43,6 +43,7 @@ import { UNTRUSTED_CONTENT_RULES } from '../../domain/prompt-security.ts';
 import { installDependencies, NPM_CACHE_ENV } from '../runtime/sandbox-deps.ts';
 import { mintUserToken } from '../../services/user-tokens.ts';
 import { openNativeChangeRequest } from '../../services/change-requests.ts';
+import { notifyFeatureLive } from '../../services/live-updates.ts';
 import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
 
 // Phase 2 of the software factory, re-architected as a Cloudflare Workflow.
@@ -223,6 +224,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
               status: 'failed',
               error: 'repository missing or disabled',
             });
+            await notifyFeatureLive(featureId);
             return null;
           }
           let base: string;
@@ -366,6 +368,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
             error: 'agent produced no file changes',
             usage: agentRan.usage ?? undefined,
           });
+          await notifyFeatureLive(featureId);
         });
         return 'no_changes';
       }
@@ -513,6 +516,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
               error: checks.output.slice(-500),
               usage: totalUsage ?? undefined,
             });
+            await notifyFeatureLive(featureId);
           });
           return 'checks_failed';
         }
@@ -573,6 +577,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
             changeRequestId: cr.id,
             usage: totalUsage ?? undefined,
           });
+          await notifyFeatureLive(featureId);
           if (ctx.acceptance) await enqueueFactoryMessage({ kind: 'verify', featureId });
           return cr.number;
         }
@@ -621,6 +626,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
           prNumber: pr.number,
           usage: totalUsage ?? undefined,
         });
+        await notifyFeatureLive(featureId);
         // Phase 4: acceptance criteria get an empirical verification run.
         if (ctx.acceptance) await enqueueFactoryMessage({ kind: 'verify', featureId });
         return pr.number;
@@ -656,6 +662,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
         },
         async () => {
           await updateFeature(featureId, { status: 'failed', error: message });
+          await notifyFeatureLive(featureId);
         },
       );
       console.error(`turbodiff: generation workflow failed for feature ${featureId}:`, err);
