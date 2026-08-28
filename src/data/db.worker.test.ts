@@ -519,7 +519,7 @@ describe('paid-work idempotency', () => {
         )
         .bind(planId)
         .run(),
-    ).rejects.toThrow(/unique/i);
+    ).rejects.toMatchObject({ cause: { code: '23505' } });
   });
 });
 

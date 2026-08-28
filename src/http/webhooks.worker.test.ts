@@ -80,7 +80,7 @@ async function seedRepo(opts: { autoFix?: boolean } = {}): Promise<void> {
         `INSERT INTO repositories (id, installation_id, owner, name, review_on_push, auto_fix)
        VALUES (101, 1001, 'acme', 'api', TRUE, ?1)`,
       )
-      .bind(opts.autoFix),
+      .bind(opts.autoFix ?? false),
   ]);
 }
 
