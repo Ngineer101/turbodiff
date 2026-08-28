@@ -1,0 +1,80 @@
+src/http/mcp.worker.test.ts
+  s_140622c634f845::t_bc05ee8be7359a 12,275,278
+src/integrations/auth/better-auth.ts
+  s_140622c634f845::t_bc05ee8be7359a 31
+  s_140622c634f845::t_88d10e7c8bc379 6,95,100,214,216-222,226
+src/client/lib/format.test.ts
+  s_140622c634f845::t_648eb9b4e1c76b 41,44-53
+src/http/auth-email.ts
+  s_140622c634f845::t_bc05ee8be7359a 2,17-24
+src/http/ui.ts
+  s_140622c634f845::t_bc05ee8be7359a 4,192-196,227-232,250-260,276,283-288
+src/app.ts
+  s_140622c634f845::t_bc05ee8be7359a 18,138,141,159-161
+src/data/db.worker.test.ts
+  s_140622c634f845::t_698597aa417392 42,109-134,521
+  s_140622c634f845::t_56b62f8568e870 407-441
+wrangler.jsonc
+  s_140622c634f845::t_0cc621a853ee8c 4
+src/data/automations.ts
+  s_140622c634f845::t_100ad222b718d3 4,166-182
+  s_140622c634f845::t_52068366c3f10d 164
+.github/workflows/ci.yml
+  s_140622c634f845::t_940b86b3d2fc60 60
+  s_140622c634f845::t_566de618de9dd9 10-25,53-54
+  s_140622c634f845::t_2b6550436e8ad3 55
+wrangler.test.jsonc
+  s_140622c634f845::t_0cc621a853ee8c 4
+src/data/schema.ts
+  s_140622c634f845::t_88d10e7c8bc379 1172
+src/services/auth.ts
+  s_140622c634f845::t_bc05ee8be7359a 4,78-82,238-240,294-296
+db/migrations/meta/0000_snapshot.json
+  s_140622c634f845::t_7d600ef00992a0 3647-3648
+src/services/automation-poll.ts
+  s_140622c634f845::t_88d10e7c8bc379 12
+src/data/factory.ts
+  s_140622c634f845::t_52068366c3f10d 1042-1043
+  s_140622c634f845::t_100ad222b718d3 334-335,354-358,361-377,1056-1074
+db/migrations/meta/0001_snapshot.json
+  s_140622c634f845::t_7d600ef00992a0 3647-3648
+src/data/database.ts
+  s_140622c634f845::t_88d10e7c8bc379 3,15
+src/data/repositories.ts
+  s_140622c634f845::t_ce8a3a39fb97de 60-87
+vitest.worker.config.ts
+  s_140622c634f845::t_5f6d68d07a712c 33-39,41-43
+  s_140622c634f845::t_723bf13e56fefb 3-5,40
+.github/workflows/deploy.yml
+  s_140622c634f845::t_566de618de9dd9 25-40,68-69
+  s_140622c634f845::t_940b86b3d2fc60 75
+  s_140622c634f845::t_9fffaefb8900af 70
+src/services/user-tokens.ts
+  s_140622c634f845::t_bc05ee8be7359a 3,26-30
+src/shared/time.ts
+  s_140622c634f845::t_88d10e7c8bc379 4-5,16-17
+  s_140622c634f845::t_0a86900e15ca39 7-15
+src/http/api.worker.test.ts
+  s_140622c634f845::t_66079e0b1d3e6c 840-863
+src/http/api.ts
+  s_140622c634f845::t_bc05ee8be7359a 125,2852-2857,2878-2883,2901-2906
+  s_140622c634f845::t_66079e0b1d3e6c 445-448,458
+db/migrations/0000_foundation.sql
+  s_140622c634f845::t_631d6fa52ac86f 422
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "4172081aa875d8279ee717abfb838f0106438811",
+  "prompts": {},
+  "sessions": {
+    "s_140622c634f845": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a048c4-df71-7811-aa11-c17f78944a00",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
