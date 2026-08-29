@@ -148,7 +148,9 @@ function BottomTabs() {
 
 function UserBlock({ me, collapsed = false }: { me: ApiMe; collapsed?: boolean }) {
   return (
-    <div className={cn('flex items-center gap-2', collapsed ? 'justify-center' : 'justify-between')}>
+    <div
+      className={cn('flex items-center gap-2', collapsed ? 'justify-center' : 'justify-between')}
+    >
       <span className={cn('truncate font-mono text-xs text-mute', collapsed && 'hidden')}>
         {me.login ? `@${me.login}` : me.name}
       </span>
@@ -208,8 +210,8 @@ export function AppShell({ me, children }: { me: ApiMe; children: ReactNode }) {
   );
   // The code browser gets the whole viewport — a full-width, full-height
   // workspace on desktop — and forces the sidebar collapsed (below).
-  // codeRoute lives in lib/layout.ts: Artifacts repos have negative ids,
-  // which a bare \d+ here silently dropped into the reading-width container.
+  // codeRoute lives in lib/layout.ts so the route-shape rule is shared and
+  // independently tested.
   // pathname above is the *resolved* location, so the sidebar snaps
   // collapsed in the same frame the code page commits, matching the
   // container-width behavior.

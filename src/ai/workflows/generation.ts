@@ -229,7 +229,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
           }
           let base: string;
           if (repo.provider === 'artifacts') {
-            // Artifacts repos carry their default branch in D1 — there is no
+            // Artifacts repos carry their default branch in PostgreSQL — there is no
             // forge API to ask, and installationToken would reject the
             // synthetic installation id.
             base = repo.default_branch ?? 'main';
@@ -652,7 +652,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
     } catch (err) {
       // Terminal failure (a step exhausted its retries, or a
       // NonRetryableError). Recording it is itself a durable step, so the
-      // feature can never strand in 'generating' just because D1 blinked.
+      // feature can never strand in 'generating' just because PostgreSQL blinked.
       const message = (err instanceof Error ? err.message : String(err)).slice(0, 500);
       await step.do(
         'record failure',

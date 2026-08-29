@@ -30,7 +30,6 @@ import {
   readTree,
   RepoBrowserError,
 } from './repo-browser.ts';
-import { isJsonArray, isJsonObject, parseJson, type JsonValue } from '../shared/json.ts';
 
 // Use cases behind the /mcp tool surface (integrations/mcp/server.ts). Every
 // function takes the bearer-resolved AuthedUser and applies the same
@@ -63,30 +62,18 @@ async function authorizedRepo(user: AuthedUser, repositoryId: number): Promise<R
   return repo;
 }
 
-// Stored task JSON (questions/answers/results) is written by the pipeline,
-// but guard-parse anyway: an MCP result must never throw on a bad row.
-function storedJsonArray(text: string | null): JsonValue[] {
-  if (!text) return [];
-  try {
-    const parsed = parseJson(text);
-    return isJsonArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
 // Same computation as verificationSummary in http/api-support.ts, re-derived
 // here to keep the service layer below http.
 function verificationSummary(
   status: string | null | undefined,
-  resultsJson: string | null | undefined,
+  results: { verdict: string }[] | null | undefined,
 ): { status: string; total: number; failed: number } | null {
   if (!status) return null;
-  const results = storedJsonArray(resultsJson ?? null);
+  const rows = results ?? [];
   return {
     status,
-    total: results.length,
-    failed: results.filter((r) => isJsonObject(r) && r['verdict'] === 'fail').length,
+    total: rows.length,
+    failed: rows.filter((r) => r.verdict === 'fail').length,
   };
 }
 
@@ -96,7 +83,7 @@ export async function listBoard(user: AuthedUser) {
     listPlansForInstallations(user.installationIds),
     listTodos(user.installationIds),
   ]);
-  const active = plans.filter((p) => p.archived !== 1);
+  const active = plans.filter((p) => !p.archived);
   const [repoStatuses, todoRepos] = await Promise.all([
     getTaskRepoStatuses(active.map((p) => p.id)),
     todoRepositoriesForTodos(todos.map((t) => t.id)),
@@ -132,7 +119,7 @@ export async function listBoard(user: AuthedUser) {
     })),
     repos: groups
       .flatMap((g) => g.repos)
-      .filter((r) => r.enabled === 1)
+      .filter((r) => r.enabled)
       .map((r) => ({
         id: r.id,
         owner: r.owner,
@@ -156,9 +143,9 @@ export async function getTask(user: AuthedUser, taskId: number) {
     created_at: plan.created_at,
     requirements: plan.requirements,
     plan: plan.plan,
-    questions: storedJsonArray(plan.questions),
-    answers: storedJsonArray(plan.answers),
-    acceptance: storedJsonArray(plan.acceptance),
+    questions: plan.questions ?? [],
+    answers: plan.answers ?? [],
+    acceptance: plan.acceptance ?? [],
     repos: repoStatuses.map((r) => ({
       repository_id: r.repository_id,
       owner: r.owner,
@@ -251,7 +238,7 @@ export async function readRepoFile(
 async function validRepoIds(installationId: number, repoIds: number[]): Promise<boolean> {
   if (repoIds.length === 0 || repoIds.length > MAX_TASK_REPOS) return false;
   const repos = await Promise.all(repoIds.map((id) => getRepoById(id)));
-  return repos.every((r) => r && r.installation_id === installationId && r.enabled === 1);
+  return repos.every((r) => r && r.installation_id === installationId && r.enabled);
 }
 
 export async function createTodo(

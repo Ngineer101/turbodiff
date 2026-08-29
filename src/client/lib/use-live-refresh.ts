@@ -4,7 +4,7 @@ import { isJsonObject } from '../../shared/json.ts';
 import { api } from './api.ts';
 
 // Cheap live updates: poll the one-row change counter (GET
-// /api/factory/version, maintained by D1 triggers) and refetch the real
+// /api/factory/version, maintained by PostgreSQL triggers) and refetch the real
 // payloads only when it moves. Mounted once in AppShell — invalidation only
 // refetches queries with active observers, so the cost of a bump is exactly
 // the page being looked at. The per-query 30s intervals in queries.ts remain

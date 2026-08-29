@@ -2,10 +2,8 @@
 /// <reference path="../../worker-configuration.d.ts" />
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
 
-import { env } from 'cloudflare:workers';
-import { applyD1Migrations } from 'cloudflare:test';
-import { beforeAll, beforeEach, describe, expect, it } from 'vite-plus/test';
-import type { D1Migration } from '@cloudflare/vitest-pool-workers';
+import { testDatabase } from '../test/database-fixture.ts';
+import { beforeEach, describe, expect, it } from 'vite-plus/test';
 import {
   addAssistantChatMessage,
   approvePlanFeatures,
@@ -13,6 +11,7 @@ import {
   createAutomation,
   createCockpitComment,
   createFeature,
+  createVerification,
   createPlan,
   createPlanForTodo,
   createTodo,
@@ -41,33 +40,33 @@ import {
   tryRecordFixAttempt,
   tryRecordReview,
   updatePlan,
+  upsertInstallation,
   upsertPushSubscription,
   finishInstallationRepoSync,
   storeInstallationAccessSnapshot,
 } from './db.ts';
 
-type TestEnv = Cloudflare.Env & { TEST_MIGRATIONS: D1Migration[] };
-// SAFETY: vitest.worker.config.ts defines the test-only TEST_MIGRATIONS
-// miniflare binding, which the generated production Cloudflare.Env cannot
-// know about.
-const testEnv = env as TestEnv;
-
 async function seedTenant(): Promise<void> {
-  await testEnv.DB.batch([
-    testEnv.DB.prepare(
+  await testDatabase().batch([
+    testDatabase().prepare(
+      `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt")
+       VALUES ('user-1', 'Test User', 'user-1@example.test', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+    ),
+    testDatabase().prepare(
+      `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt", "githubId")
+       VALUES ('push-3001', 'Push 3001', 'push-3001@example.test', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 3001),
+              ('push-4001', 'Push 4001', 'push-4001@example.test', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 4001)`,
+    ),
+    testDatabase().prepare(
       `INSERT INTO installations (id, account_login, account_id, account_type)
 		 VALUES (1001, 'acme', 2001, 'Organization')`,
     ),
-    testEnv.DB.prepare(
+    testDatabase().prepare(
       `INSERT INTO repositories (id, installation_id, owner, name)
 		 VALUES (101, 1001, 'acme', 'api'), (102, 1001, 'acme', 'web')`,
     ),
   ]);
 }
-
-beforeAll(async () => {
-  await applyD1Migrations(testEnv.DB, testEnv.TEST_MIGRATIONS);
-});
 
 beforeEach(async () => {
   const tables = [
@@ -102,8 +101,36 @@ beforeEach(async () => {
     'user',
     'user_tokens',
   ];
-  await testEnv.DB.batch(tables.map((table) => testEnv.DB.prepare(`DELETE FROM "${table}"`)));
+  await testDatabase().batch(
+    tables.map((table) => testDatabase().prepare(`DELETE FROM "${table}"`)),
+  );
   await seedTenant();
+});
+
+describe('installation mirroring', () => {
+  it('replaces a stale GitHub installation when the account is reinstalled with a new id', async () => {
+    await upsertInstallation(1002, { login: 'acme', id: 2001, type: 'Organization' }, 3001);
+
+    const installations = await testDatabase()
+      .prepare(
+        `SELECT id, account_login, account_id, installer_github_id
+         FROM installations ORDER BY id`,
+      )
+      .all<{
+        id: number;
+        account_login: string;
+        account_id: number;
+        installer_github_id: number | null;
+      }>();
+    expect(installations.results).toEqual([
+      { id: 1002, account_login: 'acme', account_id: 2001, installer_github_id: 3001 },
+    ]);
+
+    const oldRepos = await testDatabase()
+      .prepare('SELECT COUNT(*) AS count FROM repositories WHERE installation_id = 1001')
+      .first<{ count: number }>();
+    expect(oldRepos?.count).toBe(0);
+  });
 });
 
 describe('performance state', () => {
@@ -113,10 +140,15 @@ describe('performance state', () => {
     expect(snapshot?.installationIds).toEqual([1001, 2002]);
     expect(snapshot?.verifiedAt).toBeGreaterThan(0);
 
-    await testEnv.DB.prepare(
-      `UPDATE user_installation_access SET installation_ids = '[1001,"bad"]' WHERE user_id = 'user-1'`,
-    ).run();
-    expect(await installationAccessSnapshot('user-1')).toBeNull();
+    await expect(
+      testDatabase()
+        .prepare(
+          `UPDATE user_installation_access
+         SET installation_ids = ARRAY[1001::bigint, NULL] WHERE user_id = 'user-1'`,
+        )
+        .run(),
+    ).rejects.toThrow();
+    expect((await installationAccessSnapshot('user-1'))?.installationIds).toEqual([1001, 2002]);
   });
 
   it('records ref heads and serializes repository refresh claims across callers', async () => {
@@ -137,10 +169,12 @@ describe('performance state', () => {
     expect(claims.filter(Boolean)).toHaveLength(1);
     await finishInstallationRepoSync(1001, true);
     expect(await claimInstallationRepoSync(1001)).toBe(false);
-    await testEnv.DB.prepare(
-      `UPDATE installation_repo_sync SET last_synced_at = datetime('now', '-6 minutes')
+    await testDatabase()
+      .prepare(
+        `UPDATE installation_repo_sync SET last_synced_at = CURRENT_TIMESTAMP - INTERVAL '6 minutes'
 		 WHERE installation_id = 1001`,
-    ).run();
+      )
+      .run();
     expect(await claimInstallationRepoSync(1001)).toBe(true);
   });
 });
@@ -164,24 +198,28 @@ describe('fix attempt invariants', () => {
     await finishFixAttempt(third!, 'failed');
     expect(await tryRecordFixAttempt(101, 7, 'blocking_review', 3)).toBeNull();
 
-    const count = await testEnv.DB.prepare(
-      'SELECT COUNT(*) AS count FROM fix_attempts WHERE repository_id = 101 AND pr_number = 7',
-    ).first<{ count: number }>();
+    const count = await testDatabase()
+      .prepare(
+        'SELECT COUNT(*) AS count FROM fix_attempts WHERE repository_id = 101 AND pr_number = 7',
+      )
+      .first<{ count: number }>();
     expect(count?.count).toBe(3);
   });
 
   it('fails a stale run before admitting its replacement', async () => {
     const stale = await tryRecordFixAttempt(101, 8, 'blocking_review', 3);
-    await testEnv.DB.prepare(
-      `UPDATE fix_attempts SET created_at = datetime('now', '-21 minutes') WHERE id = ?1`,
-    )
+    await testDatabase()
+      .prepare(
+        `UPDATE fix_attempts SET created_at = CURRENT_TIMESTAMP - INTERVAL '21 minutes' WHERE id = ?1`,
+      )
       .bind(stale)
       .run();
 
     const replacement = await tryRecordFixAttempt(101, 8, 'blocking_review', 3);
     expect(replacement).not.toBeNull();
     expect(replacement).not.toBe(stale);
-    const old = await testEnv.DB.prepare('SELECT status, error FROM fix_attempts WHERE id = ?1')
+    const old = await testDatabase()
+      .prepare('SELECT status, error FROM fix_attempts WHERE id = ?1')
       .bind(stale)
       .first<{ status: string; error: string }>();
     expect(old).toMatchObject({ status: 'failed' });
@@ -211,6 +249,28 @@ describe('fix attempt invariants', () => {
     const fix = await tryRecordFixAttempt(101, 7, 'blocking_review', 3);
     expect(fix).not.toBeNull();
     expect(await tryRecordFixAttempt(101, 7, 'chat', Number.MAX_SAFE_INTEGER, 'chat')).toBeNull();
+  });
+});
+
+describe('verification invariants', () => {
+  it('fails a stale running verification before admitting its replacement', async () => {
+    const featureId = await createFeature(101, 'Verify me', 'Check the implementation');
+    const stale = await createVerification(featureId);
+    await testDatabase()
+      .prepare(
+        `UPDATE verifications SET created_at = CURRENT_TIMESTAMP - INTERVAL '46 minutes' WHERE id = ?1`,
+      )
+      .bind(stale)
+      .run();
+
+    const replacement = await createVerification(featureId);
+    expect(replacement).not.toBe(stale);
+    const old = await testDatabase()
+      .prepare('SELECT status, error FROM verifications WHERE id = ?1')
+      .bind(stale)
+      .first<{ status: string; error: string }>();
+    expect(old).toMatchObject({ status: 'error' });
+    expect(old?.error).toContain('replaced');
   });
 });
 
@@ -246,7 +306,8 @@ describe('cockpit chat messages', () => {
   it('returns recent history oldest-first and persists the chat session id', async () => {
     const featureId = await createFeature(101, 'Feature', 'Spec');
     for (let i = 0; i < 25; i++) {
-      await createUserChatMessage(featureId, `msg ${i}`, 'octocat', 1);
+      const messageId = await createUserChatMessage(featureId, `msg ${i}`, 'octocat', 1);
+      await setChatMessageStatus(messageId, 'done');
     }
     const history = await recentChatHistory(featureId, 20);
     expect(history).toHaveLength(20);
@@ -271,17 +332,20 @@ describe('review dispatch invariants', () => {
     );
     expect(results.filter((id) => id !== null)).toHaveLength(1);
 
-    const count = await testEnv.DB.prepare(
-      `SELECT COUNT(*) AS count FROM reviews WHERE agent_instance_id = 'review--acme--api--9'`,
-    ).first<{ count: number }>();
+    const count = await testDatabase()
+      .prepare(
+        `SELECT COUNT(*) AS count FROM reviews WHERE agent_instance_id = 'review--acme--api--9'`,
+      )
+      .first<{ count: number }>();
     expect(count?.count).toBe(1);
   });
 
   it('fails a stale running claim before admitting its replacement', async () => {
     const stale = await tryRecordReview(101, 1001, 10, 'opened', 'review', 'review--acme--api--10');
-    await testEnv.DB.prepare(
-      `UPDATE reviews SET created_at = datetime('now', '-21 minutes') WHERE id = ?1`,
-    )
+    await testDatabase()
+      .prepare(
+        `UPDATE reviews SET created_at = CURRENT_TIMESTAMP - INTERVAL '21 minutes' WHERE id = ?1`,
+      )
       .bind(stale)
       .run();
 
@@ -315,7 +379,8 @@ describe('review dispatch invariants', () => {
     );
     expect(replacement).not.toBeNull();
     expect(replacement).not.toBe(stale);
-    const old = await testEnv.DB.prepare('SELECT status FROM reviews WHERE id = ?1')
+    const old = await testDatabase()
+      .prepare('SELECT status FROM reviews WHERE id = ?1')
       .bind(stale)
       .first<{ status: string }>();
     expect(old).toMatchObject({ status: 'failed' });
@@ -363,6 +428,41 @@ describe('single-flight database claims', () => {
     );
     expect(runs.filter((id) => id !== null)).toHaveLength(1);
   });
+
+  it('fails a stale automation run before admitting its replacement', async () => {
+    const automationId = await createAutomation(
+      101,
+      {
+        name: 'Dependency update',
+        prompt: 'Update dependencies',
+        schedule_kind: 'daily',
+        time_of_day: '09:00',
+        day_of_week: null,
+      },
+      '2026-08-14T09:00:00Z',
+    );
+    const stale = await tryRecordAutomationRun(automationId);
+    await testDatabase()
+      .prepare(
+        `UPDATE automation_runs
+         SET created_at = CURRENT_TIMESTAMP - INTERVAL '21 minutes'
+         WHERE id = ?1`,
+      )
+      .bind(stale)
+      .run();
+
+    const replacement = await tryRecordAutomationRun(automationId);
+    expect(replacement).not.toBeNull();
+    expect(replacement).not.toBe(stale);
+    const old = await testDatabase()
+      .prepare('SELECT status, error FROM automation_runs WHERE id = ?1')
+      .bind(stale)
+      .first<{ status: string; error: string | null }>();
+    expect(old).toMatchObject({
+      status: 'failed',
+      error: 'stale: consumer killed before completion',
+    });
+  });
 });
 
 describe('paid-work idempotency', () => {
@@ -382,10 +482,12 @@ describe('paid-work idempotency', () => {
     expect(starts.filter((result) => result?.created)).toHaveLength(1);
     expect(new Set(starts.map((result) => result?.planId))).toHaveLength(1);
     const planId = starts[0]!.planId;
-    const count = await testEnv.DB.prepare('SELECT COUNT(*) AS count FROM plans WHERE todo_id = ?1')
+    const count = await testDatabase()
+      .prepare('SELECT COUNT(*) AS count FROM plans WHERE todo_id = ?1')
       .bind(todoId)
       .first<{ count: number }>();
-    const todo = await testEnv.DB.prepare('SELECT plan_id FROM todos WHERE id = ?1')
+    const todo = await testDatabase()
+      .prepare('SELECT plan_id FROM todos WHERE id = ?1')
       .bind(todoId)
       .first<{ plan_id: number }>();
     expect(count?.count).toBe(1);
@@ -401,13 +503,13 @@ describe('paid-work idempotency', () => {
     await updatePlan(planId, {
       status: 'plan_ready',
       plan: '## acme/api\nChange API.\n\n## acme/web\nChange web.',
-      acceptance: '["The feature works"]',
+      acceptance: ['The feature works'],
     });
     const features = [101, 102].map((repositoryId) => ({
       repositoryId,
       title: 'Ship feature',
       spec: 'Implementation spec',
-      acceptance: '["The feature works"]',
+      acceptance: ['The feature works'],
       authorLogin: 'approver',
       authorId: 2,
       coauthorLogin: 'creator',
@@ -422,24 +524,25 @@ describe('paid-work idempotency', () => {
     expect(approvals.filter((ids) => ids !== null)).toHaveLength(1);
     expect(approvals.find((ids) => ids !== null)).toHaveLength(2);
 
-    const rows = await testEnv.DB.prepare(
-      'SELECT id, repository_id FROM features WHERE plan_id = ?1 ORDER BY repository_id',
-    )
+    const rows = await testDatabase()
+      .prepare('SELECT id, repository_id FROM features WHERE plan_id = ?1 ORDER BY repository_id')
       .bind(planId)
       .all<{ id: number; repository_id: number }>();
-    const plan = await testEnv.DB.prepare('SELECT status, feature_id FROM plans WHERE id = ?1')
+    const plan = await testDatabase()
+      .prepare('SELECT status, feature_id FROM plans WHERE id = ?1')
       .bind(planId)
       .first<{ status: string; feature_id: number }>();
     expect(rows.results.map((row) => row.repository_id)).toEqual([101, 102]);
     expect(plan).toMatchObject({ status: 'approved', feature_id: rows.results[0].id });
     await expect(
-      testEnv.DB.prepare(
-        `INSERT INTO features (repository_id, title, spec, plan_id)
+      testDatabase()
+        .prepare(
+          `INSERT INTO features (repository_id, title, spec, plan_id)
 		 VALUES (101, 'Duplicate', 'Must fail', ?1)`,
-      )
+        )
         .bind(planId)
         .run(),
-    ).rejects.toThrow(/UNIQUE constraint failed/);
+    ).rejects.toMatchObject({ cause: { code: '23505' } });
   });
 });
 
@@ -496,21 +599,22 @@ describe('push subscriptions', () => {
 
 describe('pipeline cost by month', () => {
   it('reports a month whose only spend is non-review, and scopes to the caller', async () => {
-    await testEnv.DB.batch([
-      testEnv.DB.prepare(
+    await testDatabase().batch([
+      testDatabase().prepare(
         `INSERT INTO installations (id, account_login, account_id, account_type)
 		 VALUES (2002, 'other', 2002, 'Organization')`,
       ),
-      testEnv.DB.prepare(
+      testDatabase().prepare(
         `INSERT INTO repositories (id, installation_id, owner, name)
 		 VALUES (202, 2002, 'other', 'private')`,
       ),
-      testEnv.DB.prepare(
-        `INSERT INTO automations (id, repository_id, name, prompt, schedule_kind, next_run_at)
-		 VALUES (601, 101, 'Nightly', 'do the thing', 'daily', '2026-01-01T00:00:00Z'),
-		        (602, 202, 'Theirs', 'not mine', 'daily', '2026-01-01T00:00:00Z')`,
+      testDatabase().prepare(
+        `INSERT INTO automations
+           (id, repository_id, name, prompt, schedule_kind, time_of_day, next_run_at)
+         VALUES (601, 101, 'Nightly', 'do the thing', 'daily', '09:00', '2026-01-01T00:00:00Z'),
+                (602, 202, 'Theirs', 'not mine', 'daily', '09:00', '2026-01-01T00:00:00Z')`,
       ),
-      testEnv.DB.prepare(
+      testDatabase().prepare(
         `INSERT INTO automation_runs (automation_id, cost_usd, created_at)
 		 VALUES (601, 0.25, '2026-03-04 05:06:07'),
 		        (602, 9.99, '2026-03-04 05:06:07')`,
@@ -524,8 +628,8 @@ describe('pipeline cost by month', () => {
   });
 
   it('orders months newest first', async () => {
-    await testEnv.DB.batch([
-      testEnv.DB.prepare(
+    await testDatabase().batch([
+      testDatabase().prepare(
         `INSERT INTO reviews (repository_id, installation_id, pr_number, trigger_event, cost_usd, created_at)
 		 VALUES (101, 1001, 7, 'opened', 0.5, '2026-01-15 00:00:00'),
 		        (101, 1001, 8, 'opened', 0.75, '2026-02-15 00:00:00')`,

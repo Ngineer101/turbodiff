@@ -73,10 +73,10 @@ const HUMAN_FIX_TRIGGERS = new Set(['cockpit_comment', 'chat']);
 function verifyPrompt(feature: FeatureRow, repo: RepositoryRow, criteria: string[]): string {
   const OUT_DIR = outDir(feature.id);
   const SHOTS_DIR = shotsDir(feature.id);
-  const demos = repo.demo_videos === 1;
+  const demos = repo.demo_videos;
   // launchable is the cached detection verdict: 0 means a previous run
   // proved this repo can't launch in the sandbox — skip discovery entirely.
-  const detect = !repo.run_command && demos && repo.launchable !== 0;
+  const detect = !repo.run_command && demos && repo.launchable !== false;
   const demosPossible = demos && (repo.run_command !== null || detect);
   const launch = repo.run_command
     ? `## Running the app
@@ -99,7 +99,7 @@ the background (\`nohup ... > /tmp/app.log 2>&1 &\`), wait for its port to
 accept connections, and verify runtime criteria against the live app.
 
 Timebox launch discovery to a few minutes. If the app needs Docker,
-containers, cloud bindings (e.g. Cloudflare Workers/D1/R2), a database, or
+containers, cloud bindings (e.g. Cloudflare Workers/PostgreSQL/R2), a database, or
 other external services to run, treat it as NOT launchable here — do not
 fight it; verify statically instead.
 
@@ -179,7 +179,7 @@ export async function runVerification(featureId: number): Promise<void> {
   }
   const repo = await getRepoById(feature.repository_id);
   if (!repo || !repo.enabled) return;
-  const criteria: string[] = feature.acceptance ? JSON.parse(feature.acceptance) : [];
+  const criteria = feature.acceptance ?? [];
   if (criteria.length === 0) {
     console.log(`turbodiff: verify skipped for feature ${featureId} (no acceptance criteria)`);
     return;
@@ -190,11 +190,9 @@ export async function runVerification(featureId: number): Promise<void> {
   try {
     const outcome = await verify(feature, repo, criteria);
     await finishVerification(verificationId, outcome.status, {
-      results: JSON.stringify(outcome.results),
+      results: outcome.results,
       summary: outcome.summary,
-      demo: outcome.demo
-        ? JSON.stringify({ video: outcome.demo.key, caption: outcome.demo.caption })
-        : undefined,
+      demo: outcome.demo ? { video: outcome.demo.key, caption: outcome.demo.caption } : undefined,
       usage: outcome.usage ?? undefined,
     });
     console.log(`turbodiff: verification ${outcome.status} for ${label}`);
@@ -272,12 +270,12 @@ async function verify(
     const results = await readResults(sandbox, OUT, criteria.length);
     const summary = await readText(sandbox, `${OUT}/summary.md`);
     const shots = await uploadScreenshots(sandbox, feature.id, results);
-    const demo = repo.demo_videos === 1 ? await uploadDemo(sandbox, feature.id) : undefined;
+    const demo = repo.demo_videos ? await uploadDemo(sandbox, feature.id) : undefined;
 
     // Cache the agent's discovery verdict — positive OR negative — so future
     // runs skip it entirely. Same trust domain as running the repo's own
     // code; the sandbox is the boundary.
-    if (!repo.run_command && repo.launchable !== 0) {
+    if (!repo.run_command && repo.launchable !== false) {
       try {
         const detected = parseJson((await sandbox.readFile(`${OUT}/run-command.json`)).content);
         if (isJsonObject(detected)) {
@@ -352,7 +350,7 @@ async function verify(
     // cockpit comment or a chat turn) — auto-"fixing" then means silently
     // reverting a human's explicit instruction. Flag the conflict and wait
     // for their decision instead.
-    if (failed.length > 0 && repo.auto_fix === 1) {
+    if (failed.length > 0 && repo.auto_fix) {
       const lastFixed = await latestFixedAttempt(repo.id, feature.pr_number!);
       // The guard fires only while the contract is UN-resolved: a criteria
       // edit after the comment-driven fix means the human already chose —
@@ -661,7 +659,7 @@ function reportBody(
     }
   }
   if (summary) lines.push('', '### How it works', '', summary.slice(0, 3_000));
-  if (failed > 0 && repo.auto_fix === 1) {
+  if (failed > 0 && repo.auto_fix) {
     lines.push('', '_The unmet criteria have been handed to the fix agent._');
   }
   return lines.join('\n');

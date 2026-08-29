@@ -24,7 +24,7 @@ export function registerReviewMetering(): void {
     }
     if (event.type !== 'turn' || !event.response.usage) return;
     const { usage } = event.response;
-    // Subscribers run synchronously on the emission path — queue the D1
+    // Subscribers run synchronously on the emission path — queue the PostgreSQL
     // write and contain failures; metering must never affect the agent.
     void addReviewUsage(event.instanceId, {
       inputTokens: usage.input,

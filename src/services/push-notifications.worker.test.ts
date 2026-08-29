@@ -2,18 +2,10 @@
 /// <reference path="../../worker-configuration.d.ts" />
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
 
-import { env } from 'cloudflare:workers';
-import { applyD1Migrations } from 'cloudflare:test';
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
-import type { D1Migration } from '@cloudflare/vitest-pool-workers';
+import { testDatabase } from '../test/database-fixture.ts';
+import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { createPlan, upsertPushSubscription } from '../data/db.ts';
 import { notifyPlanUsers, sendPushToSubscription } from './push-notifications.ts';
-
-type TestEnv = Cloudflare.Env & { TEST_MIGRATIONS: D1Migration[] };
-// SAFETY: vitest.worker.config.ts defines the test-only TEST_MIGRATIONS
-// miniflare binding, which the generated production Cloudflare.Env cannot
-// know about.
-const testEnv = env as TestEnv;
 
 // Fixture client keys (a valid ECDH P-256 public point + 16-byte auth
 // secret) — the RFC 8291 encryption derives a real shared secret from these,
@@ -24,21 +16,22 @@ const P256DH =
 const AUTH = 'QhkWkXwEh4Tj7XFNfBQnVg';
 
 async function seedTenant(): Promise<void> {
-  await testEnv.DB.batch([
-    testEnv.DB.prepare(
+  await testDatabase().batch([
+    testDatabase().prepare(
+      `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt", "githubId")
+       VALUES ('push-user', 'Push User', 'push@example.test', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 3001),
+              ('push-user-2', 'Push User 2', 'push-2@example.test', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 4001)`,
+    ),
+    testDatabase().prepare(
       `INSERT INTO installations (id, account_login, account_id, account_type)
 		 VALUES (1001, 'acme', 2001, 'Organization')`,
     ),
-    testEnv.DB.prepare(
+    testDatabase().prepare(
       `INSERT INTO repositories (id, installation_id, owner, name)
 		 VALUES (101, 1001, 'acme', 'api')`,
     ),
   ]);
 }
-
-beforeAll(async () => {
-  await applyD1Migrations(testEnv.DB, testEnv.TEST_MIGRATIONS);
-});
 
 beforeEach(async () => {
   const tables = [
@@ -47,8 +40,11 @@ beforeEach(async () => {
     'plans',
     'repositories',
     'installations',
+    'user',
   ];
-  await testEnv.DB.batch(tables.map((table) => testEnv.DB.prepare(`DELETE FROM "${table}"`)));
+  await testDatabase().batch(
+    tables.map((table) => testDatabase().prepare(`DELETE FROM "${table}"`)),
+  );
   await seedTenant();
 });
 
@@ -259,9 +255,9 @@ describe('notifyPlanUsers', () => {
       vi.unstubAllGlobals();
     }
 
-    const remaining = await testEnv.DB.prepare(
-      'SELECT endpoint FROM push_subscriptions ORDER BY endpoint',
-    ).all<{ endpoint: string }>();
+    const remaining = await testDatabase()
+      .prepare('SELECT endpoint FROM push_subscriptions ORDER BY endpoint')
+      .all<{ endpoint: string }>();
     expect(remaining.results.map((r) => r.endpoint)).toEqual([
       'https://push.example/live',
       'https://push.example/other-user',

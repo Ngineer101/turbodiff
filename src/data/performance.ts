@@ -1,5 +1,7 @@
-import { env } from 'cloudflare:workers';
-import { isJsonArray, isNumber, parseJson } from '../shared/json.ts';
+import { eq, sql } from 'drizzle-orm';
+import { execute, queryOne, queryRows, withDatabase } from './database.ts';
+import { userInstallationAccess } from './schema.ts';
+import { minutesAgo } from './sql.ts';
 
 export interface InstallationAccessSnapshot {
   installationIds: number[];
@@ -9,39 +11,39 @@ export interface InstallationAccessSnapshot {
 export async function installationAccessSnapshot(
   userId: string,
 ): Promise<InstallationAccessSnapshot | null> {
-  const row = await env.DB.prepare(
-    'SELECT installation_ids, verified_at FROM user_installation_access WHERE user_id = ?1',
-  )
-    .bind(userId)
-    .first<{ installation_ids: string; verified_at: string }>();
+  const row = await withDatabase(async (database) => {
+    const rows = await database
+      .select({
+        installationIds: userInstallationAccess.installationIds,
+        verifiedAt: userInstallationAccess.verifiedAt,
+      })
+      .from(userInstallationAccess)
+      .where(eq(userInstallationAccess.userId, userId))
+      .limit(1);
+    return rows[0] ?? null;
+  });
   if (!row) return null;
-  let parsed;
-  try {
-    parsed = parseJson(row.installation_ids);
-  } catch {
+  if (!row.installationIds.every(Number.isInteger)) {
     return null;
   }
-  if (!isJsonArray(parsed)) return null;
-  const installationIds = parsed.filter(isNumber);
-  if (installationIds.length !== parsed.length || !installationIds.every(Number.isInteger)) {
-    return null;
-  }
-  const verifiedAt = Date.parse(`${row.verified_at.replace(' ', 'T')}Z`);
+  const verifiedAt = Date.parse(row.verifiedAt);
   if (!Number.isFinite(verifiedAt)) return null;
-  return { installationIds, verifiedAt };
+  return { installationIds: row.installationIds, verifiedAt };
 }
 
 export async function storeInstallationAccessSnapshot(
   userId: string,
   installationIds: number[],
 ): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO user_installation_access (user_id, installation_ids, verified_at)
-		 VALUES (?1, ?2, CURRENT_TIMESTAMP)
-		 ON CONFLICT(user_id) DO UPDATE SET installation_ids = ?2, verified_at = CURRENT_TIMESTAMP`,
-  )
-    .bind(userId, JSON.stringify(installationIds))
-    .run();
+  await withDatabase(async (database) => {
+    await database
+      .insert(userInstallationAccess)
+      .values({ userId, installationIds })
+      .onConflictDoUpdate({
+        target: userInstallationAccess.userId,
+        set: { installationIds, verifiedAt: sql`CURRENT_TIMESTAMP` },
+      });
+  });
 }
 
 export interface RepositoryRefRow {
@@ -57,54 +59,51 @@ export async function recordRepositoryRef(
   headSha: string,
   pushedAt: string,
 ): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO repository_refs (repository_id, ref, head_sha, pushed_at)
-		 VALUES (?1, ?2, ?3, ?4)
-		 ON CONFLICT(repository_id, ref)
-		 DO UPDATE SET head_sha = ?3, pushed_at = ?4`,
-  )
-    .bind(repositoryId, ref, headSha, pushedAt)
-    .run();
+  await execute(sql`
+    INSERT INTO app.repository_refs (repository_id, ref, head_sha, pushed_at)
+    VALUES (${repositoryId}, ${ref}, ${headSha}, ${pushedAt})
+    ON CONFLICT(repository_id, ref)
+    DO UPDATE SET head_sha = ${headSha}, pushed_at = ${pushedAt}
+  `);
 }
 
 export async function deleteRepositoryRef(repositoryId: number, ref: string): Promise<void> {
-  await env.DB.prepare('DELETE FROM repository_refs WHERE repository_id = ?1 AND ref = ?2')
-    .bind(repositoryId, ref)
-    .run();
+  await execute(sql`
+    DELETE FROM app.repository_refs WHERE repository_id = ${repositoryId} AND ref = ${ref}
+  `);
 }
 
 export async function repositoryRef(
   repositoryId: number,
   ref: string,
 ): Promise<RepositoryRefRow | null> {
-  return env.DB.prepare('SELECT * FROM repository_refs WHERE repository_id = ?1 AND ref = ?2')
-    .bind(repositoryId, ref)
-    .first<RepositoryRefRow>();
+  return queryOne<RepositoryRefRow>(sql`
+    SELECT * FROM app.repository_refs WHERE repository_id = ${repositoryId} AND ref = ${ref}
+  `);
 }
 
 export async function repositoryRefs(repositoryId: number): Promise<RepositoryRefRow[]> {
-  const rows = await env.DB.prepare(
-    'SELECT * FROM repository_refs WHERE repository_id = ?1 ORDER BY ref',
-  )
-    .bind(repositoryId)
-    .all<RepositoryRefRow>();
-  return rows.results;
+  return queryRows<RepositoryRefRow>(sql`
+    SELECT * FROM app.repository_refs WHERE repository_id = ${repositoryId} ORDER BY ref
+  `);
 }
 
 export async function claimInstallationRepoSync(
   installationId: number,
   intervalMinutes = 5,
 ): Promise<boolean> {
-  const row = await env.DB.prepare(
-    `INSERT INTO installation_repo_sync (installation_id, syncing_until)
-		 VALUES (?1, datetime('now', '+5 minutes'))
-		 ON CONFLICT(installation_id) DO UPDATE SET syncing_until = datetime('now', '+5 minutes')
-		 WHERE (syncing_until IS NULL OR syncing_until < CURRENT_TIMESTAMP)
-		   AND (last_synced_at IS NULL OR last_synced_at < datetime('now', '-' || ?2 || ' minutes'))
-		 RETURNING installation_id`,
-  )
-    .bind(installationId, intervalMinutes)
-    .first<{ installation_id: number }>();
+  const row = await queryOne<{ installation_id: number }>(sql`
+    INSERT INTO app.installation_repo_sync (installation_id, syncing_until)
+    VALUES (${installationId}, CURRENT_TIMESTAMP + INTERVAL '5 minutes')
+    ON CONFLICT(installation_id) DO UPDATE
+    SET syncing_until = CURRENT_TIMESTAMP + INTERVAL '5 minutes'
+    WHERE (installation_repo_sync.syncing_until IS NULL
+        OR installation_repo_sync.syncing_until < CURRENT_TIMESTAMP)
+      AND (installation_repo_sync.last_synced_at IS NULL
+        OR installation_repo_sync.last_synced_at
+          < ${minutesAgo(intervalMinutes)})
+    RETURNING installation_id
+  `);
   return row !== null;
 }
 
@@ -112,13 +111,16 @@ export async function finishInstallationRepoSync(
   installationId: number,
   success: boolean,
 ): Promise<void> {
-  await env.DB.prepare(
-    success
-      ? `UPDATE installation_repo_sync
-		   SET last_synced_at = CURRENT_TIMESTAMP, syncing_until = NULL
-		   WHERE installation_id = ?1`
-      : `UPDATE installation_repo_sync SET syncing_until = NULL WHERE installation_id = ?1`,
-  )
-    .bind(installationId)
-    .run();
+  const update = success
+    ? sql`
+        UPDATE app.installation_repo_sync
+        SET last_synced_at = CURRENT_TIMESTAMP, syncing_until = NULL
+        WHERE installation_id = ${installationId}
+      `
+    : sql`
+        UPDATE app.installation_repo_sync
+        SET syncing_until = NULL
+        WHERE installation_id = ${installationId}
+      `;
+  await execute(update);
 }

@@ -7,6 +7,22 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      DATABASE_URL: postgres://turbodiff:turbodiff@127.0.0.1:5432/turbodiff
+    services:
+      postgres:
+        image: postgres:18.6-alpine
+        env:
+          POSTGRES_USER: turbodiff
+          POSTGRES_PASSWORD: turbodiff
+          POSTGRES_DB: turbodiff
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U turbodiff -d turbodiff"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v5
 
@@ -28,11 +44,17 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
-      - name: Worker and D1 integration tests
-        run: pnpm test:worker
+      - name: Validate Drizzle migrations
+        run: pnpm vp run db:check
+
+      - name: Fresh PostgreSQL schema test
+        run: pnpm vp run test:schema
+
+      - name: Worker and PostgreSQL integration tests
+        run: pnpm vp run test:worker
 
       - name: Build
         run: pnpm vp run build
 
       - name: Validate Worker deployment
-        run: pnpm wrangler deploy --dry-run
+        run: pnpm wrangler deploy --dry-run --config dist/turbodiff/wrangler.json

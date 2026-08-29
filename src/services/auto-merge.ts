@@ -41,7 +41,7 @@ export async function mergePullRequest(
 // leaves the merge to a human. Never applies to human-authored PRs (those have
 // no feature row).
 export async function maybeAutoMerge(repo: RepositoryRow, prNumber: number): Promise<void> {
-  if (repo.auto_merge !== 1) return; // cheap pre-check before any I/O
+  if (!repo.auto_merge) return; // cheap pre-check before any I/O
   const label = `${repo.owner}/${repo.name}#${prNumber}`;
   try {
     const feature = await getFeatureByRepoPr(repo.id, prNumber);
@@ -65,8 +65,8 @@ export async function maybeAutoMerge(repo: RepositoryRow, prNumber: number): Pro
     });
 
     const decline = autoMergeDecline({
-      optedIn: repo.auto_merge === 1,
-      blockingReviews: repo.blocking_reviews === 1,
+      optedIn: repo.auto_merge,
+      blockingReviews: repo.blocking_reviews,
       hasAcceptanceCriteria: Boolean(feature.acceptance),
       verificationPassed: verification?.status === 'passed',
       reviewed: botReviews.length > 0,

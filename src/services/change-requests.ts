@@ -23,7 +23,7 @@ import { autoMergeDecline } from '../domain/merge-policy.ts';
 import { splitDiffSegments } from '../domain/review-diff.ts';
 
 // Native change-request orchestration (docs/artifacts-provider.md): the
-// forge layer for Artifacts-hosted repos. Rows in D1 (data/change-requests),
+// forge layer for Artifacts-hosted repos. Rows in PostgreSQL (data/change-requests),
 // git mechanics in the sandbox (ai/runtime/cr-engine), diff patches in R2
 // under the private crs/ prefix — objects there are never issued capability
 // signatures, so /artifacts/* cannot serve them.
@@ -48,7 +48,7 @@ export async function refreshChangeRequest(
     mergeBase: state.mergeBase,
     mergeable: state.mergeable,
     conflictFiles: state.conflictFiles,
-    filesJson: JSON.stringify(state.files),
+    files: state.files,
     diffKey,
     patchTruncated: state.patchTruncated,
   });
@@ -109,12 +109,8 @@ export async function openNativeChangeRequest(input: {
   return refreshed;
 }
 
-// The one reader of change_requests.files — every consumer goes through
-// this instead of re-parsing (and re-justifying) the column inline.
-export function parseCrFiles(cr: Pick<ChangeRequestRow, 'files'>): CrFileChange[] {
-  // SAFETY: the column is written only by refreshChangeRequest above, as
-  // serialized CrFileChange[].
-  return cr.files ? (JSON.parse(cr.files) as CrFileChange[]) : [];
+export function changeRequestFiles(cr: Pick<ChangeRequestRow, 'files'>): CrFileChange[] {
+  return cr.files ?? [];
 }
 
 export async function getCrDiffPatch(cr: ChangeRequestRow): Promise<string> {
@@ -174,7 +170,7 @@ export async function maybeAutoMergeCr(
   repo: RepositoryRow,
   changeRequestId: number,
 ): Promise<void> {
-  if (repo.auto_merge !== 1) return; // cheap pre-check before any I/O
+  if (!repo.auto_merge) return; // cheap pre-check before any I/O
   const cr = await getChangeRequest(changeRequestId);
   if (!cr || cr.status !== 'open') return;
   const feature = cr.feature_id ? await getFeature(cr.feature_id) : null;
@@ -182,14 +178,14 @@ export async function maybeAutoMergeCr(
   const checks = await listCrChecks(cr.id);
 
   const decline = autoMergeDecline({
-    optedIn: repo.auto_merge === 1,
-    blockingReviews: repo.blocking_reviews === 1,
+    optedIn: repo.auto_merge,
+    blockingReviews: repo.blocking_reviews,
     hasAcceptanceCriteria: Boolean(feature?.acceptance),
     verificationPassed: verification?.status === 'passed',
     reviewed: cr.review_status !== null,
     anyBlockingReview: cr.review_status === 'changes_requested',
     checksGreen: checks.length > 0 && checks.every((check) => check.status === 'passed'),
-    hasConflict: cr.mergeable !== 1,
+    hasConflict: cr.mergeable !== true,
   });
   if (decline) {
     console.log(`turbodiff: auto-merge declined for CR ${cr.id} (${decline})`);

@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { Hono, type Context } from 'hono';
 import { deleteCookie } from 'hono/cookie';
-import { auth } from '../integrations/auth/better-auth.ts';
+import { withAuth } from '../integrations/auth/better-auth.ts';
 import { isJsonArray, isJsonObject, isString, parseJson } from '../shared/json.ts';
 import { renderAuthPage } from './auth-page.tsx';
 import { renderLanding } from './landing.tsx';
@@ -68,7 +68,7 @@ function routeAsset(path: string): string | null {
   if (path === '/') return 'src/client/pages/board.tsx';
   if (/^\/tasks\/\d+$/.test(path)) return 'src/client/pages/task.tsx';
   if (/^\/factory\/features\/\d+$/.test(path)) return 'src/client/pages/feature.tsx';
-  if (/^\/repos\/-?\d+\/code(?:\/.*)?$/.test(path)) return 'src/client/pages/code.tsx';
+  if (/^\/repos\/\d+\/code(?:\/.*)?$/.test(path)) return 'src/client/pages/code.tsx';
   if (path === '/usage') return 'src/client/pages/usage.tsx';
   if (path === '/integrations') return 'src/client/pages/integrations.tsx';
   if (path === '/agents') return 'src/client/pages/agents.tsx';
@@ -174,13 +174,13 @@ async function shellForPath(c: Context, path: string): Promise<string> {
   else if (/^\/tasks\/\d+$/.test(path)) preload.push(`/api${path}`);
   else if (/^\/factory\/features\/\d+$/.test(path)) preload.push(`/api${path}`);
   else {
-    const code = path.match(/^\/repos\/(-?\d+)\/code(?:\/.*)?$/);
+    const code = path.match(/^\/repos\/(\d+)\/code(?:\/.*)?$/);
     if (code) preload.push(`/api/repos/${code[1]}/code`);
   }
   return shell(preload, clientAssets(await loadClientManifest(c), path));
 }
 
-// Cheap shell gate: a live better-auth session (cookie-cached — no D1 read
+// Cheap shell gate: a live better-auth session (cookie-cached — no PostgreSQL read
 // within the cache window). Installation-level authorization happens per
 // request in the API layer.
 async function hasSession(c: Context): Promise<boolean> {
@@ -189,7 +189,9 @@ async function hasSession(c: Context): Promise<boolean> {
   const fake = (env as Env & { DEV_FAKE_INSTALLATIONS?: string }).DEV_FAKE_INSTALLATIONS;
   const host = new URL(c.req.url).hostname;
   if (fake && (host === 'localhost' || host === '127.0.0.1')) return true;
-  return (await auth().api.getSession({ headers: c.req.raw.headers })) !== null;
+  return (
+    (await withAuth((instance) => instance.api.getSession({ headers: c.req.raw.headers }))) !== null
+  );
 }
 
 export function createUiRoutes() {
@@ -220,10 +222,12 @@ export function createUiRoutes() {
     // Server-initiated better-auth social sign-in. The returned headers carry
     // the state cookie the OAuth callback validates — they must reach the
     // browser along with the redirect.
-    const { headers, response } = await auth().api.signInSocial({
-      body: { provider: 'github', callbackURL },
-      returnHeaders: true,
-    });
+    const { headers, response } = await withAuth((instance) =>
+      instance.api.signInSocial({
+        body: { provider: 'github', callbackURL },
+        returnHeaders: true,
+      }),
+    );
     if (!response.url) return c.text('sign-in failed — start again at /', 502);
     const res = c.redirect(response.url);
     for (const cookie of headers.getSetCookie()) res.headers.append('set-cookie', cookie);
@@ -241,15 +245,17 @@ export function createUiRoutes() {
     const next = c.req.query('next') ?? '';
     const callbackURL = next.startsWith('/') && !next.startsWith('//') ? next : '/onboarding';
     try {
-      const { headers, response } = await auth().api.linkSocialAccount({
-        body: {
-          provider: 'github',
-          callbackURL,
-          errorCallbackURL: '/onboarding?error=link_failed',
-        },
-        headers: c.req.raw.headers,
-        returnHeaders: true,
-      });
+      const { headers, response } = await withAuth((instance) =>
+        instance.api.linkSocialAccount({
+          body: {
+            provider: 'github',
+            callbackURL,
+            errorCallbackURL: '/onboarding?error=link_failed',
+          },
+          headers: c.req.raw.headers,
+          returnHeaders: true,
+        }),
+      );
       if (!response.url) return c.text('connect failed — start again at /onboarding', 502);
       const res = c.redirect(response.url);
       for (const cookie of headers.getSetCookie()) res.headers.append('set-cookie', cookie);
@@ -265,17 +271,19 @@ export function createUiRoutes() {
   app.get('/auth/callback', (c) => {
     const url = new URL(c.req.url);
     url.pathname = '/api/auth/callback/github';
-    return auth().handler(new Request(url, c.req.raw));
+    return withAuth((instance) => instance.handler(new Request(url, c.req.raw)));
   });
 
   app.post('/auth/logout', async (c) => {
     deleteCookie(c, LEGACY_SESSION_COOKIE, { path: '/' });
     let cookies: string[] = [];
     try {
-      const { headers } = await auth().api.signOut({
-        headers: c.req.raw.headers,
-        returnHeaders: true,
-      });
+      const { headers } = await withAuth((instance) =>
+        instance.api.signOut({
+          headers: c.req.raw.headers,
+          returnHeaders: true,
+        }),
+      );
       cookies = headers.getSetCookie();
     } catch {
       // No live session to revoke — still land signed out on /.

@@ -1,6 +1,8 @@
 import { setProvider } from '@flue/runtime';
 import { cloudflareBindingProvider } from '@flue/runtime/cloudflare/workers-ai';
 import { env } from 'cloudflare:workers';
+import { sql } from 'drizzle-orm';
+import { execute, withDatabaseScope } from './data/database.ts';
 import { Hono } from 'hono';
 import { dispatchReviewAgent } from './ai/review/dispatch.ts';
 import { registerReviewMetering } from './ai/review/metering.ts';
@@ -13,7 +15,7 @@ import { handleMcpProxy } from './http/mcp-proxy.ts';
 import { createUiRoutes } from './http/ui.ts';
 import { createWebhookRoutes } from './http/webhooks.ts';
 import { oAuthDiscoveryMetadata, oAuthProtectedResourceMetadata } from 'better-auth/plugins';
-import { auth } from './integrations/auth/better-auth.ts';
+import { withAuth } from './integrations/auth/better-auth.ts';
 import { verifyArtifactSig } from './integrations/security/crypto.ts';
 import { certificateSigKey, loadCertificateData } from './services/certificates.ts';
 
@@ -27,12 +29,17 @@ setProvider(
   }),
 );
 
-// Accumulate per-turn token usage and cost onto review rows in D1.
+// Accumulate per-turn token usage and cost onto review rows in PostgreSQL.
 registerReviewMetering();
 
 const startedAt = Date.now();
 
 const app = new Hono();
+
+// One lazy pg.Client per HTTP invocation. Data-free routes never connect;
+// database-heavy routes share one Hyperdrive edge connection across all
+// repository calls and Better Auth queries.
+app.use('*', (_c, next) => withDatabaseScope(next));
 
 // Baseline security headers. Every HTML page — the cockpit shell above all —
 // refuses framing: the Merge/Abandon buttons are session-authed clickjacking
@@ -67,9 +74,9 @@ app.use('*', async (c, next) => {
 
 app.get('/healthz', async (c) => {
   try {
-    await env.DB.prepare('SELECT 1').run();
+    await execute(sql`SELECT 1`);
   } catch (err) {
-    console.error('turbodiff: healthz D1 check failed', err);
+    console.error('turbodiff: healthz PostgreSQL check failed', err);
     return c.json({ ok: false, db: false }, 503);
   }
   return c.json({ ok: true, db: true, uptime_s: Math.round((Date.now() - startedAt) / 1000) });
@@ -133,10 +140,10 @@ app.route('/mcp', createMcpRoutes());
 // the UI mount to preserve this file's ordering discipline, though
 // createUiRoutes registers no competing GET.
 app.get('/.well-known/oauth-authorization-server', (c) =>
-  oAuthDiscoveryMetadata(auth())(c.req.raw),
+  withAuth((instance) => oAuthDiscoveryMetadata(instance)(c.req.raw)),
 );
 app.get('/.well-known/oauth-protected-resource', (c) =>
-  oAuthProtectedResourceMetadata(auth())(c.req.raw),
+  withAuth((instance) => oAuthProtectedResourceMetadata(instance)(c.req.raw)),
 );
 
 // better-auth (sessions, OAuth callback, sign-out). Registered before the
@@ -154,7 +161,7 @@ app.on(['GET', 'POST'], '/api/auth/update-user', (c) => c.json({ error: 'not fou
 // handleEmailSignUp).
 app.post('/api/auth/sign-up/email', handleEmailSignUp);
 
-app.on(['GET', 'POST'], '/api/auth/*', (c) => auth().handler(c.req.raw));
+app.on(['GET', 'POST'], '/api/auth/*', (c) => withAuth((instance) => instance.handler(c.req.raw)));
 
 // SPA data plane (session cookie auth, JSON in/out).
 app.route('/api', createApiRoutes());

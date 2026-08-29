@@ -85,6 +85,21 @@ export default defineConfig({
       dev: { command: 'vp dev', dependsOn: ['build:app'] },
       build: { command: 'vp build', dependsOn: ['build:app'] },
       deploy: { command: 'wrangler deploy', dependsOn: ['build'] },
+      'db:migrate': { command: 'node scripts/db-migrate.mjs up', cache: false },
+      'db:status': { command: 'node scripts/db-migrate.mjs status', cache: false },
+      'db:check': { command: 'drizzle-kit check' },
+      'db:verify': { command: 'node scripts/db-verify.mjs', cache: false },
+      'db:reset-test': {
+        command: 'node scripts/db-reset-test.mjs',
+        dependsOn: ['db:migrate'],
+        cache: false,
+      },
+      'test:schema': { command: 'node scripts/db-schema-test.mjs' },
+      'test:worker': {
+        command: 'vp test --config vitest.worker.config.ts',
+        dependsOn: ['db:reset-test'],
+        cache: false,
+      },
       'check:types': {
         command:
           'wrangler types && tsc --noEmit && tsc -p tsconfig.client.json --noEmit && tsc -p tsconfig.worker-tests.json --noEmit',

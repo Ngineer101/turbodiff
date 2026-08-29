@@ -1,10 +1,20 @@
 // Timestamp parsing and stall thresholds shared across client, HTTP, services,
 // data, and AI layers.
 
-// D1's datetime('now') stores UTC as 'YYYY-MM-DD HH:MM:SS' with no zone marker;
-// ISO strings with a 'T' already carry their own zone info.
+// Drizzle returns PostgreSQL timestamps verbatim, including space-separated
+// values with an explicit offset. Add UTC only when the value is truly zoneless.
 export function parseUtc(ts: string): number {
-  return Date.parse(ts.includes('T') ? ts : `${ts.replace(' ', 'T')}Z`);
+  const normalized = ts
+    .replace(' ', 'T')
+    // PostgreSQL preserves up to six fractional digits; ECMAScript timestamps
+    // accept milliseconds, so discard only sub-millisecond precision.
+    .replace(/\.(\d{3})\d+/, '.$1')
+    // PostgreSQL commonly renders UTC as +00. Expand short/compact offsets to
+    // the ISO form consistently accepted by both Node and workerd.
+    .replace(/([+-]\d{2})(\d{2})$/, '$1:$2')
+    .replace(/([+-]\d{2})$/, '$1:00');
+  const hasZone = /(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(normalized);
+  return Date.parse(hasZone ? normalized : `${normalized}Z`);
 }
 
 // A dispatched review that never completed and is older than this is presumed
@@ -13,5 +23,3 @@ export function parseUtc(ts: string): number {
 // running counts must all agree on this cutoff, so they all derive from here.
 export const STALL_AFTER_MINUTES = 20;
 export const STALL_AFTER_MS = STALL_AFTER_MINUTES * 60 * 1000;
-// SQLite datetime() modifier for the same cutoff, interpolated into data-layer queries.
-export const STALL_CUTOFF_MODIFIER = `-${STALL_AFTER_MINUTES} minutes`;

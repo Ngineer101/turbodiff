@@ -15,7 +15,7 @@ import {
   CR_BOT_AUTHOR,
   getCrDiffPatch,
   maybeAutoMergeCr,
-  parseCrFiles,
+  changeRequestFiles,
 } from '../../services/change-requests.ts';
 import { CR_BRANCH_NAME, CR_DIR } from '../runtime/cr-engine.ts';
 import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
@@ -84,7 +84,7 @@ export const makeFetchCr = (pin: CrPin) =>
       const comments = await listCrComments(cr.id);
       const summary = comments.find((c) => c.kind === 'summary' && c.author === CR_BOT_AUTHOR);
       const diff = await getCrDiffPatch(cr);
-      const files = parseCrFiles(cr);
+      const files = changeRequestFiles(cr);
       return {
         output: {
           title: cr.title,
@@ -182,7 +182,7 @@ export const makeFetchCrComments = (pin: CrPin) =>
   });
 
 // The native post_review: findings land as cr_comments, the verdict on the
-// CR row and its 'review' check, and the D1 review row completes — then the
+// CR row and its 'review' check, and the PostgreSQL review row completes — then the
 // auto-merge gate gets its chance, exactly like the GitHub tool's tail.
 export const makePostCrReview = (agentInstanceId: string, pin: CrPin) =>
   defineTool({
@@ -225,7 +225,7 @@ export const makePostCrReview = (agentInstanceId: string, pin: CrPin) =>
       // Same verdict mapping as the GitHub tool: a P1 requests changes in
       // blocking mode; otherwise the review approves.
       const hasP1 = data.findings.map(findingSeverity).includes('P1');
-      const blocking = repo.blocking_reviews === 1 && hasP1;
+      const blocking = repo.blocking_reviews && hasP1;
       await setChangeRequestReviewStatus(cr.id, blocking ? 'changes_requested' : 'approved');
       await upsertCrCheck(
         cr.id,
@@ -235,7 +235,7 @@ export const makePostCrReview = (agentInstanceId: string, pin: CrPin) =>
       );
       const url = cr.feature_id ? cockpitFeatureUrl(cr.feature_id) : null;
       await completeReview(agentInstanceId, url, data.findings.length);
-      if (blocking && repo.auto_fix === 1) {
+      if (blocking && repo.auto_fix) {
         // Native verdicts fire no webhook, so the blocking-review fix
         // dispatch happens here (the consumer re-validates toggle and cap).
         await enqueueFactoryMessage({

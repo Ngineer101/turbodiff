@@ -1,20 +1,34 @@
 import { env } from 'cloudflare:workers';
 import { betterAuth } from 'better-auth';
+import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { mcp } from 'better-auth/plugins';
 import { organization } from 'better-auth/plugins/organization';
+import { withDatabase, type Database } from '../../data/database.ts';
+import {
+  account,
+  invitation,
+  member,
+  oauthAccessToken,
+  oauthApplication,
+  oauthConsent,
+  organization as organizationTable,
+  session,
+  user,
+  verification,
+} from '../../data/schema.ts';
 import { sendInvitationEmail } from '../notifications/email.ts';
 import { orgAc, orgRoles } from './organization-access.ts';
 
-// Identity and sessions via better-auth (tables in migrations/0026_better_auth.sql).
+// Identity and sessions via Better Auth in the PostgreSQL `auth` schema.
 // Design notes:
 //
-//   - Sessions are durable D1 rows with a 30-day sliding window — signing out
+//   - Sessions are durable PostgreSQL rows with a 30-day sliding window — signing out
 //     is an explicit act, never a side effect of a GitHub hiccup (the old
 //     stateless cookie died at the 8h GitHub token expiry and was deleted on
 //     any failed GitHub call; see requireUser in auth.ts for the other half).
 //   - Two ways in: GitHub OAuth and email/password (emailAndPassword). A
 //     password user has no login/githubId until they link GitHub from
-//     /onboarding (auth().api.linkSocialAccount); requireUser treats that as
+//     /onboarding (linkSocialAccount); requireUser treats that as
 //     a valid session with zero installations, not as signed out. Email
 //     verification and password reset wait on an email provider (Resend,
 //     separate PR) — sign-ups are unverified for now.
@@ -63,7 +77,7 @@ import { orgAc, orgRoles } from './organization-access.ts';
 //     and tracks GitHub username renames).
 //   - The mcp plugin turns this instance into an OAuth 2.1 authorization
 //     server for the inbound /mcp endpoint (tables in
-//     migrations/0041_mcp_oauth.sql). Its authorize/token/register endpoints
+//     src/data/schema.ts). Its authorize/token/register endpoints
 //     (/api/auth/mcp/authorize|token|register) and .well-known documents ride
 //     the existing GET|POST /api/auth/* catch-all in app.ts — no new mounts
 //     needed there, and neither the closed /update-user route nor the
@@ -78,17 +92,33 @@ const SESSION_DAYS = 30;
 // Inference must own the instance type: betterAuth is deeply generic over its
 // options, and annotating with ReturnType<typeof betterAuth> collapses that
 // to Auth<BetterAuthOptions>, which the concrete instance doesn't satisfy.
-function createAuth() {
+function createAuth(database: Database) {
   return betterAuth({
     baseURL: env.PUBLIC_BASE_URL,
     basePath: '/api/auth',
     secret: env.SESSION_SECRET,
-    database: env.DB,
+    database: drizzleAdapter(database, {
+      provider: 'pg',
+      camelCase: true,
+      transaction: true,
+      schema: {
+        account,
+        invitation,
+        member,
+        oauthAccessToken,
+        oauthApplication,
+        oauthConsent,
+        organization: organizationTable,
+        session,
+        user,
+        verification,
+      },
+    }),
     session: {
       expiresIn: SESSION_DAYS * 24 * 60 * 60,
       updateAge: 24 * 60 * 60,
       // Signed cookie snapshot: polling requests (the board refetches every
-      // 5s while agents run) skip the D1 session read for 5 minutes.
+      // 5s while agents run) skip the PostgreSQL session read for 5 minutes.
       cookieCache: { enabled: true, maxAge: 5 * 60 },
     },
     account: {
@@ -99,7 +129,9 @@ function createAuth() {
         updateUserInfoOnLink: true,
       },
     },
-    advanced: { cookiePrefix: 'turbodiff' },
+    advanced: {
+      cookiePrefix: 'turbodiff',
+    },
     // Password sign-up/sign-in. requireEmailVerification stays off until an
     // email provider lands (Resend, separate PR) — there is no way to send
     // the verification mail yet.
@@ -138,7 +170,7 @@ function createAuth() {
         githubId: { type: 'number', required: false },
       },
     },
-    // Teams & orgs (migrations/0031_organizations.sql): one organization row
+    // Teams & orgs: one organization row
     // per Organization-type installation, linked by installationId. Rows are
     // written by hand from src/services/access-control.ts (webhook provisioning,
     // never this plugin's own createOrganization/addMember endpoints — those
@@ -179,15 +211,19 @@ function createAuth() {
   });
 }
 
-let instance: ReturnType<typeof createAuth> | undefined;
+type AuthInstance = ReturnType<typeof createAuth>;
 
-export function auth() {
-  instance ??= createAuth();
-  return instance;
+// Better Auth may issue several queries or a transaction for one API call.
+// Keep all of them on one fresh Hyperdrive Client and close it before the
+// operation returns; no socket or request-bound I/O survives in module scope.
+export function withAuth<Result>(
+  operation: (instance: AuthInstance) => Result | Promise<Result>,
+): Promise<Result> {
+  return withDatabase(async (database) => operation(createAuth(database)));
 }
 
 // The better-auth user with Turbodiff's additional fields, as returned by
-// auth().api.getSession — typed here once instead of casting at call sites.
+// Better Auth's getSession result — typed here once instead of casting at call sites.
 // login/githubId are null until a GitHub account is linked (email/password
 // sign-ups start without one).
 export interface AuthUser {

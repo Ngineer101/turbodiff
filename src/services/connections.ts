@@ -55,22 +55,14 @@ function stillFresh(expiresAt: string | null | undefined): boolean {
 
 // The safe, non-secret snapshot that may cross into an agent delivery.
 export function connectionSnapshot(row: ConnectionRow): ConnectionSnapshot {
-  let tools: string[] | undefined;
-  if (row.tool_allowlist) {
-    try {
-      const parsed = JSON.parse(row.tool_allowlist);
-      if (Array.isArray(parsed) && parsed.length > 0) tools = parsed.map(String);
-    } catch {
-      // Malformed allowlist behaves as "all tools" rather than failing runs.
-    }
-  }
+  const tools = row.tool_allowlist?.length ? row.tool_allowlist : undefined;
   const snapshot: ConnectionSnapshot = {
     id: row.id,
     name: row.name,
     url: row.url,
     hasAuth: row.auth_type !== 'none',
     authType: row.auth_type,
-    optional: row.optional === 1,
+    optional: row.optional,
   };
   if (tools) snapshot.tools = tools;
   return snapshot;
@@ -332,10 +324,10 @@ export function oauthStatus(
   conn: ConnectionRow,
 ): 'not_connected' | 'connected' | 'expired' | 'needs_reauth' | null {
   if (conn.auth_type !== 'oauth') return null;
-  if (conn.oauth_needs_reauth === 1) return 'needs_reauth';
+  if (conn.oauth_needs_reauth) return 'needs_reauth';
   if (conn.auth_config_ciphertext === null) return 'not_connected';
   if (
-    conn.oauth_has_refresh_token !== 1 &&
+    !conn.oauth_has_refresh_token &&
     conn.oauth_token_expires_at &&
     new Date(conn.oauth_token_expires_at).getTime() < Date.now()
   ) {

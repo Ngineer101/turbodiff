@@ -46,7 +46,7 @@ function isArtifactsErrorWithCode<T>(err: T, code: string): boolean {
 
 // Creates the Artifacts repo (retrying the derived name on collision), seeds
 // an initial commit so every consumer has a base branch to clone, and only
-// then records the D1 rows — a failed provisioning never leaves a repo row
+// then records the PostgreSQL rows — a failed provisioning never leaves a repo row
 // pointing at a broken remote. The Artifacts repo itself is compensated away
 // on later failures.
 export async function createArtifactsProject(input: {
@@ -167,7 +167,7 @@ export async function mintArtifactsCloneToken(
   };
 }
 
-// Applies one Artifacts event to D1. Runs inside the ArtifactsEventsWorkflow;
+// Applies one Artifacts event to PostgreSQL. Runs inside the ArtifactsEventsWorkflow;
 // must stay idempotent (workflow steps can be retried).
 export async function applyArtifactsEvent(event: ArtifactsEvent): Promise<string> {
   if (isArtifactsPushedEvent(event)) {
@@ -187,7 +187,7 @@ export async function applyArtifactsEvent(event: ArtifactsEvent): Promise<string
       try {
         await refreshChangeRequest(row, cr);
         refreshed += 1;
-        if (cr.source_branch === branch && row.review_on_push === 1) {
+        if (cr.source_branch === branch && row.review_on_push) {
           await enqueueFactoryMessage({ kind: 'cr_review', changeRequestId: cr.id });
         }
       } catch (err) {

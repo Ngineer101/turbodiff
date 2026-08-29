@@ -6,7 +6,7 @@ The open-source software factory: agents that take a feature from free-form
 requirements to a merged, verified pull request. The goal is to automate ~90%
 of the software creation process — you decide what to build and approve the
 plan; agents do the rest. Turbodiff is a GitHub App hosted end-to-end on
-Cloudflare (Workers, Durable Objects, D1, Queues, Containers, R2) and built
+Cloudflare (Workers, Durable Objects, Hyperdrive, Queues, Containers, R2) and built
 with [Flue](https://flueframework.com).
 
 Describe a feature and the pipeline takes over: an agent plans it against your
@@ -68,8 +68,8 @@ through your AI Gateway.
 Everything runs in one Cloudflare Worker deployment: an HTTP layer (Hono)
 in front of Durable Objects for the long-lived pieces (the per-PR review
 agent, the sandbox container), Cloudflare Workflows for the multi-minute
-factory runs, a queue to decouple intake from execution, and D1/R2 for state
-and artifacts.
+factory runs, a queue to decouple intake from execution, PostgreSQL through
+Hyperdrive for relational state, and R2 for artifacts.
 
 ```mermaid
 flowchart TB
@@ -105,7 +105,7 @@ flowchart TB
   end
 
   subgraph storage ["State"]
-    D1[("D1<br/>installations · repos · reviews · features/plans<br/>connections · repo_connections · automations<br/>(secrets AES-GCM sealed)")]
+    PG[("PostgreSQL via Hyperdrive<br/>installations · repos · reviews · features/plans<br/>connections · repo_connections · automations<br/>(secrets AES-GCM sealed)")]
     R2[("R2<br/>screenshots · demo videos")]
     Q[["Queue<br/>turbodiff-factory"]]
   end
@@ -129,7 +129,7 @@ flowchart TB
   REVIEWER -->|"streamable HTTP<br/>per-request auth resolver"| MCPS
   VERIFY -->|"evidence"| R2
   ART --> R2
-  worker <--> D1
+  worker <--> PG
 ```
 
 ### MCP connections (repo-scoped)
@@ -137,7 +137,7 @@ flowchart TB
 MCP servers are registered once per installation on the integrations page and
 attached to **repositories** (`repo_connections`), with independent toggles
 for the two mount contexts: hosted PR reviews and sandbox automation runs.
-Credentials are sealed (AES-256-GCM) in D1 and never leave the Worker
+Credentials are sealed (AES-256-GCM) in PostgreSQL and never leave the Worker
 boundary. Hosted reviews mount connections directly — the agent's auth
 resolver decrypts per request. Sandbox runs can't be trusted with
 credentials (they execute repo-influenced code), so they get a relay instead:
@@ -147,15 +147,15 @@ sequenceDiagram
   participant WF as Automation workflow
   participant SB as Sandbox (Claude CLI)
   participant PX as Worker /mcp-proxy/:id
-  participant D1
+  participant PG as PostgreSQL
   participant MCP as External MCP server
 
-  WF->>D1: listRepoConnections(repo, 'automations')
+  WF->>PG: listRepoConnections(repo, 'automations')
   WF->>WF: mint sealed grant (AES-GCM, 1 h TTL,<br/>bound to connection + repo)
   WF->>SB: write --mcp-config (proxy URL + grant — no credentials)
   SB->>PX: JSON-RPC request (Bearer grant)
   PX->>PX: verify grant · enforce tool allowlist on tools/call
-  PX->>D1: resolve + decrypt connection credential
+  PX->>PG: resolve + decrypt connection credential
   PX->>MCP: forward request with real auth header
   MCP-->>SB: response (streamed back through the proxy)
 ```
@@ -187,31 +187,37 @@ rejected at the proxy.
 - [docs/architecture.md](docs/architecture.md) — layer boundaries and dependency rules.
 - [docs/code-editing.md](docs/code-editing.md) — the in-browser code viewer/editor
   and how the GitHub and Artifacts storage backends differ.
-- [migrations/](migrations/) — D1 schema: installations, repositories, reviews,
-  agents, fix attempts, features, plans, verifications.
+- [db/migrations/](db/migrations/) — PostgreSQL schemas for identity,
+  installations, repositories, reviews, agents, factory state, and collaboration.
 
 ## One-time setup
 
 Everything runs on a single Cloudflare account. To self-host, create your own
 GitHub App and deploy:
 
-1. **Dependencies** (peer-dep conflict upstream requires the flag):
+1. **Dependencies**:
 
    ```sh
-   npm install --legacy-peer-deps
+   vp install
    ```
 
 2. **AI Gateway** — set `AI_GATEWAY_ID` in [wrangler.jsonc](wrangler.jsonc) to
    your gateway's name. It must serve Anthropic models (BYOK or unified
    billing).
 
-3. **D1** — create a `turbodiff` database, put its id in
-   [wrangler.jsonc](wrangler.jsonc), and apply the schema:
+3. **PostgreSQL + Hyperdrive** — provision PostgreSQL, create a Hyperdrive
+   configuration with caching disabled, put its id in
+   [wrangler.jsonc](wrangler.jsonc), and apply the schema through the direct
+   database URL:
 
    ```sh
-   npx wrangler d1 migrations apply turbodiff --local    # dev
-   npx wrangler d1 migrations apply turbodiff --remote   # production
+   export DATABASE_URL='postgres://...'
+   vp run db:migrate
+   vp run db:verify
    ```
+
+   See [docs/postgres.md](docs/postgres.md) for local Docker, database roles,
+   Hyperdrive creation, and deployment details.
 
 4. **Queue and R2 bucket** (factory pipeline):
 
@@ -303,22 +309,21 @@ To exercise webhooks locally, use a tunnel (`cloudflared tunnel`, `smee.io`)
 pointed at `/webhooks/github`, or send signed test payloads (HMAC-SHA256 of the
 body in `x-hub-signature-256: sha256=<hex>`).
 
-> `package.json` pins npm via `devEngines`. If your npm refuses to run scripts,
-> call the binaries directly: `./node_modules/.bin/vite dev`,
-> `./node_modules/.bin/tsc --noEmit`.
+> Vite+ owns the package-manager and Node versions for this repository; use
+> the `vp` commands documented in [AGENTS.md](AGENTS.md).
 
 ## Deploy
 
 Every commit to `main` deploys automatically via
-[GitHub Actions](.github/workflows/deploy.yml): D1 migrations are applied
-`--remote`, then the Worker and sandbox container image are built and pushed.
-The workflow needs two repository secrets, `CLOUDFLARE_API_TOKEN` (Workers
-Scripts:Edit, D1:Edit, Containers:Edit) and `CLOUDFLARE_ACCOUNT_ID`.
+[GitHub Actions](.github/workflows/deploy.yml). The workflow applies and verifies migrations on
+the existing PlanetScale database, then deploys the Worker and sandbox container image. It does
+not provision PlanetScale or Hyperdrive. The workflow needs `POSTGRES_DATABASE_URL`,
+`CLOUDFLARE_API_TOKEN` (Workers Scripts:Edit, Containers:Edit), and `CLOUDFLARE_ACCOUNT_ID`.
 
 Pull requests from branches in this repository (not forks) also get a
 preview: [`preview.yml`](.github/workflows/preview.yml) uploads a Worker
 version via `wrangler versions upload` and comments the preview URL on the
-PR. The preview shares production's D1 database, queue, and sandbox
+PR. The preview shares production's PostgreSQL database, queue, and sandbox
 container — it's for UI/API smoke-testing only, not for exercising
 webhook-triggered flows or destructive actions. The comment is updated on
 every push and marked closed when the PR closes.
@@ -326,7 +331,7 @@ every push and marked closed when the PR closes.
 To deploy manually (Docker required):
 
 ```sh
-pnpm vp run deploy
+vp run deploy
 ```
 
 ## Use it

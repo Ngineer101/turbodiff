@@ -558,10 +558,7 @@ function FilePane({
           ) : binaryPreview.kind === 'pdf' ? (
             <PdfPreview base64={file.content_base64} title={path} />
           ) : (
-            <FontPreview
-              base64={file.content_base64}
-              family={`preview-${file.sha.slice(0, 8)}`}
-            />
+            <FontPreview base64={file.content_base64} family={`preview-${file.sha.slice(0, 8)}`} />
           )}
         </div>
       </div>

@@ -73,12 +73,7 @@ export function RepoTree({
     if (document.activeElement === document.body) target.focus();
   });
   return (
-    <nav
-      ref={navRef}
-      aria-label="Repository files"
-      className="font-mono"
-      onKeyDown={onTreeKeyDown}
-    >
+    <nav ref={navRef} aria-label="Repository files" className="font-mono" onKeyDown={onTreeKeyDown}>
       <DirContents
         repoId={repoId}
         treeRef={treeRef}

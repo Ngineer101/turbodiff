@@ -27,13 +27,6 @@ export async function certificateUrl(featureId: number): Promise<string> {
 // Thumbnails shown on the card; the count line still reports every capture.
 const MAX_SHOTS = 5;
 
-interface RawResult {
-  index: number;
-  verdict: 'pass' | 'fail' | 'skip';
-  note: string;
-  screenshot?: string;
-}
-
 export async function loadCertificateData(featureId: number): Promise<CertificateData | null> {
   const feature = await getFeature(featureId);
   // A certificate only exists once there is a PR to certify.
@@ -42,8 +35,8 @@ export async function loadCertificateData(featureId: number): Promise<Certificat
   if (!repo) return null;
 
   const verification = await latestVerificationForFeature(featureId);
-  const criteria: string[] = feature.acceptance ? JSON.parse(feature.acceptance) : [];
-  const results: RawResult[] = verification?.results ? JSON.parse(verification.results) : [];
+  const criteria = feature.acceptance ?? [];
+  const results = verification?.results ?? [];
   const byIndex = new Map(results.map((r) => [r.index, r]));
 
   const shotNames = [

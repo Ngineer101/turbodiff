@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "turbodiff",
-  "compatibility_date": "2026-08-08",
+  "compatibility_date": "2026-08-18",
   "assets": {
     "binding": "ASSETS",
   },
@@ -23,14 +23,13 @@
   // Exposes the live Worker version (id/tag) to GET /version — see
   // https://developers.cloudflare.com/workers/configuration/version-metadata/
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
-  // Installation/repo config store. Apply migrations with:
-  //   npx wrangler d1 migrations apply turbodiff [--local | --remote]
-  "d1_databases": [
+  // PostgreSQL application store. Production connections are pooled by
+  // Hyperdrive; migrations use a direct DATABASE_URL (docs/postgres.md).
+  "hyperdrive": [
     {
-      "binding": "DB",
-      "database_name": "turbodiff",
-      "database_id": "e4ec5e43-95c5-46de-bb1d-7984b384c0d9",
-      "migrations_dir": "migrations",
+      "binding": "HYPERDRIVE",
+      "id": "00e793ecaf2c44b292e069861623dc3f",
+      "localConnectionString": "postgres://turbodiff:turbodiff@localhost:5432/turbodiff",
     },
   ],
   // Verification evidence (Phase 4): screenshots captured in the sandbox land

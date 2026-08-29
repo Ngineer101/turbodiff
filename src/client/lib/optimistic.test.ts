@@ -24,8 +24,8 @@ describe('applyOptimistic', () => {
 });
 
 describe('optimisticNow', () => {
-  it('matches the D1 UTC timestamp shape', () => {
-    expect(optimisticNow()).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+  it('matches the PostgreSQL adapter ISO timestamp shape', () => {
+    expect(optimisticNow()).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
   });
 });
 
