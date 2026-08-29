@@ -1080,9 +1080,9 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       const data = await immutableRepoJson(
         deferredExecution(c),
         recorded
-          // v2: the payload gained content_base64 — a fresh key so cached
-          // field-less JSON from before the change is never served.
-          ? `artifacts/file/v2/${repo.id}/${recorded.head_sha}/${encodeURIComponent(path)}`
+          ? // v2: the payload gained content_base64 — a fresh key so cached
+            // field-less JSON from before the change is never served.
+            `artifacts/file/v2/${repo.id}/${recorded.head_sha}/${encodeURIComponent(path)}`
           : null,
         () => readFileArtifacts(repo, ref, path),
       );
@@ -1371,6 +1371,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     base.verification = verificationSummary(
       verification?.status ?? null,
       verification?.results ?? null,
+      verification?.created_at ?? null,
     );
     return c.json(base);
   });

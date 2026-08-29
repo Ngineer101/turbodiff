@@ -148,7 +148,9 @@ function BottomTabs() {
 
 function UserBlock({ me, collapsed = false }: { me: ApiMe; collapsed?: boolean }) {
   return (
-    <div className={cn('flex items-center gap-2', collapsed ? 'justify-center' : 'justify-between')}>
+    <div
+      className={cn('flex items-center gap-2', collapsed ? 'justify-center' : 'justify-between')}
+    >
       <span className={cn('truncate font-mono text-xs text-mute', collapsed && 'hidden')}>
         {me.login ? `@${me.login}` : me.name}
       </span>

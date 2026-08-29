@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { placeholderList } from './sql.ts';
-import { STALL_CUTOFF_MODIFIER } from '../shared/time.ts';
+import { STALL_CUTOFF_MODIFIER, VERIFY_STALL_AFTER_MINUTES } from '../shared/time.ts';
 import type { CliUsage } from '../shared/usage.ts';
 import type { RepositoryRow } from './repositories.ts';
 
@@ -204,6 +204,7 @@ export interface TaskRepoStatusRow {
   provider: string;
   verification_status: string | null;
   verification_results: string | null;
+  verification_created_at: string | null;
 }
 
 // One row per repo attached to each of the given plans — the board/task
@@ -216,7 +217,8 @@ export async function getTaskRepoStatuses(planIds: number[]): Promise<TaskRepoSt
     `SELECT pr.plan_id, pr.repository_id, r.owner, r.name, r.provider,
 		        f.id AS feature_id, f.status AS feature_status, f.error AS feature_error,
 		        f.pr_number AS pr_number,
-		        v.status AS verification_status, v.results AS verification_results
+		        v.status AS verification_status, v.results AS verification_results,
+		        v.created_at AS verification_created_at
 		 FROM plan_repositories pr
 		 JOIN repositories r ON r.id = pr.repository_id
 		 LEFT JOIN features f ON f.plan_id = pr.plan_id AND f.repository_id = pr.repository_id
@@ -240,7 +242,8 @@ export async function boardTaskRepoStatuses(
     `SELECT pr.plan_id, pr.repository_id, r.owner, r.name, r.provider,
 		        f.id AS feature_id, f.status AS feature_status, f.error AS feature_error,
 		        f.pr_number AS pr_number,
-		        v.status AS verification_status, v.results AS verification_results
+		        v.status AS verification_status, v.results AS verification_results,
+		        v.created_at AS verification_created_at
 		 FROM plan_repositories pr
 		 JOIN plans p ON p.id = pr.plan_id
 		 JOIN repositories r ON r.id = pr.repository_id
@@ -279,14 +282,12 @@ export async function latestVerificationForFeature(
 // Verification runs killed mid-flight (isolate death) never reach their
 // error handler, stranding rows in 'running' and the UI in an endless poll.
 // Lazy sweep from the read paths, like failStrandedGeneration.
-const VERIFICATION_STRAND_MINUTES = 45;
-
 export async function failStrandedVerifications(): Promise<number> {
   const res = await env.DB.prepare(
     `UPDATE verifications SET status = 'error',
 		   error = 'verification run was killed before finishing — re-run it from the PR or wait for the next push'
 		 WHERE status = 'running'
-		   AND created_at < datetime('now', '-${VERIFICATION_STRAND_MINUTES} minutes')`,
+		   AND created_at < datetime('now', '-${VERIFY_STALL_AFTER_MINUTES} minutes')`,
   ).run();
   return res.meta.changes ?? 0;
 }

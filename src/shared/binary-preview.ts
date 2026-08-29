@@ -30,9 +30,7 @@ function isPreviewableExtension(ext: string): ext is keyof typeof PREVIEWABLE {
 
 // Extension after the last `.` of the last path segment, lowercased. No dot,
 // a trailing dot, and dotfiles (`.gitignore`) all mean no previewable kind.
-export function binaryPreviewKind(
-  path: string,
-): { kind: BinaryPreviewKind; mime: string } | null {
+export function binaryPreviewKind(path: string): { kind: BinaryPreviewKind; mime: string } | null {
   const name = path.slice(path.lastIndexOf('/') + 1);
   const dot = name.lastIndexOf('.');
   if (dot <= 0 || dot === name.length - 1) return null;

@@ -15,3 +15,10 @@ export const STALL_AFTER_MINUTES = 20;
 export const STALL_AFTER_MS = STALL_AFTER_MINUTES * 60 * 1000;
 // SQLite datetime() modifier for the same cutoff, interpolated into data-layer queries.
 export const STALL_CUTOFF_MODIFIER = `-${STALL_AFTER_MINUTES} minutes`;
+
+// A verification run older than this that never finished is presumed dead.
+// Three places must agree on the cutoff: the display-layer 'stalled' status
+// (verificationSummary), startVerification's in-flight dedupe window, and the
+// stranded-row sweep in data/factory.ts.
+export const VERIFY_STALL_AFTER_MINUTES = 45;
+export const VERIFY_STALL_AFTER_MS = VERIFY_STALL_AFTER_MINUTES * 60 * 1000;

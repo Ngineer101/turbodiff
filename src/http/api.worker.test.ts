@@ -100,7 +100,9 @@ beforeEach(async () => {
     'fix_attempts',
     'automation_runs',
     'automations',
+    'plan_repositories',
     'features',
+    'plans',
     'reviews',
     'repositories',
     'installations',
@@ -301,6 +303,62 @@ describe('pipeline cost reporting', () => {
     // Still a distinct concept — and the foreign installation's 9.99 is in
     // neither figure.
     expect(usage.stats.month_review_cost_usd).toBeCloseTo(0.1, 6);
+  });
+});
+
+describe('verification stall display', () => {
+  // One approved task on the acme repo with a PR open and a latest
+  // verification row — the shape the board serializes per repo.
+  async function seedTaskWithVerification(): Promise<void> {
+    await testEnv.DB.batch([
+      testEnv.DB.prepare(
+        `INSERT INTO plans (id, repository_id, title, requirements, status)
+			 VALUES (701, 101, 'Ship it', 'requirements', 'approved')`,
+      ),
+      testEnv.DB.prepare(
+        `INSERT INTO plan_repositories (plan_id, repository_id, position) VALUES (701, 101, 0)`,
+      ),
+      testEnv.DB.prepare(
+        `INSERT INTO features (id, repository_id, plan_id, title, spec, status, pr_number)
+			 VALUES (501, 101, 701, 'Ship it', 'spec', 'pr_opened', 7)`,
+      ),
+      testEnv.DB.prepare(`INSERT INTO verifications (id, feature_id) VALUES (801, 501)`),
+    ]);
+  }
+
+  async function boardVerificationStatus(): Promise<string | undefined> {
+    const response = await authenticatedApi().request('https://turbodiff.test/api/board');
+    expect(response.status).toBe(200);
+    // SAFETY: /api/board's 200 body is the ApiBoard contract this test
+    // exercises; the assertions below fail on any drift in that shape.
+    const board = (await response.json()) as ApiBoard;
+    return board.tasks.find((t) => t.id === 701)?.repos[0]?.verification?.status;
+  }
+
+  it("reports a fresh running row as 'running' and an over-age one as 'stalled', display-only", async () => {
+    await seedTaskWithVerification();
+    expect(await boardVerificationStatus()).toBe('running');
+
+    await testEnv.DB.prepare(
+      `UPDATE verifications SET created_at = datetime('now', '-46 minutes') WHERE id = 801`,
+    ).run();
+    expect(await boardVerificationStatus()).toBe('stalled');
+
+    // Display-only: the row itself still says 'running' — the cron sweep,
+    // not the read path, resolves it to 'error'.
+    const row = await testEnv.DB.prepare('SELECT status FROM verifications WHERE id = 801').first<{
+      status: string;
+    }>();
+    expect(row?.status).toBe('running');
+  });
+
+  it("reports a completed 'passed' row as 'passed' regardless of age", async () => {
+    await seedTaskWithVerification();
+    await testEnv.DB.prepare(
+      `UPDATE verifications SET status = 'passed', created_at = datetime('now', '-46 minutes')
+			 WHERE id = 801`,
+    ).run();
+    expect(await boardVerificationStatus()).toBe('passed');
   });
 });
 

@@ -109,7 +109,7 @@ export type PlanStatus =
   | 'failed';
 
 export interface ApiVerificationSummary {
-  status: string; // running | passed | failed | error
+  status: string; // running | stalled | passed | failed | error
   total: number;
   failed: number;
 }

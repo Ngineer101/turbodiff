@@ -29,15 +29,7 @@ const CHECKERBOARD: React.CSSProperties = {
     'repeating-conic-gradient(var(--color-surface-2) 0% 25%, transparent 0% 50%) 50% / 20px 20px',
 };
 
-export function ImagePreview({
-  base64,
-  mime,
-  alt,
-}: {
-  base64: string;
-  mime: string;
-  alt: string;
-}) {
+export function ImagePreview({ base64, mime, alt }: { base64: string; mime: string; alt: string }) {
   const blob = useMemo(() => new Blob([base64ToBytes(base64)], { type: mime }), [base64, mime]);
   const url = useBlobUrl(blob);
   if (!url) return null;

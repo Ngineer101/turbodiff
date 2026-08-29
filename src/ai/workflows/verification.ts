@@ -1,7 +1,7 @@
 import { env, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { getFeature, latestVerificationForFeature } from '../../data/db.ts';
 import { runVerification } from '../runners/verifier.ts';
-import { parseUtc } from '../../shared/time.ts';
+import { verificationSkipReason } from '../../domain/verification.ts';
 import { notifyFeatureLive } from '../../services/live-updates.ts';
 
 // Verification as a durable Workflow, for the same reason generation is one:
@@ -31,18 +31,24 @@ export class VerificationWorkflow extends WorkflowEntrypoint<unknown, Verificati
   }
 }
 
-// Queue entry point. Dedupe: a fresh 'running' verification for this feature
-// means an instance is already on it (e.g. a queue redelivery) — skip.
+// Queue entry point, gated by verificationSkipReason: a feature already in a
+// terminal state (merged/abandoned/pr_closed) has nothing left to prove, and
+// a fresh 'running' verification means an instance is already on it (e.g. a
+// queue redelivery) — skip both.
 export async function startVerification(featureId: number): Promise<void> {
   const feature = await getFeature(featureId);
   if (!feature) return;
   const latest = await latestVerificationForFeature(featureId);
-  if (latest?.status === 'running') {
-    const startedMs = parseUtc(latest.created_at);
-    if (Date.now() - startedMs < 45 * 60_000) {
-      console.log(`turbodiff: verification skipped for feature ${featureId} — a run is in flight`);
-      return;
-    }
+  const skip = verificationSkipReason(feature, latest, Date.now());
+  if (skip === 'terminal') {
+    console.log(
+      `turbodiff: verification skipped for feature ${featureId} — feature is ${feature.status}`,
+    );
+    return;
+  }
+  if (skip === 'in_flight') {
+    console.log(`turbodiff: verification skipped for feature ${featureId} — a run is in flight`);
+    return;
   }
   await env.VERIFY_WORKFLOW.create({
     id: `verify-${featureId}-${Date.now()}`,
