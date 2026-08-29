@@ -56,7 +56,7 @@ function onApiError<T>(err: T) {
   toast.error(err instanceof ApiError ? err.message : 'Request failed');
 }
 
-function QuickAdd({ board }: { board: ApiBoard }) {
+function QuickAdd({ board, onAdd }: { board: ApiBoard; onAdd: () => void }) {
   const queryClient = useQueryClient();
   const inputRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState('');
@@ -107,6 +107,7 @@ function QuickAdd({ board }: { board: ApiBoard }) {
     if (!t) return;
     add.mutate(t);
     setTitle('');
+    onAdd();
   };
   return (
     <form onSubmit={submit} className="flex flex-col gap-2 sm:flex-row">
@@ -932,7 +933,13 @@ export function BoardPage() {
 
       <div className="mt-5 flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 flex-1 lg:max-w-xl">
-          <QuickAdd board={data} />
+          <QuickAdd
+            board={data}
+            onAdd={() => {
+              setRepoId(null);
+              setFilter('all');
+            }}
+          />
         </div>
         {filterRepos.length > 1 ? (
           <RepoFilter repos={filterRepos} value={repoFilter} onChange={setRepoId} />
