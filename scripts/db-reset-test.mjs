@@ -24,7 +24,13 @@ try {
     );
   }
   await client.query('ALTER SEQUENCE app.native_entity_id_seq RESTART WITH 4000000000000000');
-  await client.query('UPDATE app.factory_version SET version = 1 WHERE id = 1');
+  // factory_version is part of the blanket TRUNCATE above. Recreate its
+  // required singleton so trigger bumps produce distinct immutable cache
+  // keys throughout the Worker test suite.
+  await client.query(`
+    INSERT INTO app.factory_version (id, version) VALUES (1, 1)
+    ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version
+  `);
   console.log('Local PostgreSQL test data reset');
 } finally {
   await client.end();
