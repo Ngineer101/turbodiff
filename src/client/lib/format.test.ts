@@ -43,9 +43,7 @@ describe('parseUtc', () => {
   });
 
   it('reads raw node-postgres timestamptz output without corrupting its offset', () => {
-    expect(parseUtc('2026-08-28 10:00:00.123456+00')).toBe(
-      Date.parse('2026-08-28T10:00:00.123Z'),
-    );
+    expect(parseUtc('2026-08-28 10:00:00.123456+00')).toBe(Date.parse('2026-08-28T10:00:00.123Z'));
   });
 
   it('treats legacy zone-less database timestamps as UTC', () => {

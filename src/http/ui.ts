@@ -190,9 +190,7 @@ async function hasSession(c: Context): Promise<boolean> {
   const host = new URL(c.req.url).hostname;
   if (fake && (host === 'localhost' || host === '127.0.0.1')) return true;
   return (
-    (await withAuth((instance) =>
-      instance.api.getSession({ headers: c.req.raw.headers }),
-    )) !== null
+    (await withAuth((instance) => instance.api.getSession({ headers: c.req.raw.headers }))) !== null
   );
 }
 

@@ -235,9 +235,7 @@ export async function requireUser(request: Request): Promise<AuthedUser | null> 
       devFake: true,
     };
   }
-  const found = await withAuth((instance) =>
-    instance.api.getSession({ headers: request.headers }),
-  );
+  const found = await withAuth((instance) => instance.api.getSession({ headers: request.headers }));
   if (!found) return null;
   const user = found.user;
   // better-auth's static session type erases the login/githubId

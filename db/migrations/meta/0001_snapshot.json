@@ -108,14 +108,10 @@
         "account_userId_fkey": {
           "name": "account_userId_fkey",
           "tableFrom": "account",
-          "columnsFrom": [
-            "userId"
-          ],
+          "columnsFrom": ["userId"],
           "tableTo": "user",
           "schemaTo": "auth",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -124,10 +120,7 @@
       "uniqueConstraints": {
         "account_provider_identity_unique": {
           "name": "account_provider_identity_unique",
-          "columns": [
-            "accountId",
-            "providerId"
-          ],
+          "columns": ["accountId", "providerId"],
           "nullsNotDistinct": false
         }
       },
@@ -276,56 +269,40 @@
         "agent_runs_plan_id_fkey": {
           "name": "agent_runs_plan_id_fkey",
           "tableFrom": "agent_runs",
-          "columnsFrom": [
-            "plan_id"
-          ],
+          "columnsFrom": ["plan_id"],
           "tableTo": "plans",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         },
         "agent_runs_feature_id_fkey": {
           "name": "agent_runs_feature_id_fkey",
           "tableFrom": "agent_runs",
-          "columnsFrom": [
-            "feature_id"
-          ],
+          "columnsFrom": ["feature_id"],
           "tableTo": "features",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         },
         "agent_runs_fix_attempt_id_fkey": {
           "name": "agent_runs_fix_attempt_id_fkey",
           "tableFrom": "agent_runs",
-          "columnsFrom": [
-            "fix_attempt_id"
-          ],
+          "columnsFrom": ["fix_attempt_id"],
           "tableTo": "fix_attempts",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         },
         "agent_runs_automation_run_id_fkey": {
           "name": "agent_runs_automation_run_id_fkey",
           "tableFrom": "agent_runs",
-          "columnsFrom": [
-            "automation_run_id"
-          ],
+          "columnsFrom": ["automation_run_id"],
           "tableTo": "automation_runs",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -423,14 +400,10 @@
         "agents_installation_id_fkey": {
           "name": "agents_installation_id_fkey",
           "tableFrom": "agents",
-          "columnsFrom": [
-            "installation_id"
-          ],
+          "columnsFrom": ["installation_id"],
           "tableTo": "installations",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -439,18 +412,12 @@
       "uniqueConstraints": {
         "agents_id_installation_unique": {
           "name": "agents_id_installation_unique",
-          "columns": [
-            "id",
-            "installation_id"
-          ],
+          "columns": ["id", "installation_id"],
           "nullsNotDistinct": false
         },
         "agents_installation_slug_unique": {
           "name": "agents_installation_slug_unique",
-          "columns": [
-            "installation_id",
-            "slug"
-          ],
+          "columns": ["installation_id", "slug"],
           "nullsNotDistinct": false
         }
       },
@@ -607,14 +574,10 @@
         "automation_runs_automation_id_fkey": {
           "name": "automation_runs_automation_id_fkey",
           "tableFrom": "automation_runs",
-          "columnsFrom": [
-            "automation_id"
-          ],
+          "columnsFrom": ["automation_id"],
           "tableTo": "automations",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -775,14 +738,10 @@
         "automations_repository_id_fkey": {
           "name": "automations_repository_id_fkey",
           "tableFrom": "automations",
-          "columnsFrom": [
-            "repository_id"
-          ],
+          "columnsFrom": ["repository_id"],
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -828,14 +787,10 @@
         "change_request_counters_repository_id_fkey": {
           "name": "change_request_counters_repository_id_fkey",
           "tableFrom": "change_request_counters",
-          "columnsFrom": [
-            "repository_id"
-          ],
+          "columnsFrom": ["repository_id"],
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -1075,28 +1030,20 @@
         "change_requests_feature_id_features_id_fk": {
           "name": "change_requests_feature_id_features_id_fk",
           "tableFrom": "change_requests",
-          "columnsFrom": [
-            "feature_id"
-          ],
+          "columnsFrom": ["feature_id"],
           "tableTo": "features",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "set null"
         },
         "change_requests_repository_id_fkey": {
           "name": "change_requests_repository_id_fkey",
           "tableFrom": "change_requests",
-          "columnsFrom": [
-            "repository_id"
-          ],
+          "columnsFrom": ["repository_id"],
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -1105,10 +1052,7 @@
       "uniqueConstraints": {
         "change_requests_repo_number_unique": {
           "name": "change_requests_repo_number_unique",
-          "columns": [
-            "repository_id",
-            "number"
-          ],
+          "columns": ["repository_id", "number"],
           "nullsNotDistinct": false
         }
       },
@@ -1256,14 +1200,10 @@
         "chat_messages_feature_id_fkey": {
           "name": "chat_messages_feature_id_fkey",
           "tableFrom": "chat_messages",
-          "columnsFrom": [
-            "feature_id"
-          ],
+          "columnsFrom": ["feature_id"],
           "tableTo": "features",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -1415,28 +1355,20 @@
         "cockpit_comments_feature_id_fkey": {
           "name": "cockpit_comments_feature_id_fkey",
           "tableFrom": "cockpit_comments",
-          "columnsFrom": [
-            "feature_id"
-          ],
+          "columnsFrom": ["feature_id"],
           "tableTo": "features",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         },
         "cockpit_comments_fix_attempt_id_fkey": {
           "name": "cockpit_comments_fix_attempt_id_fkey",
           "tableFrom": "cockpit_comments",
-          "columnsFrom": [
-            "fix_attempt_id"
-          ],
+          "columnsFrom": ["fix_attempt_id"],
           "tableTo": "fix_attempts",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "set null"
         }
@@ -1571,14 +1503,10 @@
         "connections_installation_id_fkey": {
           "name": "connections_installation_id_fkey",
           "tableFrom": "connections",
-          "columnsFrom": [
-            "installation_id"
-          ],
+          "columnsFrom": ["installation_id"],
           "tableTo": "installations",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -1587,18 +1515,12 @@
       "uniqueConstraints": {
         "connections_id_installation_unique": {
           "name": "connections_id_installation_unique",
-          "columns": [
-            "id",
-            "installation_id"
-          ],
+          "columns": ["id", "installation_id"],
           "nullsNotDistinct": false
         },
         "connections_installation_name_unique": {
           "name": "connections_installation_name_unique",
-          "columns": [
-            "installation_id",
-            "name"
-          ],
+          "columns": ["installation_id", "name"],
           "nullsNotDistinct": false
         }
       },
@@ -1680,14 +1602,10 @@
         "cr_checks_change_request_id_fkey": {
           "name": "cr_checks_change_request_id_fkey",
           "tableFrom": "cr_checks",
-          "columnsFrom": [
-            "change_request_id"
-          ],
+          "columnsFrom": ["change_request_id"],
           "tableTo": "change_requests",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -1696,10 +1614,7 @@
       "uniqueConstraints": {
         "cr_checks_name_unique": {
           "name": "cr_checks_name_unique",
-          "columns": [
-            "change_request_id",
-            "name"
-          ],
+          "columns": ["change_request_id", "name"],
           "nullsNotDistinct": false
         }
       },
@@ -1811,14 +1726,10 @@
         "cr_comments_change_request_id_fkey": {
           "name": "cr_comments_change_request_id_fkey",
           "tableFrom": "cr_comments",
-          "columnsFrom": [
-            "change_request_id"
-          ],
+          "columnsFrom": ["change_request_id"],
           "tableTo": "change_requests",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -2169,42 +2080,30 @@
         "features_plan_id_plans_id_fk": {
           "name": "features_plan_id_plans_id_fk",
           "tableFrom": "features",
-          "columnsFrom": [
-            "plan_id"
-          ],
+          "columnsFrom": ["plan_id"],
           "tableTo": "plans",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "set null"
         },
         "features_change_request_id_change_requests_id_fk": {
           "name": "features_change_request_id_change_requests_id_fk",
           "tableFrom": "features",
-          "columnsFrom": [
-            "change_request_id"
-          ],
+          "columnsFrom": ["change_request_id"],
           "tableTo": "change_requests",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "set null"
         },
         "features_repository_id_fkey": {
           "name": "features_repository_id_fkey",
           "tableFrom": "features",
-          "columnsFrom": [
-            "repository_id"
-          ],
+          "columnsFrom": ["repository_id"],
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -2213,10 +2112,7 @@
       "uniqueConstraints": {
         "features_plan_repository_unique": {
           "name": "features_plan_repository_unique",
-          "columns": [
-            "plan_id",
-            "repository_id"
-          ],
+          "columns": ["plan_id", "repository_id"],
           "nullsNotDistinct": false
         }
       },
@@ -2415,14 +2311,10 @@
         "fix_attempts_repository_id_fkey": {
           "name": "fix_attempts_repository_id_fkey",
           "tableFrom": "fix_attempts",
-          "columnsFrom": [
-            "repository_id"
-          ],
+          "columnsFrom": ["repository_id"],
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -2490,14 +2382,10 @@
         "installation_repo_sync_installation_id_fkey": {
           "name": "installation_repo_sync_installation_id_fkey",
           "tableFrom": "installation_repo_sync",
-          "columnsFrom": [
-            "installation_id"
-          ],
+          "columnsFrom": ["installation_id"],
           "tableTo": "installations",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -2588,26 +2476,17 @@
       "uniqueConstraints": {
         "installations_id_provider_unique": {
           "name": "installations_id_provider_unique",
-          "columns": [
-            "id",
-            "provider"
-          ],
+          "columns": ["id", "provider"],
           "nullsNotDistinct": false
         },
         "installations_provider_login_unique": {
           "name": "installations_provider_login_unique",
-          "columns": [
-            "provider",
-            "account_login"
-          ],
+          "columns": ["provider", "account_login"],
           "nullsNotDistinct": false
         },
         "installations_provider_account_unique": {
           "name": "installations_provider_account_unique",
-          "columns": [
-            "provider",
-            "account_id"
-          ],
+          "columns": ["provider", "account_id"],
           "nullsNotDistinct": false
         }
       },
@@ -2763,28 +2642,20 @@
         "invitation_organizationId_fkey": {
           "name": "invitation_organizationId_fkey",
           "tableFrom": "invitation",
-          "columnsFrom": [
-            "organizationId"
-          ],
+          "columnsFrom": ["organizationId"],
           "tableTo": "organization",
           "schemaTo": "auth",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         },
         "invitation_inviterId_fkey": {
           "name": "invitation_inviterId_fkey",
           "tableFrom": "invitation",
-          "columnsFrom": [
-            "inviterId"
-          ],
+          "columnsFrom": ["inviterId"],
           "tableTo": "user",
           "schemaTo": "auth",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -2861,28 +2732,20 @@
         "member_organizationId_fkey": {
           "name": "member_organizationId_fkey",
           "tableFrom": "member",
-          "columnsFrom": [
-            "organizationId"
-          ],
+          "columnsFrom": ["organizationId"],
           "tableTo": "organization",
           "schemaTo": "auth",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         },
         "member_userId_fkey": {
           "name": "member_userId_fkey",
           "tableFrom": "member",
-          "columnsFrom": [
-            "userId"
-          ],
+          "columnsFrom": ["userId"],
           "tableTo": "user",
           "schemaTo": "auth",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -2891,10 +2754,7 @@
       "uniqueConstraints": {
         "member_organization_user_unique": {
           "name": "member_organization_user_unique",
-          "columns": [
-            "organizationId",
-            "userId"
-          ],
+          "columns": ["organizationId", "userId"],
           "nullsNotDistinct": false
         }
       },
@@ -3023,28 +2883,20 @@
         "oauthAccessToken_clientId_fkey": {
           "name": "oauthAccessToken_clientId_fkey",
           "tableFrom": "oauthAccessToken",
-          "columnsFrom": [
-            "clientId"
-          ],
+          "columnsFrom": ["clientId"],
           "tableTo": "oauthApplication",
           "schemaTo": "auth",
-          "columnsTo": [
-            "clientId"
-          ],
+          "columnsTo": ["clientId"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         },
         "oauthAccessToken_userId_fkey": {
           "name": "oauthAccessToken_userId_fkey",
           "tableFrom": "oauthAccessToken",
-          "columnsFrom": [
-            "userId"
-          ],
+          "columnsFrom": ["userId"],
           "tableTo": "user",
           "schemaTo": "auth",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -3053,16 +2905,12 @@
       "uniqueConstraints": {
         "oauthAccessToken_accessToken_key": {
           "name": "oauthAccessToken_accessToken_key",
-          "columns": [
-            "accessToken"
-          ],
+          "columns": ["accessToken"],
           "nullsNotDistinct": false
         },
         "oauthAccessToken_refreshToken_key": {
           "name": "oauthAccessToken_refreshToken_key",
-          "columns": [
-            "refreshToken"
-          ],
+          "columns": ["refreshToken"],
           "nullsNotDistinct": false
         }
       },
@@ -3169,14 +3017,10 @@
         "oauthApplication_userId_fkey": {
           "name": "oauthApplication_userId_fkey",
           "tableFrom": "oauthApplication",
-          "columnsFrom": [
-            "userId"
-          ],
+          "columnsFrom": ["userId"],
           "tableTo": "user",
           "schemaTo": "auth",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -3185,9 +3029,7 @@
       "uniqueConstraints": {
         "oauthApplication_clientId_key": {
           "name": "oauthApplication_clientId_key",
-          "columns": [
-            "clientId"
-          ],
+          "columns": ["clientId"],
           "nullsNotDistinct": false
         }
       },
@@ -3279,28 +3121,20 @@
         "oauthConsent_clientId_fkey": {
           "name": "oauthConsent_clientId_fkey",
           "tableFrom": "oauthConsent",
-          "columnsFrom": [
-            "clientId"
-          ],
+          "columnsFrom": ["clientId"],
           "tableTo": "oauthApplication",
           "schemaTo": "auth",
-          "columnsTo": [
-            "clientId"
-          ],
+          "columnsTo": ["clientId"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         },
         "oauthConsent_userId_fkey": {
           "name": "oauthConsent_userId_fkey",
           "tableFrom": "oauthConsent",
-          "columnsFrom": [
-            "userId"
-          ],
+          "columnsFrom": ["userId"],
           "tableTo": "user",
           "schemaTo": "auth",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -3309,10 +3143,7 @@
       "uniqueConstraints": {
         "oauth_consent_client_user_unique": {
           "name": "oauth_consent_client_user_unique",
-          "columns": [
-            "clientId",
-            "userId"
-          ],
+          "columns": ["clientId", "userId"],
           "nullsNotDistinct": false
         }
       },
@@ -3372,14 +3203,10 @@
         "organization_installationId_fkey": {
           "name": "organization_installationId_fkey",
           "tableFrom": "organization",
-          "columnsFrom": [
-            "installationId"
-          ],
+          "columnsFrom": ["installationId"],
           "tableTo": "installations",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -3388,16 +3215,12 @@
       "uniqueConstraints": {
         "organization_slug_key": {
           "name": "organization_slug_key",
-          "columns": [
-            "slug"
-          ],
+          "columns": ["slug"],
           "nullsNotDistinct": false
         },
         "organization_installationId_key": {
           "name": "organization_installationId_key",
-          "columns": [
-            "installationId"
-          ],
+          "columns": ["installationId"],
           "nullsNotDistinct": false
         }
       },
@@ -3449,28 +3272,20 @@
         "plan_repositories_plan_id_fkey": {
           "name": "plan_repositories_plan_id_fkey",
           "tableFrom": "plan_repositories",
-          "columnsFrom": [
-            "plan_id"
-          ],
+          "columnsFrom": ["plan_id"],
           "tableTo": "plans",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         },
         "plan_repositories_repository_id_fkey": {
           "name": "plan_repositories_repository_id_fkey",
           "tableFrom": "plan_repositories",
-          "columnsFrom": [
-            "repository_id"
-          ],
+          "columnsFrom": ["repository_id"],
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -3478,19 +3293,13 @@
       "compositePrimaryKeys": {
         "plan_repositories_pkey": {
           "name": "plan_repositories_pkey",
-          "columns": [
-            "plan_id",
-            "repository_id"
-          ]
+          "columns": ["plan_id", "repository_id"]
         }
       },
       "uniqueConstraints": {
         "plan_repositories_position_unique": {
           "name": "plan_repositories_position_unique",
-          "columns": [
-            "plan_id",
-            "position"
-          ],
+          "columns": ["plan_id", "position"],
           "nullsNotDistinct": false
         }
       },
@@ -3713,42 +3522,30 @@
         "plans_todo_id_todos_id_fk": {
           "name": "plans_todo_id_todos_id_fk",
           "tableFrom": "plans",
-          "columnsFrom": [
-            "todo_id"
-          ],
+          "columnsFrom": ["todo_id"],
           "tableTo": "todos",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "set null"
         },
         "plans_feature_id_features_id_fk": {
           "name": "plans_feature_id_features_id_fk",
           "tableFrom": "plans",
-          "columnsFrom": [
-            "feature_id"
-          ],
+          "columnsFrom": ["feature_id"],
           "tableTo": "features",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "set null"
         },
         "plans_repository_id_fkey": {
           "name": "plans_repository_id_fkey",
           "tableFrom": "plans",
-          "columnsFrom": [
-            "repository_id"
-          ],
+          "columnsFrom": ["repository_id"],
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -3757,9 +3554,7 @@
       "uniqueConstraints": {
         "plans_todo_unique": {
           "name": "plans_todo_unique",
-          "columns": [
-            "todo_id"
-          ],
+          "columns": ["todo_id"],
           "nullsNotDistinct": false
         }
       },
@@ -3846,14 +3641,10 @@
         "push_subscriptions_user_github_id_fkey": {
           "name": "push_subscriptions_user_github_id_fkey",
           "tableFrom": "push_subscriptions",
-          "columnsFrom": [
-            "user_github_id"
-          ],
+          "columnsFrom": ["user_github_id"],
           "tableTo": "user",
           "schemaTo": "auth",
-          "columnsTo": [
-            "githubId"
-          ],
+          "columnsTo": ["githubId"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -3862,9 +3653,7 @@
       "uniqueConstraints": {
         "push_subscriptions_endpoint_key": {
           "name": "push_subscriptions_endpoint_key",
-          "columns": [
-            "endpoint"
-          ],
+          "columns": ["endpoint"],
           "nullsNotDistinct": false
         }
       },
@@ -3950,32 +3739,20 @@
         "repo_agents_repository_tenant_fk": {
           "name": "repo_agents_repository_tenant_fk",
           "tableFrom": "repo_agents",
-          "columnsFrom": [
-            "repository_id",
-            "installation_id"
-          ],
+          "columnsFrom": ["repository_id", "installation_id"],
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsTo": [
-            "id",
-            "installation_id"
-          ],
+          "columnsTo": ["id", "installation_id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         },
         "repo_agents_agent_tenant_fk": {
           "name": "repo_agents_agent_tenant_fk",
           "tableFrom": "repo_agents",
-          "columnsFrom": [
-            "agent_id",
-            "installation_id"
-          ],
+          "columnsFrom": ["agent_id", "installation_id"],
           "tableTo": "agents",
           "schemaTo": "app",
-          "columnsTo": [
-            "id",
-            "installation_id"
-          ],
+          "columnsTo": ["id", "installation_id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -3983,10 +3760,7 @@
       "compositePrimaryKeys": {
         "repo_agents_pkey": {
           "name": "repo_agents_pkey",
-          "columns": [
-            "repository_id",
-            "agent_id"
-          ]
+          "columns": ["repository_id", "agent_id"]
         }
       },
       "uniqueConstraints": {},
@@ -4079,32 +3853,20 @@
         "repo_connections_repository_tenant_fk": {
           "name": "repo_connections_repository_tenant_fk",
           "tableFrom": "repo_connections",
-          "columnsFrom": [
-            "repository_id",
-            "installation_id"
-          ],
+          "columnsFrom": ["repository_id", "installation_id"],
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsTo": [
-            "id",
-            "installation_id"
-          ],
+          "columnsTo": ["id", "installation_id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         },
         "repo_connections_connection_tenant_fk": {
           "name": "repo_connections_connection_tenant_fk",
           "tableFrom": "repo_connections",
-          "columnsFrom": [
-            "connection_id",
-            "installation_id"
-          ],
+          "columnsFrom": ["connection_id", "installation_id"],
           "tableTo": "connections",
           "schemaTo": "app",
-          "columnsTo": [
-            "id",
-            "installation_id"
-          ],
+          "columnsTo": ["id", "installation_id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -4112,10 +3874,7 @@
       "compositePrimaryKeys": {
         "repo_connections_pkey": {
           "name": "repo_connections_pkey",
-          "columns": [
-            "repository_id",
-            "connection_id"
-          ]
+          "columns": ["repository_id", "connection_id"]
         }
       },
       "uniqueConstraints": {},
@@ -4201,32 +3960,20 @@
         "repo_skills_repository_tenant_fk": {
           "name": "repo_skills_repository_tenant_fk",
           "tableFrom": "repo_skills",
-          "columnsFrom": [
-            "repository_id",
-            "installation_id"
-          ],
+          "columnsFrom": ["repository_id", "installation_id"],
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsTo": [
-            "id",
-            "installation_id"
-          ],
+          "columnsTo": ["id", "installation_id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         },
         "repo_skills_skill_tenant_fk": {
           "name": "repo_skills_skill_tenant_fk",
           "tableFrom": "repo_skills",
-          "columnsFrom": [
-            "skill_id",
-            "installation_id"
-          ],
+          "columnsFrom": ["skill_id", "installation_id"],
           "tableTo": "skills",
           "schemaTo": "app",
-          "columnsTo": [
-            "id",
-            "installation_id"
-          ],
+          "columnsTo": ["id", "installation_id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -4234,10 +3981,7 @@
       "compositePrimaryKeys": {
         "repo_skills_pkey": {
           "name": "repo_skills_pkey",
-          "columns": [
-            "repository_id",
-            "skill_id"
-          ]
+          "columns": ["repository_id", "skill_id"]
         }
       },
       "uniqueConstraints": {},
@@ -4463,16 +4207,10 @@
         "repositories_installation_provider_fk": {
           "name": "repositories_installation_provider_fk",
           "tableFrom": "repositories",
-          "columnsFrom": [
-            "installation_id",
-            "provider"
-          ],
+          "columnsFrom": ["installation_id", "provider"],
           "tableTo": "installations",
           "schemaTo": "app",
-          "columnsTo": [
-            "id",
-            "provider"
-          ],
+          "columnsTo": ["id", "provider"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -4481,18 +4219,12 @@
       "uniqueConstraints": {
         "repositories_id_installation_unique": {
           "name": "repositories_id_installation_unique",
-          "columns": [
-            "id",
-            "installation_id"
-          ],
+          "columns": ["id", "installation_id"],
           "nullsNotDistinct": false
         },
         "repositories_owner_name_unique": {
           "name": "repositories_owner_name_unique",
-          "columns": [
-            "owner",
-            "name"
-          ],
+          "columns": ["owner", "name"],
           "nullsNotDistinct": false
         }
       },
@@ -4569,14 +4301,10 @@
         "repository_refs_repository_id_fkey": {
           "name": "repository_refs_repository_id_fkey",
           "tableFrom": "repository_refs",
-          "columnsFrom": [
-            "repository_id"
-          ],
+          "columnsFrom": ["repository_id"],
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -4584,10 +4312,7 @@
       "compositePrimaryKeys": {
         "repository_refs_pkey": {
           "name": "repository_refs_pkey",
-          "columns": [
-            "repository_id",
-            "ref"
-          ]
+          "columns": ["repository_id", "ref"]
         }
       },
       "uniqueConstraints": {},
@@ -4860,16 +4585,10 @@
         "reviews_repository_tenant_fk": {
           "name": "reviews_repository_tenant_fk",
           "tableFrom": "reviews",
-          "columnsFrom": [
-            "repository_id",
-            "installation_id"
-          ],
+          "columnsFrom": ["repository_id", "installation_id"],
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsTo": [
-            "id",
-            "installation_id"
-          ],
+          "columnsTo": ["id", "installation_id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -5032,28 +4751,20 @@
         "session_userId_fkey": {
           "name": "session_userId_fkey",
           "tableFrom": "session",
-          "columnsFrom": [
-            "userId"
-          ],
+          "columnsFrom": ["userId"],
           "tableTo": "user",
           "schemaTo": "auth",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         },
         "session_active_organization_fk": {
           "name": "session_active_organization_fk",
           "tableFrom": "session",
-          "columnsFrom": [
-            "activeOrganizationId"
-          ],
+          "columnsFrom": ["activeOrganizationId"],
           "tableTo": "organization",
           "schemaTo": "auth",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "set null"
         }
@@ -5062,9 +4773,7 @@
       "uniqueConstraints": {
         "session_token_key": {
           "name": "session_token_key",
-          "columns": [
-            "token"
-          ],
+          "columns": ["token"],
           "nullsNotDistinct": false
         }
       },
@@ -5136,14 +4845,10 @@
         "skills_installation_id_fkey": {
           "name": "skills_installation_id_fkey",
           "tableFrom": "skills",
-          "columnsFrom": [
-            "installation_id"
-          ],
+          "columnsFrom": ["installation_id"],
           "tableTo": "installations",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -5152,18 +4857,12 @@
       "uniqueConstraints": {
         "skills_id_installation_unique": {
           "name": "skills_id_installation_unique",
-          "columns": [
-            "id",
-            "installation_id"
-          ],
+          "columns": ["id", "installation_id"],
           "nullsNotDistinct": false
         },
         "skills_installation_slug_unique": {
           "name": "skills_installation_slug_unique",
-          "columns": [
-            "installation_id",
-            "slug"
-          ],
+          "columns": ["installation_id", "slug"],
           "nullsNotDistinct": false
         }
       },
@@ -5220,28 +4919,20 @@
         "todo_repositories_todo_id_fkey": {
           "name": "todo_repositories_todo_id_fkey",
           "tableFrom": "todo_repositories",
-          "columnsFrom": [
-            "todo_id"
-          ],
+          "columnsFrom": ["todo_id"],
           "tableTo": "todos",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         },
         "todo_repositories_repository_id_fkey": {
           "name": "todo_repositories_repository_id_fkey",
           "tableFrom": "todo_repositories",
-          "columnsFrom": [
-            "repository_id"
-          ],
+          "columnsFrom": ["repository_id"],
           "tableTo": "repositories",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -5249,19 +4940,13 @@
       "compositePrimaryKeys": {
         "todo_repositories_pkey": {
           "name": "todo_repositories_pkey",
-          "columns": [
-            "todo_id",
-            "repository_id"
-          ]
+          "columns": ["todo_id", "repository_id"]
         }
       },
       "uniqueConstraints": {
         "todo_repositories_position_unique": {
           "name": "todo_repositories_position_unique",
-          "columns": [
-            "todo_id",
-            "position"
-          ],
+          "columns": ["todo_id", "position"],
           "nullsNotDistinct": false
         }
       },
@@ -5383,28 +5068,20 @@
         "todos_plan_id_plans_id_fk": {
           "name": "todos_plan_id_plans_id_fk",
           "tableFrom": "todos",
-          "columnsFrom": [
-            "plan_id"
-          ],
+          "columnsFrom": ["plan_id"],
           "tableTo": "plans",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "set null"
         },
         "todos_installation_id_fkey": {
           "name": "todos_installation_id_fkey",
           "tableFrom": "todos",
-          "columnsFrom": [
-            "installation_id"
-          ],
+          "columnsFrom": ["installation_id"],
           "tableTo": "installations",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -5481,16 +5158,12 @@
       "uniqueConstraints": {
         "user_email_unique": {
           "name": "user_email_unique",
-          "columns": [
-            "email"
-          ],
+          "columns": ["email"],
           "nullsNotDistinct": false
         },
         "user_github_id_unique": {
           "name": "user_github_id_unique",
-          "columns": [
-            "githubId"
-          ],
+          "columns": ["githubId"],
           "nullsNotDistinct": false
         }
       },
@@ -5528,14 +5201,10 @@
         "user_installation_access_user_id_fkey": {
           "name": "user_installation_access_user_id_fkey",
           "tableFrom": "user_installation_access",
-          "columnsFrom": [
-            "user_id"
-          ],
+          "columnsFrom": ["user_id"],
           "tableTo": "user",
           "schemaTo": "auth",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
@@ -5835,14 +5504,10 @@
         "verifications_feature_id_fkey": {
           "name": "verifications_feature_id_fkey",
           "tableFrom": "verifications",
-          "columnsFrom": [
-            "feature_id"
-          ],
+          "columnsFrom": ["feature_id"],
           "tableTo": "features",
           "schemaTo": "app",
-          "columnsTo": [
-            "id"
-          ],
+          "columnsTo": ["id"],
           "onUpdate": "no action",
           "onDelete": "cascade"
         }
