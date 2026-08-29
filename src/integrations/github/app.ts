@@ -66,6 +66,12 @@ export async function installationToken(installationId: number): Promise<string>
   return data.token;
 }
 
+export async function installationDetails(installationId: number): Promise<{
+  account: { login: string; id: number; type: string };
+}> {
+  return githubJson(await appJwt(), `/app/installations/${installationId}`);
+}
+
 // Least-privilege token for code that runs inside a sandbox next to untrusted
 // content: scoped to ONE repository and the given permissions (typically just
 // contents), so a compromised or prompt-injected agent run cannot touch other
@@ -135,11 +141,6 @@ async function mintToken(
   installationId: number,
   scope?: { repositories: string[]; permissions: Record<string, string> },
 ): Promise<{ token: string; expires_at: string }> {
-  // Negative ids are synthetic Artifacts installations (git/provider.ts) —
-  // a caller reaching GitHub with one is a provider-dispatch bug upstream.
-  if (installationId < 0) {
-    throw new Error(`installation ${installationId} is Artifacts-hosted, not a GitHub App install`);
-  }
   return githubJson<{ token: string; expires_at: string }>(
     await appJwt(),
     `/app/installations/${installationId}/access_tokens`,

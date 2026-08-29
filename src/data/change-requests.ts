@@ -1,7 +1,9 @@
-import { env } from 'cloudflare:workers';
+import { sql } from 'drizzle-orm';
+import type { CrFileChange } from '../ai/runtime/cr-engine.ts';
+import { execute, queryOne, queryRows } from './database.ts';
 
-// Typed layer over the native change-request store (migration 0036,
-// docs/artifacts-provider.md). Diff patches live in R2 under the private
+// Typed layer over the native change-request store (docs/artifacts-provider.md).
+// Diff patches live in R2 under the private
 // crs/ prefix; only their keys are recorded here.
 
 export interface ChangeRequestRow {
@@ -16,11 +18,11 @@ export interface ChangeRequestRow {
   source_head: string | null;
   target_head: string | null;
   merge_base: string | null;
-  mergeable: number | null; // NULL unknown, 1 clean, 0 conflicts
-  conflict_files: string | null; // JSON string[]
-  files: string | null; // JSON CrFileChange[]
+  mergeable: boolean | null;
+  conflict_files: string[] | null;
+  files: CrFileChange[] | null;
   diff_key: string | null;
-  patch_truncated: number;
+  patch_truncated: boolean;
   review_status: string | null; // 'approved' | 'changes_requested'
   merged_head: string | null;
   opened_by: string;
@@ -58,41 +60,34 @@ export async function createChangeRequest(input: {
   targetBranch: string;
   openedBy: string;
 }): Promise<ChangeRequestRow> {
-  // Per-repo display number allocated in the INSERT itself so no read can
-  // race the sequence.
-  const row = await env.DB.prepare(
-    `INSERT INTO change_requests
-		   (repository_id, number, feature_id, title, source_branch, target_branch, opened_by)
-		 SELECT ?1, COALESCE(MAX(number), 0) + 1, ?2, ?3, ?4, ?5, ?6
-		 FROM change_requests WHERE repository_id = ?1
-		 RETURNING *`,
-  )
-    .bind(
-      input.repositoryId,
-      input.featureId,
-      input.title,
-      input.sourceBranch,
-      input.targetBranch,
-      input.openedBy,
+  // The counter row is incremented atomically, so concurrent creators never
+  // allocate the same per-repository display number.
+  const row = await queryOne<ChangeRequestRow>(sql`
+    INSERT INTO app.change_requests
+      (repository_id, number, feature_id, title, source_branch, target_branch, opened_by)
+    VALUES (
+      ${input.repositoryId}, app.next_change_request_number(${input.repositoryId}),
+      ${input.featureId}, ${input.title}, ${input.sourceBranch}, ${input.targetBranch},
+      ${input.openedBy}
     )
-    .first<ChangeRequestRow>();
+    RETURNING *
+  `);
   if (!row) throw new Error('change request insert returned no row');
   return row;
 }
 
 export async function getChangeRequest(id: number): Promise<ChangeRequestRow | null> {
-  return env.DB.prepare('SELECT * FROM change_requests WHERE id = ?1')
-    .bind(id)
-    .first<ChangeRequestRow>();
+  return queryOne<ChangeRequestRow>(sql`SELECT * FROM app.change_requests WHERE id = ${id}`);
 }
 
 export async function getChangeRequestByRepoNumber(
   repositoryId: number,
   number: number,
 ): Promise<ChangeRequestRow | null> {
-  return env.DB.prepare('SELECT * FROM change_requests WHERE repository_id = ?1 AND number = ?2')
-    .bind(repositoryId, number)
-    .first<ChangeRequestRow>();
+  return queryOne<ChangeRequestRow>(sql`
+    SELECT * FROM app.change_requests
+    WHERE repository_id = ${repositoryId} AND number = ${number}
+  `);
 }
 
 export async function getOpenChangeRequest(
@@ -100,30 +95,23 @@ export async function getOpenChangeRequest(
   sourceBranch: string,
   targetBranch: string,
 ): Promise<ChangeRequestRow | null> {
-  return env.DB.prepare(
-    `SELECT * FROM change_requests
-		 WHERE repository_id = ?1 AND source_branch = ?2 AND target_branch = ?3 AND status = 'open'`,
-  )
-    .bind(repositoryId, sourceBranch, targetBranch)
-    .first<ChangeRequestRow>();
+  return queryOne<ChangeRequestRow>(sql`
+    SELECT * FROM app.change_requests
+    WHERE repository_id = ${repositoryId} AND source_branch = ${sourceBranch}
+      AND target_branch = ${targetBranch} AND status = 'open'
+  `);
 }
 
 export async function listChangeRequestsForRepo(
   repositoryId: number,
   status?: string,
 ): Promise<ChangeRequestRow[]> {
-  const rows = status
-    ? await env.DB.prepare(
-        'SELECT * FROM change_requests WHERE repository_id = ?1 AND status = ?2 ORDER BY number DESC',
-      )
-        .bind(repositoryId, status)
-        .all<ChangeRequestRow>()
-    : await env.DB.prepare(
-        'SELECT * FROM change_requests WHERE repository_id = ?1 ORDER BY number DESC',
-      )
-        .bind(repositoryId)
-        .all<ChangeRequestRow>();
-  return rows.results;
+  const statusFilter = status ? sql`AND status = ${status}` : sql.empty();
+  return queryRows<ChangeRequestRow>(sql`
+    SELECT * FROM app.change_requests
+    WHERE repository_id = ${repositoryId} ${statusFilter}
+    ORDER BY number DESC
+  `);
 }
 
 export interface ChangeRequestStatePatch {
@@ -132,7 +120,7 @@ export interface ChangeRequestStatePatch {
   mergeBase: string;
   mergeable: boolean;
   conflictFiles: string[];
-  filesJson: string;
+  files: CrFileChange[];
   diffKey: string;
   patchTruncated: boolean;
 }
@@ -142,54 +130,36 @@ export async function updateChangeRequestState(
   id: number,
   state: ChangeRequestStatePatch,
 ): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE change_requests SET
-		   source_head = ?2, target_head = ?3, merge_base = ?4, mergeable = ?5,
-		   conflict_files = ?6, files = ?7, diff_key = ?8, patch_truncated = ?9,
-		   updated_at = datetime('now')
-		 WHERE id = ?1`,
-  )
-    .bind(
-      id,
-      state.sourceHead,
-      state.targetHead,
-      state.mergeBase,
-      state.mergeable ? 1 : 0,
-      JSON.stringify(state.conflictFiles),
-      state.filesJson,
-      state.diffKey,
-      state.patchTruncated ? 1 : 0,
-    )
-    .run();
+  await execute(sql`
+    UPDATE app.change_requests SET
+      source_head = ${state.sourceHead}, target_head = ${state.targetHead},
+      merge_base = ${state.mergeBase}, mergeable = ${state.mergeable},
+      conflict_files = ${JSON.stringify(state.conflictFiles)}::jsonb,
+      files = ${JSON.stringify(state.files)}::jsonb, diff_key = ${state.diffKey},
+      patch_truncated = ${state.patchTruncated}
+    WHERE id = ${id}
+  `);
 }
 
 export async function setChangeRequestReviewStatus(
   id: number,
   reviewStatus: 'approved' | 'changes_requested',
 ): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE change_requests SET review_status = ?2, updated_at = datetime('now') WHERE id = ?1`,
-  )
-    .bind(id, reviewStatus)
-    .run();
+  await execute(sql`
+    UPDATE app.change_requests SET review_status = ${reviewStatus} WHERE id = ${id}
+  `);
 }
 
 export async function markChangeRequestMerged(id: number, mergedHead: string): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE change_requests SET status = 'merged', merged_head = ?2, mergeable = 1,
-		   conflict_files = '[]', updated_at = datetime('now')
-		 WHERE id = ?1`,
-  )
-    .bind(id, mergedHead)
-    .run();
+  await execute(sql`
+    UPDATE app.change_requests SET status = 'merged', merged_head = ${mergedHead},
+      mergeable = TRUE, conflict_files = '[]'::jsonb
+    WHERE id = ${id}
+  `);
 }
 
 export async function closeChangeRequest(id: number): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE change_requests SET status = 'closed', updated_at = datetime('now') WHERE id = ?1`,
-  )
-    .bind(id)
-    .run();
+  await execute(sql`UPDATE app.change_requests SET status = 'closed' WHERE id = ${id}`);
 }
 
 export async function addCrComment(input: {
@@ -201,32 +171,22 @@ export async function addCrComment(input: {
   severity: string | null;
   body: string;
 }): Promise<CrCommentRow> {
-  const row = await env.DB.prepare(
-    `INSERT INTO cr_comments (change_request_id, file, line, author, kind, severity, body)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-		 RETURNING *`,
-  )
-    .bind(
-      input.changeRequestId,
-      input.file,
-      input.line,
-      input.author,
-      input.kind,
-      input.severity,
-      input.body,
+  const row = await queryOne<CrCommentRow>(sql`
+    INSERT INTO app.cr_comments (change_request_id, file, line, author, kind, severity, body)
+    VALUES (
+      ${input.changeRequestId}, ${input.file}, ${input.line}, ${input.author},
+      ${input.kind}, ${input.severity}, ${input.body}
     )
-    .first<CrCommentRow>();
+    RETURNING *
+  `);
   if (!row) throw new Error('cr comment insert returned no row');
   return row;
 }
 
 export async function listCrComments(changeRequestId: number): Promise<CrCommentRow[]> {
-  const rows = await env.DB.prepare(
-    'SELECT * FROM cr_comments WHERE change_request_id = ?1 ORDER BY id',
-  )
-    .bind(changeRequestId)
-    .all<CrCommentRow>();
-  return rows.results;
+  return queryRows<CrCommentRow>(sql`
+    SELECT * FROM app.cr_comments WHERE change_request_id = ${changeRequestId} ORDER BY id
+  `);
 }
 
 export async function upsertCrCheck(
@@ -235,21 +195,16 @@ export async function upsertCrCheck(
   status: 'running' | 'passed' | 'failed' | 'error',
   summary?: string,
 ): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO cr_checks (change_request_id, name, status, summary)
-		 VALUES (?1, ?2, ?3, ?4)
-		 ON CONFLICT (change_request_id, name) DO UPDATE SET
-		   status = ?3, summary = ?4, updated_at = datetime('now')`,
-  )
-    .bind(changeRequestId, name, status, summary ?? null)
-    .run();
+  await execute(sql`
+    INSERT INTO app.cr_checks (change_request_id, name, status, summary)
+    VALUES (${changeRequestId}, ${name}, ${status}, ${summary ?? null})
+    ON CONFLICT (change_request_id, name) DO UPDATE SET
+      status = EXCLUDED.status, summary = EXCLUDED.summary
+  `);
 }
 
 export async function listCrChecks(changeRequestId: number): Promise<CrCheckRow[]> {
-  const rows = await env.DB.prepare(
-    'SELECT * FROM cr_checks WHERE change_request_id = ?1 ORDER BY name',
-  )
-    .bind(changeRequestId)
-    .all<CrCheckRow>();
-  return rows.results;
+  return queryRows<CrCheckRow>(sql`
+    SELECT * FROM app.cr_checks WHERE change_request_id = ${changeRequestId} ORDER BY name
+  `);
 }

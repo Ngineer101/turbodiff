@@ -2,25 +2,19 @@
 /// <reference path="../../worker-configuration.d.ts" />
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
 
-import type { D1Migration } from '@cloudflare/vitest-pool-workers';
-import { env } from 'cloudflare:workers';
+import { testDatabase } from '../test/database-fixture.ts';
 // Transport-level coverage for the inbound MCP server: JSON-RPC over
 // stateless streamable HTTP, bearer auth stubbed at the route seam. Request
 // shapes mirror the outbound probe in integrations/mcp/client.ts.
-import { applyD1Migrations } from 'cloudflare:test';
 import { Hono } from 'hono';
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
+import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { oAuthDiscoveryMetadata, oAuthProtectedResourceMetadata } from 'better-auth/plugins';
-import { auth } from '../integrations/auth/better-auth.ts';
+import { withAuth } from '../integrations/auth/better-auth.ts';
 import type { AuthedUser } from '../services/auth.ts';
 import { isJsonArray, isJsonObject, isString, parseJson, type JsonObject } from '../shared/json.ts';
 import { createMcpRoutes, type McpRouteDependencies } from './mcp.ts';
 
-type TestEnv = Cloudflare.Env & { TEST_MIGRATIONS: D1Migration[] };
 type EnqueueFactory = NonNullable<McpRouteDependencies['enqueueFactory']>;
-// SAFETY: vitest.worker.config.ts provisions the TEST_MIGRATIONS binding for
-// this pool on top of the generated Cloudflare.Env.
-const testEnv = env as TestEnv;
 
 const acmeUser: AuthedUser = {
   session: { authUserId: 'user-3001', userId: 3001, login: 'octocat' },
@@ -84,37 +78,33 @@ function toolPayload(result: JsonObject) {
 }
 
 async function seedTenants(): Promise<void> {
-  await testEnv.DB.batch([
-    testEnv.DB.prepare(
+  await testDatabase().batch([
+    testDatabase().prepare(
       `INSERT INTO installations (id, account_login, account_id, account_type)
 		 VALUES (1001, 'acme', 2001, 'Organization'),
 		        (2002, 'other', 2002, 'Organization')`,
     ),
-    testEnv.DB.prepare(
+    testDatabase().prepare(
       `INSERT INTO repositories (id, installation_id, owner, name)
 		 VALUES (101, 1001, 'acme', 'api'),
 		        (202, 2002, 'other', 'private')`,
     ),
-    testEnv.DB.prepare(
+    testDatabase().prepare(
       `INSERT INTO todos (id, installation_id, title, created_by_login, created_by_id)
 		 VALUES (401, 1001, 'Acme backlog', 'octocat', 3001),
 		        (402, 2002, 'Other backlog', 'someone-else', 4001)`,
     ),
-    testEnv.DB.prepare(
+    testDatabase().prepare(
       `INSERT INTO todo_repositories (todo_id, repository_id, position)
 		 VALUES (401, 101, 0), (402, 202, 0)`,
     ),
-    testEnv.DB.prepare(
+    testDatabase().prepare(
       `INSERT INTO "user" (id, name, email, "emailVerified", "createdAt", "updatedAt", login, "githubId")
-		 VALUES ('u1', 'octocat', 'octocat@example.test', 1, '2026-01-01T00:00:00.000Z',
+		 VALUES ('u1', 'octocat', 'octocat@example.test', true, '2026-01-01T00:00:00.000Z',
 		         '2026-01-01T00:00:00.000Z', 'octocat', 3001)`,
     ),
   ]);
 }
-
-beforeAll(async () => {
-  await applyD1Migrations(testEnv.DB, testEnv.TEST_MIGRATIONS);
-});
 
 beforeEach(async () => {
   const tables = [
@@ -128,7 +118,9 @@ beforeEach(async () => {
     'installations',
     'user',
   ];
-  await testEnv.DB.batch(tables.map((table) => testEnv.DB.prepare(`DELETE FROM "${table}"`)));
+  await testDatabase().batch(
+    tables.map((table) => testDatabase().prepare(`DELETE FROM "${table}"`)),
+  );
   await seedTenants();
 });
 
@@ -219,9 +211,8 @@ describe('MCP tool surface', () => {
     expect(created.isError).toBe(false);
     const body = parseJson(created.text);
     if (!isJsonObject(body)) throw new Error(`unexpected create_todo result: ${created.text}`);
-    const row = await testEnv.DB.prepare(
-      `SELECT installation_id, created_by_login FROM todos WHERE id = ?1`,
-    )
+    const row = await testDatabase()
+      .prepare(`SELECT installation_id, created_by_login FROM todos WHERE id = ?1`)
       .bind(body.todo_id)
       .first<{ installation_id: number; created_by_login: string }>();
     expect(row).toEqual({ installation_id: 1001, created_by_login: 'octocat' });
@@ -232,9 +223,9 @@ describe('MCP tool surface', () => {
       ),
     );
     expect(foreign.isError).toBe(true);
-    const count = await testEnv.DB.prepare(
-      `SELECT COUNT(*) AS n FROM todos WHERE title = 'Cross-tenant'`,
-    ).first<{ n: number }>();
+    const count = await testDatabase()
+      .prepare(`SELECT COUNT(*) AS n FROM todos WHERE title = 'Cross-tenant'`)
+      .first<{ n: number }>();
     expect(count?.n).toBe(0);
   });
 
@@ -254,7 +245,7 @@ describe('MCP tool surface', () => {
     if (!isJsonObject(body)) throw new Error(`unexpected start_task result: ${started.text}`);
     const planId = body.task_id;
     expect(enqueueFactory).toHaveBeenCalledExactlyOnceWith({ kind: 'plan_analyze', planId });
-    const todo = await testEnv.DB.prepare('SELECT plan_id FROM todos WHERE id = 401').first<{
+    const todo = await testDatabase().prepare('SELECT plan_id FROM todos WHERE id = 401').first<{
       plan_id: number | null;
     }>();
     expect(todo?.plan_id).toBe(planId);
@@ -281,10 +272,10 @@ describe('OAuth discovery documents', () => {
   function discoveryApp() {
     const app = new Hono();
     app.get('/.well-known/oauth-authorization-server', (c) =>
-      oAuthDiscoveryMetadata(auth())(c.req.raw),
+      withAuth((instance) => oAuthDiscoveryMetadata(instance)(c.req.raw)),
     );
     app.get('/.well-known/oauth-protected-resource', (c) =>
-      oAuthProtectedResourceMetadata(auth())(c.req.raw),
+      withAuth((instance) => oAuthProtectedResourceMetadata(instance)(c.req.raw)),
     );
     return app;
   }

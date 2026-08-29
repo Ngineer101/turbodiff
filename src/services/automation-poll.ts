@@ -2,10 +2,6 @@ import { computeNextRunAt, type ScheduleInput } from '../domain/automation-sched
 import { claimAutomation, listDueAutomations } from '../data/db.ts';
 import { enqueueFactoryMessage } from './factory-queue.ts';
 
-function sqlUtcNow(d: Date): string {
-  return d.toISOString().slice(0, 19).replace('T', ' ');
-}
-
 // Called from the `scheduled` handler in src/cloudflare.ts (a fixed-interval
 // Cron Trigger — see wrangler.jsonc). Finds automations due to fire, claims
 // each atomically (advancing next_run_at so a redelivered/overlapping poll
@@ -13,7 +9,7 @@ function sqlUtcNow(d: Date): string {
 // batch, so every item is wrapped individually.
 export async function pollAutomations(): Promise<void> {
   const now = new Date();
-  const nowIso = sqlUtcNow(now);
+  const nowIso = now.toISOString();
   const due = await listDueAutomations(nowIso);
   for (const automation of due) {
     try {

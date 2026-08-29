@@ -21,10 +21,9 @@ export async function applyOptimistic<T>(
   };
 }
 
-// D1-style UTC timestamp ('YYYY-MM-DD HH:MM:SS') for optimistic rows, so
-// they format identically to server rows (see format.ts ago()).
+// Match the ISO timestamptz values returned by the PostgreSQL adapter.
 export function optimisticNow(): string {
-  return new Date().toISOString().slice(0, 19).replace('T', ' ');
+  return new Date().toISOString();
 }
 
 // Client-only placeholder id for an optimistic row: negative, so it can

@@ -20,7 +20,7 @@ export interface ApiReview {
   total_tokens: number;
   cost_usd: number;
   duration_s: number | null;
-  created_at: string; // D1 UTC 'YYYY-MM-DD HH:MM:SS'
+  created_at: string; // ISO-8601 timestamptz
 }
 
 // One session (generation, review, fix, or verify run) inside a shipped
@@ -370,7 +370,7 @@ export interface ApiMe {
   installation_ids: number[];
 }
 
-// Native org roles (migrations/0031_organizations.sql), scoped per
+// Native organization roles, scoped per
 // installation rather than global — an ApiMe.role would be meaningless
 // across installations, so the members page fetches role via ApiOrgMembers
 // for the one installation it's showing.

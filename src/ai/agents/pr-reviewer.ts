@@ -144,13 +144,13 @@ export function PrReviewer(props: AgentProps) {
     useTool(makeFetchPr(cfg.pin));
     useTool(makeFetchFile(cfg.pin));
     useTool(makeFetchReviewThreads(cfg.pin));
-    // post_review closes over the instance id so completing the D1 review row
+    // post_review closes over the instance id so completing the PostgreSQL review row
     // can never hit another agent's concurrent review of the same PR.
     useTool(makePostReview(props.id, cfg.pin));
   }
 
   // The agent's configured external MCP servers (e.g. an Executor catalog).
-  // Tokens stay sealed in D1: the auth resolver decrypts per request, so
+  // Tokens stay sealed in PostgreSQL: the auth resolver decrypts per request, so
   // they never enter model context or conversation storage.
   for (const conn of cfg.connections) {
     const definition: McpConnectionDefinition = {

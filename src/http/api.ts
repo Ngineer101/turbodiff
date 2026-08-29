@@ -122,13 +122,13 @@ import {
   userIsGithubOrgAdmin,
 } from '../services/auth.ts';
 import { APIError } from 'better-auth';
-import { auth } from '../integrations/auth/better-auth.ts';
+import { withAuth } from '../integrations/auth/better-auth.ts';
 import { certificateUrl } from '../services/certificates.ts';
 import { memberRole } from '../services/access-control.ts';
 import {
   CR_BOT_AUTHOR,
   getCrDiffPatch,
-  parseCrFiles,
+  changeRequestFiles,
   splitPatchByFile,
 } from '../services/change-requests.ts';
 import {
@@ -442,6 +442,10 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   // Web Push subscription (src/services/push-notifications.ts). Body shape matches
   // PushSubscription.toJSON() natively — no client-side reshaping needed.
   app.post('/push/subscribe', async (c) => {
+    const user = c.get('user');
+    if (!user.githubConnected || user.session.userId <= 0) {
+      return c.json({ error: 'connect GitHub before enabling push notifications' }, 409);
+    }
     const body = await c.req
       .json<{ endpoint?: string; keys?: { p256dh?: string; auth?: string } }>()
       .catch(() => null);
@@ -451,7 +455,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (!endpoint || !p256dh || !auth) {
       return c.json({ error: 'body must be {"endpoint", "keys": {"p256dh", "auth"}}' }, 400);
     }
-    await upsertPushSubscription(c.get('user').session.userId, { endpoint, p256dh, auth });
+    await upsertPushSubscription(user.session.userId, { endpoint, p256dh, auth });
     return c.json({ ok: true });
   });
 
@@ -556,8 +560,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
           id: repo.id,
           owner: repo.owner,
           name: repo.name,
-          enabled: repo.enabled === 1,
-          suspended: installation.suspended === 1,
+          enabled: repo.enabled,
+          suspended: installation.suspended,
           reviews: u?.reviews ?? 0,
           cost_usd: u?.cost_usd ?? 0,
         };
@@ -604,7 +608,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       deferredExecution(c),
       `board/${encodeURIComponent(tenantKey)}/${version}`,
       async (): Promise<ApiBoard> => {
-        // All D1 rollups start in one wave. The repo-link queries are scoped
+        // All PostgreSQL rollups start in one wave. The repo-link queries are scoped
         // directly by installation rather than waiting for plan/todo ids.
         const [groups, plans, todos, stats, pipelineCost, repoStatuses, todoRepos] =
           await Promise.all([
@@ -643,7 +647,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
             })),
           })),
           tasks: plans
-            .filter((plan) => plan.archived !== 1)
+            .filter((plan) => !plan.archived)
             .map((plan) =>
               serializeTask(plan, statusesByPlan.get(plan.id) ?? [], { includePlan: false }),
             ),
@@ -653,7 +657,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
           })),
           repos: groups
             .flatMap((group) => group.repos)
-            .filter((repo) => repo.enabled === 1)
+            .filter((repo) => repo.enabled)
             .map((repo) => ({
               id: repo.id,
               owner: repo.owner,
@@ -675,7 +679,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   async function validRepoIds(installationId: number, repoIds: number[]): Promise<boolean> {
     if (repoIds.length === 0 || repoIds.length > MAX_TASK_REPOS) return false;
     const repos = await Promise.all(repoIds.map((id) => getRepoById(id)));
-    return repos.every((r) => r && r.installation_id === installationId && r.enabled === 1);
+    return repos.every((r) => r && r.installation_id === installationId && r.enabled);
   }
 
   app.post('/todos', async (c) => {
@@ -778,7 +782,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const attachments = rawAtts
       .map((a) => ({
         key: isString(a.key) ? a.key : '',
-        name: isString(a.name) ? a.name.slice(-120) : 'attachment',
+        name: isString(a.name) ? String(a.name).slice(-120) : 'attachment',
         content_type: isString(a.content_type) ? a.content_type : '',
       }))
       .filter((a) => a.key.startsWith('plan-uploads/'))
@@ -790,7 +794,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       title,
       requirements,
       { login: session.login, id: session.userId },
-      attachments.length > 0 ? JSON.stringify(attachments) : undefined,
+      attachments.length > 0 ? attachments : undefined,
       model || undefined,
     );
     if (!started) return c.json({ error: 'todo could not be started' }, 409);
@@ -852,12 +856,12 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (!isJsonArray(given)) {
       return c.json({ error: 'body must be {"answers": ["...", ...]}' }, 400);
     }
-    const questions: ApiPlanQuestion[] = plan.questions ? JSON.parse(plan.questions) : [];
+    const questions: ApiPlanQuestion[] = plan.questions ?? [];
     const answers = questions.map((_, i) => {
       const v = given[i];
       return isString(v) ? v : v == null ? '' : JSON.stringify(v);
     });
-    await updatePlan(plan.id, { status: 'refining', answers: JSON.stringify(answers) });
+    await updatePlan(plan.id, { status: 'refining', answers });
     await enqueueFactoryMessage({ kind: 'plan_refine', planId: plan.id });
     return c.json({ ok: true });
   });
@@ -1208,12 +1212,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         status: feature.status,
         error: feature.error,
         pr_number: feature.pr_number,
-        criteria_conflict: feature.criteria_conflict === 1,
-        // SAFETY: proposed_acceptance is written only by setProposedAcceptance
-        // as serialized string[].
-        proposed_criteria: feature.proposed_acceptance
-          ? (JSON.parse(feature.proposed_acceptance) as string[])
-          : null,
+        criteria_conflict: feature.criteria_conflict,
+        proposed_criteria: feature.proposed_acceptance,
       },
       repo: `${repo.owner}/${repo.name}`,
       provider: repo.provider,
@@ -1252,14 +1252,15 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       if (cr) {
         base.diff_version = cr.source_head;
         base.cr_number = cr.number;
-        const crFiles = parseCrFiles(cr);
+        const crFiles = changeRequestFiles(cr);
         base.pr = {
           state: cr.status,
           html_url: null,
           additions: crFiles.reduce((sum, f) => sum + (f.additions ?? 0), 0),
           deletions: crFiles.reduce((sum, f) => sum + (f.deletions ?? 0), 0),
           changed_files: crFiles.length,
-          mergeable_state: cr.mergeable === 0 ? 'dirty' : cr.mergeable === 1 ? 'clean' : null,
+          mergeable_state:
+            cr.mergeable === false ? 'dirty' : cr.mergeable === true ? 'clean' : null,
         };
         const crComments = await listCrComments(cr.id);
         const findings = crComments.filter((comment) => comment.kind === 'finding');
@@ -1338,20 +1339,15 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     base.comments = cockpitComments.map(serializeCockpitComment);
     base.plan = plan?.plan ?? null;
 
-    // SAFETY: verifications.demo is written only by the verify pipeline as a
-    // serialized {video, caption} object.
-    const demo = verification?.demo
-      ? (JSON.parse(verification.demo) as { video?: string; caption?: string })
-      : null;
+    const demo = verification?.demo ?? null;
     if (demo?.video) {
       base.demo = {
         url: `/artifacts/${demo.video}?sig=${await signArtifactKey(demo.video)}`,
         caption: demo.caption ?? null,
       };
     }
-    const criteria: string[] = feature.acceptance ? JSON.parse(feature.acceptance) : [];
-    const results: { index: number; verdict: string; note: string; screenshot?: string }[] =
-      verification?.results ? JSON.parse(verification.results) : [];
+    const criteria = feature.acceptance ?? [];
+    const results = verification?.results ?? [];
     base.criteria = await Promise.all(
       criteria.map(async (text, i) => {
         const r = results.find((x) => x.index === i);
@@ -1410,7 +1406,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
             file.patch,
           ]),
         );
-        const crFiles = parseCrFiles(artifactsCr);
+        const crFiles = changeRequestFiles(artifactsCr);
         return {
           version: artifactsCr.source_head,
           files: crFiles.slice(0, MAX_FILES).map((file) => {
@@ -1476,6 +1472,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       !payload?.path ||
       !isNumber(line) ||
       !Number.isInteger(line) ||
+      line <= 0 ||
       !payload.body?.trim() ||
       !feature.pr_number
     ) {
@@ -1788,7 +1785,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     // A same-text "update" keeps the same contract and re-fails identically —
     // the two ways that happens are a stale page or an unedited textarea,
     // and both deserve words, not a silent loop.
-    if (feature.acceptance && JSON.stringify(criteria) === feature.acceptance) {
+    if (feature.acceptance && JSON.stringify(criteria) === JSON.stringify(feature.acceptance)) {
       return c.json(
         {
           error:
@@ -1812,16 +1809,12 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     }
     const deniedCapability = await requireCapability(c, repo.installation_id, 'settings', orgAdmin);
     if (deniedCapability) return deniedCapability;
-    if (feature.criteria_conflict !== 1 || !feature.pr_number) {
+    if (!feature.criteria_conflict || !feature.pr_number) {
       return c.json({ error: 'no criteria conflict to resolve' }, 409);
     }
     const verification = await latestVerificationForFeature(feature.id);
-    // SAFETY: verifications.results is written only by the verify pipeline as
-    // serialized CriterionResult[].
-    const results: CriterionResult[] = verification?.results
-      ? (JSON.parse(verification.results) as CriterionResult[])
-      : [];
-    const criteria: string[] = feature.acceptance ? JSON.parse(feature.acceptance) : [];
+    const results: CriterionResult[] = verification?.results ?? [];
+    const criteria = feature.acceptance ?? [];
     await setFeatureCriteriaConflict(feature.id, false);
     // The explicit authorization the automatic path refused to assume: the
     // user chose the planned behavior over their comment's direction.
@@ -1859,7 +1852,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       if (!cr) return c.json({ error: 'unknown change request' }, 409);
       if (cr.status === 'merged') return c.json({ ok: true }); // idempotent re-click
       if (cr.status !== 'open') return c.json({ error: `change request is ${cr.status}` }, 409);
-      if (cr.mergeable === 0) {
+      if (cr.mergeable === false) {
         return c.json(
           { error: 'merge blocked — the change request has conflicts', conflict: true },
           409,
@@ -2034,7 +2027,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
           name: a.name,
           description: a.description,
           model: a.model,
-          is_builtin: a.is_builtin === 1,
+          is_builtin: a.is_builtin,
         })),
     });
   });
@@ -2071,7 +2064,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         name: agent.name,
         description: agent.description,
         model: agent.model,
-        is_builtin: agent.is_builtin === 1,
+        is_builtin: agent.is_builtin,
         instructions: agent.instructions,
         installation_id: agent.installation_id,
       },
@@ -2099,7 +2092,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const { installationIds } = c.get('user');
     const siblings = (await listAgents(installationIds)).filter((a) => a.slug === agent.slug);
     await Promise.all(siblings.map((s) => updateAgent(s.id, values)));
-    if (agent.is_builtin === 0) {
+    if (!agent.is_builtin) {
       const covered = new Set(siblings.map((s) => s.installation_id));
       await Promise.all(
         installationIds.filter((id) => !covered.has(id)).map((id) => createAgent(id, values)),
@@ -2118,10 +2111,10 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       orgAdmin,
     );
     if (deniedCapability) return deniedCapability;
-    if (agent.is_builtin === 1) return c.json({ error: 'built-in agents cannot be deleted' }, 403);
+    if (agent.is_builtin) return c.json({ error: 'built-in agents cannot be deleted' }, 403);
     // Fan out by slug: deleting a generic agent removes every installation's copy.
     const siblings = (await listAgents(c.get('user').installationIds)).filter(
-      (a) => a.slug === agent.slug && a.is_builtin === 0,
+      (a) => a.slug === agent.slug && !a.is_builtin,
     );
     await Promise.all(siblings.map((s) => deleteAgent(s.id)));
     return c.json({ ok: true });
@@ -2232,7 +2225,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     return c.json({ ok: true });
   });
 
-  // --- Automations: recurring per-repo prompt runs (migration 0028) ---
+  // --- Automations: recurring per-repo prompt runs ---
 
   app.get('/automations', async (c) => {
     const { installationIds } = c.get('user');
@@ -2250,7 +2243,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       ),
       repos: groups
         .flatMap((g) => g.repos)
-        .filter((r) => r.enabled === 1)
+        .filter((r) => r.enabled)
         .map((r) => ({
           id: r.id,
           owner: r.owner,
@@ -2269,7 +2262,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (error) return c.json({ error }, 400);
     const repositoryId = Number(body.repository_id);
     const repo = Number.isInteger(repositoryId) ? await getRepoById(repositoryId) : null;
-    if (!repo || !installationIds.includes(repo.installation_id) || repo.enabled !== 1) {
+    if (!repo || !installationIds.includes(repo.installation_id) || !repo.enabled) {
       return c.json({ error: 'unknown or disabled repository' }, 404);
     }
     const automationUnsupported = factoryUnsupportedReason(repo);
@@ -2317,7 +2310,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const values = readAutomationPayload(body);
     const error = validateAutomation(values);
     if (error) return c.json({ error }, 400);
-    const enabled = body.enabled === undefined ? automation.enabled === 1 : Boolean(body.enabled);
+    const enabled = body.enabled === undefined ? automation.enabled : Boolean(body.enabled);
     // Recompute next_run_at only when the schedule actually changed, so an
     // untouched schedule keeps its already-computed firing time.
     const scheduleChanged =
@@ -2371,7 +2364,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       runs: runs.map((r) => ({
         id: r.id,
         // SAFETY: automation_runs.status only ever holds running | pr_opened |
-        // no_changes | checks_failed | failed (migration 0028, finishAutomationRun).
+        // no_changes | checks_failed | failed (finishAutomationRun).
         status: r.status as ApiAutomationRunSummary['status'],
         pr_number: r.pr_number,
         error: r.error,
@@ -2393,7 +2386,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       run: {
         id: detail.run.id,
         // SAFETY: automation_runs.status only ever holds running | pr_opened |
-        // no_changes | checks_failed | failed (migration 0028, finishAutomationRun).
+        // no_changes | checks_failed | failed (finishAutomationRun).
         status: detail.run.status as ApiAutomationRunSummary['status'],
         pr_number: detail.run.pr_number,
         error: detail.run.error,
@@ -2407,7 +2400,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       runs: runs.map((r) => ({
         id: r.id,
         kind: r.kind,
-        success: r.success === 1,
+        success: r.success,
         created_at: r.created_at,
       })),
     });
@@ -2439,7 +2432,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       // client filters on installation_id.
       repos: groups.flatMap(({ repos }) =>
         repos
-          .filter((r) => r.enabled === 1)
+          .filter((r) => r.enabled)
           .map((r) => ({
             id: r.id,
             installation_id: r.installation_id,
@@ -2463,8 +2456,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
             .filter((l) => l.connection_id === conn.id)
             .map((l) => ({
               repository_id: l.repository_id,
-              reviews: l.reviews === 1,
-              automations: l.automations === 1,
+              reviews: l.reviews,
+              automations: l.automations,
             })),
         };
       }),
@@ -2732,19 +2725,19 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
           id: installation.id,
           account_login: installation.account_login,
           account_type: installation.account_type,
-          suspended: installation.suspended === 1,
+          suspended: installation.suspended,
           repos: repos.map((r) => ({
             id: r.id,
             owner: r.owner,
             name: r.name,
             provider: r.provider,
-            enabled: r.enabled === 1,
-            review_on_push: r.review_on_push === 1,
-            blocking_reviews: r.blocking_reviews === 1,
-            auto_fix: r.auto_fix === 1,
-            auto_merge: r.auto_merge === 1,
-            auto_resolve_conflicts: r.auto_resolve_conflicts === 1,
-            demo_videos: r.demo_videos === 1,
+            enabled: r.enabled,
+            review_on_push: r.review_on_push,
+            blocking_reviews: r.blocking_reviews,
+            auto_fix: r.auto_fix,
+            auto_merge: r.auto_merge,
+            auto_resolve_conflicts: r.auto_resolve_conflicts,
+            demo_videos: r.demo_videos,
             check_command: r.check_command,
             agents: instAgents.map((a) => ({
               id: a.id,
@@ -2765,7 +2758,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   });
 
   // --- Organizations: member management for Organization-type installations ---
-  // (migrations/0031_organizations.sql). Reads use plain installation
+  // in the auth schema. Reads use plain installation
   // membership (the hybrid model's baseline), but the org row itself is now
   // provisioned lazily on first visit for installations whose webhook was
   // missed, with the first owner bootstrapped from GitHub org-admin status
@@ -2846,10 +2839,12 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       );
     }
     try {
-      const invitation = await auth().api.createInvitation({
-        headers: c.req.raw.headers,
-        body: { email, role, organizationId: resolved.orgId },
-      });
+      const invitation = await withAuth((instance) =>
+        instance.api.createInvitation({
+          headers: c.req.raw.headers,
+          body: { email, role, organizationId: resolved.orgId },
+        }),
+      );
       return c.json<ApiInvitation>({
         id: invitation.id,
         email: invitation.email,
@@ -2870,10 +2865,12 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const denied = await requireCapability(c, resolved.installationId, 'member', orgAdmin);
     if (denied) return denied;
     try {
-      await auth().api.removeMember({
-        headers: c.req.raw.headers,
-        body: { memberIdOrEmail: c.req.param('memberId'), organizationId: resolved.orgId },
-      });
+      await withAuth((instance) =>
+        instance.api.removeMember({
+          headers: c.req.raw.headers,
+          body: { memberIdOrEmail: c.req.param('memberId'), organizationId: resolved.orgId },
+        }),
+      );
       return c.json({ ok: true });
     } catch (err) {
       return orgApiErrorResponse(c, err);
@@ -2891,10 +2888,12 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       return c.json({ error: 'body must be {"role": "owner"|"admin"|"member"}' }, 400);
     }
     try {
-      await auth().api.updateMemberRole({
-        headers: c.req.raw.headers,
-        body: { memberId: c.req.param('memberId'), role, organizationId: resolved.orgId },
-      });
+      await withAuth((instance) =>
+        instance.api.updateMemberRole({
+          headers: c.req.raw.headers,
+          body: { memberId: c.req.param('memberId'), role, organizationId: resolved.orgId },
+        }),
+      );
       return c.json({ ok: true });
     } catch (err) {
       return orgApiErrorResponse(c, err);

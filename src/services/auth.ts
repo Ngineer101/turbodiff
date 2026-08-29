@@ -1,5 +1,7 @@
 import { env } from 'cloudflare:workers';
-import { auth, type AuthUser } from '../integrations/auth/better-auth.ts';
+import { sql } from 'drizzle-orm';
+import { queryOne } from '../data/database.ts';
+import { withAuth, type AuthUser } from '../integrations/auth/better-auth.ts';
 import {
   installationAccessSnapshot,
   storeInstallationAccessSnapshot,
@@ -51,7 +53,7 @@ const INSTALLATIONS_STALE_MAX_MS = 60 * 60_000;
 const tokenCache = new Map<string, { token: string; exp: number }>();
 const installationsCache = new Map<string, { ids: number[]; fetchedAt: number }>();
 const installationRefreshes = new Map<string, Promise<number[] | null>>();
-// Synthetic (Artifacts) installation ids were the one uncached D1 read on
+// Synthetic (Artifacts) installation ids were the one uncached PostgreSQL read on
 // every API request — same TTL discipline as the GitHub installation list,
 // with the same bounded staleness on membership revocation.
 const SYNTHETIC_TTL_MS = 60_000;
@@ -73,9 +75,11 @@ async function githubToken(userId: string): Promise<string> {
   const cached = tokenCache.get(userId);
   if (cached && cached.exp > Date.now()) return cached.token;
   try {
-    const { accessToken } = await auth().api.getAccessToken({
-      body: { providerId: 'github', userId },
-    });
+    const { accessToken } = await withAuth((instance) =>
+      instance.api.getAccessToken({
+        body: { providerId: 'github', userId },
+      }),
+    );
     if (!accessToken) return '';
     tokenCache.set(userId, { token: accessToken, exp: Date.now() + TOKEN_TTL_MS });
     return accessToken;
@@ -231,7 +235,7 @@ export async function requireUser(request: Request): Promise<AuthedUser | null> 
       devFake: true,
     };
   }
-  const found = await auth().api.getSession({ headers: request.headers });
+  const found = await withAuth((instance) => instance.api.getSession({ headers: request.headers }));
   if (!found) return null;
   const user = found.user;
   // better-auth's static session type erases the login/githubId
@@ -265,8 +269,8 @@ async function resolveAuthedUser(user: AuthUser): Promise<AuthedUser | null> {
     cachedSyntheticInstallationIds(githubId),
   ]);
   if (resolved === null) return null;
-  // Artifacts-hosted projects ride on synthetic negative-id installations;
-  // GitHub can't know about them, so membership-derived ids are unioned in.
+  // GitHub cannot know about Artifacts-hosted projects, so membership-derived
+  // installation ids are unioned in.
   return {
     session: { authUserId: user.id, userId: githubId, login },
     installationIds: [...new Set([...resolved.ids, ...synthetic])],
@@ -277,27 +281,28 @@ async function resolveAuthedUser(user: AuthUser): Promise<AuthedUser | null> {
 }
 
 // The /mcp bearer counterpart to requireUser: resolves an OAuth 2.1 access
-// token issued by the better-auth mcp plugin (migrations/0041_mcp_oauth.sql)
+// token issued by the better-auth MCP plugin
 // to the same AuthedUser shape, through the same resolveAuthedUser tail —
 // per-isolate token/installation caches and the synthetic-installation union
 // included, so there is no second authorization path to keep in sync. Null
 // for an absent, unknown, or expired token. The user row is read with a
-// direct D1 query (precedent: services/access-control.ts queries better-auth
+// direct PostgreSQL query (precedent: services/access-control.ts queries better-auth
 // tables directly).
 export async function requireMcpUser(request: Request): Promise<AuthedUser | null> {
-  const session = await auth().api.getMcpSession({ headers: request.headers });
+  const session = await withAuth((instance) =>
+    instance.api.getMcpSession({ headers: request.headers }),
+  );
   if (!session?.userId) return null;
-  const row = await env.DB.prepare(
-    'SELECT "id", "name", "email", "login", "githubId" FROM "user" WHERE "id" = ?1',
-  )
-    .bind(session.userId)
-    .first<{
-      id: string;
-      name: string;
-      email: string;
-      login: string | null;
-      githubId: number | null;
-    }>();
+  const row = await queryOne<{
+    id: string;
+    name: string;
+    email: string;
+    login: string | null;
+    githubId: number | null;
+  }>(sql`
+    SELECT id, name, email, login, "githubId"
+    FROM auth."user" WHERE id = ${session.userId}
+  `);
   if (!row) return null;
   return resolveAuthedUser(row);
 }

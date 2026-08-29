@@ -170,8 +170,7 @@ export async function serializeFeatureUsage(
   };
 }
 
-// Groups reviews/fix attempts (over-fetched by repo id + PR number
-// separately, D1 having no clean tuple-IN) down to the exact pair.
+// Groups the exact review/fix-attempt tuple query results for presentation.
 export function groupByRepoPr<T extends { repository_id: number; pr_number: number }>(
   rows: T[],
 ): Map<string, T[]> {
@@ -187,32 +186,26 @@ export function groupByRepoPr<T extends { repository_id: number; pr_number: numb
 
 export function verificationSummary(
   status: string | null,
-  resultsJson: string | null,
+  results: { verdict: string }[] | null,
   createdAt: string | null,
 ): ApiVerificationSummary | null {
   if (!status) return null;
-  let total = 0;
-  let failed = 0;
-  try {
-    // SAFETY: verifications.results is written only by the verify pipeline as a
-    // serialized {index, verdict, note}[]; anything unparsable lands in catch.
-    const results = JSON.parse(resultsJson ?? '[]') as { verdict: string }[];
-    total = results.length;
-    failed = results.filter((r) => r.verdict === 'fail').length;
-  } catch {
-    // results unparsable — report the bare status
-  }
+  const rows = results ?? [];
   // Display-only, mirroring reviewState: the DB row stays 'running' until the
   // cron sweep (failStrandedVerifications) resolves it to 'error'.
   const stalled =
     status === 'running' &&
     createdAt !== null &&
     Date.now() - parseUtc(createdAt) > VERIFY_STALL_AFTER_MS;
-  return { status: stalled ? 'stalled' : status, total, failed };
+  return {
+    status: stalled ? 'stalled' : status,
+    total: rows.length,
+    failed: rows.filter((r) => r.verdict === 'fail').length,
+  };
 }
 
 export function serializeAgentRun(r: AgentRunRow): ApiAgentRun {
-  return { id: r.id, kind: r.kind, success: r.success === 1, created_at: r.created_at };
+  return { id: r.id, kind: r.kind, success: r.success, created_at: r.created_at };
 }
 
 type CockpitFixStatus = NonNullable<ApiCockpitComment['fix_status']>;
@@ -269,14 +262,9 @@ export function serializeTask(
   // task page passes true.
   opts: { includePlan: boolean } = { includePlan: true },
 ): ApiPlan {
-  // SAFETY: plans.questions is written only by the planner (planner.ts) as a
-  // serialized question array matching ApiPlanQuestion.
-  const questions = p.questions ? (JSON.parse(p.questions) as ApiPlanQuestion[]) : [];
-  // SAFETY: plans.acceptance is written only by the planner as a serialized string[].
-  const acceptance = p.acceptance ? (JSON.parse(p.acceptance) as string[]) : [];
-  // SAFETY: plans.attachments is written only by POST /todos/:id/start as a
-  // serialized {key, name, content_type}[] — name is the only field read back.
-  const attachments = p.attachments ? (JSON.parse(p.attachments) as { name: string }[]) : [];
+  const questions: ApiPlanQuestion[] = p.questions ?? [];
+  const acceptance = p.acceptance ?? [];
+  const attachments = p.attachments ?? [];
   return {
     id: p.id,
     title: p.title,
@@ -286,7 +274,7 @@ export function serializeTask(
     questions,
     acceptance,
     plan: opts.includePlan ? p.plan : null,
-    archived: p.archived === 1,
+    archived: p.archived,
     model: p.runner_model ?? DEFAULT_RUNNER_MODEL,
     attachments: attachments.map((a) => ({ name: a.name })),
     repos: repoStatuses
@@ -309,7 +297,7 @@ export function serializeTask(
   };
 }
 
-const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,30}$/;
+const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 // Gateway-only model ids: cloudflare/<provider>/<model>.
 const MODEL_RE = /^cloudflare\/[\w.-]+\/[\w.:-]+$/;
 
@@ -337,8 +325,8 @@ export function readAgentPayload(body: JsonObject): AgentFormValues {
 
 export function validateAgent(v: AgentFormValues, checkSlug: boolean): string | null {
   if (!v.name) return 'name is required';
-  if (checkSlug && !SLUG_RE.test(v.slug))
-    return 'slug must be 2-31 chars: lowercase letters, digits, dashes';
+  if (checkSlug && (v.slug.length < 2 || v.slug.length > 31 || !SLUG_RE.test(v.slug)))
+    return 'slug must be 2-31 chars: lowercase letters and digits separated by single dashes';
   if (checkSlug && RESERVED_AGENT_SLUGS.has(v.slug)) return `"${v.slug}" is a reserved word`;
   if (!v.instructions) return 'instructions are required';
   if (!MODEL_RE.test(v.model))
@@ -368,8 +356,8 @@ export function readSkillPayload(body: JsonObject): SkillFormValues {
 
 export function validateSkill(v: SkillFormValues, checkSlug: boolean): string | null {
   if (!v.name) return 'name is required';
-  if (checkSlug && !SLUG_RE.test(v.slug))
-    return 'slug must be 2-31 chars: lowercase letters, digits, dashes';
+  if (checkSlug && (v.slug.length < 2 || v.slug.length > 31 || !SLUG_RE.test(v.slug)))
+    return 'slug must be 2-31 chars: lowercase letters and digits separated by single dashes';
   if (!v.instructions) return 'instructions are required';
   return null;
 }
@@ -428,7 +416,7 @@ export function serializeAutomation(
     schedule_kind: a.schedule_kind as ApiAutomationSummary['schedule_kind'],
     time_of_day: a.time_of_day,
     day_of_week: a.day_of_week,
-    enabled: a.enabled === 1,
+    enabled: a.enabled,
     next_run_at: a.next_run_at,
     last_run: lastRun,
   };

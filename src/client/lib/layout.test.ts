@@ -7,15 +7,16 @@ describe('codeRoute', () => {
     expect(codeRoute('/repos/1/code/src/http/api.ts')).toBe(true);
   });
 
-  it('matches Artifacts repos, whose synthetic ids are negative', () => {
-    expect(codeRoute('/repos/-1/code')).toBe(true);
-    expect(codeRoute('/repos/-42/code/src/main.tsx')).toBe(true);
+  it('matches high-range Artifacts repository ids', () => {
+    expect(codeRoute('/repos/4000000000000001/code')).toBe(true);
+    expect(codeRoute('/repos/4000000000000042/code/src/main.tsx')).toBe(true);
   });
 
   it('matches nothing else', () => {
     expect(codeRoute('/')).toBe(false);
     expect(codeRoute('/factory/features/56')).toBe(false);
     expect(codeRoute('/repos/abc/code')).toBe(false);
+    expect(codeRoute('/repos/-1/code')).toBe(false);
     expect(codeRoute('/repos/1/settings')).toBe(false);
   });
 });

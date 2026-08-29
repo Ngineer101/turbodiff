@@ -1,9 +1,11 @@
-// Internal SQL helpers for the data layer; not part of the data API facade.
+import { sql, type SQL } from 'drizzle-orm';
 
-// Numbered D1 placeholder list for IN clauses: placeholderList(3) -> "?1, ?2, ?3",
-// placeholderList(2, 4) -> "?4, ?5". Keep every IN clause on this helper so the
-// numbering arithmetic (especially offsets past earlier bind params) lives in
-// exactly one place.
-export function placeholderList(count: number, start = 1): string {
-  return Array.from({ length: count }, (_, i) => `?${start + i}`).join(', ');
+/** Bind numeric entity ids as one PostgreSQL array parameter for `= ANY(...)`. */
+export function bigintArray(ids: readonly number[]): SQL {
+  return sql`${sql.param(ids)}::bigint[]`;
+}
+
+/** A timezone-safe PostgreSQL cutoff expression with a bound minute count. */
+export function minutesAgo(minutes: number): SQL {
+  return sql`CURRENT_TIMESTAMP - (${minutes}::double precision * INTERVAL '1 minute')`;
 }

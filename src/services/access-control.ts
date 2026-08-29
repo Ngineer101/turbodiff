@@ -1,4 +1,5 @@
-import { env } from 'cloudflare:workers';
+import { sql } from 'drizzle-orm';
+import { execute, queryOne, queryRows } from '../data/database.ts';
 import { getInstallation } from '../data/repositories.ts';
 import type { AuthedUser, userIsGithubOrgAdmin } from './auth.ts';
 import { orgRoles, type OrgRole } from '../integrations/auth/organization-access.ts';
@@ -25,9 +26,9 @@ import { orgRoles, type OrgRole } from '../integrations/auth/organization-access
 // for installations whose webhook delivery was missed, lazily from
 // orgForInstallationWithHeal on request paths.
 async function orgForInstallation(installationId: number): Promise<{ id: string } | null> {
-  return env.DB.prepare('SELECT id FROM "organization" WHERE "installationId" = ?1')
-    .bind(installationId)
-    .first<{ id: string }>();
+  return queryOne<{ id: string }>(sql`
+    SELECT id FROM auth."organization" WHERE "installationId" = ${installationId}
+  `);
 }
 
 // Idempotent: creates the linked organization row for an Organization-type
@@ -35,7 +36,7 @@ async function orgForInstallation(installationId: number): Promise<{ id: string 
 // Called from the installation/installation_repositories webhook handlers
 // (src/services/github-webhooks.ts) and from orgForInstallationWithHeal
 // below, which self-heals installations whose provisioning webhook was
-// missed (or that predate migrations/0031_organizations.sql).
+// missed (or that predate the organization schema).
 export async function ensureOrganizationForInstallation(
   installationId: number,
   accountLogin: string,
@@ -43,13 +44,14 @@ export async function ensureOrganizationForInstallation(
   const existing = await orgForInstallation(installationId);
   if (existing) return existing.id;
   const now = new Date().toISOString();
-  await env.DB.prepare(
-    `INSERT INTO "organization" (id, name, slug, "installationId", "createdAt")
-		 VALUES (?1, ?2, ?3, ?4, ?5)
-		 ON CONFLICT("installationId") DO NOTHING`,
-  )
-    .bind(crypto.randomUUID(), accountLogin, accountLogin.toLowerCase(), installationId, now)
-    .run();
+  await execute(sql`
+    INSERT INTO auth."organization" (id, name, slug, "installationId", "createdAt")
+    VALUES (
+      ${crypto.randomUUID()}, ${accountLogin}, ${accountLogin.toLowerCase()},
+      ${installationId}, ${now}
+    )
+    ON CONFLICT("installationId") DO NOTHING
+  `);
   // A concurrent webhook delivery may have won the insert race above.
   const row = await orgForInstallation(installationId);
   if (!row)
@@ -77,32 +79,32 @@ export async function ensureOrganizationForInstallation(
 // linked organization IS the access grant. Uncached on purpose: a freshly
 // created project must appear on the next request.
 export async function syntheticInstallationIds(githubId: number): Promise<number[]> {
-  const rows = await env.DB.prepare(
-    `SELECT o."installationId" AS id FROM "member" m
-		 JOIN "organization" o ON o.id = m."organizationId"
-		 JOIN "user" u ON u.id = m."userId"
-		 WHERE u."githubId" = ?1 AND o."installationId" < 0`,
-  )
-    .bind(githubId)
-    .all<{ id: number }>();
-  return rows.results.map((r) => r.id);
+  const rows = await queryRows<{ id: number }>(sql`
+    SELECT o."installationId" AS id FROM auth."member" m
+    JOIN auth."organization" o ON o.id = m."organizationId"
+    JOIN auth."user" u ON u.id = m."userId"
+    JOIN app.installations i ON i.id = o."installationId"
+    WHERE u."githubId" = ${githubId} AND i.provider = 'artifacts'
+  `);
+  return rows.map((row) => row.id);
 }
 
 export async function ensureOwnerMember(
   organizationId: string,
   installerGithubId: number,
 ): Promise<void> {
-  const user = await env.DB.prepare('SELECT id FROM "user" WHERE "githubId" = ?1')
-    .bind(installerGithubId)
-    .first<{ id: string }>();
+  const user = await queryOne<{ id: string }>(sql`
+    SELECT id FROM auth."user" WHERE "githubId" = ${installerGithubId}
+  `);
   if (!user) return;
-  await env.DB.prepare(
-    `INSERT INTO "member" (id, "organizationId", "userId", role, "createdAt")
-		 VALUES (?1, ?2, ?3, 'owner', ?4)
-		 ON CONFLICT("organizationId", "userId") DO NOTHING`,
-  )
-    .bind(crypto.randomUUID(), organizationId, user.id, new Date().toISOString())
-    .run();
+  await execute(sql`
+    INSERT INTO auth."member" (id, "organizationId", "userId", role, "createdAt")
+    VALUES (
+      ${crypto.randomUUID()}, ${organizationId}, ${user.id}, 'owner',
+      ${new Date().toISOString()}
+    )
+    ON CONFLICT("organizationId", "userId") DO NOTHING
+  `);
 }
 
 // The caller's role in an organization, keyed by their GitHub user id (the
@@ -111,13 +113,11 @@ export async function ensureOwnerMember(
 // 'member' (the auto-provisioning decision — hybrid access never locks
 // someone out of an installation they have real GitHub access to).
 export async function memberRole(organizationId: string, githubId: number): Promise<OrgRole> {
-  const row = await env.DB.prepare(
-    `SELECT "member".role AS role FROM "member"
-		 JOIN "user" ON "user".id = "member"."userId"
-		 WHERE "member"."organizationId" = ?1 AND "user"."githubId" = ?2`,
-  )
-    .bind(organizationId, githubId)
-    .first<{ role: string }>();
+  const row = await queryOne<{ role: string }>(sql`
+    SELECT member.role FROM auth."member" AS member
+    JOIN auth."user" AS "user" ON "user".id = member."userId"
+    WHERE member."organizationId" = ${organizationId} AND "user"."githubId" = ${githubId}
+  `);
   return row?.role === 'owner' || row?.role === 'admin' ? row.role : 'member';
 }
 
@@ -125,13 +125,11 @@ export async function memberRole(organizationId: string, githubId: number): Prom
 // explicit 'member' row from the implicit fallback, and explicit in-app role
 // assignments must win over GitHub-derived elevation.
 async function hasMemberRow(organizationId: string, githubId: number): Promise<boolean> {
-  const row = await env.DB.prepare(
-    `SELECT 1 AS x FROM "member"
-     JOIN "user" ON "user".id = "member"."userId"
-     WHERE "member"."organizationId" = ?1 AND "user"."githubId" = ?2`,
-  )
-    .bind(organizationId, githubId)
-    .first();
+  const row = await queryOne<{ x: number }>(sql`
+    SELECT 1 AS x FROM auth."member" AS member
+    JOIN auth."user" AS "user" ON "user".id = member."userId"
+    WHERE member."organizationId" = ${organizationId} AND "user"."githubId" = ${githubId}
+  `);
   return row !== null;
 }
 
@@ -153,11 +151,9 @@ async function ensureInstallerOwner(
 ): Promise<void> {
   if (user.devFake || installerGithubId === null) return;
   if (user.session.userId !== installerGithubId) return;
-  const count = await env.DB.prepare(
-    'SELECT COUNT(*) AS n FROM "member" WHERE "organizationId" = ?1',
-  )
-    .bind(organizationId)
-    .first<{ n: number }>();
+  const count = await queryOne<{ n: number }>(sql`
+    SELECT COUNT(*) AS n FROM auth."member" WHERE "organizationId" = ${organizationId}
+  `);
   if (!count || count.n > 0) return;
   await ensureOwnerMember(organizationId, user.session.userId);
 }
@@ -191,20 +187,23 @@ async function ensureGithubAdminOwner(
 // org must keep going through the GitHub-admin bootstrap above.
 async function ensureSoleMemberOwner(user: AuthedUser, organizationId: string): Promise<void> {
   if (user.devFake) return;
-  await env.DB.prepare(
-    `UPDATE "member" SET role = 'owner'
-     WHERE "organizationId" = ?1
-       AND role <> 'owner'
-       AND "userId" IN (SELECT id FROM "user" WHERE "githubId" = ?2)
-       AND (SELECT COUNT(*) FROM "member" m2 WHERE m2."organizationId" = ?1) = 1`,
-  )
-    .bind(organizationId, user.session.userId)
-    .run();
+  await execute(sql`
+    UPDATE auth."member" SET role = 'owner'
+    WHERE "organizationId" = ${organizationId}
+      AND role <> 'owner'
+      AND "userId" IN (
+        SELECT id FROM auth."user" WHERE "githubId" = ${user.session.userId}
+      )
+      AND (
+        SELECT COUNT(*) FROM auth."member" m2
+        WHERE m2."organizationId" = ${organizationId}
+      ) = 1
+  `);
 }
 
 // Resolve an installation to its linked organization, provisioning the row
 // if the webhook that should have created it was missed (installations that
-// predate migrations/0031_organizations.sql, or dropped deliveries). Also
+// predate the organization schema, or dropped deliveries). Also
 // bootstraps the first owner from GitHub: see ensureGithubAdminOwner. Also
 // normalizes a sole member row belonging to the caller to 'owner': see
 // ensureSoleMemberOwner. Null for personal (User-type) installations and
@@ -226,7 +225,7 @@ export async function orgForInstallationWithHeal(
     };
   }
   if (installation) {
-    // Installer first: it is a pure D1 check, and when it promotes the
+    // Installer first: it is a pure PostgreSQL check, and when it promotes the
     // caller the admin bootstrap's no-member-row guard makes the GitHub
     // call below unnecessary.
     await ensureInstallerOwner(user, org.id, installation.installer_github_id);
@@ -254,7 +253,7 @@ export async function orgForInstallationWithHeal(
 // check is fully permitted there — GitHub membership is already the whole
 // authorization story for a personal installation. A missing org row for an
 // Organization-type installation is provisioned here (a GET-time heal that
-// writes to D1 deliberately — same precedent as the GET /settings repo
+// writes to PostgreSQL deliberately — same precedent as the GET /settings repo
 // self-heal in src/http/api.ts), so a GitHub org admin is never locked out
 // of settings writes just because they haven't visited the members page yet.
 export async function capabilityDenied(

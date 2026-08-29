@@ -34,21 +34,21 @@ agents, the review policy, the cockpit, and the sandbox with a full git CLI in
 it. We build the forge layer natively, shaped for a factory rather than for
 humans-emulating-a-factory:
 
-| GitHub concept    | Native replacement                                          |
-| ----------------- | ----------------------------------------------------------- |
-| Pull request      | Change request: D1 row (repo, source/target branch, status) |
-| PR diff           | Sandbox `git diff target...source`, cached in R2            |
-| Review comments   | D1 rows anchored to file+line, same shape as cockpit today  |
-| Merge button      | Sandbox `git merge` + push, driven by `auto-merge.ts` logic |
-| Conflict badge    | Sandbox `git merge --no-commit` dry-run                     |
-| Webhooks          | Queue event subscriptions (already on the factory queue)    |
-| CI checks         | turbodiff's own checks in the sandbox, statuses in D1       |
-| Deploy keys / PAT | Repo-scoped Artifacts tokens minted per job and per user    |
+| GitHub concept    | Native replacement                                                  |
+| ----------------- | ------------------------------------------------------------------- |
+| Pull request      | Change request: PostgreSQL row (repo, source/target branch, status) |
+| PR diff           | Sandbox `git diff target...source`, cached in R2                    |
+| Review comments   | PostgreSQL rows anchored to file+line, same shape as cockpit today  |
+| Merge button      | Sandbox `git merge` + push, driven by `auto-merge.ts` logic         |
+| Conflict badge    | Sandbox `git merge --no-commit` dry-run                             |
+| Webhooks          | Queue event subscriptions (already on the factory queue)            |
+| CI checks         | turbodiff's own checks in the sandbox, statuses in PostgreSQL       |
+| Deploy keys / PAT | Repo-scoped Artifacts tokens minted per job and per user            |
 
 ## The loop, end to end
 
 1. **Create project** → `GIT_ARTIFACTS.create('org-slug/repo')`, namespace
-   per org. The spike's create step is this, minus the D1 bookkeeping.
+   per org. The spike's create step is this, minus the PostgreSQL bookkeeping.
 2. **Agent works** → sandbox clones with a short-TTL write token (spike:
    mint → push → revoke), commits to `turbodiff/feat-N`, pushes.
 3. **Push event** arrives on the factory queue (spike: event capture) →
@@ -92,10 +92,10 @@ or is existing turbodiff logic re-pointed at a `GitProvider` interface
   mergeability, inline comments, merge with conflict ripple). Reference
   implementations, deliberately never merged.
 - **Phase 1 (this PR)**: the provider seam (`src/integrations/git/`),
-  synthetic tenancy in D1, Artifacts project provisioning + clone tokens,
+  synthetic tenancy in PostgreSQL, Artifacts project provisioning + clone tokens,
   declarative push/delete event ingestion, and capability gates on every
   PR-bound factory intake — `docs/artifacts-provider.md`.
-- **Phases 2-3 (this PR)**: the native CR layer in production — D1 records,
+- **Phases 2-3 (this PR)**: the native CR layer in production — PostgreSQL records,
   the sandbox diff/merge engine, native reviews/checks/verification/merges,
   the cockpit rendering CRs through the existing diff surface, and a
   create-project UI. Remaining GitHub-only flows: automations, the PR fix

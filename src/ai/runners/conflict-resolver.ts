@@ -82,7 +82,7 @@ export async function processResolveConflictMessage(
   msg: ConflictResolveQueueMessage,
 ): Promise<void> {
   const repo = await getRepoById(msg.repoId);
-  if (!repo || !repo.enabled || repo.auto_resolve_conflicts !== 1) {
+  if (!repo?.enabled || !repo.auto_resolve_conflicts) {
     console.log(
       `turbodiff: conflict resolution skipped for repo ${msg.repoId}#${msg.prNumber} (auto-resolve off)`,
     );
