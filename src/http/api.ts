@@ -1471,6 +1471,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       !payload?.path ||
       !isNumber(line) ||
       !Number.isInteger(line) ||
+      line <= 0 ||
       !payload.body?.trim() ||
       !feature.pr_number
     ) {

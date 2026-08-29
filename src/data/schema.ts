@@ -30,14 +30,18 @@ export const nativeEntityIdSeq = appSchema.sequence('native_entity_id_seq', {
   cache: '1',
   cycle: false,
 });
-export const factoryVersionSeq = appSchema.sequence('factory_version_seq', {
-  startWith: '1',
-  increment: '1',
-  minValue: '1',
-  maxValue: '9223372036854775807',
-  cache: '1',
-  cycle: false,
-});
+
+export const factoryVersionState = appSchema.table(
+  'factory_version',
+  {
+    id: integer().primaryKey().notNull(),
+    version: bigint({ mode: 'number' }).default(1).notNull(),
+  },
+  (_table) => [
+    check('factory_version_singleton_check', sql`id = 1`),
+    check('factory_version_positive_check', sql`version > 0`),
+  ],
+);
 
 export const user = authSchema.table(
   'user',

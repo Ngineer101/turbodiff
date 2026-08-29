@@ -128,6 +128,39 @@ describe('API authentication and CSRF', () => {
   });
 });
 
+describe('API constraint validation', () => {
+  it.each(['security-', 'a--b'])(
+    'rejects an agent slug PostgreSQL would reject: %s',
+    async (slug) => {
+      const response = await authenticatedApi().request('https://turbodiff.test/api/agents', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ slug, name: 'Invalid', instructions: 'Review carefully' }),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: expect.stringContaining('slug') });
+    },
+  );
+
+  it('rejects line zero before inserting a cockpit comment', async () => {
+    const feature = await testDatabase()
+      .prepare(
+        `INSERT INTO features (repository_id, title, spec, pr_number)
+         VALUES (101, 'Feature', 'Spec', 7) RETURNING id`,
+      )
+      .first<{ id: number }>();
+    const response = await authenticatedApi().request(
+      `https://turbodiff.test/api/factory/features/${feature!.id}/comments`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: 'src/index.ts', line: 0, body: 'Fix this' }),
+      },
+    );
+    expect(response.status).toBe(400);
+  });
+});
+
 describe('authenticated tenant isolation', () => {
   it('returns only installations, repositories, and todos owned by the caller', async () => {
     const response = await authenticatedApi().request('https://turbodiff.test/api/board');

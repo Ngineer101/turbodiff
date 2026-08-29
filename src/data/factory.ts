@@ -270,10 +270,21 @@ export async function failStrandedVerifications(): Promise<number> {
 }
 
 export async function createVerification(featureId: number): Promise<number> {
-  const row = await queryOne<{ id: number }>(sql`
-    INSERT INTO app.verifications (feature_id) VALUES (${featureId}) RETURNING id
-  `);
-  return row!.id;
+  return withTransaction(async (transaction) => {
+    // The partial unique index is the final concurrency guard. Close a run
+    // that outlived the same threshold used by startVerification before the
+    // replacement INSERT, so a cron tick is not required to release it.
+    await transaction.execute(sql`
+      UPDATE app.verifications SET status = 'error',
+        error = 'verification run was killed before finishing — replaced by a new run'
+      WHERE feature_id = ${featureId} AND status = 'running'
+        AND created_at < ${minutesAgo(VERIFICATION_STRAND_MINUTES)}
+    `);
+    const result = await transaction.execute<{ id: number }>(sql`
+      INSERT INTO app.verifications (feature_id) VALUES (${featureId}) RETURNING id
+    `);
+    return result.rows[0]!.id;
+  });
 }
 
 export async function finishVerification(
@@ -623,11 +634,12 @@ export async function getFeature(id: number): Promise<FeatureRow | null> {
 // run_started_at fall back to created_at.
 const GENERATION_STRAND_MINUTES = 45;
 
-// A PostgreSQL sequence is the cache invalidation clock. Triggered nextval()
-// calls avoid a globally contended singleton UPDATE under concurrent runs.
+// This singleton row is updated by transactional triggers. A reader can only
+// observe a new version after the write that caused it commits, so immutable
+// board snapshots can never be cached under a version for uncommitted data.
 export async function factoryVersion(): Promise<number> {
   const row = await queryOne<{ version: number }>(sql`
-    SELECT last_value AS version FROM app.factory_version_seq
+    SELECT version FROM app.factory_version WHERE id = 1
   `);
   return row?.version ?? 0;
 }

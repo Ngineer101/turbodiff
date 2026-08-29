@@ -24,7 +24,7 @@ try {
     );
   }
   await client.query('ALTER SEQUENCE app.native_entity_id_seq RESTART WITH 4000000000000000');
-  await client.query('ALTER SEQUENCE app.factory_version_seq RESTART WITH 1');
+  await client.query('UPDATE app.factory_version SET version = 1 WHERE id = 1');
   console.log('Local PostgreSQL test data reset');
 } finally {
   await client.end();

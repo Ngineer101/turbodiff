@@ -15,6 +15,13 @@
       "when": 1787953342072,
       "tag": "0001_database-functions",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788013427144,
+      "tag": "0002_transactional-factory-version",
+      "breakpoints": true
     }
   ]
 }

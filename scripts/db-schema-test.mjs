@@ -27,7 +27,7 @@ const schemas = await db.query(`
 `);
 
 const counts = new Map(schemas.rows.map((row) => [row.table_schema, row.count]));
-if (counts.get('app') !== 30) throw new Error(`Expected 30 app tables, found ${counts.get('app')}`);
+if (counts.get('app') !== 31) throw new Error(`Expected 31 app tables, found ${counts.get('app')}`);
 if (counts.get('auth') !== 10)
   throw new Error(`Expected 10 auth tables, found ${counts.get('auth')}`);
 
@@ -177,9 +177,20 @@ if (changeRequests.rows[0]?.number !== 1 || changeRequests.rows[1]?.number !== 2
 }
 if (!changeRequests.rows[0]?.touched) throw new Error('updated_at trigger did not run');
 
-const version = await db.query('SELECT last_value::bigint AS version FROM app.factory_version_seq');
+const version = await db.query('SELECT version FROM app.factory_version WHERE id = 1');
 if (Number(version.rows[0]?.version) <= 1)
-  throw new Error('Factory invalidation sequence did not advance');
+  throw new Error('Factory invalidation version did not advance');
+
+const versionBeforeRollback = Number(version.rows[0]?.version);
+await db.exec(`
+  BEGIN;
+  UPDATE plans SET title = 'Rolled back' WHERE repository_id = 3001;
+  ROLLBACK;
+`);
+const versionAfterRollback = await db.query('SELECT version FROM app.factory_version WHERE id = 1');
+if (Number(versionAfterRollback.rows[0]?.version) !== versionBeforeRollback) {
+  throw new Error('Factory invalidation version escaped a rolled-back transaction');
+}
 
 await db.close();
-console.log(`Fresh PostgreSQL schema passed (${files.length} migrations, 40 tables)`);
+console.log(`Fresh PostgreSQL schema passed (${files.length} migrations, 41 tables)`);

@@ -3,5 +3,6 @@
   "compilerOptions": {
     "types": ["node", "@cloudflare/vitest-pool-workers/types"]
   },
-  "include": ["worker-configuration.d.ts", "src/env.d.ts", "src/**/*.worker.test.ts"]
+  "include": ["worker-configuration.d.ts", "src/env.d.ts", "src/**/*.worker.test.ts"],
+  "exclude": []
 }

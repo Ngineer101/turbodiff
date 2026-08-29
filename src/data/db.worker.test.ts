@@ -11,6 +11,7 @@ import {
   createAutomation,
   createCockpitComment,
   createFeature,
+  createVerification,
   createPlan,
   createPlanForTodo,
   createTodo,
@@ -248,6 +249,28 @@ describe('fix attempt invariants', () => {
     const fix = await tryRecordFixAttempt(101, 7, 'blocking_review', 3);
     expect(fix).not.toBeNull();
     expect(await tryRecordFixAttempt(101, 7, 'chat', Number.MAX_SAFE_INTEGER, 'chat')).toBeNull();
+  });
+});
+
+describe('verification invariants', () => {
+  it('fails a stale running verification before admitting its replacement', async () => {
+    const featureId = await createFeature(101, 'Verify me', 'Check the implementation');
+    const stale = await createVerification(featureId);
+    await testDatabase()
+      .prepare(
+        `UPDATE verifications SET created_at = CURRENT_TIMESTAMP - INTERVAL '46 minutes' WHERE id = ?1`,
+      )
+      .bind(stale)
+      .run();
+
+    const replacement = await createVerification(featureId);
+    expect(replacement).not.toBe(stale);
+    const old = await testDatabase()
+      .prepare('SELECT status, error FROM verifications WHERE id = ?1')
+      .bind(stale)
+      .first<{ status: string; error: string }>();
+    expect(old).toMatchObject({ status: 'error' });
+    expect(old?.error).toContain('replaced');
   });
 });
 

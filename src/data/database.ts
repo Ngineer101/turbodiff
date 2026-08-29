@@ -21,8 +21,8 @@ interface DatabaseScope {
 
 const databaseScope = new AsyncLocalStorage<DatabaseScope>();
 
-export function postgresClient(): Client {
-  return new Client({
+export function postgresClient(onError?: () => void): Client {
+  const connection = new Client({
     connectionString: env.HYPERDRIVE.connectionString,
     options: '-c search_path=app,auth,public',
     connectionTimeoutMillis: 10_000,
@@ -30,12 +30,46 @@ export function postgresClient(): Client {
     statement_timeout: 55_000,
     application_name: 'turbodiff-worker',
   });
+  // pg emits idle-socket failures as Client 'error' events. Without a
+  // listener Node treats one as an uncaught exception and kills the Worker
+  // invocation; clear the scoped client as well so the next data call can
+  // reconnect through Hyperdrive.
+  connection.on('error', (error) => {
+    console.error(
+      JSON.stringify({
+        message: 'turbodiff: PostgreSQL client error',
+        error: error.message,
+        code: 'code' in error ? error.code : undefined,
+      }),
+    );
+    onError?.();
+  });
+  return connection;
 }
 
-async function connectDatabase(): Promise<{ connection: Client; database: Database }> {
-  const connection = postgresClient();
+async function connectDatabase(onError?: () => void): Promise<{
+  connection: Client;
+  database: Database;
+}> {
+  const connection = postgresClient(onError);
   await connection.connect();
   return { connection, database: drizzle(connection, { schema }) };
+}
+
+function scopedDatabase(scope: DatabaseScope): Promise<DatabaseExecutor> {
+  if (scope.database) return scope.database;
+
+  let pending: Promise<DatabaseExecutor>;
+  const clearPending = () => {
+    if (scope.database === pending) scope.database = undefined;
+  };
+  pending = connectDatabase(clearPending).then(({ database }) => database);
+  scope.database = pending;
+  // Cache only a successful connection. A transient connect failure must not
+  // poison every later query in the same request or queue batch. This branch
+  // clears the cache while the original promise still rejects to its caller.
+  void pending.catch(clearPending);
+  return pending;
 }
 
 /**
@@ -55,8 +89,7 @@ export async function withDatabase<Result>(
 ): Promise<Result> {
   const scope = databaseScope.getStore();
   if (scope) {
-    scope.database ??= connectDatabase().then(({ database }) => database);
-    return operation(await scope.database);
+    return operation(await scopedDatabase(scope));
   }
 
   const { connection, database } = await connectDatabase();

@@ -282,7 +282,7 @@ export function serializeTask(
   };
 }
 
-const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,30}$/;
+const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 // Gateway-only model ids: cloudflare/<provider>/<model>.
 const MODEL_RE = /^cloudflare\/[\w.-]+\/[\w.:-]+$/;
 
@@ -310,8 +310,8 @@ export function readAgentPayload(body: JsonObject): AgentFormValues {
 
 export function validateAgent(v: AgentFormValues, checkSlug: boolean): string | null {
   if (!v.name) return 'name is required';
-  if (checkSlug && !SLUG_RE.test(v.slug))
-    return 'slug must be 2-31 chars: lowercase letters, digits, dashes';
+  if (checkSlug && (v.slug.length < 2 || v.slug.length > 31 || !SLUG_RE.test(v.slug)))
+    return 'slug must be 2-31 chars: lowercase letters and digits separated by single dashes';
   if (checkSlug && RESERVED_AGENT_SLUGS.has(v.slug)) return `"${v.slug}" is a reserved word`;
   if (!v.instructions) return 'instructions are required';
   if (!MODEL_RE.test(v.model))
@@ -341,8 +341,8 @@ export function readSkillPayload(body: JsonObject): SkillFormValues {
 
 export function validateSkill(v: SkillFormValues, checkSlug: boolean): string | null {
   if (!v.name) return 'name is required';
-  if (checkSlug && !SLUG_RE.test(v.slug))
-    return 'slug must be 2-31 chars: lowercase letters, digits, dashes';
+  if (checkSlug && (v.slug.length < 2 || v.slug.length > 31 || !SLUG_RE.test(v.slug)))
+    return 'slug must be 2-31 chars: lowercase letters and digits separated by single dashes';
   if (!v.instructions) return 'instructions are required';
   return null;
 }

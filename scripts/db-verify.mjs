@@ -8,7 +8,7 @@ const client = new Client({ connectionString, application_name: 'turbodiff-schem
 await client.connect();
 try {
   const expected = new Map([
-    ['app', 30],
+    ['app', 31],
     ['auth', 10],
   ]);
   const relations = await client.query(`
