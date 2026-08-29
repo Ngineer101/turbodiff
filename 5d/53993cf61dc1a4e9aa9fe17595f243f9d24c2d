@@ -1,0 +1,21 @@
+.github/workflows/ci.yml
+  s_140622c634f845::t_9a5bf56380cca2 14
+.github/workflows/deploy.yml
+  s_140622c634f845::t_9a5bf56380cca2 29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "5d53993cf61dc1a4e9aa9fe17595f243f9d24c2d",
+  "prompts": {},
+  "sessions": {
+    "s_140622c634f845": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a048c4-df71-7811-aa11-c17f78944a00",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Nico Botha <nicolaasb@pm.me>"
+    }
+  }
+}
