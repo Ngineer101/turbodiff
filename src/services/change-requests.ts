@@ -18,10 +18,9 @@ import {
   type ChangeRequestRow,
   type RepositoryRow,
 } from '../data/db.ts';
-import { enqueueFactoryMessage } from './factory-queue.ts';
 import { autoMergeDecline } from '../domain/merge-policy.ts';
 import { splitDiffSegments } from '../domain/review-diff.ts';
-import { decideReviewIntake } from '../domain/review-intake.ts';
+import { scheduleChangeReview } from './lifecycle.ts';
 
 // Native change-request orchestration (docs/artifacts-provider.md): the
 // forge layer for Artifacts-hosted repos. Rows in PostgreSQL (data/change-requests),
@@ -106,14 +105,13 @@ export async function openNativeChangeRequest(input: {
     );
   }
   const refreshed = await refreshChangeRequest(input.repo, cr);
-  const intake = decideReviewIntake({
-    mode: input.repo.review_intake,
-    origin: input.openedBy === 'factory' ? 'factory' : 'human',
-    event: 'opened',
-    draft: false,
-  });
-  if (intake.kind === 'admit') {
-    await enqueueFactoryMessage({ kind: 'cr_review', changeRequestId: cr.id });
+  if (refreshed.change_id) {
+    await scheduleChangeReview({
+      changeId: refreshed.change_id,
+      trigger: 'opened',
+      actor: input.openedBy,
+      idempotencyKey: `native-review:${refreshed.change_id}:opened:${refreshed.source_head ?? cr.id}`,
+    });
   }
   return refreshed;
 }

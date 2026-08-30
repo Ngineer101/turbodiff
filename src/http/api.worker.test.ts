@@ -10,7 +10,8 @@ import type { AuthedUser } from '../services/auth.ts';
 import type { ApiBoard, ApiUsage } from '../shared/api-types.ts';
 import { isJsonObject, isString, parseJson } from '../shared/json.ts';
 import { createApiRoutes, type ApiRouteDependencies } from './api.ts';
-import { ensureBuiltinAgents, upsertChange } from '../data/db.ts';
+import { ensureBuiltinAgents, getFactoryRun, getStageRun, upsertChange } from '../data/db.ts';
+import type { FactoryMessage } from '../shared/factory-messages.ts';
 
 type Authenticate = NonNullable<ApiRouteDependencies['authenticate']>;
 
@@ -155,15 +156,14 @@ describe('on-demand change review', () => {
       draft: false,
       capabilities: ['read_change', 'publish_review'],
     });
-    const dispatchReview = vi.fn<NonNullable<ApiRouteDependencies['dispatchReview']>>(
-      async () => true,
-    );
+    const queued: FactoryMessage[] = [];
     const app = apiApp({
       authenticate: async () => acmeUser,
       canPushToRepo: async () => true,
       orgAdmin: async () => true,
-      computeRisk: async () => 'full',
-      dispatchReview,
+      enqueueFactory: async (message) => {
+        queued.push(message);
+      },
     });
 
     const response = await app.request(`https://turbodiff.test/api/changes/${change.id}/review`, {
@@ -174,10 +174,17 @@ describe('on-demand change review', () => {
     expect(await response.json()).toMatchObject({
       ok: true,
       change_id: change.id,
-      tier: 'full',
-      agents: ['review'],
+      run_id: expect.any(Number),
+      stage_run_id: expect.any(Number),
     });
-    expect(dispatchReview).toHaveBeenCalledTimes(1);
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({ kind: 'run_stage', stage: 'review', changeId: change.id });
+    if (queued[0]?.kind !== 'run_stage') throw new Error('expected a run_stage command');
+    await expect(getFactoryRun(queued[0].factoryRunId)).resolves.toMatchObject({
+      status: 'active',
+      profile_key: 'review_on_demand',
+    });
+    await expect(getStageRun(queued[0].stageRunId)).resolves.toMatchObject({ status: 'queued' });
   });
 
   it('keeps human PRs out of the legacy factory-only profile', async () => {
@@ -196,15 +203,14 @@ describe('on-demand change review', () => {
       draft: false,
       capabilities: ['read_change', 'publish_review'],
     });
-    const dispatchReview = vi.fn<NonNullable<ApiRouteDependencies['dispatchReview']>>(
-      async () => true,
-    );
+    const queued: FactoryMessage[] = [];
     const app = apiApp({
       authenticate: async () => acmeUser,
       canPushToRepo: async () => true,
       orgAdmin: async () => true,
-      computeRisk: async () => 'full',
-      dispatchReview,
+      enqueueFactory: async (message) => {
+        queued.push(message);
+      },
     });
 
     const response = await app.request(`https://turbodiff.test/api/changes/${change.id}/review`, {
@@ -212,8 +218,8 @@ describe('on-demand change review', () => {
     });
 
     expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({ error: 'repository admits factory changes only' });
-    expect(dispatchReview).not.toHaveBeenCalled();
+    expect(await response.json()).toEqual({ error: 'legacy profile admits factory changes only' });
+    expect(queued).toHaveLength(0);
   });
 });
 

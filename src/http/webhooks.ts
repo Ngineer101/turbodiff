@@ -3,22 +3,17 @@ import { verifyWebhookSignature } from '../integrations/github/app.ts';
 import {
   createGithubWebhookService,
   type GithubWebhookDependencies,
-  type ReviewDispatcher,
 } from '../services/github-webhooks.ts';
 import { parseJson } from '../shared/json.ts';
 
 export type WebhookRouteDependencies = GithubWebhookDependencies;
-export type { ReviewDispatcher } from '../services/github-webhooks.ts';
 
 // GitHub HTTP transport: authenticate and decode the delivery, then hand the
 // application event to the webhook service. Business policy never depends on
 // Hono request/response objects.
-export function createWebhookRoutes(
-  dispatch: ReviewDispatcher,
-  dependencies: WebhookRouteDependencies = {},
-) {
+export function createWebhookRoutes(dependencies: WebhookRouteDependencies = {}) {
   const app = new Hono();
-  const service = createGithubWebhookService(dispatch, dependencies);
+  const service = createGithubWebhookService(dependencies);
 
   app.post('/github', async (context) => {
     const rawBody = await context.req.arrayBuffer();

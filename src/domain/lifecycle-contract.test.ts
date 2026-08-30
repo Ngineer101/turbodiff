@@ -4,6 +4,7 @@ import {
   PROCESS_PROFILE_KEYS,
   type LifecycleScenario,
 } from './lifecycle-contract.ts';
+import { decideLifecycle } from './lifecycle-coordinator.ts';
 
 // Executable acceptance inventory for docs/software-factory-lifecycle.md.
 // These fixtures are deliberately data, not mocks of the current pipeline.
@@ -451,6 +452,13 @@ export const LIFECYCLE_SCENARIOS: LifecycleScenario[] = [
 ];
 
 describe('composable lifecycle acceptance contract', () => {
+  it('produces the specified decision for every acceptance scenario', () => {
+    for (const scenario of LIFECYCLE_SCENARIOS) {
+      expect(decideLifecycle(scenario.profile, scenario.given), scenario.id).toEqual(
+        scenario.expected,
+      );
+    }
+  });
   it('uses stable, unique scenario ids', () => {
     const ids = LIFECYCLE_SCENARIOS.map((scenario) => scenario.id);
     expect(new Set(ids).size).toBe(ids.length);

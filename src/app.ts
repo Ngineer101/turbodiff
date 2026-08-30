@@ -4,7 +4,6 @@ import { env } from 'cloudflare:workers';
 import { sql } from 'drizzle-orm';
 import { execute, withDatabaseScope } from './data/database.ts';
 import { Hono } from 'hono';
-import { dispatchReviewAgent } from './ai/review/dispatch.ts';
 import { registerReviewMetering } from './ai/review/metering.ts';
 import { createApiRoutes } from './http/api.ts';
 import { handleEmailSignUp } from './http/auth-email.ts';
@@ -123,7 +122,7 @@ app.get('/b/:id', async (c) => {
 });
 
 // GitHub App webhooks — authenticated by HMAC signature, not the bearer secret.
-app.route('/webhooks', createWebhookRoutes(dispatchReviewAgent));
+app.route('/webhooks', createWebhookRoutes());
 
 // MCP relay for sandbox runs — authenticated by a short-lived sealed grant
 // minted per run, not by session or bearer secret (see lib/mcp-proxy.ts).
@@ -164,7 +163,7 @@ app.post('/api/auth/sign-up/email', handleEmailSignUp);
 app.on(['GET', 'POST'], '/api/auth/*', (c) => withAuth((instance) => instance.handler(c.req.raw)));
 
 // SPA data plane (session cookie auth, JSON in/out).
-app.route('/api', createApiRoutes({ dispatchReview: dispatchReviewAgent }));
+app.route('/api', createApiRoutes());
 
 // SPA shell + landing + OAuth sign-in (session cookie auth).
 app.route('/', createUiRoutes());
