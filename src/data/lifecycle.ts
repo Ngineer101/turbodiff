@@ -46,6 +46,16 @@ export interface StageRunRow {
   completed_at: string | null;
 }
 
+export interface AcceptanceContractRow {
+  id: number;
+  work_item_id: number | null;
+  change_id: number | null;
+  version: number;
+  criteria: JsonValue;
+  source: string;
+  created_at: string;
+}
+
 export async function createFactoryRunWithStage(input: {
   repositoryId: number;
   changeId: number | null;
@@ -60,9 +70,15 @@ export async function createFactoryRunWithStage(input: {
   eventPayload?: JsonValue;
   decision: LifecycleDecision;
   idempotencyKey: string;
+  stageInput?: JsonValue;
+  workItem?: {
+    origin: 'idea' | 'issue' | 'external_change' | 'automation' | 'api';
+    title: string;
+    description: string;
+  };
 }): Promise<{ run: FactoryRunRow; stageRun: StageRunRow | null }> {
   return withTransaction(async () => {
-    const run = await queryOne<FactoryRunRow>(sql`
+    let run = await queryOne<FactoryRunRow>(sql`
       INSERT INTO app.factory_runs (
         repository_id, work_item_id, change_id, profile_key, start_stage,
         stop_after_stage, policy_snapshot, trigger, actor, idempotency_key
@@ -77,6 +93,33 @@ export async function createFactoryRunWithStage(input: {
       RETURNING *
     `);
     if (!run) throw new Error('factory run insert returned no row');
+
+    if (input.workItem && run.work_item_id === null) {
+      // Serialize duplicate deliveries on the idempotent run before creating
+      // its work item, otherwise two concurrent transactions could leave an
+      // orphaned duplicate work item behind.
+      run =
+        (await queryOne<FactoryRunRow>(sql`
+          SELECT * FROM app.factory_runs WHERE id = ${run.id} FOR UPDATE
+        `)) ?? run;
+      if (run.work_item_id === null) {
+        const workItem = await queryOne<{ id: number }>(sql`
+          INSERT INTO app.work_items (repository_id, origin, title, description)
+          VALUES (
+            ${input.repositoryId}, ${input.workItem.origin}, ${input.workItem.title},
+            ${input.workItem.description}
+          )
+          RETURNING id
+        `);
+        if (!workItem) throw new Error('work item insert returned no row');
+        run =
+          (await queryOne<FactoryRunRow>(sql`
+            UPDATE app.factory_runs SET work_item_id = ${workItem.id}
+            WHERE id = ${run.id}
+            RETURNING *
+          `)) ?? run;
+      }
+    }
 
     await execute(sql`
       INSERT INTO app.lifecycle_events (
@@ -96,9 +139,10 @@ export async function createFactoryRunWithStage(input: {
 
     const stageRun = await queryOne<StageRunRow>(sql`
       INSERT INTO app.stage_runs (
-        factory_run_id, change_id, stage, trigger, idempotency_key
+        factory_run_id, change_id, stage, trigger, input, idempotency_key
       ) VALUES (
         ${run.id}, ${input.changeId}, ${input.decision.stage}, ${input.trigger},
+        ${input.stageInput === undefined ? null : JSON.stringify(input.stageInput)}::jsonb,
         ${`${run.id}:${input.decision.stage}:1`}
       )
       ON CONFLICT (idempotency_key) DO UPDATE SET
@@ -163,6 +207,7 @@ export async function recordLifecycleDecision(
   eventPayload: JsonValue,
   decision: LifecycleDecision,
   idempotencyKey: string,
+  stageInput?: JsonValue,
 ): Promise<StageRunRow | null> {
   return withTransaction(async () => {
     const inserted = await execute(sql`
@@ -187,9 +232,10 @@ export async function recordLifecycleDecision(
     const attempt = attemptRow?.attempt ?? 1;
     const stageRun = await queryOne<StageRunRow>(sql`
       INSERT INTO app.stage_runs (
-        factory_run_id, change_id, stage, attempt, trigger, idempotency_key
+        factory_run_id, change_id, stage, attempt, trigger, input, idempotency_key
       ) VALUES (
         ${runId}, ${changeId}, ${decision.stage}, ${attempt}, ${eventKind},
+        ${stageInput === undefined ? null : JSON.stringify(stageInput)}::jsonb,
         ${`${runId}:${decision.stage}:${attempt}`}
       )
       RETURNING *
@@ -197,6 +243,65 @@ export async function recordLifecycleDecision(
     if (!stageRun) throw new Error('stage run insert returned no row');
     return stageRun;
   });
+}
+
+export async function attachFactoryRunChange(runId: number, changeId: number): Promise<void> {
+  await withTransaction(async () => {
+    await execute(sql`
+      UPDATE app.factory_runs SET change_id = ${changeId}, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ${runId} AND (change_id IS NULL OR change_id = ${changeId})
+    `);
+    await execute(sql`
+      UPDATE app.stage_runs SET change_id = ${changeId}
+      WHERE factory_run_id = ${runId} AND change_id IS NULL
+    `);
+  });
+}
+
+export async function createAcceptanceContract(input: {
+  workItemId?: number | null;
+  changeId?: number | null;
+  criteria: JsonValue;
+  source: string;
+}): Promise<AcceptanceContractRow> {
+  if (input.workItemId == null && input.changeId == null) {
+    throw new Error('acceptance contract requires a work item or change');
+  }
+  return withTransaction(async () => {
+    const owner = input.changeId
+      ? sql`change_id = ${input.changeId}`
+      : sql`work_item_id = ${input.workItemId ?? null}`;
+    const latest = await queryOne<{ version: number }>(sql`
+      SELECT version FROM app.acceptance_contracts
+      WHERE ${owner}
+      ORDER BY version DESC
+      LIMIT 1
+      FOR UPDATE
+    `);
+    const version = (latest?.version ?? 0) + 1;
+    const contract = await queryOne<AcceptanceContractRow>(sql`
+      INSERT INTO app.acceptance_contracts (
+        work_item_id, change_id, version, criteria, source
+      ) VALUES (
+        ${input.workItemId ?? null}, ${input.changeId ?? null}, ${version},
+        ${JSON.stringify(input.criteria)}::jsonb, ${input.source}
+      )
+      RETURNING *
+    `);
+    if (!contract) throw new Error('acceptance contract insert returned no row');
+    return contract;
+  });
+}
+
+export async function latestAcceptanceContractForChange(
+  changeId: number,
+): Promise<AcceptanceContractRow | null> {
+  return queryOne<AcceptanceContractRow>(sql`
+    SELECT * FROM app.acceptance_contracts
+    WHERE change_id = ${changeId}
+    ORDER BY version DESC
+    LIMIT 1
+  `);
 }
 
 async function applyRunDecision(runId: number, decision: LifecycleDecision): Promise<void> {

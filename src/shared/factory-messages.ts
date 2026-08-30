@@ -13,6 +13,8 @@ export const CHAT_BUSY_DELAY_SECONDS = 30;
 export interface GenerateQueueMessage {
   kind: 'generate';
   featureId: number;
+  factoryRunId?: number;
+  stageRunId?: number;
   // Legacy field from the pre-workflow retry loop; ignored.
   attempt?: number;
 }
@@ -24,6 +26,8 @@ export type PlanQueueMessage =
 export interface VerifyQueueMessage {
   kind: 'verify';
   featureId: number;
+  factoryRunId?: number;
+  stageRunId?: number;
 }
 
 export interface AutomationQueueMessage {

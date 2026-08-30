@@ -21,6 +21,7 @@ import {
 import { autoMergeDecline } from '../domain/merge-policy.ts';
 import { splitDiffSegments } from '../domain/review-diff.ts';
 import { scheduleChangeReview } from './lifecycle.ts';
+import { isDeliveryProcessProfile } from '../domain/process-profiles.ts';
 
 // Native change-request orchestration (docs/artifacts-provider.md): the
 // forge layer for Artifacts-hosted repos. Rows in PostgreSQL (data/change-requests),
@@ -105,7 +106,7 @@ export async function openNativeChangeRequest(input: {
     );
   }
   const refreshed = await refreshChangeRequest(input.repo, cr);
-  if (refreshed.change_id) {
+  if (refreshed.change_id && !isDeliveryProcessProfile(input.repo.process_profile)) {
     await scheduleChangeReview({
       changeId: refreshed.change_id,
       trigger: 'opened',
