@@ -228,6 +228,33 @@ export interface ApiChatList {
   messages: ApiChatMessage[];
 }
 
+export interface ApiLifecycleRun {
+  id: number;
+  profile: ApiProcessProfile;
+  status: 'active' | 'awaiting_human' | 'handed_off' | 'completed' | 'failed' | 'cancelled';
+  start_stage: string;
+  stop_after_stage: string;
+  handoff_reason: string | null;
+  created_at: string;
+  completed_at: string | null;
+  stages: {
+    id: number;
+    stage: string;
+    attempt: number;
+    status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+    error: string | null;
+    started_at: string | null;
+    completed_at: string | null;
+  }[];
+  events: {
+    key: string;
+    kind: string;
+    decision: string | null;
+    reason: string | null;
+    created_at: string;
+  }[];
+}
+
 export interface ApiFeatureDetail {
   feature: {
     id: number;
@@ -288,6 +315,8 @@ export interface ApiFeatureDetail {
   verification: ApiVerificationSummary | null;
   // Every generate/verify/fix run recorded for this feature, chronological.
   runs: ApiAgentRun[];
+  // Coordinator-owned lifecycle history, including handoffs and stage retries.
+  lifecycle_runs: ApiLifecycleRun[];
 }
 
 // The cockpit paints its controls, status, evidence, and conversations from

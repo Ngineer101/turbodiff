@@ -17,6 +17,7 @@ import {
   getFeature,
   getStageRun,
   latestAcceptanceContractForChange,
+  listFactoryRunsForFeature,
   listStageRuns,
   tryRecordFixAttempt,
   tryRecordReview,
@@ -377,6 +378,9 @@ describe('composable feature delivery', () => {
       status: 'handed_off',
       handoff_reason: 'requested stop boundary reached',
     });
+    await expect(listFactoryRunsForFeature(featureId)).resolves.toMatchObject([
+      { id: implementCommands[0].factoryRunId, profile_key: 'idea_to_pr' },
+    ]);
     await expect(listStageRuns(implementCommands[0].factoryRunId)).resolves.toMatchObject([
       { stage: 'implement', status: 'completed', input: { featureId } },
       { stage: 'publish', status: 'completed', change_id: change.id, input: { featureId } },

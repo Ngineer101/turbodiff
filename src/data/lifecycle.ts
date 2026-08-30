@@ -56,6 +56,16 @@ export interface AcceptanceContractRow {
   created_at: string;
 }
 
+export interface LifecycleEventRow {
+  idempotency_key: string;
+  factory_run_id: number | null;
+  change_id: number | null;
+  kind: LifecycleEventKind;
+  payload: JsonValue | null;
+  decision: LifecycleDecision | null;
+  created_at: string;
+}
+
 export async function createFactoryRunWithStage(input: {
   repositoryId: number;
   changeId: number | null;
@@ -165,6 +175,24 @@ export async function getStageRun(id: number): Promise<StageRunRow | null> {
 export async function listStageRuns(factoryRunId: number): Promise<StageRunRow[]> {
   return queryRows<StageRunRow>(sql`
     SELECT * FROM app.stage_runs WHERE factory_run_id = ${factoryRunId} ORDER BY id
+  `);
+}
+
+export async function listFactoryRunsForFeature(featureId: number): Promise<FactoryRunRow[]> {
+  return queryRows<FactoryRunRow>(sql`
+    SELECT DISTINCT fr.*
+    FROM app.factory_runs fr
+    JOIN app.lifecycle_events le ON le.factory_run_id = fr.id
+    WHERE le.payload ->> 'featureId' = ${String(featureId)}
+    ORDER BY fr.created_at, fr.id
+  `);
+}
+
+export async function listLifecycleEvents(factoryRunId: number): Promise<LifecycleEventRow[]> {
+  return queryRows<LifecycleEventRow>(sql`
+    SELECT * FROM app.lifecycle_events
+    WHERE factory_run_id = ${factoryRunId}
+    ORDER BY created_at, idempotency_key
   `);
 }
 
