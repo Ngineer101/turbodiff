@@ -4,6 +4,16 @@
 
 export type ReviewState = 'running' | 'completed' | 'stalled' | 'failed';
 
+export type ApiProcessProfile =
+  | 'review_on_demand'
+  | 'automatic_review'
+  | 'review_and_repair'
+  | 'idea_to_pr'
+  | 'assisted_delivery'
+  | 'full_delivery'
+  | 'native_turnkey'
+  | 'legacy_factory';
+
 // One review row, pre-digested for display: the worker computes state (which
 // needs the stall clock) and totals; the client only formats.
 export interface ApiReview {
@@ -339,6 +349,7 @@ export interface ApiRepoSettings {
   enabled: boolean;
   review_on_push: boolean;
   review_intake: 'factory_only' | 'on_demand' | 'all_changes';
+  process_profile: ApiProcessProfile;
   blocking_reviews: boolean;
   auto_fix: boolean;
   auto_merge: boolean;

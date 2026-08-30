@@ -10,7 +10,13 @@ import type { AuthedUser } from '../services/auth.ts';
 import type { ApiBoard, ApiUsage } from '../shared/api-types.ts';
 import { isJsonObject, isString, parseJson } from '../shared/json.ts';
 import { createApiRoutes, type ApiRouteDependencies } from './api.ts';
-import { ensureBuiltinAgents, getFactoryRun, getStageRun, upsertChange } from '../data/db.ts';
+import {
+  ensureBuiltinAgents,
+  getFactoryRun,
+  getRepoById,
+  getStageRun,
+  upsertChange,
+} from '../data/db.ts';
 import type { FactoryMessage } from '../shared/factory-messages.ts';
 
 type Authenticate = NonNullable<ApiRouteDependencies['authenticate']>;
@@ -137,9 +143,13 @@ describe('on-demand change review', () => {
     const configured = await authenticatedApi().request('https://turbodiff.test/api/repos/101', {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ review_intake: 'on_demand' }),
+      body: JSON.stringify({ process_profile: 'review_on_demand' }),
     });
     expect(configured.status).toBe(200);
+    await expect(getRepoById(101)).resolves.toMatchObject({
+      process_profile: 'review_on_demand',
+      review_intake: 'on_demand',
+    });
     await ensureBuiltinAgents(1001);
     const change = await upsertChange({
       repositoryId: 101,
