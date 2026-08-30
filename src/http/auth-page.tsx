@@ -71,6 +71,12 @@ const CSS = `
 		border: 1px solid rgba(248, 81, 73, 0.4); border-radius: 8px;
 	}
 	.error.show { display: block; }
+	.notice {
+		margin-bottom: 1rem; padding: 0.65rem 0.75rem;
+		font-size: 0.82rem; color: var(--ink);
+		background: rgba(63, 185, 80, 0.08);
+		border: 1px solid rgba(63, 185, 80, 0.35); border-radius: 8px;
+	}
 	.submit {
 		width: 100%; padding: 0.6rem 0; margin-top: 0.2rem;
 		font: 500 0.9rem/1 "IBM Plex Sans", system-ui, sans-serif;
@@ -168,7 +174,7 @@ function GitHubIcon() {
   );
 }
 
-function AuthPage({ next }: { next?: string }) {
+function AuthPage({ next, notice }: { next?: string; notice?: string }) {
   const githubHref = next
     ? `/auth/login/github?next=${encodeURIComponent(next)}`
     : '/auth/login/github';
@@ -195,6 +201,11 @@ function AuthPage({ next }: { next?: string }) {
 
         <main>
           <div class="panel">
+            {notice ? (
+              <p class="notice" role="status">
+                {notice}
+              </p>
+            ) : null}
             <a class="github" href={githubHref}>
               <GitHubIcon />
               Continue with GitHub
@@ -263,6 +274,6 @@ function AuthPage({ next }: { next?: string }) {
   );
 }
 
-export function renderAuthPage(next?: string): string {
-  return `<!doctype html>${(<AuthPage next={next} />).toString()}`;
+export function renderAuthPage(next?: string, notice?: string): string {
+  return `<!doctype html>${(<AuthPage next={next} notice={notice} />).toString()}`;
 }

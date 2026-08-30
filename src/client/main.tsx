@@ -349,7 +349,6 @@ if ('requestIdleCallback' in window) {
 // real content immediately and revalidates in the background. Heavy or
 // fast-moving payloads (diffs, file contents, chat) stay memory-only.
 const PERSISTED_KEYS = new Set([
-  'me',
   'board',
   'agents',
   'skills',
@@ -359,7 +358,7 @@ const PERSISTED_KEYS = new Set([
   'usage',
 ]);
 // Bump to drop persisted caches whose shape no longer matches the client.
-const PERSIST_BUSTER = 'v2';
+const PERSIST_BUSTER = 'v3';
 const persistOptions: PersistQueryClientOptions = {
   queryClient,
   persister: createSyncStoragePersister({

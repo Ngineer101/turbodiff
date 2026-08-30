@@ -65,7 +65,16 @@ export function taskIsLive(p: ApiPlan): boolean {
 export const meQuery = queryOptions({
   queryKey: ['me'],
   queryFn: () => api.get<ApiMe>('/api/me'),
-  staleTime: Infinity,
+  staleTime: 60_000,
+  refetchInterval: (query) => {
+    const status = query.state.data?.github_status;
+    if (status === 'syncing') return 2_000;
+    if (status === 'reauthorization_required') return 5_000;
+    if (status === 'temporarily_unavailable') return 15_000;
+    // Detect a provider credential that disappeared after the last durable
+    // membership snapshot without making navigation wait on GitHub.
+    return 60_000;
+  },
 });
 
 export const boardQuery = queryOptions({

@@ -406,6 +406,15 @@ export interface ApiMe {
   login: string | null;
   name: string;
   github_connected: boolean;
+  // Recovery-oriented account state. `github_connected` remains the stable
+  // identity/link flag; this tells the UI which useful next action to show.
+  github_status:
+    | 'not_connected'
+    | 'reauthorization_required'
+    | 'temporarily_unavailable'
+    | 'app_not_installed'
+    | 'syncing'
+    | 'ready';
   github_app_slug: string;
   vapid_public_key: string;
   installation_ids: number[];

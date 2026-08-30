@@ -1,5 +1,6 @@
-// Thin fetch wrapper for the Worker's /api routes. Session-cookie authed:
-// a 401 means the cookie is missing/expired, so restart OAuth.
+// Thin fetch wrapper for the Worker's /api routes. Recoverable GitHub account
+// states are 200 responses on /api/me; a 401 now means the application session
+// itself is missing/expired.
 
 export class ApiError extends Error {
   status: number;
@@ -15,6 +16,16 @@ export class ApiError extends Error {
 // entries fall out first.
 const ETAG_CACHE_MAX = 50;
 const etagCache = new Map<string, { etag: string; data: unknown }>();
+let redirectingToLogin = false;
+
+function restartAuthentication(): void {
+  if (redirectingToLogin) return;
+  redirectingToLogin = true;
+  // Never hydrate a new/renewed session with another user's account-scoped
+  // payloads. Sidebar preferences use separate keys and remain intact.
+  window.localStorage.removeItem('turbodiff.queryCache');
+  window.location.replace('/auth/login?expired=1');
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const baseHeaders: Record<string, string> = init?.body
@@ -28,7 +39,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { ...baseHeaders, ...init?.headers },
   });
   if (res.status === 401) {
-    window.location.href = '/auth/login';
+    restartAuthentication();
     throw new ApiError('signed out', 401);
   }
   if (res.status === 304 && cached) {

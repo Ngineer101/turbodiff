@@ -25,6 +25,7 @@ const acmeUser: AuthedUser = {
   session: { authUserId: 'user-3001', userId: 3001, login: 'octocat' },
   installationIds: [1001],
   githubConnected: true,
+  githubStatus: 'ready',
   name: 'octocat',
 };
 
@@ -119,6 +120,56 @@ describe('API authentication and CSRF', () => {
     const response = await apiApp().request('https://turbodiff.test/api/me');
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({ error: 'unauthorized' });
+  });
+
+  it('keeps a migrated user signed in when GitHub needs re-authorization', async () => {
+    const response = await apiApp({
+      authenticate: async () => ({
+        ...acmeUser,
+        installationIds: [],
+        githubStatus: 'reauthorization_required',
+      }),
+    }).request('https://turbodiff.test/api/me');
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      login: 'octocat',
+      github_connected: true,
+      github_status: 'reauthorization_required',
+      installation_ids: [],
+    });
+  });
+
+  it('guides a new connected user to install the GitHub App', async () => {
+    const response = await apiApp({
+      authenticate: async () => ({
+        ...acmeUser,
+        installationIds: [],
+        githubStatus: 'app_not_installed',
+      }),
+    }).request('https://turbodiff.test/api/me');
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      github_connected: true,
+      github_status: 'app_not_installed',
+      installation_ids: [],
+    });
+  });
+
+  it('starts repository repair without delaying the migrated user response', async () => {
+    const repositoryRepair = vi.fn(async () => {});
+    const response = await apiApp({
+      authenticate: async () => ({
+        ...acmeUser,
+        githubStatus: 'syncing',
+        repositoryRepair,
+      }),
+    }).request('https://turbodiff.test/api/me');
+
+    expect(response.status).toBe(200);
+    expect(repositoryRepair).toHaveBeenCalledOnce();
+    expect(await response.json()).toMatchObject({ github_status: 'syncing' });
   });
 
   it('rejects a cross-origin mutation before invoking authentication', async () => {
@@ -1044,6 +1095,7 @@ describe('push subscriptions', () => {
       session: { authUserId: 'email-user', userId: 0, login: '' },
       installationIds: [],
       githubConnected: false,
+      githubStatus: 'not_connected',
       name: 'Email User',
     };
     const response = await apiApp({ authenticate: async () => emailUser }).request(

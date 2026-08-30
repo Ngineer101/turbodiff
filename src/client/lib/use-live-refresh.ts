@@ -10,6 +10,10 @@ import { api } from './api.ts';
 // the page being looked at. The per-query 30s intervals in queries.ts remain
 // as a slow fallback; this hook is what makes changes land in seconds.
 const FALLBACK_POLL_MS = 30_000;
+// A socket that never opens is commonly an auth/proxy rejection. Five
+// exponential attempts are enough to ride out a deploy without creating an
+// endless request storm; the authenticated version poll remains the fallback.
+const MAX_UNOPENED_ATTEMPTS = 5;
 
 // Query keys that mirror live factory state.
 const LIVE_KEYS = ['board', 'task', 'feature', 'chat', 'automation-runs', 'automation-run'];
@@ -65,6 +69,7 @@ export function useLiveRefresh(installationIds: number[]): void {
         if (opened) connected = Math.max(0, connected - 1);
         updateConnectionState();
         if (stopped) return;
+        if (!opened && attempt >= MAX_UNOPENED_ATTEMPTS - 1) return;
         const delay = Math.min(30_000, 1_000 * 2 ** Math.min(attempt, 5));
         const timer = window.setTimeout(() => {
           reconnectTimers.delete(timer);

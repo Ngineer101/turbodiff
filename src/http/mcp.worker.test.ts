@@ -20,6 +20,7 @@ const acmeUser: AuthedUser = {
   session: { authUserId: 'user-3001', userId: 3001, login: 'octocat' },
   installationIds: [1001],
   githubConnected: true,
+  githubStatus: 'ready',
   name: 'octocat',
 };
 
