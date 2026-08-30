@@ -13,6 +13,8 @@ import {
   reviewedRecently,
   setInstallationSuspended,
   updateFeature,
+  upsertChange,
+  changeProviderKey,
   upsertInstallation,
   type AgentRow,
   type RepositoryRow,
@@ -28,6 +30,7 @@ import {
   remainingDailyBudget,
 } from './review-policy.ts';
 import type { JsonValue } from '../shared/json.ts';
+import type { ChangeCapability, ChangeOrigin } from '../domain/lifecycle-contract.ts';
 
 // GitHub App webhook receiver. Two jobs:
 //   1. Mirror installation / repository-selection changes into PostgreSQL.
@@ -62,7 +65,18 @@ interface InstallationEvent {
 interface PullRequestEvent {
   action: string;
   number: number;
-  pull_request: { draft: boolean; html_url: string; merged?: boolean };
+  pull_request: {
+    draft: boolean;
+    html_url: string;
+    merged?: boolean;
+    state?: string;
+    title?: string;
+    updated_at?: string;
+    maintainer_can_modify?: boolean;
+    user?: { login: string; type: string } | null;
+    head?: { ref: string; sha: string; repo: { full_name: string } | null };
+    base?: { ref: string; sha: string };
+  };
   repository: { id: number; full_name: string };
 }
 
@@ -245,18 +259,67 @@ async function handleInstallationRepositories(p: InstallationEvent): Promise<Web
 // A push burst re-dispatches an agent at most once per window.
 const PUSH_DEBOUNCE_MINUTES = 10;
 
+function githubChangeCapabilities(p: PullRequestEvent): ChangeCapability[] {
+  const capabilities: ChangeCapability[] = [
+    'read_change',
+    'publish_review',
+    'publish_check',
+    'merge',
+  ];
+  // Fork pull requests remain reviewable but are not assumed writable. A
+  // future live capability probe may add write_head when the installation can
+  // prove it has authority in the contributor repository.
+  if (p.pull_request.head?.repo?.full_name === p.repository.full_name) {
+    capabilities.push('write_head');
+  }
+  return capabilities;
+}
+
+function githubChangeOrigin(p: PullRequestEvent, factoryFeature: boolean): ChangeOrigin {
+  if (factoryFeature || p.pull_request.head?.ref.startsWith('turbodiff/')) return 'factory';
+  if (p.pull_request.user?.type === 'Bot') return 'automation';
+  return 'human';
+}
+
 async function handlePullRequest(
   p: PullRequestEvent,
   dispatch: ReviewDispatcher,
   computeRisk: typeof computeRiskTier,
 ): Promise<WebhookHandlerResult> {
+  const repo = await getRepoById(p.repository.id);
+  if (!repo) return { body: { ok: true, skipped: 'repo not tracked' } };
+  const feature = await getFeatureByRepoPr(repo.id, p.number);
+  const change = await upsertChange({
+    repositoryId: repo.id,
+    providerKey: changeProviderKey('github', p.number),
+    number: p.number,
+    origin: githubChangeOrigin(p, feature !== null),
+    title: p.pull_request.title ?? feature?.title ?? `Pull request #${p.number}`,
+    externalUrl: p.pull_request.html_url,
+    sourceBranch: p.pull_request.head?.ref ?? feature?.branch ?? `refs/pull/${p.number}/head`,
+    targetBranch: p.pull_request.base?.ref ?? repo.default_branch ?? 'main',
+    status: p.action === 'closed' ? (p.pull_request.merged ? 'merged' : 'closed') : 'open',
+    sourceHead: p.pull_request.head?.sha ?? null,
+    targetHead: p.pull_request.base?.sha ?? null,
+    draft: p.pull_request.draft,
+    capabilities: githubChangeCapabilities(p),
+    providerUpdatedAt: p.pull_request.updated_at ?? null,
+  });
+  if (feature) await updateFeature(feature.id, { changeId: change.id });
+
   // Closed factory PRs feed the board's Done column: merged -> 'merged',
   // closed-unmerged -> 'pr_closed'. GitHub fires this for every merge path
   // (cockpit button, auto-merge, the GitHub UI itself).
   if (p.action === 'closed') {
-    const repo = await getRepoById(p.repository.id);
-    const feature = repo ? await getFeatureByRepoPr(repo.id, p.number) : null;
-    if (!feature) return { body: { ok: true, ignored: 'closed non-factory PR' } };
+    if (!feature) {
+      return {
+        body: {
+          ok: true,
+          change: change.id,
+          status: p.pull_request.merged ? 'merged' : 'closed',
+        },
+      };
+    }
     // The cockpit's abandon action closes the PR itself and sets 'abandoned'
     // before this webhook delivery lands — don't let the generic 'pr_closed'
     // clobber that more specific status.
@@ -267,6 +330,7 @@ async function handlePullRequest(
     return {
       body: {
         ok: true,
+        change: change.id,
         feature: feature.id,
         status: p.pull_request.merged ? 'merged' : 'pr_closed',
       },
@@ -277,8 +341,6 @@ async function handlePullRequest(
   }
   if (p.pull_request.draft) return { body: { ok: true, skipped: 'draft' } };
 
-  const repo = await getRepoById(p.repository.id);
-  if (!repo) return { body: { ok: true, skipped: 'repo not tracked' } };
   if (!repo.enabled) return { body: { ok: true, skipped: 'factory disabled for repo' } };
   if (p.action === 'synchronize' && !repo.review_on_push) {
     return { body: { ok: true, skipped: 'push reviews disabled for repo' } };
@@ -287,7 +349,6 @@ async function handlePullRequest(
   // Reviews gate factory output only: a PR gets auto-reviewed only when it
   // belongs to a feature this factory generated. Human-opened PRs are never
   // dispatched (the standalone auto-review product was retired).
-  const feature = await getFeatureByRepoPr(repo.id, p.number);
   if (!feature) return { body: { ok: true, skipped: 'not a factory PR' } };
 
   const installation = await getInstallation(repo.installation_id);

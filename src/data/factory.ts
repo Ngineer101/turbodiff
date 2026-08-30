@@ -500,6 +500,7 @@ export interface FeatureRow {
   branch: string | null;
   pr_number: number | null;
   change_request_id: number | null; // native CR the feature opened (Artifacts)
+  change_id: number | null; // provider-neutral change identity
   criteria_conflict: boolean; // awaiting a human criteria-vs-comment decision
   acceptance_updated_at: string | null; // last human edit of the criteria (conflict guard)
   proposed_acceptance: string[] | null;
@@ -669,6 +670,7 @@ export async function updateFeature(
     usage?: CliUsage;
     // Native change request the feature opened (Artifacts repos).
     changeRequestId?: number;
+    changeId?: number;
   },
 ): Promise<void> {
   await execute(sql`
@@ -692,6 +694,9 @@ export async function updateFeature(
       model = COALESCE(${fields.usage?.model ?? null}::text, model),
       change_request_id = COALESCE(
         ${fields.changeRequestId ?? null}::bigint, change_request_id
+      ),
+      change_id = COALESCE(
+        ${fields.changeId ?? null}::bigint, change_id
       )
     WHERE id = ${id}
   `);

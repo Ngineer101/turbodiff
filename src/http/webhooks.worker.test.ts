@@ -11,6 +11,7 @@ import {
   createFeature,
   ensureBuiltinAgents,
   finishFixAttempt,
+  getChangeByProviderKey,
   getFeature,
   tryRecordFixAttempt,
   tryRecordReview,
@@ -275,7 +276,7 @@ describe('GitHub webhook authentication and mirroring', () => {
 });
 
 describe('factory PR webhook decisions', () => {
-  it('never dispatches a human-opened pull request', async () => {
+  it('canonicalizes but never dispatches a human-opened pull request', async () => {
     await seedRepo();
     const dispatch = vi.fn<ReviewDispatcher>(async () => true);
     const response = await postWebhook(webhookApp(dispatch), 'pull_request', {
@@ -284,6 +285,14 @@ describe('factory PR webhook decisions', () => {
       pull_request: {
         draft: false,
         html_url: 'https://github.com/acme/api/pull/42',
+        title: 'Contributor change',
+        user: { login: 'contributor', type: 'User' },
+        head: {
+          ref: 'topic',
+          sha: 'a'.repeat(40),
+          repo: { full_name: 'contributor/api' },
+        },
+        base: { ref: 'main', sha: 'b'.repeat(40) },
       },
       repository: { id: 101, full_name: 'acme/api' },
     });
@@ -291,6 +300,43 @@ describe('factory PR webhook decisions', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ skipped: 'not a factory PR' });
     expect(dispatch).not.toHaveBeenCalled();
+    const change = await getChangeByProviderKey(101, 'github:42');
+    expect(change).toMatchObject({
+      origin: 'human',
+      title: 'Contributor change',
+      source_branch: 'topic',
+      target_branch: 'main',
+      source_head: 'a'.repeat(40),
+      status: 'open',
+    });
+    expect(change?.capabilities).toEqual([
+      'read_change',
+      'publish_review',
+      'publish_check',
+      'merge',
+    ]);
+
+    const synchronized = await postWebhook(webhookApp(dispatch), 'pull_request', {
+      action: 'synchronize',
+      number: 42,
+      pull_request: {
+        draft: false,
+        html_url: 'https://github.com/acme/api/pull/42',
+        title: 'Contributor change',
+        user: { login: 'contributor', type: 'User' },
+        head: {
+          ref: 'topic',
+          sha: 'c'.repeat(40),
+          repo: { full_name: 'contributor/api' },
+        },
+        base: { ref: 'main', sha: 'b'.repeat(40) },
+      },
+      repository: { id: 101, full_name: 'acme/api' },
+    });
+    expect(synchronized.status).toBe(200);
+    const refreshed = await getChangeByProviderKey(101, 'github:42');
+    expect(refreshed?.id).toBe(change?.id);
+    expect(refreshed?.source_head).toBe('c'.repeat(40));
   });
 
   it('dispatches a factory PR once and debounces a push while its review is active', async () => {
@@ -324,6 +370,10 @@ describe('factory PR webhook decisions', () => {
     };
     const openedResponse = await postWebhook(webhookApp(dispatch), 'pull_request', opened);
     expect(await openedResponse.json()).toMatchObject({ tier: 'full', agents: ['review'] });
+    const feature = await getFeature(featureId);
+    const change = await getChangeByProviderKey(101, 'github:42');
+    expect(feature?.change_id).toBe(change?.id);
+    expect(change?.origin).toBe('factory');
 
     const pushResponse = await postWebhook(webhookApp(dispatch), 'pull_request', {
       ...opened,

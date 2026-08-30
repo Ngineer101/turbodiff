@@ -13,10 +13,12 @@ import {
   type CliUsage,
 } from '../runtime/cli-usage.ts';
 import {
+  changeProviderKey,
   getFeature,
   getRepoById,
   listEnabledSkillsForRepo,
   updateFeature,
+  upsertChange,
   type FeatureRow,
   type SkillRow,
 } from '../../data/db.ts';
@@ -91,6 +93,14 @@ const REPAIR_TIMEOUT_MS = 15 * 60_000;
 export type GenerationParams = {
   featureId: number;
 };
+
+interface CreatedGithubPullRequest {
+  number: number;
+  html_url: string;
+  updated_at: string;
+  head: { ref: string; sha: string };
+  base: { ref: string; sha: string };
+}
 
 function branchName(feature: FeatureRow): string {
   const slug = feature.title
@@ -575,6 +585,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
             branch: ctx.branch,
             prNumber: cr.number,
             changeRequestId: cr.id,
+            changeId: cr.change_id ?? undefined,
             usage: totalUsage ?? undefined,
           });
           await notifyFeatureLive(featureId);
@@ -599,14 +610,14 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
                   `\n\n---\n_turbodiff factory · feature #${featureId}_`,
               }),
             })
-          ).json()) as { number: number };
+          ).json()) as CreatedGithubPullRequest;
         // Open the PR AS the instructing user when their stored credential
         // can mint a token ("opened by <user>"). The bot is the fallback —
         // both when no credential exists and when the user token can't
         // create the PR (e.g. missing repo permission), so a user-token
         // problem costs one extra call, never the run.
         const userToken = ctx.authorId !== null ? await mintUserToken(ctx.authorId) : null;
-        let pr: { number: number };
+        let pr: CreatedGithubPullRequest;
         if (userToken) {
           try {
             pr = await createPr(userToken);
@@ -620,10 +631,27 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
         } else {
           pr = await createPr(await installationToken(ctx.installationId));
         }
+        const change = await upsertChange({
+          repositoryId: ctx.repositoryId,
+          providerKey: changeProviderKey('github', pr.number),
+          number: pr.number,
+          origin: 'factory',
+          title: ctx.title,
+          externalUrl: pr.html_url,
+          sourceBranch: pr.head.ref,
+          targetBranch: pr.base.ref,
+          status: 'open',
+          sourceHead: pr.head.sha,
+          targetHead: pr.base.sha,
+          draft: false,
+          capabilities: ['read_change', 'publish_review', 'write_head', 'publish_check', 'merge'],
+          providerUpdatedAt: pr.updated_at,
+        });
         await updateFeature(featureId, {
           status: 'pr_opened',
           branch: ctx.branch,
           prNumber: pr.number,
+          changeId: change.id,
           usage: totalUsage ?? undefined,
         });
         await notifyFeatureLive(featureId);

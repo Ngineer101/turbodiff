@@ -8,6 +8,7 @@ import {
   createArtifactsInstallation,
   createArtifactsRepository,
   createChangeRequest,
+  getChange,
   getChangeRequest,
   getOpenChangeRequest,
   listCrChecks,
@@ -57,6 +58,14 @@ describe('change request records', () => {
     expect(first.number).toBe(1);
     expect(second.number).toBe(2);
     expect(first.status).toBe('open');
+    expect(first.change_id).toBeTypeOf('number');
+    expect(await getChange(first.change_id!)).toMatchObject({
+      provider_key: 'artifacts:1',
+      origin: 'factory',
+      source_branch: 'turbodiff/feat-1',
+      target_branch: 'main',
+      status: 'open',
+    });
   });
 
   it('finds the open CR for a branch pair and enforces one-open-per-pair', async () => {
@@ -97,6 +106,11 @@ describe('change request records', () => {
     expect(reread.merged_head).toBe('d'.repeat(40));
     expect(reread.mergeable).toBe(true);
     expect(reread.review_status).toBe('changes_requested');
+    expect(await getChange(reread.change_id!)).toMatchObject({
+      status: 'merged',
+      source_head: 'a'.repeat(40),
+      target_head: 'd'.repeat(40),
+    });
   });
 
   it('upserts one live check row per name', async () => {

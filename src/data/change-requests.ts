@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import type { CrFileChange } from '../ai/runtime/cr-engine.ts';
-import { execute, queryOne, queryRows } from './database.ts';
+import { changeProviderKey, upsertChange } from './changes.ts';
+import { execute, queryOne, queryRows, withTransaction } from './database.ts';
 
 // Typed layer over the native change-request store (docs/artifacts-provider.md).
 // Diff patches live in R2 under the private
@@ -11,6 +12,7 @@ export interface ChangeRequestRow {
   repository_id: number;
   number: number;
   feature_id: number | null;
+  change_id: number | null;
   title: string;
   source_branch: string;
   target_branch: string;
@@ -61,19 +63,46 @@ export async function createChangeRequest(input: {
   openedBy: string;
 }): Promise<ChangeRequestRow> {
   // The counter row is incremented atomically, so concurrent creators never
-  // allocate the same per-repository display number.
-  const row = await queryOne<ChangeRequestRow>(sql`
-    INSERT INTO app.change_requests
-      (repository_id, number, feature_id, title, source_branch, target_branch, opened_by)
-    VALUES (
-      ${input.repositoryId}, app.next_change_request_number(${input.repositoryId}),
-      ${input.featureId}, ${input.title}, ${input.sourceBranch}, ${input.targetBranch},
-      ${input.openedBy}
-    )
-    RETURNING *
-  `);
-  if (!row) throw new Error('change request insert returned no row');
-  return row;
+  // allocate the same per-repository display number. The canonical Change,
+  // native extension row, and optional feature link commit together.
+  return withTransaction(async () => {
+    const row = await queryOne<ChangeRequestRow>(sql`
+      INSERT INTO app.change_requests
+        (repository_id, number, feature_id, title, source_branch, target_branch, opened_by)
+      VALUES (
+        ${input.repositoryId}, app.next_change_request_number(${input.repositoryId}),
+        ${input.featureId}, ${input.title}, ${input.sourceBranch}, ${input.targetBranch},
+        ${input.openedBy}
+      )
+      RETURNING *
+    `);
+    if (!row) throw new Error('change request insert returned no row');
+
+    const change = await upsertChange({
+      repositoryId: input.repositoryId,
+      providerKey: changeProviderKey('artifacts', row.number),
+      number: row.number,
+      origin: input.openedBy === 'factory' ? 'factory' : 'human',
+      title: input.title,
+      externalUrl: null,
+      sourceBranch: input.sourceBranch,
+      targetBranch: input.targetBranch,
+      status: 'open',
+      sourceHead: null,
+      targetHead: null,
+      draft: false,
+      capabilities: ['read_change', 'publish_review', 'write_head', 'publish_check', 'merge'],
+    });
+    await execute(sql`
+      UPDATE app.change_requests SET change_id = ${change.id} WHERE id = ${row.id}
+    `);
+    if (input.featureId !== null) {
+      await execute(sql`
+        UPDATE app.features SET change_id = ${change.id} WHERE id = ${input.featureId}
+      `);
+    }
+    return { ...row, change_id: change.id };
+  });
 }
 
 export async function getChangeRequest(id: number): Promise<ChangeRequestRow | null> {
@@ -130,15 +159,22 @@ export async function updateChangeRequestState(
   id: number,
   state: ChangeRequestStatePatch,
 ): Promise<void> {
-  await execute(sql`
-    UPDATE app.change_requests SET
-      source_head = ${state.sourceHead}, target_head = ${state.targetHead},
-      merge_base = ${state.mergeBase}, mergeable = ${state.mergeable},
-      conflict_files = ${JSON.stringify(state.conflictFiles)}::jsonb,
-      files = ${JSON.stringify(state.files)}::jsonb, diff_key = ${state.diffKey},
-      patch_truncated = ${state.patchTruncated}
-    WHERE id = ${id}
-  `);
+  await withTransaction(async () => {
+    await execute(sql`
+      UPDATE app.change_requests SET
+        source_head = ${state.sourceHead}, target_head = ${state.targetHead},
+        merge_base = ${state.mergeBase}, mergeable = ${state.mergeable},
+        conflict_files = ${JSON.stringify(state.conflictFiles)}::jsonb,
+        files = ${JSON.stringify(state.files)}::jsonb, diff_key = ${state.diffKey},
+        patch_truncated = ${state.patchTruncated}, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ${id}
+    `);
+    await execute(sql`
+      UPDATE app.changes SET source_head = ${state.sourceHead}, target_head = ${state.targetHead},
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = (SELECT change_id FROM app.change_requests WHERE id = ${id})
+    `);
+  });
 }
 
 export async function setChangeRequestReviewStatus(
@@ -151,15 +187,30 @@ export async function setChangeRequestReviewStatus(
 }
 
 export async function markChangeRequestMerged(id: number, mergedHead: string): Promise<void> {
-  await execute(sql`
-    UPDATE app.change_requests SET status = 'merged', merged_head = ${mergedHead},
-      mergeable = TRUE, conflict_files = '[]'::jsonb
-    WHERE id = ${id}
-  `);
+  await withTransaction(async () => {
+    await execute(sql`
+      UPDATE app.change_requests SET status = 'merged', merged_head = ${mergedHead},
+        mergeable = TRUE, conflict_files = '[]'::jsonb, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ${id}
+    `);
+    await execute(sql`
+      UPDATE app.changes SET status = 'merged', target_head = ${mergedHead},
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = (SELECT change_id FROM app.change_requests WHERE id = ${id})
+    `);
+  });
 }
 
 export async function closeChangeRequest(id: number): Promise<void> {
-  await execute(sql`UPDATE app.change_requests SET status = 'closed' WHERE id = ${id}`);
+  await withTransaction(async () => {
+    await execute(sql`
+      UPDATE app.change_requests SET status = 'closed', updated_at = CURRENT_TIMESTAMP WHERE id = ${id}
+    `);
+    await execute(sql`
+      UPDATE app.changes SET status = 'closed', updated_at = CURRENT_TIMESTAMP
+      WHERE id = (SELECT change_id FROM app.change_requests WHERE id = ${id})
+    `);
+  });
 }
 
 export async function addCrComment(input: {

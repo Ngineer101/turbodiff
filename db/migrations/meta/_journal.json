@@ -22,6 +22,13 @@
       "when": 1788013427144,
       "tag": "0002_transactional-factory-version",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788102390263,
+      "tag": "0003_canonical-changes",
+      "breakpoints": true
     }
   ]
 }
