@@ -252,6 +252,80 @@ function GoNoGoBoard({ data }: { data: ApiFeatureDetail }) {
   );
 }
 
+function LifecycleHistory({ runs }: { runs: ApiFeatureDetail['lifecycle_runs'] }) {
+  if (runs.length === 0) return null;
+  return (
+    <>
+      <SectionHeading>Factory lifecycle</SectionHeading>
+      <Accordion type="multiple">
+        {runs.map((run) => (
+          <AccordionItem key={run.id} value={String(run.id)}>
+            <AccordionTrigger
+              aside={
+                <span className="font-mono text-xs tracking-[0.08em] text-mute uppercase">
+                  {sentence(run.status.replaceAll('_', ' '))}
+                </span>
+              }
+            >
+              {sentence(run.profile.replaceAll('_', ' '))} · {sentence(run.start_stage)} →{' '}
+              {sentence(run.stop_after_stage)}
+            </AccordionTrigger>
+            <AccordionContent>
+              <ol className="space-y-2">
+                {run.stages.map((stage) => (
+                  <li key={stage.id} className="flex items-start gap-3 text-sm">
+                    <span
+                      className={cn(
+                        'mt-1.5 size-2 shrink-0 rounded-full',
+                        stage.status === 'completed'
+                          ? 'bg-accent-bright'
+                          : stage.status === 'failed'
+                            ? 'bg-danger'
+                            : stage.status === 'running'
+                              ? 'bg-warn animate-pulse'
+                              : 'bg-line-2',
+                      )}
+                    />
+                    <span className="min-w-0">
+                      <span className="text-ink">{sentence(stage.stage)}</span>
+                      {stage.attempt > 1 ? (
+                        <span className="ml-2 font-mono text-xs text-mute">
+                          attempt {stage.attempt}
+                        </span>
+                      ) : null}
+                      <span className="ml-2 text-xs text-mute">{sentence(stage.status)}</span>
+                      {stage.error ? (
+                        <span className="mt-0.5 block text-xs text-danger">{stage.error}</span>
+                      ) : null}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+              {run.handoff_reason ? (
+                <p className="mt-3 text-xs text-mute">Handoff: {run.handoff_reason}</p>
+              ) : null}
+              <details className="mt-3 text-xs text-mute">
+                <summary className="cursor-pointer select-none">
+                  {run.events.length} lifecycle events
+                </summary>
+                <ol className="mt-2 space-y-1 border-l border-line pl-3 font-mono">
+                  {run.events.map((event) => (
+                    <li key={event.key}>
+                      {event.kind}
+                      {event.decision ? ` → ${event.decision}` : ''}
+                      {event.reason ? ` · ${event.reason}` : ''}
+                    </li>
+                  ))}
+                </ol>
+              </details>
+            </AccordionContent>
+          </AccordionItem>
+        ))}
+      </Accordion>
+    </>
+  );
+}
+
 function CommentFixStatePill({ comment }: { comment: ApiCockpitComment }) {
   if (comment.fix_status === 'fixed') return <Pill tone="on">Fixed</Pill>;
   if (comment.fix_status === 'no_changes') return <Pill tone="neutral">No changes needed</Pill>;
@@ -1062,6 +1136,7 @@ export default function FeaturePage() {
               </>
             ) : null}
 
+            <LifecycleHistory runs={data.lifecycle_runs} />
             <AgentRunLog runs={data.runs} />
           </div>
 

@@ -60,6 +60,7 @@ import {
   listRepoConnectionLinks,
   listConnections,
   listFixAttemptsForRepoPrs,
+  listFactoryRunsForFeature,
   listInstallationsWithRepos,
   listPlansForInstallations,
   listRecentFeaturesForUsage,
@@ -68,6 +69,8 @@ import {
   listRepoSkillOverrides,
   listReposForTodo,
   listReviewsForRepoPrs,
+  listLifecycleEvents,
+  listStageRuns,
   listMembersWithGithubLogin,
   listPendingInvitations,
   listSkills,
@@ -170,6 +173,7 @@ import { mergePullRequest } from '../services/auto-merge.ts';
 import { enqueueFactoryMessage, enqueueFactoryMessages } from '../services/factory-queue.ts';
 import { DEFAULT_MODEL } from '../domain/personas.ts';
 import { scheduleChangeReview } from '../services/lifecycle.ts';
+import type { LifecycleDecision } from '../domain/lifecycle-contract.ts';
 import {
   ADOPTABLE_PROCESS_PROFILE_KEYS,
   type AdoptableProcessProfileKey,
@@ -216,6 +220,18 @@ import type {
 
 interface DeferredExecution {
   waitUntil(promise: Promise<void>): void;
+}
+
+function lifecycleDecisionReason(decision: LifecycleDecision | null): string | null {
+  if (!decision) return null;
+  switch (decision.kind) {
+    case 'wait':
+    case 'handoff':
+    case 'ignore':
+      return decision.reason;
+    default:
+      return null;
+  }
 }
 
 const fallbackExecution: DeferredExecution = {
@@ -1272,10 +1288,49 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       criteria: [],
       verification: null,
       runs: [],
+      lifecycle_runs: [],
     };
     // Fetched even when generation never opened a PR — a failed run is
     // exactly the case where an advanced user most wants the full log.
-    base.runs = (await listAgentRunsForFeature(feature.id)).map(serializeAgentRun);
+    const [agentRuns, lifecycleRuns] = await Promise.all([
+      listAgentRunsForFeature(feature.id),
+      listFactoryRunsForFeature(feature.id),
+    ]);
+    base.runs = agentRuns.map(serializeAgentRun);
+    base.lifecycle_runs = await Promise.all(
+      lifecycleRuns.map(async (run) => {
+        const [stages, events] = await Promise.all([
+          listStageRuns(run.id),
+          listLifecycleEvents(run.id),
+        ]);
+        return {
+          id: run.id,
+          profile: run.profile_key,
+          status: run.status,
+          start_stage: run.start_stage,
+          stop_after_stage: run.stop_after_stage,
+          handoff_reason: run.handoff_reason,
+          created_at: run.created_at,
+          completed_at: run.completed_at,
+          stages: stages.map((stage) => ({
+            id: stage.id,
+            stage: stage.stage,
+            attempt: stage.attempt,
+            status: stage.status,
+            error: stage.error,
+            started_at: stage.started_at,
+            completed_at: stage.completed_at,
+          })),
+          events: events.map((event) => ({
+            key: event.idempotency_key,
+            kind: event.kind,
+            decision: event.decision?.kind ?? null,
+            reason: lifecycleDecisionReason(event.decision),
+            created_at: event.created_at,
+          })),
+        };
+      }),
+    );
     if (!feature.pr_number) return c.json(base);
     base.certificate_url = await certificateUrl(feature.id);
 
