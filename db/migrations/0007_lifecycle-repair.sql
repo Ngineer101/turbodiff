@@ -1,0 +1,3 @@
+ALTER TABLE "app"."fix_attempts" ADD COLUMN "stage_run_id" bigint;--> statement-breakpoint
+ALTER TABLE "app"."fix_attempts" ADD CONSTRAINT "fix_attempts_stage_run_id_stage_runs_id_fk" FOREIGN KEY ("stage_run_id") REFERENCES "app"."stage_runs"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "fix_attempts_stage_run_idx" ON "app"."fix_attempts" USING btree ("stage_run_id","id") WHERE (stage_run_id IS NOT NULL);

@@ -357,6 +357,7 @@ export async function tryRecordFixAttempt(
   // regardless: never two sandbox runs on one PR — chat turns both honor
   // and hold that lock like any other attempt.
   capTrigger?: string,
+  stageRunId: number | null = null,
 ): Promise<number | null> {
   return withTransaction(async (transaction) => {
     await transaction.execute(sql`
@@ -367,8 +368,8 @@ export async function tryRecordFixAttempt(
           AND created_at < ${minutesAgo(STALL_AFTER_MINUTES)}
       `);
     const result = await transaction.execute<{ id: number }>(sql`
-        INSERT INTO app.fix_attempts (repository_id, pr_number, "trigger")
-        SELECT ${repositoryId}, ${prNumber}, ${trigger}
+        INSERT INTO app.fix_attempts (repository_id, pr_number, "trigger", stage_run_id)
+        SELECT ${repositoryId}, ${prNumber}, ${trigger}, ${stageRunId}
         WHERE (
           SELECT COUNT(*) FROM app.fix_attempts
           WHERE repository_id = ${repositoryId} AND pr_number = ${prNumber}

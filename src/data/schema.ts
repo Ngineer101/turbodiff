@@ -731,6 +731,10 @@ export const fixAttempts = appSchema.table(
     cacheWriteTokens: bigint('cache_write_tokens', { mode: 'number' }).default(0).notNull(),
     costUsd: numeric('cost_usd', { precision: 20, scale: 10, mode: 'number' }).default(0).notNull(),
     model: text(),
+    stageRunId: bigint('stage_run_id', { mode: 'number' }).references(
+      (): AnyPgColumn => stageRuns.id,
+      { onDelete: 'set null' },
+    ),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .default(sql`CURRENT_TIMESTAMP`)
       .notNull(),
@@ -745,6 +749,9 @@ export const fixAttempts = appSchema.table(
       table.prNumber,
       table.id.desc(),
     ),
+    index('fix_attempts_stage_run_idx')
+      .using('btree', table.stageRunId, table.id)
+      .where(sql`(stage_run_id IS NOT NULL)`),
     foreignKey({
       columns: [table.repositoryId],
       foreignColumns: [repositories.id],

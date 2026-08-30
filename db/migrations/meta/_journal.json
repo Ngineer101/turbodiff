@@ -50,6 +50,13 @@
       "when": 1788107707025,
       "tag": "0006_review-stage-outcomes",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788108555286,
+      "tag": "0007_lifecycle-repair",
+      "breakpoints": true
     }
   ]
 }

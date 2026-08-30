@@ -85,12 +85,13 @@ export async function scheduleChangeReview(input: {
   });
   const decision = decideLifecycle(repo.process_profile, context);
   const profile = processProfile(repo.process_profile);
+  const stopAfterStage = repo.process_profile === 'review_and_repair' ? 'merge' : 'review';
   const created = await createFactoryRunWithStage({
     repositoryId: repo.id,
     changeId: change.id,
     profileKey: repo.process_profile,
     startStage: 'review',
-    stopAfterStage: 'review',
+    stopAfterStage,
     policySnapshot: parseJson(JSON.stringify(profile)),
     trigger: input.trigger,
     actor: input.actor,
@@ -215,6 +216,31 @@ export async function failLifecycleReview(
   if (failed?.stage_run_id) await settleReviewStage(failed.stage_run_id, enqueue);
 }
 
+export async function completeLifecycleRepair(
+  stageRunId: number,
+  success: boolean,
+  output: JsonValue,
+  enqueue: typeof enqueueFactoryMessage = enqueueFactoryMessage,
+): Promise<void> {
+  const stageRun = await getStageRun(stageRunId);
+  if (!stageRun || stageRun.stage !== 'repair' || stageRun.status !== 'running') return;
+  const command: RunStageCommand = {
+    kind: 'run_stage',
+    factoryRunId: stageRun.factory_run_id,
+    stageRunId: stageRun.id,
+    stage: 'repair',
+    idempotencyKey: stageRun.idempotency_key,
+  };
+  if (stageRun.change_id !== null) command.changeId = stageRun.change_id;
+  await finishStageRun(
+    stageRun.id,
+    success ? 'completed' : 'failed',
+    output,
+    success ? undefined : 'repair did not update the change',
+  );
+  await coordinateStageOutcome(command, success, enqueue);
+}
+
 export async function runLifecycleStage(
   command: RunStageCommand,
   dispatchReview: ReviewDispatcher,
@@ -239,6 +265,19 @@ export async function runLifecycleStage(
   if (!run || !change || !repo) {
     await finishStageRun(stageRun.id, 'failed', undefined, 'stage inputs are unavailable');
     await coordinateStageOutcome(command, false, enqueue);
+    return;
+  }
+  if (stageRun.stage === 'repair') {
+    await enqueue({
+      kind: 'fix',
+      repoId: repo.id,
+      prNumber: change.number,
+      trigger: 'lifecycle_repair',
+      factoryRunId: run.id,
+      stageRunId: stageRun.id,
+      changeId: change.id,
+    });
+    await recordStageRunOutput(stageRun.id, { kind: 'repair_enqueued' });
     return;
   }
   if (stageRun.stage !== 'review') {
