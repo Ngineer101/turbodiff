@@ -11,6 +11,7 @@ import {
 } from '../runtime/cli-usage.ts';
 import {
   finishFixAttempt,
+  getChange,
   getFeatureByRepoPr,
   getInstallation,
   getRepoById,
@@ -30,6 +31,7 @@ import { UNTRUSTED_CONTENT_RULES } from '../../domain/prompt-security.ts';
 import { installDependencies, NPM_CACHE_ENV } from '../runtime/sandbox-deps.ts';
 import { FIX_MAX_ATTEMPTS, type FixQueueMessage } from '../../shared/factory-messages.ts';
 import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
+import { completeLifecycleRepair } from '../../services/lifecycle.ts';
 import {
   resolveRunnerAuth,
   runnerEnvironment,
@@ -540,37 +542,60 @@ export async function processFixMessage(
   dependencies: FixProcessorDependencies = {},
 ): Promise<void> {
   const executeFix = dependencies.runFix ?? runFix;
+  const lifecycleOwned = msg.stageRunId !== undefined;
+  const settleLifecycle = async (success: boolean, detail: string) => {
+    if (msg.stageRunId === undefined) return;
+    await completeLifecycleRepair(msg.stageRunId, success, { detail });
+  };
   const repo = await getRepoById(msg.repoId);
-  if (!repo || !repo.enabled || !repo.auto_fix) {
+  if (!repo || !repo.enabled || (!lifecycleOwned && !repo.auto_fix)) {
     console.log(`turbodiff: fix skipped for repo ${msg.repoId}#${msg.prNumber} (auto-fix off)`);
+    await settleLifecycle(false, 'repository missing, disabled, or auto-fix is off');
     return;
   }
   const label = `${repo.owner}/${repo.name}#${msg.prNumber}`;
   const installation = await getInstallation(repo.installation_id);
   if (!installation || installation.suspended) {
     console.log(`turbodiff: fix skipped for ${label} (installation missing or suspended)`);
+    await settleLifecycle(false, 'installation missing or suspended');
     return;
   }
   const feature = await getFeatureByRepoPr(repo.id, msg.prNumber);
-  if (!feature || feature.status !== 'pr_opened') {
+  const change = msg.changeId === undefined ? null : await getChange(msg.changeId);
+  const lifecycleChangeOpen =
+    lifecycleOwned &&
+    change !== null &&
+    change.repository_id === repo.id &&
+    change.number === msg.prNumber &&
+    change.status === 'open';
+  if (lifecycleOwned ? !lifecycleChangeOpen : !feature || feature.status !== 'pr_opened') {
     console.log(`turbodiff: fix skipped for ${label} (not an open factory PR)`);
+    await settleLifecycle(false, 'change is not open or does not match the repair command');
     return;
   }
 
   // The cap check, the running-attempt check, and the attempt insert are one
   // atomic statement — two concurrent deliveries for the same PR can't both
   // start a run past the cap or clobber an in-flight sandbox.
-  const attemptId = await tryRecordFixAttempt(repo.id, msg.prNumber, msg.trigger, FIX_MAX_ATTEMPTS);
+  const attemptId = await tryRecordFixAttempt(
+    repo.id,
+    msg.prNumber,
+    msg.trigger,
+    FIX_MAX_ATTEMPTS,
+    undefined,
+    msg.stageRunId ?? null,
+  );
   if (attemptId === null) {
     // A run already in flight for this PR is the single-flight guard doing
     // its job, not the cap — the "N attempts have run" handoff text would be
     // misleading here, so only post it when the cap is actually the reason.
     if (await hasRunningFixAttempt(repo.id, msg.prNumber)) {
       console.log(`turbodiff: fix already running for ${label}, skipping`);
+      await settleLifecycle(false, 'another repair is already running');
       return;
     }
     console.warn(`turbodiff: fix cap reached for ${label}`);
-    if (feature.change_request_id) {
+    if (feature?.change_request_id) {
       await addCrComment({
         changeRequestId: feature.change_request_id,
         file: null,
@@ -591,6 +616,7 @@ export async function processFixMessage(
         FIX_MAX_ATTEMPTS,
       );
     }
+    await settleLifecycle(false, 'repair attempt policy is exhausted');
     return;
   }
   if (msg.commentIds?.length) {
@@ -611,7 +637,7 @@ export async function processFixMessage(
       attemptId,
       trigger: msg.trigger,
       workflowRunId: msg.workflowRunId,
-      runnerModel: feature.runner_model ?? undefined,
+      runnerModel: feature?.runner_model ?? undefined,
     });
     await finishFixAttempt(
       attemptId,
@@ -621,17 +647,19 @@ export async function processFixMessage(
       outcome.usage ?? undefined,
     );
     console.log(`turbodiff: fix ${outcome.status} for ${label} (attempt ${attemptId})`);
+    await settleLifecycle(outcome.status === 'fixed', `repair outcome: ${outcome.status}`);
     // A fix push invalidates prior verification evidence: re-verify factory
     // PRs so the report (and the auto-merge gate) reflects the fixed code.
-    if (outcome.status === 'fixed') {
-      const feature = await getFeatureByRepoPr(repo.id, msg.prNumber);
-      if (feature?.acceptance) {
-        await enqueueFactoryMessage({ kind: 'verify', featureId: feature.id });
+    if (outcome.status === 'fixed' && !lifecycleOwned) {
+      const refreshedFeature = await getFeatureByRepoPr(repo.id, msg.prNumber);
+      if (refreshedFeature?.acceptance) {
+        await enqueueFactoryMessage({ kind: 'verify', featureId: refreshedFeature.id });
       }
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await finishFixAttempt(attemptId, 'failed', undefined, message.slice(0, 500));
+    await settleLifecycle(false, message.slice(0, 500));
     console.error(`turbodiff: fix attempt failed for ${label}:`, err);
   }
 }

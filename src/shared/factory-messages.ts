@@ -40,6 +40,10 @@ export interface FixQueueMessage {
   author?: { login: string; id: number };
   commentIds?: number[];
   workflowRunId?: number;
+  // Present when the lifecycle coordinator owns this repair attempt.
+  factoryRunId?: number;
+  stageRunId?: number;
+  changeId?: number;
 }
 
 export interface ChatQueueMessage {
