@@ -10,7 +10,12 @@ import {
 } from 'lucide-react';
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import type { ApiCockpitComment, ApiFeatureDetail, ApiMe } from '../../shared/api-types.ts';
+import type {
+  ApiCockpitComment,
+  ApiFeatureDetail,
+  ApiMe,
+  ApiVerificationSummary,
+} from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
 import { useDictation } from '../lib/dictation.ts';
 import { sentence } from '../lib/format.ts';
@@ -88,6 +93,28 @@ function VerdictMark({ verdict }: { verdict: string | null }) {
 // the only signal.
 type Station = { label: string; verdict: string; tone: LampTone; pulse?: boolean };
 
+// The Verify lamp. A merged PR's unfinished (or sweep-errored) verification
+// is moot — the human already shipped it — so those states show GO. Completed
+// verdicts (passed / N UNMET) still show their truth even after merge.
+function verifyStation(v: ApiVerificationSummary | null, merged: boolean): Station {
+  const unresolved = !v || v.status === 'running' || v.status === 'stalled' || v.status === 'error';
+  if (merged && unresolved) return { label: 'Verify', verdict: 'GO', tone: 'go' };
+  if (!v) return { label: 'Verify', verdict: 'QUEUED', tone: 'off' };
+  switch (v.status) {
+    case 'passed':
+      return { label: 'Verify', verdict: 'GO', tone: 'go' };
+    case 'running':
+      return { label: 'Verify', verdict: 'POLLING', tone: 'hold', pulse: true };
+    case 'stalled':
+      // Presumed dead, not live — no pulse.
+      return { label: 'Verify', verdict: 'STALLED', tone: 'abort' };
+    case 'error':
+      return { label: 'Verify', verdict: 'ERRORED', tone: 'abort' };
+    default: // 'failed'
+      return { label: 'Verify', verdict: `${v.failed} UNMET`, tone: 'abort' };
+  }
+}
+
 function stationsFor(data: ApiFeatureDetail): Station[] {
   const v = data.verification;
   const lastReview = data.reviews.at(-1);
@@ -104,15 +131,7 @@ function stationsFor(data: ApiFeatureDetail): Station[] {
       : blocking
         ? { label: 'Review', verdict: 'NO-GO', tone: 'abort' }
         : { label: 'Review', verdict: 'GO', tone: 'go' };
-  const verify: Station = !v
-    ? { label: 'Verify', verdict: 'QUEUED', tone: 'off' }
-    : v.status === 'passed'
-      ? { label: 'Verify', verdict: 'GO', tone: 'go' }
-      : v.status === 'running'
-        ? { label: 'Verify', verdict: 'POLLING', tone: 'hold', pulse: true }
-        : v.status === 'error'
-          ? { label: 'Verify', verdict: 'ERRORED', tone: 'abort' }
-          : { label: 'Verify', verdict: `${v.failed} UNMET`, tone: 'abort' };
+  const verify = verifyStation(v, merged);
   const ship: Station = merged
     ? { label: 'Ship', verdict: 'MERGED', tone: 'go' }
     : conflict

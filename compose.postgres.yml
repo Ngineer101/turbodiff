@@ -13,7 +13,7 @@ services:
       timeout: 3s
       retries: 20
     volumes:
-      - turbodiff-postgres:/var/lib/postgresql/data
+      - turbodiff-postgres:/var/lib/postgresql
 
 volumes:
   turbodiff-postgres:

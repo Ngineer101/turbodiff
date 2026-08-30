@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import type { CriterionResult } from '../domain/verification.ts';
 import type { ApiPlanQuestion } from '../shared/api-types.ts';
-import { STALL_AFTER_MINUTES } from '../shared/time.ts';
+import { STALL_AFTER_MINUTES, VERIFY_STALL_AFTER_MINUTES } from '../shared/time.ts';
 import type { CliUsage } from '../shared/usage.ts';
 import { execute, queryOne, queryRows, withTransaction } from './database.ts';
 import type { RepositoryRow } from './repositories.ts';
@@ -187,6 +187,7 @@ export interface TaskRepoStatusRow {
   pr_number: number | null;
   provider: string;
   verification_status: string | null;
+  verification_created_at: string | null;
   verification_results: CriterionResult[] | null;
 }
 
@@ -198,7 +199,8 @@ export async function getTaskRepoStatuses(planIds: number[]): Promise<TaskRepoSt
   return queryRows<TaskRepoStatusRow>(sql`
     SELECT pr.plan_id, pr.repository_id, r.owner, r.name, r.provider,
       f.id AS feature_id, f.status AS feature_status, f.error AS feature_error,
-      f.pr_number, v.status AS verification_status, v.results AS verification_results
+      f.pr_number, v.status AS verification_status, v.results AS verification_results,
+      v.created_at AS verification_created_at
     FROM app.plan_repositories pr
     JOIN app.repositories r ON r.id = pr.repository_id
     LEFT JOIN app.features f
@@ -220,7 +222,8 @@ export async function boardTaskRepoStatuses(
   return queryRows<TaskRepoStatusRow>(sql`
     SELECT pr.plan_id, pr.repository_id, r.owner, r.name, r.provider,
       f.id AS feature_id, f.status AS feature_status, f.error AS feature_error,
-      f.pr_number, v.status AS verification_status, v.results AS verification_results
+      f.pr_number, v.status AS verification_status, v.results AS verification_results,
+      v.created_at AS verification_created_at
     FROM app.plan_repositories pr
     JOIN app.plans p ON p.id = pr.plan_id
     JOIN app.repositories r ON r.id = pr.repository_id
@@ -258,14 +261,12 @@ export async function latestVerificationForFeature(
 // Verification runs killed mid-flight (isolate death) never reach their
 // error handler, stranding rows in 'running' and the UI in an endless poll.
 // Lazy sweep from the read paths, like failStrandedGeneration.
-const VERIFICATION_STRAND_MINUTES = 45;
-
 export async function failStrandedVerifications(): Promise<number> {
   return execute(sql`
     UPDATE app.verifications SET status = 'error',
       error = 'verification run was killed before finishing — re-run it from the PR or wait for the next push'
     WHERE status = 'running'
-      AND created_at < ${minutesAgo(VERIFICATION_STRAND_MINUTES)}
+      AND created_at < ${minutesAgo(VERIFY_STALL_AFTER_MINUTES)}
   `);
 }
 
@@ -278,7 +279,7 @@ export async function createVerification(featureId: number): Promise<number> {
       UPDATE app.verifications SET status = 'error',
         error = 'verification run was killed before finishing — replaced by a new run'
       WHERE feature_id = ${featureId} AND status = 'running'
-        AND created_at < ${minutesAgo(VERIFICATION_STRAND_MINUTES)}
+        AND created_at < ${minutesAgo(VERIFY_STALL_AFTER_MINUTES)}
     `);
     const result = await transaction.execute<{ id: number }>(sql`
       INSERT INTO app.verifications (feature_id) VALUES (${featureId}) RETURNING id

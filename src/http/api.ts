@@ -1367,6 +1367,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     base.verification = verificationSummary(
       verification?.status ?? null,
       verification?.results ?? null,
+      verification?.created_at ?? null,
     );
     return c.json(base);
   });

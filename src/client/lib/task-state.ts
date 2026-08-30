@@ -40,7 +40,9 @@ export function taskStages(p: ApiPlan): { label: string; state: StageState }[] {
     if (build === 'done') {
       const allMerged = p.repos.every((r) => r.feature_status === 'merged');
       const anyRunning = p.repos.some((r) => r.verification?.status === 'running');
-      const anyFailed = p.repos.some((r) => r.verification?.status === 'failed');
+      const anyFailed = p.repos.some(
+        (r) => r.verification?.status === 'failed' || r.verification?.status === 'stalled',
+      );
       const allProven = p.repos.every(
         (r) => r.feature_status === 'merged' || r.verification?.status === 'passed',
       );

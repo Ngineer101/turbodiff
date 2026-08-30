@@ -23,3 +23,10 @@ export function parseUtc(ts: string): number {
 // running counts must all agree on this cutoff, so they all derive from here.
 export const STALL_AFTER_MINUTES = 20;
 export const STALL_AFTER_MS = STALL_AFTER_MINUTES * 60 * 1000;
+
+// A verification run older than this that never finished is presumed dead.
+// Three places must agree on the cutoff: the display-layer 'stalled' status
+// (verificationSummary), startVerification's in-flight dedupe window, and the
+// stranded-row sweep in data/factory.ts.
+export const VERIFY_STALL_AFTER_MINUTES = 45;
+export const VERIFY_STALL_AFTER_MS = VERIFY_STALL_AFTER_MINUTES * 60 * 1000;

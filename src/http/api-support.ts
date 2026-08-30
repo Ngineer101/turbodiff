@@ -27,7 +27,7 @@ import { capabilityDenied, orgForInstallationWithHeal } from '../services/access
 import { userCanPushToRepo, type AuthedUser, type userIsGithubOrgAdmin } from '../services/auth.ts';
 import { DEFAULT_RUNNER_MODEL } from '../shared/runner-models.ts';
 import { isNumber, isString, type JsonObject } from '../shared/json.ts';
-import { parseUtc, STALL_AFTER_MS } from '../shared/time.ts';
+import { parseUtc, STALL_AFTER_MS, VERIFY_STALL_AFTER_MS } from '../shared/time.ts';
 import type {
   ApiAgentRun,
   ApiAutomationSummary,
@@ -187,10 +187,21 @@ export function groupByRepoPr<T extends { repository_id: number; pr_number: numb
 export function verificationSummary(
   status: string | null,
   results: { verdict: string }[] | null,
+  createdAt: string | null,
 ): ApiVerificationSummary | null {
   if (!status) return null;
   const rows = results ?? [];
-  return { status, total: rows.length, failed: rows.filter((r) => r.verdict === 'fail').length };
+  // Display-only, mirroring reviewState: the DB row stays 'running' until the
+  // cron sweep (failStrandedVerifications) resolves it to 'error'.
+  const stalled =
+    status === 'running' &&
+    createdAt !== null &&
+    Date.now() - parseUtc(createdAt) > VERIFY_STALL_AFTER_MS;
+  return {
+    status: stalled ? 'stalled' : status,
+    total: rows.length,
+    failed: rows.filter((r) => r.verdict === 'fail').length,
+  };
 }
 
 export function serializeAgentRun(r: AgentRunRow): ApiAgentRun {
@@ -277,7 +288,11 @@ export function serializeTask(
         pr_number: r.pr_number,
         feature_status: r.feature_status,
         feature_error: r.feature_error,
-        verification: verificationSummary(r.verification_status, r.verification_results),
+        verification: verificationSummary(
+          r.verification_status,
+          r.verification_results,
+          r.verification_created_at,
+        ),
       })),
   };
 }

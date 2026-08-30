@@ -30,6 +30,7 @@ import {
   readTree,
   RepoBrowserError,
 } from './repo-browser.ts';
+import { parseUtc, VERIFY_STALL_AFTER_MS } from '../shared/time.ts';
 
 // Use cases behind the /mcp tool surface (integrations/mcp/server.ts). Every
 // function takes the bearer-resolved AuthedUser and applies the same
@@ -67,11 +68,18 @@ async function authorizedRepo(user: AuthedUser, repositoryId: number): Promise<R
 function verificationSummary(
   status: string | null | undefined,
   results: { verdict: string }[] | null | undefined,
+  createdAt: string | null | undefined,
 ): { status: string; total: number; failed: number } | null {
   if (!status) return null;
   const rows = results ?? [];
+  // Display-only 'stalled' mapping past the shared cutoff — the DB row stays
+  // 'running' until the cron sweep resolves it.
+  const stalled =
+    status === 'running' &&
+    createdAt != null &&
+    Date.now() - parseUtc(createdAt) > VERIFY_STALL_AFTER_MS;
   return {
-    status,
+    status: stalled ? 'stalled' : status,
     total: rows.length,
     failed: rows.filter((r) => r.verdict === 'fail').length,
   };
@@ -154,7 +162,11 @@ export async function getTask(user: AuthedUser, taskId: number) {
       feature_status: r.feature_status,
       feature_error: r.feature_error,
       pr_number: r.pr_number,
-      verification: verificationSummary(r.verification_status, r.verification_results),
+      verification: verificationSummary(
+        r.verification_status,
+        r.verification_results,
+        r.verification_created_at,
+      ),
     })),
   };
 }
@@ -176,7 +188,11 @@ export async function getFeature(user: AuthedUser, featureId: number) {
     error: feature.error,
     pr_number: feature.pr_number,
     repo: `${repo.owner}/${repo.name}`,
-    verification: verificationSummary(verification?.status, verification?.results),
+    verification: verificationSummary(
+      verification?.status,
+      verification?.results,
+      verification?.created_at,
+    ),
     chat: messages.map((m) => ({
       role: m.role,
       body: m.body,
