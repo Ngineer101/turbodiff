@@ -279,6 +279,7 @@ export const repositories = appSchema.table(
     enabled: boolean().default(true).notNull(),
     model: text(),
     reviewOnPush: boolean('review_on_push').default(false).notNull(),
+    reviewIntake: text('review_intake').default('factory_only').notNull(),
     blockingReviews: boolean('blocking_reviews').default(false).notNull(),
     autoFix: boolean('auto_fix').default(false).notNull(),
     checkCommand: text('check_command'),
@@ -318,6 +319,10 @@ export const repositories = appSchema.table(
       sql`provider = ANY (ARRAY['github'::text, 'artifacts'::text])`,
     ),
     check('repositories_app_port_check', sql`(app_port >= 1) AND (app_port <= 65535)`),
+    check(
+      'repositories_review_intake_check',
+      sql`review_intake = ANY (ARRAY['factory_only'::text, 'on_demand'::text, 'all_changes'::text])`,
+    ),
     check(
       'repositories_artifacts_shape',
       sql`((provider = 'artifacts'::text) AND (artifacts_repo IS NOT NULL) AND (default_branch IS NOT NULL)) OR ((provider = 'github'::text) AND (artifacts_repo IS NULL))`,

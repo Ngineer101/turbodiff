@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { toast } from 'sonner';
-import type { ApiCloneCredential, ApiRepoSettings, ApiSettings } from '../../shared/api-types.ts';
+import type { ApiRepoSettings, ApiSettings } from '../../shared/api-types.ts';
 import { cloneCommand } from '../../shared/projects.ts';
 import { api, ApiError } from '../lib/api.ts';
 import { pushSupported, subscribeToPush, unsubscribeFromPush } from '../lib/push.ts';
@@ -331,6 +331,29 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
               <Clapperboard className="size-3" aria-hidden /> Demos
             </Chip>
           </ConfigRow>
+          <ConfigRow label="Intake">
+            <Chip
+              on={repo.review_intake === 'factory_only'}
+              title="Review only changes created by the Turbodiff factory"
+              onClick={() => patchRepo.mutate({ review_intake: 'factory_only' })}
+            >
+              Factory only
+            </Chip>
+            <Chip
+              on={repo.review_intake === 'on_demand'}
+              title="Review any open change only when a person explicitly requests it"
+              onClick={() => patchRepo.mutate({ review_intake: 'on_demand' })}
+            >
+              On demand
+            </Chip>
+            <Chip
+              on={repo.review_intake === 'all_changes'}
+              title="Automatically review qualifying human, automation, and factory changes"
+              onClick={() => patchRepo.mutate({ review_intake: 'all_changes' })}
+            >
+              All changes
+            </Chip>
+          </ConfigRow>
           <ConfigRow label="Check">
             <CheckCommandForm repo={repo} />
           </ConfigRow>
@@ -354,7 +377,7 @@ function NotificationsSettings() {
       setLoading(false);
       return;
     }
-    navigator.serviceWorker.ready
+    void navigator.serviceWorker.ready
       .then((r) => r.pushManager.getSubscription())
       .then((sub) => setEnabled(Notification.permission === 'granted' && sub !== null))
       .finally(() => setLoading(false));

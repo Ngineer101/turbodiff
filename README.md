@@ -44,8 +44,8 @@ Cloudflare account ([One-time setup](#one-time-setup)).
   gets a report comment with a verdict table and inline screenshots; unmet
   criteria feed the auto-fix loop.
 
-**Review** (where Turbodiff started; standalone intake is part of the target
-composable lifecycle):
+**Review** (where Turbodiff started; also works standalone for existing
+changes through on-demand or automatic repository intake):
 
 - One durable agent instance per PR (`owner--repo--number`), so re-reviews
   continue the same conversation and reconcile against earlier findings.

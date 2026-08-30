@@ -18,6 +18,8 @@ import {
   hasPendingChatTurn,
   listChatMessages,
   getChangeRequest,
+  getChangeRequestByChangeId,
+  getChange,
   getRepoByFullName,
   listCrChecks,
   listCrComments,
@@ -90,6 +92,7 @@ import {
   setRepoDemoVideos,
   setRepoEnabled,
   setRepoReviewOnPush,
+  setRepoReviewIntake,
   setRepoSkillEnabled,
   setTaskRunnerModel,
   setTodoRepositories,
@@ -166,6 +169,9 @@ import { checkMergeability, dispatchConflictResolution } from '../services/merge
 import { mergePullRequest } from '../services/auto-merge.ts';
 import { enqueueFactoryMessage, enqueueFactoryMessages } from '../services/factory-queue.ts';
 import { DEFAULT_MODEL } from '../domain/personas.ts';
+import { decideReviewIntake } from '../domain/review-intake.ts';
+import { dispatchChangeReviews, type ReviewDispatcher } from '../services/change-review.ts';
+import { computeRiskTier } from '../services/review-policy.ts';
 import {
   isBoolean,
   isJsonArray,
@@ -299,6 +305,8 @@ export interface ApiRouteDependencies {
   orgAdmin?: typeof userIsGithubOrgAdmin;
   // Injectable for tests (the worker-test fixture has no queue binding).
   enqueueFactory?: typeof enqueueFactoryMessage;
+  dispatchReview?: ReviewDispatcher;
+  computeRisk?: typeof computeRiskTier;
 }
 
 export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
@@ -307,6 +315,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   const canPushToRepo = dependencies.canPushToRepo ?? userCanPushToRepo;
   const orgAdmin = dependencies.orgAdmin ?? userIsGithubOrgAdmin;
   const enqueueFactory = dependencies.enqueueFactory ?? enqueueFactoryMessage;
+  const dispatchReview = dependencies.dispatchReview;
+  const computeRisk = dependencies.computeRisk ?? computeRiskTier;
 
   // Every API response exposes its Worker time to DevTools. Slow paths emit a
   // structured event into Workers Observability with a stable 250ms budget.
@@ -1196,6 +1206,41 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   });
 
   // --- Factory PR cockpit ---
+
+  // Explicit review entry point for any canonical change. This is the
+  // partial-adoption path: a team can hand Turbodiff an existing PR without a
+  // feature, plan, generation run, or commitment to downstream automation.
+  app.post('/changes/:id/review', async (c) => {
+    const id = Number(c.req.param('id'));
+    const change = Number.isInteger(id) ? await getChange(id) : null;
+    const repo = change ? await getRepoById(change.repository_id) : null;
+    if (!change || !repo || !c.get('user').installationIds.includes(repo.installation_id)) {
+      return c.json({ error: 'unknown change' }, 404);
+    }
+    const deniedCapability = await requireCapability(c, repo.installation_id, 'settings', orgAdmin);
+    if (deniedCapability) return deniedCapability;
+
+    const intake = decideReviewIntake({
+      mode: repo.review_intake,
+      origin: change.origin,
+      event: 'manual',
+      draft: change.draft,
+    });
+    if (intake.kind === 'ignore') return c.json({ error: intake.reason }, 409);
+
+    if (repo.provider === 'artifacts') {
+      const cr = await getChangeRequestByChangeId(change.id);
+      if (!cr) return c.json({ error: 'native change request is unavailable' }, 409);
+      await enqueueFactory({ kind: 'cr_review', changeRequestId: cr.id });
+      return c.json({ ok: true, change_id: change.id });
+    }
+    if (!dispatchReview) return c.json({ error: 'review dispatcher unavailable' }, 503);
+
+    const result = await dispatchChangeReviews(change, repo, 'manual', dispatchReview, computeRisk);
+    if (result.kind === 'failed') return c.json({ error: result.reason }, 502);
+    if (result.kind === 'skipped') return c.json({ error: result.reason }, 409);
+    return c.json({ ok: true, change_id: change.id, tier: result.tier, agents: result.agents });
+  });
 
   app.get('/factory/features/:id', async (c) => {
     const id = Number(c.req.param('id'));
@@ -2733,6 +2778,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
             provider: r.provider,
             enabled: r.enabled,
             review_on_push: r.review_on_push,
+            review_intake: r.review_intake,
             blocking_reviews: r.blocking_reviews,
             auto_fix: r.auto_fix,
             auto_merge: r.auto_merge,
@@ -2922,6 +2968,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       .json<{
         enabled?: boolean;
         review_on_push?: boolean;
+        review_intake?: 'factory_only' | 'on_demand' | 'all_changes';
         blocking_reviews?: boolean;
         auto_fix?: boolean;
         auto_merge?: boolean;
@@ -2931,8 +2978,20 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       }>()
       .catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
+    if (
+      body.review_intake !== undefined &&
+      body.review_intake !== 'factory_only' &&
+      body.review_intake !== 'on_demand' &&
+      body.review_intake !== 'all_changes'
+    ) {
+      return c.json(
+        { error: 'review_intake must be factory_only, on_demand, or all_changes' },
+        400,
+      );
+    }
     if (isBoolean(body.enabled)) await setRepoEnabled(repo.id, body.enabled);
     if (isBoolean(body.review_on_push)) await setRepoReviewOnPush(repo.id, body.review_on_push);
+    if (body.review_intake) await setRepoReviewIntake(repo.id, body.review_intake);
     if (isBoolean(body.blocking_reviews))
       await setRepoBlockingReviews(repo.id, body.blocking_reviews);
     if (isBoolean(body.auto_fix)) await setRepoAutoFix(repo.id, body.auto_fix);
