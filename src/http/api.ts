@@ -92,6 +92,7 @@ import {
   setRepoEnabled,
   setRepoReviewOnPush,
   setRepoReviewIntake,
+  setRepoProcessProfile,
   setRepoSkillEnabled,
   setTaskRunnerModel,
   setTodoRepositories,
@@ -169,6 +170,10 @@ import { mergePullRequest } from '../services/auto-merge.ts';
 import { enqueueFactoryMessage, enqueueFactoryMessages } from '../services/factory-queue.ts';
 import { DEFAULT_MODEL } from '../domain/personas.ts';
 import { scheduleChangeReview } from '../services/lifecycle.ts';
+import {
+  ADOPTABLE_PROCESS_PROFILE_KEYS,
+  type AdoptableProcessProfileKey,
+} from '../domain/process-profiles.ts';
 import {
   isBoolean,
   isJsonArray,
@@ -2786,6 +2791,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
             enabled: r.enabled,
             review_on_push: r.review_on_push,
             review_intake: r.review_intake,
+            process_profile: r.process_profile,
             blocking_reviews: r.blocking_reviews,
             auto_fix: r.auto_fix,
             auto_merge: r.auto_merge,
@@ -2976,6 +2982,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         enabled?: boolean;
         review_on_push?: boolean;
         review_intake?: 'factory_only' | 'on_demand' | 'all_changes';
+        process_profile?: AdoptableProcessProfileKey;
         blocking_reviews?: boolean;
         auto_fix?: boolean;
         auto_merge?: boolean;
@@ -2996,9 +3003,19 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         400,
       );
     }
+    if (
+      body.process_profile !== undefined &&
+      !ADOPTABLE_PROCESS_PROFILE_KEYS.includes(body.process_profile)
+    ) {
+      return c.json(
+        { error: `process_profile must be ${ADOPTABLE_PROCESS_PROFILE_KEYS.join(', ')}` },
+        400,
+      );
+    }
     if (isBoolean(body.enabled)) await setRepoEnabled(repo.id, body.enabled);
     if (isBoolean(body.review_on_push)) await setRepoReviewOnPush(repo.id, body.review_on_push);
     if (body.review_intake) await setRepoReviewIntake(repo.id, body.review_intake);
+    if (body.process_profile) await setRepoProcessProfile(repo.id, body.process_profile);
     if (isBoolean(body.blocking_reviews))
       await setRepoBlockingReviews(repo.id, body.blocking_reviews);
     if (isBoolean(body.auto_fix)) await setRepoAutoFix(repo.id, body.auto_fix);

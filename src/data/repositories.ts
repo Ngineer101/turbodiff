@@ -4,6 +4,7 @@ import { repositories } from './schema.ts';
 import { bigintArray } from './sql.ts';
 import type { ReviewIntakeMode } from '../domain/review-intake.ts';
 import type { ProcessProfileKey } from '../domain/lifecycle-contract.ts';
+import type { AdoptableProcessProfileKey } from '../domain/process-profiles.ts';
 
 // Thin typed layer over the PostgreSQL application schema.
 
@@ -296,6 +297,22 @@ export async function setRepoReviewIntake(id: number, mode: ReviewIntakeMode): P
         : 'legacy_factory';
   await execute(sql`
     UPDATE app.repositories SET review_intake = ${mode}, process_profile = ${profile}
+    WHERE id = ${id}
+  `);
+}
+
+export async function setRepoProcessProfile(
+  id: number,
+  profile: AdoptableProcessProfileKey,
+): Promise<void> {
+  const intake: ReviewIntakeMode =
+    profile === 'legacy_factory'
+      ? 'factory_only'
+      : profile === 'review_on_demand'
+        ? 'on_demand'
+        : 'all_changes';
+  await execute(sql`
+    UPDATE app.repositories SET process_profile = ${profile}, review_intake = ${intake}
     WHERE id = ${id}
   `);
 }

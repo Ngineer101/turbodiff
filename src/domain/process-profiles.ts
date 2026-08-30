@@ -104,6 +104,15 @@ export const PROCESS_PROFILES = {
   },
 } satisfies Record<ProcessProfileKey, ProcessProfileContract>;
 
+export const ADOPTABLE_PROCESS_PROFILE_KEYS = [
+  'legacy_factory',
+  'review_on_demand',
+  'automatic_review',
+  'review_and_repair',
+] as const satisfies readonly ProcessProfileKey[];
+
+export type AdoptableProcessProfileKey = (typeof ADOPTABLE_PROCESS_PROFILE_KEYS)[number];
+
 export function processProfile(key: ProcessProfileKey): ProcessProfileContract {
   return PROCESS_PROFILES[key];
 }

@@ -331,27 +331,34 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
               <Clapperboard className="size-3" aria-hidden /> Demos
             </Chip>
           </ConfigRow>
-          <ConfigRow label="Intake">
+          <ConfigRow label="Process">
             <Chip
-              on={repo.review_intake === 'factory_only'}
-              title="Review only changes created by the Turbodiff factory"
-              onClick={() => patchRepo.mutate({ review_intake: 'factory_only' })}
+              on={repo.process_profile === 'legacy_factory'}
+              title="Preserve the existing end-to-end factory behavior for factory-created changes"
+              onClick={() => patchRepo.mutate({ process_profile: 'legacy_factory' })}
             >
-              Factory only
+              Legacy factory
             </Chip>
             <Chip
-              on={repo.review_intake === 'on_demand'}
+              on={repo.process_profile === 'review_on_demand'}
               title="Review any open change only when a person explicitly requests it"
-              onClick={() => patchRepo.mutate({ review_intake: 'on_demand' })}
+              onClick={() => patchRepo.mutate({ process_profile: 'review_on_demand' })}
             >
-              On demand
+              Review on demand
             </Chip>
             <Chip
-              on={repo.review_intake === 'all_changes'}
+              on={repo.process_profile === 'automatic_review'}
               title="Automatically review qualifying human, automation, and factory changes"
-              onClick={() => patchRepo.mutate({ review_intake: 'all_changes' })}
+              onClick={() => patchRepo.mutate({ process_profile: 'automatic_review' })}
             >
-              All changes
+              Automatic review
+            </Chip>
+            <Chip
+              on={repo.process_profile === 'review_and_repair'}
+              title="Automatically review writable changes, repair blocking findings, and re-review until clean or handed off"
+              onClick={() => patchRepo.mutate({ process_profile: 'review_and_repair' })}
+            >
+              Review + repair
             </Chip>
           </ConfigRow>
           <ConfigRow label="Check">

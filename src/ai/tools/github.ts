@@ -411,11 +411,14 @@ export const makePostReview = (agentInstanceId: string, pin: RepoPin = null) =>
       // as running. The findings count feeds the noise metric on the
       // dashboard (fallback-posted findings still count — they reached the PR).
       const verdict =
-        intended === 'REQUEST_CHANGES'
+        data.findings.map(findingSeverity).includes('P1') &&
+        row.process_profile !== 'legacy_factory'
           ? 'request_changes'
-          : intended === 'APPROVE'
-            ? 'approve'
-            : 'comment';
+          : intended === 'REQUEST_CHANGES'
+            ? 'request_changes'
+            : intended === 'APPROVE'
+              ? 'approve'
+              : 'comment';
       await completeLifecycleReview(agentInstanceId, output.url, data.findings.length, verdict);
       // Factory-PR gate: a blocking verdict on a self-authored PR never fires
       // the pull_request_review webhook trigger (the posted state is COMMENT),

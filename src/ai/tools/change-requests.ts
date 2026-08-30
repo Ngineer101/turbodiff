@@ -238,7 +238,9 @@ export const makePostCrReview = (agentInstanceId: string, pin: CrPin) =>
         agentInstanceId,
         url,
         data.findings.length,
-        blocking ? 'request_changes' : 'approve',
+        (hasP1 && repo.process_profile !== 'legacy_factory') || blocking
+          ? 'request_changes'
+          : 'approve',
       );
       if (blocking && repo.auto_fix && repo.process_profile === 'legacy_factory') {
         // Native verdicts fire no webhook, so the blocking-review fix
