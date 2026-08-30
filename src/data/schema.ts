@@ -280,6 +280,7 @@ export const repositories = appSchema.table(
     model: text(),
     reviewOnPush: boolean('review_on_push').default(false).notNull(),
     reviewIntake: text('review_intake').default('factory_only').notNull(),
+    processProfile: text('process_profile').default('legacy_factory').notNull(),
     blockingReviews: boolean('blocking_reviews').default(false).notNull(),
     autoFix: boolean('auto_fix').default(false).notNull(),
     checkCommand: text('check_command'),
@@ -322,6 +323,10 @@ export const repositories = appSchema.table(
     check(
       'repositories_review_intake_check',
       sql`review_intake = ANY (ARRAY['factory_only'::text, 'on_demand'::text, 'all_changes'::text])`,
+    ),
+    check(
+      'repositories_process_profile_check',
+      sql`process_profile = ANY (ARRAY['review_on_demand'::text, 'automatic_review'::text, 'review_and_repair'::text, 'idea_to_pr'::text, 'assisted_delivery'::text, 'full_delivery'::text, 'native_turnkey'::text, 'legacy_factory'::text])`,
     ),
     check(
       'repositories_artifacts_shape',
@@ -1247,6 +1252,241 @@ export const changes = appSchema.table(
       sql`status = ANY (ARRAY['open'::text, 'merged'::text, 'closed'::text])`,
     ),
     check('changes_capabilities_array_check', sql`jsonb_typeof(capabilities) = 'array'::text`),
+  ],
+);
+
+export const workItems = appSchema.table(
+  'work_items',
+  {
+    id: bigint({ mode: 'number' })
+      .primaryKey()
+      .generatedByDefaultAsIdentity({ maxValue: '9007199254740991' }),
+    repositoryId: bigint('repository_id', { mode: 'number' }),
+    origin: text().notNull(),
+    title: text().notNull(),
+    description: text().notNull(),
+    status: text().default('open').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+  },
+  (table) => [
+    index('work_items_repo_created_idx').using('btree', table.repositoryId, table.createdAt.desc()),
+    foreignKey({
+      columns: [table.repositoryId],
+      foreignColumns: [repositories.id],
+      name: 'work_items_repository_id_fkey',
+    }).onDelete('set null'),
+    check(
+      'work_items_origin_check',
+      sql`origin = ANY (ARRAY['idea'::text, 'issue'::text, 'external_change'::text, 'automation'::text, 'api'::text])`,
+    ),
+    check('work_items_status_check', sql`status = ANY (ARRAY['open'::text, 'closed'::text])`),
+  ],
+);
+
+export const acceptanceContracts = appSchema.table(
+  'acceptance_contracts',
+  {
+    id: bigint({ mode: 'number' })
+      .primaryKey()
+      .generatedByDefaultAsIdentity({ maxValue: '9007199254740991' }),
+    workItemId: bigint('work_item_id', { mode: 'number' }),
+    changeId: bigint('change_id', { mode: 'number' }),
+    version: integer().notNull(),
+    criteria: jsonb().$type<JsonValue>().notNull(),
+    source: text().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+  },
+  (table) => [
+    index('acceptance_contracts_work_item_idx').using(
+      'btree',
+      table.workItemId,
+      table.version.desc(),
+    ),
+    index('acceptance_contracts_change_idx').using('btree', table.changeId, table.version.desc()),
+    foreignKey({
+      columns: [table.workItemId],
+      foreignColumns: [workItems.id],
+      name: 'acceptance_contracts_work_item_id_fkey',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.changeId],
+      foreignColumns: [changes.id],
+      name: 'acceptance_contracts_change_id_fkey',
+    }).onDelete('cascade'),
+    check('acceptance_contracts_version_check', sql`version > 0`),
+    check(
+      'acceptance_contracts_owner_check',
+      sql`(work_item_id IS NOT NULL) OR (change_id IS NOT NULL)`,
+    ),
+    check('acceptance_contracts_criteria_array_check', sql`jsonb_typeof(criteria) = 'array'::text`),
+  ],
+);
+
+export const factoryRuns = appSchema.table(
+  'factory_runs',
+  {
+    id: bigint({ mode: 'number' })
+      .primaryKey()
+      .generatedByDefaultAsIdentity({ maxValue: '9007199254740991' }),
+    repositoryId: bigint('repository_id', { mode: 'number' }).notNull(),
+    workItemId: bigint('work_item_id', { mode: 'number' }),
+    changeId: bigint('change_id', { mode: 'number' }),
+    profileKey: text('profile_key').notNull(),
+    startStage: text('start_stage').notNull(),
+    stopAfterStage: text('stop_after_stage').notNull(),
+    policySnapshot: jsonb('policy_snapshot').$type<JsonValue>().notNull(),
+    trigger: text().notNull(),
+    actor: text(),
+    status: text().default('active').notNull(),
+    handoffReason: text('handoff_reason'),
+    idempotencyKey: text('idempotency_key').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+    completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
+  },
+  (table) => [
+    index('factory_runs_repo_created_idx').using(
+      'btree',
+      table.repositoryId,
+      table.createdAt.desc(),
+    ),
+    index('factory_runs_change_idx')
+      .using('btree', table.changeId, table.createdAt.desc())
+      .where(sql`(change_id IS NOT NULL)`),
+    index('factory_runs_work_item_idx')
+      .using('btree', table.workItemId, table.createdAt.desc())
+      .where(sql`(work_item_id IS NOT NULL)`),
+    foreignKey({
+      columns: [table.repositoryId],
+      foreignColumns: [repositories.id],
+      name: 'factory_runs_repository_id_fkey',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.workItemId],
+      foreignColumns: [workItems.id],
+      name: 'factory_runs_work_item_id_fkey',
+    }).onDelete('set null'),
+    foreignKey({
+      columns: [table.changeId],
+      foreignColumns: [changes.id],
+      name: 'factory_runs_change_id_fkey',
+    }).onDelete('set null'),
+    unique('factory_runs_idempotency_key_unique').on(table.idempotencyKey),
+    check(
+      'factory_runs_status_check',
+      sql`status = ANY (ARRAY['active'::text, 'awaiting_human'::text, 'handed_off'::text, 'completed'::text, 'failed'::text, 'cancelled'::text])`,
+    ),
+    check(
+      'factory_runs_profile_check',
+      sql`profile_key = ANY (ARRAY['review_on_demand'::text, 'automatic_review'::text, 'review_and_repair'::text, 'idea_to_pr'::text, 'assisted_delivery'::text, 'full_delivery'::text, 'native_turnkey'::text, 'legacy_factory'::text])`,
+    ),
+    check(
+      'factory_runs_stage_check',
+      sql`start_stage = ANY (ARRAY['plan'::text, 'implement'::text, 'publish'::text, 'review'::text, 'repair'::text, 'verify'::text, 'merge'::text]) AND stop_after_stage = ANY (ARRAY['plan'::text, 'implement'::text, 'publish'::text, 'review'::text, 'repair'::text, 'verify'::text, 'merge'::text])`,
+    ),
+    check(
+      'factory_runs_stage_order_check',
+      sql`array_position(ARRAY['plan'::text, 'implement'::text, 'publish'::text, 'review'::text, 'repair'::text, 'verify'::text, 'merge'::text], start_stage) <= array_position(ARRAY['plan'::text, 'implement'::text, 'publish'::text, 'review'::text, 'repair'::text, 'verify'::text, 'merge'::text], stop_after_stage)`,
+    ),
+    check('factory_runs_policy_object_check', sql`jsonb_typeof(policy_snapshot) = 'object'::text`),
+  ],
+);
+
+export const stageRuns = appSchema.table(
+  'stage_runs',
+  {
+    id: bigint({ mode: 'number' })
+      .primaryKey()
+      .generatedByDefaultAsIdentity({ maxValue: '9007199254740991' }),
+    factoryRunId: bigint('factory_run_id', { mode: 'number' }).notNull(),
+    changeId: bigint('change_id', { mode: 'number' }),
+    stage: text().notNull(),
+    attempt: integer().default(1).notNull(),
+    status: text().default('queued').notNull(),
+    trigger: text().notNull(),
+    input: jsonb().$type<JsonValue>(),
+    output: jsonb().$type<JsonValue>(),
+    workflowInstance: text('workflow_instance'),
+    error: text(),
+    idempotencyKey: text('idempotency_key').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+    startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }),
+    completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
+  },
+  (table) => [
+    index('stage_runs_factory_run_idx').using('btree', table.factoryRunId, table.id),
+    index('stage_runs_change_idx')
+      .using('btree', table.changeId, table.id.desc())
+      .where(sql`(change_id IS NOT NULL)`),
+    foreignKey({
+      columns: [table.factoryRunId],
+      foreignColumns: [factoryRuns.id],
+      name: 'stage_runs_factory_run_id_fkey',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.changeId],
+      foreignColumns: [changes.id],
+      name: 'stage_runs_change_id_fkey',
+    }).onDelete('set null'),
+    unique('stage_runs_idempotency_key_unique').on(table.idempotencyKey),
+    unique('stage_runs_attempt_unique').on(table.factoryRunId, table.stage, table.attempt),
+    check('stage_runs_attempt_check', sql`attempt > 0`),
+    check(
+      'stage_runs_status_check',
+      sql`status = ANY (ARRAY['queued'::text, 'running'::text, 'completed'::text, 'failed'::text, 'cancelled'::text])`,
+    ),
+    check(
+      'stage_runs_stage_check',
+      sql`stage = ANY (ARRAY['plan'::text, 'implement'::text, 'publish'::text, 'review'::text, 'repair'::text, 'verify'::text, 'merge'::text])`,
+    ),
+  ],
+);
+
+export const lifecycleEvents = appSchema.table(
+  'lifecycle_events',
+  {
+    idempotencyKey: text('idempotency_key').primaryKey().notNull(),
+    factoryRunId: bigint('factory_run_id', { mode: 'number' }),
+    changeId: bigint('change_id', { mode: 'number' }),
+    kind: text().notNull(),
+    payload: jsonb().$type<JsonValue>(),
+    decision: jsonb().$type<JsonValue>(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+  },
+  (table) => [
+    index('lifecycle_events_factory_run_idx').using('btree', table.factoryRunId, table.createdAt),
+    index('lifecycle_events_change_idx')
+      .using('btree', table.changeId, table.createdAt)
+      .where(sql`(change_id IS NOT NULL)`),
+    foreignKey({
+      columns: [table.factoryRunId],
+      foreignColumns: [factoryRuns.id],
+      name: 'lifecycle_events_factory_run_id_fkey',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.changeId],
+      foreignColumns: [changes.id],
+      name: 'lifecycle_events_change_id_fkey',
+    }).onDelete('set null'),
+    check(
+      'lifecycle_events_kind_check',
+      sql`kind = ANY (ARRAY['work.requested'::text, 'plan.ready'::text, 'human.approved'::text, 'change.opened'::text, 'change.updated'::text, 'change.closed'::text, 'stage.completed'::text, 'stage.failed'::text, 'external.checks_updated'::text, 'human.resume_requested'::text, 'human.handoff_requested'::text, 'run.cancelled'::text])`,
+    ),
   ],
 );
 

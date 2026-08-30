@@ -22,17 +22,17 @@ import { dispatchReviewAgent } from './dispatch.ts';
 // with the risk tier computed from the CR's own file summary instead of the
 // PR files API. Queue-driven ('cr_review' messages), so CR opening never
 // waits on dispatch.
-export async function dispatchNativeCrReviews(changeRequestId: number): Promise<void> {
+export async function dispatchNativeCrReviews(changeRequestId: number): Promise<boolean> {
   const cr = await getChangeRequest(changeRequestId);
-  if (!cr || cr.status !== 'open') return;
+  if (!cr || cr.status !== 'open') return false;
   const repo = await getRepoById(cr.repository_id);
-  if (!repo?.enabled) return;
+  if (!repo?.enabled) return false;
 
   const installation = await getInstallation(repo.installation_id);
-  if (!installation || installation.suspended) return;
+  if (!installation || installation.suspended) return false;
 
   const enabled = (await listAgentsForRepo(repo)).filter((a) => a.enabled);
-  if (enabled.length === 0) return;
+  if (enabled.length === 0) return false;
 
   const files: RiskFileEntry[] = changeRequestFiles(cr).map((f) => ({
     filename: f.path,
@@ -45,7 +45,7 @@ export async function dispatchNativeCrReviews(changeRequestId: number): Promise<
   // Same admission control as the webhook path: each selected agent consumes
   // one unit of the installation's rolling daily cap.
   const budget = await remainingDailyBudget(repo.installation_id, installation.account_login);
-  if (budget <= 0) return;
+  if (budget <= 0) return false;
   const agents = agentsForTier(tier, enabled).slice(0, budget);
   const cockpitUrl = cr.feature_id ? cockpitFeatureUrl(cr.feature_id) : `${env.PUBLIC_BASE_URL}/`;
 
@@ -69,4 +69,5 @@ export async function dispatchNativeCrReviews(changeRequestId: number): Promise<
       'review dispatch failed — re-run from the cockpit',
     );
   }
+  return dispatched > 0;
 }

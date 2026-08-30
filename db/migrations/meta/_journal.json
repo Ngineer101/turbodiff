@@ -36,6 +36,13 @@
       "when": 1788106042210,
       "tag": "0004_review-intake",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1788107446744,
+      "tag": "0005_lifecycle-coordinator",
+      "breakpoints": true
     }
   ]
 }

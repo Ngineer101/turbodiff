@@ -1,6 +1,7 @@
 // Queue contracts cross the HTTP, service, Worker-entrypoint, workflow, and
 // runner boundaries. Keeping them in shared prevents those layers from
 // importing one another just to agree on transport shapes.
+import type { RunStageCommand } from '../domain/lifecycle-contract.ts';
 
 export const FIX_MAX_ATTEMPTS = 3;
 
@@ -68,6 +69,7 @@ export interface CrMergeQueueMessage {
 }
 
 export type FactoryMessage =
+  | RunStageCommand
   | GenerateQueueMessage
   | PlanQueueMessage
   | VerifyQueueMessage

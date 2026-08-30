@@ -16,31 +16,30 @@ import {
   tryRecordFixAttempt,
   tryRecordReview,
   updateFeature,
-  type AgentRow,
-  type RepositoryRow,
 } from '../data/db.ts';
-import { FIX_MAX_ATTEMPTS } from '../shared/factory-messages.ts';
+import { FIX_MAX_ATTEMPTS, type FactoryMessage } from '../shared/factory-messages.ts';
+import type { RunStageCommand } from '../domain/lifecycle-contract.ts';
 import type { JsonObject } from '../shared/json.ts';
-import {
-  createWebhookRoutes,
-  type ReviewDispatcher,
-  type WebhookRouteDependencies,
-} from './webhooks.ts';
+import { createWebhookRoutes, type WebhookRouteDependencies } from './webhooks.ts';
+import type { ReviewDispatcher } from '../services/change-review.ts';
+import { runLifecycleStage } from '../services/lifecycle.ts';
 
 type TestEnv = Cloudflare.Env & { GITHUB_WEBHOOK_SECRET: string };
+interface ScheduledReviewBody {
+  run: number;
+  stage_run: number;
+}
 // SAFETY: the Worker test config provides this fixture secret at runtime.
 const testEnv = env as TestEnv;
 
-function webhookApp(
-  dispatch: ReviewDispatcher = async () => true,
-  dependencies: WebhookRouteDependencies = {},
-) {
+function webhookApp(dependencies: WebhookRouteDependencies = {}) {
   const app = new Hono();
-  app.route(
-    '/webhooks',
-    createWebhookRoutes(dispatch, { computeRisk: async () => 'full', ...dependencies }),
-  );
+  app.route('/webhooks', createWebhookRoutes(dependencies));
   return app;
+}
+
+function stageCommands(messages: FactoryMessage[]): RunStageCommand[] {
+  return messages.filter((message): message is RunStageCommand => message.kind === 'run_stage');
 }
 
 async function signature(body: string): Promise<string> {
@@ -73,6 +72,13 @@ async function postWebhook(app: Hono, event: string, payload: JsonObject): Promi
 async function seedRepo(
   opts: { autoFix?: boolean; reviewIntake?: 'factory_only' | 'on_demand' | 'all_changes' } = {},
 ): Promise<void> {
+  const reviewIntake = opts.reviewIntake ?? 'factory_only';
+  const processProfile =
+    reviewIntake === 'all_changes'
+      ? 'automatic_review'
+      : reviewIntake === 'on_demand'
+        ? 'review_on_demand'
+        : 'legacy_factory';
   await testDatabase().batch([
     testDatabase().prepare(
       `INSERT INTO installations (id, account_login, account_id, account_type)
@@ -81,10 +87,10 @@ async function seedRepo(
     testDatabase()
       .prepare(
         `INSERT INTO repositories
-          (id, installation_id, owner, name, review_on_push, auto_fix, review_intake)
-       VALUES (101, 1001, 'acme', 'api', TRUE, ?1, ?2)`,
+          (id, installation_id, owner, name, review_on_push, auto_fix, review_intake, process_profile)
+       VALUES (101, 1001, 'acme', 'api', TRUE, ?1, ?2, ?3)`,
       )
-      .bind(opts.autoFix ?? false, opts.reviewIntake ?? 'factory_only'),
+      .bind(opts.autoFix ?? false, reviewIntake, processProfile),
   ]);
 }
 
@@ -279,10 +285,11 @@ describe('GitHub webhook authentication and mirroring', () => {
 });
 
 describe('factory PR webhook decisions', () => {
-  it('canonicalizes but never dispatches a human-opened pull request', async () => {
+  it('canonicalizes but never schedules a human-opened pull request', async () => {
     await seedRepo();
-    const dispatch = vi.fn<ReviewDispatcher>(async () => true);
-    const response = await postWebhook(webhookApp(dispatch), 'pull_request', {
+    const queued: FactoryMessage[] = [];
+    const app = webhookApp({ enqueueLifecycle: async (message) => void queued.push(message) });
+    const response = await postWebhook(app, 'pull_request', {
       action: 'opened',
       number: 42,
       pull_request: {
@@ -302,9 +309,9 @@ describe('factory PR webhook decisions', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
-      skipped: 'repository admits factory changes only',
+      skipped: 'legacy profile admits factory changes only',
     });
-    expect(dispatch).not.toHaveBeenCalled();
+    expect(queued).toHaveLength(0);
     const change = await getChangeByProviderKey(101, 'github:42');
     expect(change).toMatchObject({
       origin: 'human',
@@ -321,7 +328,7 @@ describe('factory PR webhook decisions', () => {
       'merge',
     ]);
 
-    const synchronized = await postWebhook(webhookApp(dispatch), 'pull_request', {
+    const synchronized = await postWebhook(app, 'pull_request', {
       action: 'synchronize',
       number: 42,
       pull_request: {
@@ -347,39 +354,47 @@ describe('factory PR webhook decisions', () => {
   it('automatically reviews a human PR only after all-changes intake is selected', async () => {
     await seedRepo({ reviewIntake: 'all_changes' });
     await ensureBuiltinAgents(1001);
-    const dispatch = vi.fn<ReviewDispatcher>(async () => true);
-    const response = await postWebhook(webhookApp(dispatch), 'pull_request', {
-      action: 'opened',
-      number: 77,
-      pull_request: {
-        draft: false,
-        html_url: 'https://github.com/acme/api/pull/77',
-        title: 'Human contribution',
-        user: { login: 'contributor', type: 'User' },
-        head: {
-          ref: 'contribution',
-          sha: 'd'.repeat(40),
-          repo: { full_name: 'contributor/api' },
+    const queued: FactoryMessage[] = [];
+    const response = await postWebhook(
+      webhookApp({ enqueueLifecycle: async (message) => void queued.push(message) }),
+      'pull_request',
+      {
+        action: 'opened',
+        number: 77,
+        pull_request: {
+          draft: false,
+          html_url: 'https://github.com/acme/api/pull/77',
+          title: 'Human contribution',
+          user: { login: 'contributor', type: 'User' },
+          head: {
+            ref: 'contribution',
+            sha: 'd'.repeat(40),
+            repo: { full_name: 'contributor/api' },
+          },
+          base: { ref: 'main', sha: 'e'.repeat(40) },
         },
-        base: { ref: 'main', sha: 'e'.repeat(40) },
+        repository: { id: 101, full_name: 'acme/api' },
       },
-      repository: { id: 101, full_name: 'acme/api' },
-    });
+    );
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ tier: 'full', agents: ['review'] });
-    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(await response.json()).toMatchObject({
+      review: 'acme/api#77',
+      run: expect.any(Number),
+      stage_run: expect.any(Number),
+    });
+    expect(stageCommands(queued)).toHaveLength(1);
   });
 
-  it('dispatches a factory PR once and debounces a push while its review is active', async () => {
+  it('schedules duplicate factory deliveries idempotently and executes the stage once', async () => {
     await seedRepo();
     await ensureBuiltinAgents(1001);
     const featureId = await createFeature(101, 'Factory feature', 'Implementation spec');
     await updateFeature(featureId, { status: 'pr_opened', prNumber: 42 });
 
-    const calls: { agent: AgentRow; repo: RepositoryRow; trigger: string }[] = [];
+    const calls: { trigger: string }[] = [];
     const dispatch: ReviewDispatcher = async (agent, repo, prNumber, _url, trigger, options) => {
-      calls.push({ agent, repo, trigger });
+      calls.push({ trigger });
       await tryRecordReview(
         repo.id,
         repo.installation_id,
@@ -400,19 +415,32 @@ describe('factory PR webhook decisions', () => {
       },
       repository: { id: 101, full_name: 'acme/api' },
     };
-    const openedResponse = await postWebhook(webhookApp(dispatch), 'pull_request', opened);
-    expect(await openedResponse.json()).toMatchObject({ tier: 'full', agents: ['review'] });
+    const queued: FactoryMessage[] = [];
+    const app = webhookApp({ enqueueLifecycle: async (message) => void queued.push(message) });
+    const openedResponse = await postWebhook(app, 'pull_request', opened);
+    const duplicateResponse = await postWebhook(app, 'pull_request', opened);
+    const firstBody = await openedResponse.json<ScheduledReviewBody>();
+    const duplicateBody = await duplicateResponse.json<ScheduledReviewBody>();
+    expect(firstBody).toMatchObject({ run: expect.any(Number), stage_run: expect.any(Number) });
+    expect(duplicateBody).toMatchObject({ run: firstBody.run, stage_run: firstBody.stage_run });
     const feature = await getFeature(featureId);
     const change = await getChangeByProviderKey(101, 'github:42');
     expect(feature?.change_id).toBe(change?.id);
     expect(change?.origin).toBe('factory');
 
-    const pushResponse = await postWebhook(webhookApp(dispatch), 'pull_request', {
-      ...opened,
-      action: 'synchronize',
+    const commands = stageCommands(queued);
+    expect(commands).toHaveLength(2);
+    expect(commands[1]).toEqual(commands[0]);
+    const lifecycleEnqueue = async (message: FactoryMessage) => {
+      queued.push(message);
+    };
+    await runLifecycleStage(commands[0], dispatch, {
+      computeRisk: async () => 'full',
+      enqueue: lifecycleEnqueue,
     });
-    expect(await pushResponse.json()).toMatchObject({
-      skipped: 'all agents busy or within push debounce',
+    await runLifecycleStage(commands[1], dispatch, {
+      computeRisk: async () => 'full',
+      enqueue: lifecycleEnqueue,
     });
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ trigger: 'opened' });
@@ -475,7 +503,7 @@ describe('CI failure auto-fix', () => {
     const enqueueFix = vi.fn<NonNullable<WebhookRouteDependencies['enqueueFix']>>(async () => {});
 
     const response = await postWebhook(
-      webhookApp(undefined, { enqueueFix }),
+      webhookApp({ enqueueFix }),
       'workflow_run',
       workflowRunPayload({}),
     );

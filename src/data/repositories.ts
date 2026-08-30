@@ -3,6 +3,7 @@ import { execute, queryOne, queryRows, withDatabase, withTransaction } from './d
 import { repositories } from './schema.ts';
 import { bigintArray } from './sql.ts';
 import type { ReviewIntakeMode } from '../domain/review-intake.ts';
+import type { ProcessProfileKey } from '../domain/lifecycle-contract.ts';
 
 // Thin typed layer over the PostgreSQL application schema.
 
@@ -28,6 +29,7 @@ export interface RepositoryRow {
   enabled: boolean;
   review_on_push: boolean; // re-dispatch tiered agents on pushes to open PRs
   review_intake: ReviewIntakeMode;
+  process_profile: ProcessProfileKey;
   blocking_reviews: boolean; // P1 → REQUEST_CHANGES, clean → APPROVE
   auto_fix: boolean; // dispatch the fix agent when a blocking review lands
   auto_merge: boolean; // merge factory PRs when verification + review are clean
@@ -286,7 +288,16 @@ export async function setRepoReviewOnPush(id: number, on: boolean): Promise<void
 }
 
 export async function setRepoReviewIntake(id: number, mode: ReviewIntakeMode): Promise<void> {
-  await execute(sql`UPDATE app.repositories SET review_intake = ${mode} WHERE id = ${id}`);
+  const profile =
+    mode === 'on_demand'
+      ? 'review_on_demand'
+      : mode === 'all_changes'
+        ? 'automatic_review'
+        : 'legacy_factory';
+  await execute(sql`
+    UPDATE app.repositories SET review_intake = ${mode}, process_profile = ${profile}
+    WHERE id = ${id}
+  `);
 }
 
 export async function setRepoBlockingReviews(id: number, on: boolean): Promise<void> {

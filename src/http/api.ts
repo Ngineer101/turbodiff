@@ -18,7 +18,6 @@ import {
   hasPendingChatTurn,
   listChatMessages,
   getChangeRequest,
-  getChangeRequestByChangeId,
   getChange,
   getRepoByFullName,
   listCrChecks,
@@ -169,9 +168,7 @@ import { checkMergeability, dispatchConflictResolution } from '../services/merge
 import { mergePullRequest } from '../services/auto-merge.ts';
 import { enqueueFactoryMessage, enqueueFactoryMessages } from '../services/factory-queue.ts';
 import { DEFAULT_MODEL } from '../domain/personas.ts';
-import { decideReviewIntake } from '../domain/review-intake.ts';
-import { dispatchChangeReviews, type ReviewDispatcher } from '../services/change-review.ts';
-import { computeRiskTier } from '../services/review-policy.ts';
+import { scheduleChangeReview } from '../services/lifecycle.ts';
 import {
   isBoolean,
   isJsonArray,
@@ -305,8 +302,6 @@ export interface ApiRouteDependencies {
   orgAdmin?: typeof userIsGithubOrgAdmin;
   // Injectable for tests (the worker-test fixture has no queue binding).
   enqueueFactory?: typeof enqueueFactoryMessage;
-  dispatchReview?: ReviewDispatcher;
-  computeRisk?: typeof computeRiskTier;
 }
 
 export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
@@ -315,8 +310,6 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   const canPushToRepo = dependencies.canPushToRepo ?? userCanPushToRepo;
   const orgAdmin = dependencies.orgAdmin ?? userIsGithubOrgAdmin;
   const enqueueFactory = dependencies.enqueueFactory ?? enqueueFactoryMessage;
-  const dispatchReview = dependencies.dispatchReview;
-  const computeRisk = dependencies.computeRisk ?? computeRiskTier;
 
   // Every API response exposes its Worker time to DevTools. Slow paths emit a
   // structured event into Workers Observability with a stable 250ms budget.
@@ -1220,26 +1213,24 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const deniedCapability = await requireCapability(c, repo.installation_id, 'settings', orgAdmin);
     if (deniedCapability) return deniedCapability;
 
-    const intake = decideReviewIntake({
-      mode: repo.review_intake,
-      origin: change.origin,
-      event: 'manual',
-      draft: change.draft,
+    const scheduled = await scheduleChangeReview({
+      changeId: change.id,
+      trigger: 'manual',
+      actor: c.get('user').session.login,
+      idempotencyKey: `manual-review:${change.id}:${crypto.randomUUID()}`,
+      enqueue: enqueueFactory,
     });
-    if (intake.kind === 'ignore') return c.json({ error: intake.reason }, 409);
-
-    if (repo.provider === 'artifacts') {
-      const cr = await getChangeRequestByChangeId(change.id);
-      if (!cr) return c.json({ error: 'native change request is unavailable' }, 409);
-      await enqueueFactory({ kind: 'cr_review', changeRequestId: cr.id });
-      return c.json({ ok: true, change_id: change.id });
+    if (scheduled.decision.kind !== 'schedule') {
+      const reason =
+        'reason' in scheduled.decision ? scheduled.decision.reason : 'review was not scheduled';
+      return c.json({ error: reason }, 409);
     }
-    if (!dispatchReview) return c.json({ error: 'review dispatcher unavailable' }, 503);
-
-    const result = await dispatchChangeReviews(change, repo, 'manual', dispatchReview, computeRisk);
-    if (result.kind === 'failed') return c.json({ error: result.reason }, 502);
-    if (result.kind === 'skipped') return c.json({ error: result.reason }, 409);
-    return c.json({ ok: true, change_id: change.id, tier: result.tier, agents: result.agents });
+    return c.json({
+      ok: true,
+      change_id: change.id,
+      run_id: scheduled.runId,
+      stage_run_id: scheduled.stageRunId,
+    });
   });
 
   app.get('/factory/features/:id', async (c) => {
@@ -1800,8 +1791,24 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (!cr || cr.status !== 'open') {
       return c.json({ error: 'the change request is not open' }, 409);
     }
-    await enqueueFactoryMessage({ kind: 'cr_review', changeRequestId: cr.id });
-    return c.json({ ok: true });
+    if (!cr.change_id) return c.json({ error: 'the canonical change is unavailable' }, 409);
+    const scheduled = await scheduleChangeReview({
+      changeId: cr.change_id,
+      trigger: 'manual',
+      actor: c.get('user').session.login,
+      idempotencyKey: `manual-native-review:${cr.change_id}:${crypto.randomUUID()}`,
+      enqueue: enqueueFactory,
+    });
+    if (!scheduled.stageRunId) {
+      const reason =
+        'reason' in scheduled.decision ? scheduled.decision.reason : 'review was not scheduled';
+      return c.json({ error: reason }, 409);
+    }
+    return c.json({
+      ok: true,
+      run_id: scheduled.runId,
+      stage_run_id: scheduled.stageRunId,
+    });
   });
 
   // Criteria-conflict resolution (see verifier.ts postCriteriaConflictNotice):

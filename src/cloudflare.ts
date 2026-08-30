@@ -25,6 +25,8 @@ import { runQueuedCrMerge } from './services/change-requests.ts';
 import { startVerification, VerificationWorkflow } from './ai/workflows/verification.ts';
 import { notifyPlanLive } from './services/live-updates.ts';
 import { withDatabaseScope } from './data/database.ts';
+import { runLifecycleStage } from './services/lifecycle.ts';
+import { dispatchReviewAgent } from './ai/review/dispatch.ts';
 
 // The fixer sandbox container (docs/software-factory-design.md). Declared in
 // wrangler.jsonc under containers/durable_objects with migration tag v2.
@@ -54,6 +56,11 @@ export default {
       for (const message of batch.messages) {
         const body = message.body;
         switch (body.kind) {
+          case 'run_stage':
+            await runLifecycleStage(body, dispatchReviewAgent, {
+              dispatchNativeReview: dispatchNativeCrReviews,
+            });
+            break;
           case 'generate':
             // Just creates a durable workflow instance (sub-second) — the
             // run itself lives outside any consumer wall clock.

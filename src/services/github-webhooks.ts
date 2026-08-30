@@ -17,13 +17,9 @@ import {
 import { FIX_MAX_ATTEMPTS, type FixQueueMessage } from '../shared/factory-messages.ts';
 import { enqueueFactoryMessage } from './factory-queue.ts';
 import { ensureOrganizationForInstallation, ensureOwnerMember } from './access-control.ts';
-import { computeRiskTier } from './review-policy.ts';
 import type { JsonValue } from '../shared/json.ts';
 import type { ChangeCapability, ChangeOrigin } from '../domain/lifecycle-contract.ts';
-import { decideReviewIntake } from '../domain/review-intake.ts';
-import { dispatchChangeReviews, type ReviewDispatcher } from './change-review.ts';
-
-export type { DispatchOptions, ReviewDispatcher } from './change-review.ts';
+import { scheduleChangeReview } from './lifecycle.ts';
 
 // GitHub App webhook receiver. Two jobs:
 //   1. Mirror installation / repository-selection changes into PostgreSQL.
@@ -106,17 +102,13 @@ export interface WebhookHandlerResult {
 export type FixEnqueuer = (message: FixQueueMessage) => Promise<void>;
 
 export interface GithubWebhookDependencies {
-  computeRisk?: typeof computeRiskTier;
   enqueueFix?: FixEnqueuer;
+  enqueueLifecycle?: typeof enqueueFactoryMessage;
 }
 
 // Application service: authenticated payloads enter here after the transport
 // verifies GitHub's signature and parses JSON.
-export function createGithubWebhookService(
-  dispatch: ReviewDispatcher,
-  dependencies: GithubWebhookDependencies = {},
-) {
-  const computeRisk = dependencies.computeRisk ?? computeRiskTier;
+export function createGithubWebhookService(dependencies: GithubWebhookDependencies = {}) {
   const enqueueFix: FixEnqueuer =
     dependencies.enqueueFix ??
     (async (message: FixQueueMessage) => {
@@ -125,7 +117,7 @@ export function createGithubWebhookService(
 
   return {
     handle(event: string, payload: JsonValue): Promise<WebhookHandlerResult> {
-      return handleEvent(event, payload, dispatch, computeRisk, enqueueFix);
+      return handleEvent(event, payload, enqueueFix, dependencies.enqueueLifecycle);
     },
   };
 }
@@ -143,9 +135,8 @@ function verifiedEventPayload<T>(payload: JsonValue): T {
 async function handleEvent(
   event: string,
   payload: JsonValue,
-  dispatch: ReviewDispatcher,
-  computeRisk: typeof computeRiskTier,
   enqueueFix: FixEnqueuer,
+  enqueueLifecycle?: typeof enqueueFactoryMessage,
 ): Promise<WebhookHandlerResult> {
   switch (event) {
     case 'installation':
@@ -153,11 +144,7 @@ async function handleEvent(
     case 'installation_repositories':
       return handleInstallationRepositories(verifiedEventPayload<InstallationEvent>(payload));
     case 'pull_request':
-      return handlePullRequest(
-        verifiedEventPayload<PullRequestEvent>(payload),
-        dispatch,
-        computeRisk,
-      );
+      return handlePullRequest(verifiedEventPayload<PullRequestEvent>(payload), enqueueLifecycle);
     case 'pull_request_review':
       return handlePullRequestReview(
         verifiedEventPayload<PullRequestReviewEvent>(payload),
@@ -260,8 +247,7 @@ function githubChangeOrigin(p: PullRequestEvent, factoryFeature: boolean): Chang
 
 async function handlePullRequest(
   p: PullRequestEvent,
-  dispatch: ReviewDispatcher,
-  computeRisk: typeof computeRiskTier,
+  enqueueLifecycle?: typeof enqueueFactoryMessage,
 ): Promise<WebhookHandlerResult> {
   const repo = await getRepoById(p.repository.id);
   if (!repo) return { body: { ok: true, skipped: 'repo not tracked' } };
@@ -320,30 +306,30 @@ async function handlePullRequest(
     return { body: { ok: true, skipped: 'push reviews disabled for repo' } };
   }
 
-  const intake = decideReviewIntake({
-    mode: repo.review_intake,
-    origin: change.origin,
-    event: p.action === 'synchronize' ? 'updated' : 'opened',
-    draft: change.draft,
+  const scheduled = await scheduleChangeReview({
+    changeId: change.id,
+    trigger: p.action,
+    idempotencyKey: [
+      'github-review',
+      change.id,
+      p.action,
+      change.source_head ?? change.provider_updated_at ?? 'unknown-head',
+    ].join(':'),
+    enqueue: enqueueLifecycle,
   });
-  if (intake.kind === 'ignore') return { body: { ok: true, skipped: intake.reason } };
-
-  const result = await dispatchChangeReviews(
-    change,
-    repo,
-    p.action,
-    dispatch,
-    computeRisk,
-    p.action === 'synchronize',
-  );
-  if (result.kind === 'failed') return { body: { error: result.reason }, status: 502 };
-  if (result.kind === 'skipped') return { body: { ok: true, skipped: result.reason } };
+  if (!scheduled.stageRunId) {
+    const skipped =
+      scheduled.decision.kind === 'ignore' || scheduled.decision.kind === 'handoff'
+        ? scheduled.decision.reason
+        : scheduled.decision.kind;
+    return { body: { ok: true, change: change.id, run: scheduled.runId, skipped } };
+  }
   return {
     body: {
       ok: true,
       review: `${p.repository.full_name}#${p.number}`,
-      tier: result.tier,
-      agents: result.agents,
+      run: scheduled.runId,
+      stage_run: scheduled.stageRunId,
     },
   };
 }
