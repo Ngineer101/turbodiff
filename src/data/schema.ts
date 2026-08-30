@@ -563,6 +563,9 @@ export const features = appSchema.table(
       (): AnyPgColumn => changeRequests.id,
       { onDelete: 'set null' },
     ),
+    changeId: bigint('change_id', { mode: 'number' }).references((): AnyPgColumn => changes.id, {
+      onDelete: 'set null',
+    }),
     criteriaConflict: boolean('criteria_conflict').default(false).notNull(),
     acceptanceUpdatedAt: timestamp('acceptance_updated_at', { withTimezone: true, mode: 'string' }),
     proposedAcceptance: jsonb('proposed_acceptance').$type<JsonValue>(),
@@ -575,6 +578,9 @@ export const features = appSchema.table(
     index('features_change_request_idx')
       .using('btree', table.changeRequestId)
       .where(sql`(change_request_id IS NOT NULL)`),
+    index('features_change_idx')
+      .using('btree', table.changeId)
+      .where(sql`(change_id IS NOT NULL)`),
     index('features_generating_created_idx')
       .using('btree', table.createdAt)
       .where(sql`(status = 'generating'::text)`),
@@ -1183,6 +1189,62 @@ export const changeRequestCounters = appSchema.table(
   ],
 );
 
+export const changes = appSchema.table(
+  'changes',
+  {
+    id: bigint({ mode: 'number' })
+      .primaryKey()
+      .generatedByDefaultAsIdentity({ maxValue: '9007199254740991' }),
+    repositoryId: bigint('repository_id', { mode: 'number' }).notNull(),
+    providerKey: text('provider_key').notNull(),
+    number: integer().notNull(),
+    origin: text().notNull(),
+    title: text().notNull(),
+    externalUrl: text('external_url'),
+    sourceBranch: text('source_branch').notNull(),
+    targetBranch: text('target_branch').notNull(),
+    status: text().default('open').notNull(),
+    sourceHead: text('source_head'),
+    targetHead: text('target_head'),
+    draft: boolean().default(false).notNull(),
+    capabilities: jsonb()
+      .$type<JsonValue>()
+      .default(sql`'[]'::jsonb`)
+      .notNull(),
+    providerUpdatedAt: timestamp('provider_updated_at', { withTimezone: true, mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+  },
+  (table) => [
+    index('changes_repo_status_idx').using(
+      'btree',
+      table.repositoryId,
+      table.status,
+      table.number.desc(),
+    ),
+    foreignKey({
+      columns: [table.repositoryId],
+      foreignColumns: [repositories.id],
+      name: 'changes_repository_id_fkey',
+    }).onDelete('cascade'),
+    unique('changes_repo_provider_key_unique').on(table.repositoryId, table.providerKey),
+    check('changes_number_check', sql`number > 0`),
+    check(
+      'changes_origin_check',
+      sql`origin = ANY (ARRAY['human'::text, 'factory'::text, 'automation'::text, 'imported'::text])`,
+    ),
+    check(
+      'changes_status_check',
+      sql`status = ANY (ARRAY['open'::text, 'merged'::text, 'closed'::text])`,
+    ),
+    check('changes_capabilities_array_check', sql`jsonb_typeof(capabilities) = 'array'::text`),
+  ],
+);
+
 export const changeRequests = appSchema.table(
   'change_requests',
   {
@@ -1193,6 +1255,9 @@ export const changeRequests = appSchema.table(
     number: integer().notNull(),
     featureId: bigint('feature_id', { mode: 'number' }).references((): AnyPgColumn => features.id, {
       onDelete: 'set null',
+    }),
+    changeId: bigint('change_id', { mode: 'number' }).references((): AnyPgColumn => changes.id, {
+      onDelete: 'cascade',
     }),
     title: text().notNull(),
     sourceBranch: text('source_branch').notNull(),
@@ -1220,6 +1285,9 @@ export const changeRequests = appSchema.table(
     index('change_requests_feature_idx')
       .using('btree', table.featureId)
       .where(sql`(feature_id IS NOT NULL)`),
+    uniqueIndex('change_requests_change_unique')
+      .using('btree', table.changeId)
+      .where(sql`(change_id IS NOT NULL)`),
     uniqueIndex('change_requests_open_branches_unique')
       .using('btree', table.repositoryId, table.sourceBranch, table.targetBranch)
       .where(sql`(status = 'open'::text)`),

@@ -1,6 +1,7 @@
 // Stable data-layer facade. Query implementations are grouped by bounded
 // responsibility; callers do not reach across repository modules directly.
 export * from './repositories.ts';
+export * from './changes.ts';
 export * from './change-requests.ts';
 export * from './chat.ts';
 export * from './factory.ts';
