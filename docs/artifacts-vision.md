@@ -1,5 +1,12 @@
 # Artifacts as a GitHub alternative — the end state
 
+This is a provider-specific companion to the normative
+[composable software factory lifecycle](software-factory-lifecycle.md). The
+lifecycle defines product responsibility, stage boundaries, and provider
+capabilities; this document explains how the Turbodiff-hosted forge supplies
+those capabilities. Provider ownership must not make the native path a separate
+or privileged orchestration model.
+
 The Phase 0 spike (`docs/artifacts-spike.md`) proves plumbing. This doc is the
 reason the plumbing matters: what turbodiff looks like when a project never
 touches GitHub, and how each spike primitive becomes a leg of that product.

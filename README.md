@@ -2,21 +2,18 @@
 
 <img src="public/logo-small.png" alt="Turbodiff logo" width="64" align="right" />
 
-The open-source software factory: agents that take a feature from free-form
-requirements to a merged, verified pull request. The goal is to automate ~90%
-of the software creation process — you decide what to build and approve the
-plan; agents do the rest. Turbodiff is a GitHub App hosted end-to-end on
-Cloudflare (Workers, Durable Objects, Hyperdrive, Queues, Containers, R2) and built
-with [Flue](https://flueframework.com).
+The open-source, composable software factory: agents that can help at any
+contiguous part of delivery, from a free-form idea to an open pull request,
+from an existing pull request to a review, or all the way to a merged and
+verified change. Turbodiff fits into a team's existing process instead of
+requiring the team to replace it. It is a GitHub App hosted end-to-end on
+Cloudflare (Workers, Durable Objects, Hyperdrive, Queues, Containers, R2) and
+built with [Flue](https://flueframework.com).
 
-Describe a feature and the pipeline takes over: an agent plans it against your
-actual code (asking clarifying questions where the requirements are
-ambiguous), you approve the plan, agents generate the code, review it, fix
-blocking findings automatically, and verify the result empirically — launching
-the app in a sandbox and posting screenshot evidence for every acceptance
-criterion to the PR. The review stage also works standalone: install the app
-and every new pull request gets an automatic review, a short summary plus
-inline comments on the exact lines each finding concerns.
+Choose where Turbodiff starts, where it stops, and which stages require a
+person. The target lifecycle covers planning, implementation, publication,
+review, repair, verification, and merge. Each stage produces durable artifacts
+that can be handed back to the team or used to continue an automated run.
 
 **Live at [turbodiff.dev](https://turbodiff.dev)** — or self-host on your own
 Cloudflare account ([One-time setup](#one-time-setup)).
@@ -31,8 +28,8 @@ Cloudflare account ([One-time setup](#one-time-setup)).
 
 ## What's inside
 
-**Factory** (in active development — see
-[docs/software-factory-design.md](docs/software-factory-design.md)):
+**Factory** (in active development — see the
+[composable lifecycle specification](docs/software-factory-lifecycle.md)):
 
 - **Plan** — an agent clones the repo read-only, analyzes your requirements
   against the real code, asks clarifying questions, and produces a file-level
@@ -47,7 +44,8 @@ Cloudflare account ([One-time setup](#one-time-setup)).
   gets a report comment with a verdict table and inline screenshots; unmet
   criteria feed the auto-fix loop.
 
-**Review** (where Turbodiff started — also works standalone):
+**Review** (where Turbodiff started; standalone intake is part of the target
+composable lifecycle):
 
 - One durable agent instance per PR (`owner--repo--number`), so re-reviews
   continue the same conversation and reconcile against earlier findings.
