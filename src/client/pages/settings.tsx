@@ -360,6 +360,36 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
             >
               Review + repair
             </Chip>
+            <Chip
+              on={repo.process_profile === 'idea_to_pr'}
+              title="Turn approved feature specifications into changes, then hand off at the pull request"
+              onClick={() => patchRepo.mutate({ process_profile: 'idea_to_pr' })}
+            >
+              Idea to PR
+            </Chip>
+            <Chip
+              on={repo.process_profile === 'assisted_delivery'}
+              title="Implement, publish, review, repair, and verify; leave merge to the team"
+              onClick={() => patchRepo.mutate({ process_profile: 'assisted_delivery' })}
+            >
+              Assisted delivery
+            </Chip>
+            <Chip
+              on={repo.process_profile === 'full_delivery'}
+              title="Run the full lifecycle through merge when every gate passes"
+              onClick={() => patchRepo.mutate({ process_profile: 'full_delivery' })}
+            >
+              Full delivery
+            </Chip>
+            {repo.provider === 'artifacts' ? (
+              <Chip
+                on={repo.process_profile === 'native_turnkey'}
+                title="Run full delivery using native Artifacts change requests"
+                onClick={() => patchRepo.mutate({ process_profile: 'native_turnkey' })}
+              >
+                Native turnkey
+              </Chip>
+            ) : null}
           </ConfigRow>
           <ConfigRow label="Check">
             <CheckCommandForm repo={repo} />

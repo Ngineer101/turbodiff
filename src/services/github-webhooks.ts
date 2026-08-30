@@ -20,6 +20,7 @@ import { ensureOrganizationForInstallation, ensureOwnerMember } from './access-c
 import type { JsonValue } from '../shared/json.ts';
 import type { ChangeCapability, ChangeOrigin } from '../domain/lifecycle-contract.ts';
 import { scheduleChangeReview } from './lifecycle.ts';
+import { isDeliveryProcessProfile } from '../domain/process-profiles.ts';
 
 // GitHub App webhook receiver. Two jobs:
 //   1. Mirror installation / repository-selection changes into PostgreSQL.
@@ -301,6 +302,9 @@ async function handlePullRequest(
   }
   if (p.action !== 'opened' && p.action !== 'ready_for_review' && p.action !== 'synchronize') {
     return { body: { ok: true, ignored: p.action } };
+  }
+  if (feature && isDeliveryProcessProfile(repo.process_profile)) {
+    return { body: { ok: true, change: change.id, skipped: 'factory lifecycle owns delivery' } };
   }
   if (p.action === 'synchronize' && !repo.review_on_push) {
     return { body: { ok: true, skipped: 'push reviews disabled for repo' } };

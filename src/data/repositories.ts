@@ -308,7 +308,7 @@ export async function setRepoProcessProfile(
   const intake: ReviewIntakeMode =
     profile === 'legacy_factory'
       ? 'factory_only'
-      : profile === 'review_on_demand'
+      : profile === 'review_on_demand' || profile === 'idea_to_pr'
         ? 'on_demand'
         : 'all_changes';
   await execute(sql`

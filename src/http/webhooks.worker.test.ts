@@ -9,22 +9,31 @@ import { Hono } from 'hono';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import {
   createFeature,
+  createFactoryRunWithStage,
   ensureBuiltinAgents,
   finishFixAttempt,
   getChangeByProviderKey,
   getFactoryRun,
   getFeature,
   getStageRun,
+  latestAcceptanceContractForChange,
+  listStageRuns,
   tryRecordFixAttempt,
   tryRecordReview,
   updateFeature,
+  upsertChange,
 } from '../data/db.ts';
 import { FIX_MAX_ATTEMPTS, type FactoryMessage } from '../shared/factory-messages.ts';
 import type { RunStageCommand } from '../domain/lifecycle-contract.ts';
 import type { JsonObject } from '../shared/json.ts';
 import { createWebhookRoutes, type WebhookRouteDependencies } from './webhooks.ts';
 import type { ReviewDispatcher } from '../services/change-review.ts';
-import { completeLifecycleReview, runLifecycleStage } from '../services/lifecycle.ts';
+import {
+  completeLifecycleReview,
+  completeLifecycleStage,
+  runLifecycleStage,
+  scheduleFeatureDelivery,
+} from '../services/lifecycle.ts';
 
 type TestEnv = Cloudflare.Env & { GITHUB_WEBHOOK_SECRET: string };
 interface ScheduledReviewBody {
@@ -99,6 +108,12 @@ async function seedRepo(
 beforeEach(async () => {
   const tables = [
     'agent_runs',
+    'lifecycle_events',
+    'stage_runs',
+    'factory_runs',
+    'acceptance_contracts',
+    'work_items',
+    'changes',
     'fix_attempts',
     'reviews',
     'repo_agents',
@@ -283,6 +298,172 @@ describe('GitHub webhook authentication and mirroring', () => {
       .prepare('SELECT installer_github_id FROM installations WHERE id = 1001')
       .first<{ installer_github_id: number | null }>();
     expect(installation?.installer_github_id).toBe(9999);
+  });
+});
+
+describe('composable feature delivery', () => {
+  it('coordinates an approved idea through implementation and publish, then hands off', async () => {
+    await seedRepo();
+    await testDatabase()
+      .prepare(
+        `UPDATE repositories
+         SET process_profile = 'idea_to_pr', review_intake = 'on_demand'
+         WHERE id = 101`,
+      )
+      .run();
+    const featureId = await createFeature(
+      101,
+      'Composable delivery',
+      'Implement the agreed behavior',
+      ['The behavior is covered by tests'],
+    );
+    const queued: FactoryMessage[] = [];
+    const enqueue = async (message: FactoryMessage) => void queued.push(message);
+
+    await expect(scheduleFeatureDelivery(featureId, enqueue)).resolves.toBe(true);
+    await expect(scheduleFeatureDelivery(featureId, enqueue)).resolves.toBe(true);
+    const implementCommands = stageCommands(queued);
+    expect(implementCommands).toHaveLength(2);
+    expect(implementCommands[1]).toEqual(implementCommands[0]);
+
+    const dispatch = vi.fn<ReviewDispatcher>(async () => true);
+    await runLifecycleStage(implementCommands[0], dispatch, { enqueue });
+    await runLifecycleStage(implementCommands[1], dispatch, { enqueue });
+    expect(queued.filter((message) => message.kind === 'generate')).toEqual([
+      {
+        kind: 'generate',
+        featureId,
+        factoryRunId: implementCommands[0].factoryRunId,
+        stageRunId: implementCommands[0].stageRunId,
+      },
+    ]);
+
+    const change = await upsertChange({
+      repositoryId: 101,
+      providerKey: 'github:91',
+      number: 91,
+      origin: 'factory',
+      title: 'Composable delivery',
+      externalUrl: 'https://github.com/acme/api/pull/91',
+      sourceBranch: 'turbodiff/feature-91',
+      targetBranch: 'main',
+      status: 'open',
+      sourceHead: 'a'.repeat(40),
+      targetHead: 'b'.repeat(40),
+      draft: false,
+      capabilities: ['read_change', 'publish_review', 'write_head', 'publish_check', 'merge'],
+    });
+    await updateFeature(featureId, {
+      status: 'pr_opened',
+      prNumber: 91,
+      changeId: change.id,
+    });
+    await completeLifecycleStage(
+      implementCommands[0].stageRunId,
+      'implement',
+      true,
+      { kind: 'change_published', featureId },
+      {},
+      enqueue,
+    );
+
+    const publishCommand = stageCommands(queued).find((command) => command.stage === 'publish');
+    expect(publishCommand).toBeDefined();
+    await runLifecycleStage(publishCommand!, dispatch, { enqueue });
+
+    await expect(getFactoryRun(implementCommands[0].factoryRunId)).resolves.toMatchObject({
+      change_id: change.id,
+      work_item_id: expect.any(Number),
+      status: 'handed_off',
+      handoff_reason: 'requested stop boundary reached',
+    });
+    await expect(listStageRuns(implementCommands[0].factoryRunId)).resolves.toMatchObject([
+      { stage: 'implement', status: 'completed', input: { featureId } },
+      { stage: 'publish', status: 'completed', change_id: change.id, input: { featureId } },
+    ]);
+    await expect(latestAcceptanceContractForChange(change.id)).resolves.toMatchObject({
+      version: 1,
+      criteria: ['The behavior is covered by tests'],
+      source: 'feature.acceptance',
+    });
+  });
+
+  it('hands verified delivery to the merge executor and completes the run', async () => {
+    await seedRepo();
+    const featureId = await createFeature(101, 'Verified delivery', 'Ship it', [
+      'The check passes',
+    ]);
+    const change = await upsertChange({
+      repositoryId: 101,
+      providerKey: 'github:92',
+      number: 92,
+      origin: 'factory',
+      title: 'Verified delivery',
+      externalUrl: 'https://github.com/acme/api/pull/92',
+      sourceBranch: 'turbodiff/feature-92',
+      targetBranch: 'main',
+      status: 'open',
+      sourceHead: 'c'.repeat(40),
+      targetHead: 'd'.repeat(40),
+      draft: false,
+      capabilities: ['read_change', 'publish_review', 'write_head', 'publish_check', 'merge'],
+    });
+    await updateFeature(featureId, {
+      status: 'pr_opened',
+      prNumber: 92,
+      changeId: change.id,
+    });
+    const created = await createFactoryRunWithStage({
+      repositoryId: 101,
+      changeId: change.id,
+      profileKey: 'full_delivery',
+      startStage: 'verify',
+      stopAfterStage: 'merge',
+      policySnapshot: { key: 'full_delivery' },
+      trigger: 'test',
+      eventKind: 'human.resume_requested',
+      decision: { kind: 'schedule', stage: 'verify' },
+      idempotencyKey: `verify-delivery:${featureId}`,
+      stageInput: { featureId },
+    });
+    expect(created.stageRun).not.toBeNull();
+    const queued: FactoryMessage[] = [];
+    const enqueue = async (message: FactoryMessage) => void queued.push(message);
+    const verifyCommand: RunStageCommand = {
+      kind: 'run_stage',
+      factoryRunId: created.run.id,
+      stageRunId: created.stageRun!.id,
+      stage: 'verify',
+      changeId: change.id,
+      idempotencyKey: created.stageRun!.idempotency_key,
+    };
+    const dispatch = vi.fn<ReviewDispatcher>(async () => true);
+
+    await runLifecycleStage(verifyCommand, dispatch, { enqueue });
+    expect(queued).toContainEqual({
+      kind: 'verify',
+      featureId,
+      factoryRunId: created.run.id,
+      stageRunId: created.stageRun!.id,
+    });
+    await completeLifecycleStage(
+      created.stageRun!.id,
+      'verify',
+      true,
+      { kind: 'verification_completed', status: 'passed' },
+      { verificationPassed: true },
+      enqueue,
+    );
+    const mergeCommand = stageCommands(queued).find((command) => command.stage === 'merge');
+    expect(mergeCommand).toBeDefined();
+    const mergeGithub = vi.fn(async () => {});
+    await runLifecycleStage(mergeCommand!, dispatch, { enqueue, mergeGithub });
+
+    expect(mergeGithub).toHaveBeenCalledExactlyOnceWith(101, 92);
+    await expect(getFactoryRun(created.run.id)).resolves.toMatchObject({ status: 'completed' });
+    await expect(getStageRun(mergeCommand!.stageRunId)).resolves.toMatchObject({
+      status: 'completed',
+    });
   });
 });
 

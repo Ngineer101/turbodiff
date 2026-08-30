@@ -47,6 +47,8 @@ import { mintUserToken } from '../../services/user-tokens.ts';
 import { openNativeChangeRequest } from '../../services/change-requests.ts';
 import { notifyFeatureLive } from '../../services/live-updates.ts';
 import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
+import { completeLifecycleStage } from '../../services/lifecycle.ts';
+import type { GenerateQueueMessage } from '../../shared/factory-messages.ts';
 
 // Phase 2 of the software factory, re-architected as a Cloudflare Workflow.
 // The old design ran the whole pipeline inside one queue-consumer invocation,
@@ -92,6 +94,8 @@ const REPAIR_TIMEOUT_MS = 15 * 60_000;
 
 export type GenerationParams = {
   featureId: number;
+  factoryRunId?: number;
+  stageRunId?: number;
 };
 
 interface CreatedGithubPullRequest {
@@ -216,7 +220,28 @@ const QUICK = {
 
 export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationParams> {
   async run(event: WorkflowEvent<GenerationParams>, step: WorkflowStep): Promise<string> {
-    const { featureId } = event.payload;
+    const { featureId, stageRunId } = event.payload;
+    const settleLifecycle = async (
+      success: boolean,
+      outcome: string,
+      detail?: string,
+    ): Promise<void> => {
+      if (!stageRunId) return;
+      await step.do('settle lifecycle implement', QUICK, async () => {
+        if (detail) {
+          await completeLifecycleStage(stageRunId, 'implement', success, {
+            kind: outcome,
+            featureId,
+            detail,
+          });
+          return;
+        }
+        await completeLifecycleStage(stageRunId, 'implement', success, {
+          kind: outcome,
+          featureId,
+        });
+      });
+    };
 
     try {
       // Load, guard, and flip to 'generating'. NonRetryableError for
@@ -278,7 +303,14 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
           };
         },
       );
-      if (!ctx) return 'skipped';
+      if (!ctx) {
+        const current = await step.do('load skipped feature outcome', QUICK, () =>
+          getFeature(featureId),
+        );
+        const published = current?.status === 'pr_opened' && current.change_id !== null;
+        await settleLifecycle(published, published ? 'pr_already_opened' : 'generation_skipped');
+        return 'skipped';
+      }
       const full = `${ctx.owner}/${ctx.name}`;
       const label = `${full} feature #${featureId}`;
 
@@ -380,6 +412,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
           });
           await notifyFeatureLive(featureId);
         });
+        await settleLifecycle(false, 'no_changes', 'agent produced no file changes');
         return 'no_changes';
       }
 
@@ -528,6 +561,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
             });
             await notifyFeatureLive(featureId);
           });
+          await settleLifecycle(false, 'checks_failed', checks.output.slice(-500));
           return 'checks_failed';
         }
       }
@@ -589,7 +623,9 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
             usage: totalUsage ?? undefined,
           });
           await notifyFeatureLive(featureId);
-          if (ctx.acceptance) await enqueueFactoryMessage({ kind: 'verify', featureId });
+          if (ctx.acceptance && !stageRunId) {
+            await enqueueFactoryMessage({ kind: 'verify', featureId });
+          }
           return cr.number;
         }
         const createPr = async (authToken: string) =>
@@ -656,7 +692,9 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
         });
         await notifyFeatureLive(featureId);
         // Phase 4: acceptance criteria get an empirical verification run.
-        if (ctx.acceptance) await enqueueFactoryMessage({ kind: 'verify', featureId });
+        if (ctx.acceptance && !stageRunId) {
+          await enqueueFactoryMessage({ kind: 'verify', featureId });
+        }
         return pr.number;
       });
 
@@ -676,6 +714,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
       );
 
       console.log(`turbodiff: generation pr_opened for ${label} (PR #${prNumber})`);
+      await settleLifecycle(true, 'change_published');
       return 'pr_opened';
     } catch (err) {
       // Terminal failure (a step exhausted its retries, or a
@@ -694,6 +733,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
         },
       );
       console.error(`turbodiff: generation workflow failed for feature ${featureId}:`, err);
+      await settleLifecycle(false, 'generation_failed', message);
       return 'failed';
     }
   }
@@ -702,7 +742,8 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
 // Entry point used by the queue consumer (and, transitively, every retry
 // path). Cheap guards against duplicate instances; the workflow re-checks in
 // its first step.
-export async function startGeneration(featureId: number): Promise<void> {
+export async function startGeneration(message: GenerateQueueMessage): Promise<void> {
+  const { featureId, factoryRunId, stageRunId } = message;
   const feature = await getFeature(featureId);
   if (!feature) {
     console.warn(`turbodiff: generation skipped, feature ${featureId} not found`);
@@ -710,6 +751,12 @@ export async function startGeneration(featureId: number): Promise<void> {
   }
   if (feature.status === 'pr_opened') {
     console.log(`turbodiff: generation skipped for feature ${featureId} — PR already opened`);
+    if (stageRunId) {
+      await completeLifecycleStage(stageRunId, 'implement', feature.change_id !== null, {
+        kind: 'pr_already_opened',
+        featureId,
+      });
+    }
     return;
   }
   const startedMs = feature.run_started_at ? parseUtc(feature.run_started_at) : 0;
@@ -718,7 +765,16 @@ export async function startGeneration(featureId: number): Promise<void> {
     console.log(
       `turbodiff: generation skipped for feature ${featureId} — an instance is in flight`,
     );
+    if (stageRunId) {
+      await completeLifecycleStage(stageRunId, 'implement', false, {
+        kind: 'generation_already_in_flight',
+        featureId,
+      });
+    }
     return;
   }
-  await env.GEN_WORKFLOW.create({ id: `gen-${featureId}-${Date.now()}`, params: { featureId } });
+  await env.GEN_WORKFLOW.create({
+    id: `gen-${featureId}-${Date.now()}`,
+    params: { featureId, factoryRunId, stageRunId },
+  });
 }

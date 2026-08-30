@@ -109,9 +109,31 @@ export const ADOPTABLE_PROCESS_PROFILE_KEYS = [
   'review_on_demand',
   'automatic_review',
   'review_and_repair',
+  'idea_to_pr',
+  'assisted_delivery',
+  'full_delivery',
+  'native_turnkey',
 ] as const satisfies readonly ProcessProfileKey[];
 
 export type AdoptableProcessProfileKey = (typeof ADOPTABLE_PROCESS_PROFILE_KEYS)[number];
+
+export const DELIVERY_PROCESS_PROFILE_KEYS = [
+  'idea_to_pr',
+  'assisted_delivery',
+  'full_delivery',
+  'native_turnkey',
+] as const satisfies readonly ProcessProfileKey[];
+
+export type DeliveryProcessProfileKey = (typeof DELIVERY_PROCESS_PROFILE_KEYS)[number];
+
+export function isDeliveryProcessProfile(key: ProcessProfileKey): key is DeliveryProcessProfileKey {
+  return (
+    key === 'idea_to_pr' ||
+    key === 'assisted_delivery' ||
+    key === 'full_delivery' ||
+    key === 'native_turnkey'
+  );
+}
 
 export function processProfile(key: ProcessProfileKey): ProcessProfileContract {
   return PROCESS_PROFILES[key];

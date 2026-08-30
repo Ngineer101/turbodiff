@@ -21,11 +21,11 @@ import { failStrandedGeneration, failStrandedVerifications } from './data/factor
 import { sweepFactoryPrConflicts } from './services/merge-conflicts.ts';
 import { runPlanAnalyze, runPlanRefine } from './ai/runners/planner.ts';
 import { dispatchNativeCrReviews } from './ai/review/native-dispatch.ts';
-import { runQueuedCrMerge } from './services/change-requests.ts';
+import { mergeNativeChangeRequest, runQueuedCrMerge } from './services/change-requests.ts';
 import { startVerification, VerificationWorkflow } from './ai/workflows/verification.ts';
 import { notifyPlanLive } from './services/live-updates.ts';
 import { withDatabaseScope } from './data/database.ts';
-import { runLifecycleStage } from './services/lifecycle.ts';
+import { runLifecycleStage, scheduleFeatureDelivery } from './services/lifecycle.ts';
 import { dispatchReviewAgent } from './ai/review/dispatch.ts';
 
 // The fixer sandbox container (docs/software-factory-design.md). Declared in
@@ -59,12 +59,17 @@ export default {
           case 'run_stage':
             await runLifecycleStage(body, dispatchReviewAgent, {
               dispatchNativeReview: dispatchNativeCrReviews,
+              mergeNative: async (changeRequestId, actor) => {
+                await mergeNativeChangeRequest(changeRequestId, actor);
+              },
             });
             break;
           case 'generate':
             // Just creates a durable workflow instance (sub-second) — the
             // run itself lives outside any consumer wall clock.
-            await startGeneration(body.featureId);
+            if (body.stageRunId || !(await scheduleFeatureDelivery(body.featureId))) {
+              await startGeneration(body);
+            }
             break;
           case 'plan_analyze':
             await runPlanAnalyze(body.planId);
@@ -77,7 +82,7 @@ export default {
           case 'verify':
             // Just creates a durable workflow instance — verify runs exceed
             // the consumer wall clock routinely (launch discovery + demos).
-            await startVerification(body.featureId);
+            await startVerification(body);
             break;
           case 'automation':
             await startAutomationRun(body.automationId);
