@@ -1,5 +1,6 @@
 import { observe } from '@flue/runtime';
-import { addReviewUsage, markReviewFailed } from '../../data/db.ts';
+import { addReviewUsage } from '../../data/db.ts';
+import { failLifecycleReview } from '../../services/lifecycle.ts';
 
 // Meters model usage per review. Every completed model call emits a `turn`
 // event carrying provider-reported tokens and catalog-priced cost; review
@@ -17,7 +18,7 @@ export function registerReviewMetering(): void {
     // (agent error, abort, or a run that ended without posting), flip it to
     // failed so it doesn't sit "running" until the stall cutoff.
     if (event.type === 'submission_settled') {
-      void markReviewFailed(event.instanceId).catch((err) =>
+      void failLifecycleReview(event.instanceId).catch((err) =>
         console.error('turbodiff: marking review failed errored', err),
       );
       return;

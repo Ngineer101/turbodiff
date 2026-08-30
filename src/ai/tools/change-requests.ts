@@ -2,7 +2,6 @@ import { defineTool } from '@flue/runtime';
 import * as v from 'valibot';
 import {
   addCrComment,
-  completeReview,
   getChangeRequest,
   getRepoByFullName,
   listCrComments,
@@ -11,6 +10,7 @@ import {
   type ChangeRequestRow,
   type RepositoryRow,
 } from '../../data/db.ts';
+import { completeLifecycleReview } from '../../services/lifecycle.ts';
 import {
   CR_BOT_AUTHOR,
   getCrDiffPatch,
@@ -234,8 +234,13 @@ export const makePostCrReview = (agentInstanceId: string, pin: CrPin) =>
         `${data.findings.length} finding(s)` + (blocking ? ' — P1 blocks merge' : ''),
       );
       const url = cr.feature_id ? cockpitFeatureUrl(cr.feature_id) : null;
-      await completeReview(agentInstanceId, url, data.findings.length);
-      if (blocking && repo.auto_fix) {
+      await completeLifecycleReview(
+        agentInstanceId,
+        url,
+        data.findings.length,
+        blocking ? 'request_changes' : 'approve',
+      );
+      if (blocking && repo.auto_fix && repo.process_profile === 'legacy_factory') {
         // Native verdicts fire no webhook, so the blocking-review fix
         // dispatch happens here (the consumer re-validates toggle and cap).
         await enqueueFactoryMessage({

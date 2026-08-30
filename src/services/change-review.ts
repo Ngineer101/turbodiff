@@ -15,7 +15,11 @@ import {
   type RiskTier,
 } from './review-policy.ts';
 
-export type DispatchOptions = { riskTier?: string; modelOverride?: string };
+export type DispatchOptions = {
+  riskTier?: string;
+  modelOverride?: string;
+  stageRunId?: number;
+};
 
 export type ReviewDispatcher = (
   agent: AgentRow,
@@ -40,6 +44,7 @@ export async function dispatchChangeReviews(
   dispatch: ReviewDispatcher,
   computeRisk: typeof computeRiskTier = computeRiskTier,
   debounce = false,
+  stageRunId?: number,
 ): Promise<ChangeReviewDispatchResult> {
   if (change.status !== 'open') return { kind: 'skipped', reason: 'change is not open' };
   if (change.draft) return { kind: 'skipped', reason: 'change is draft' };
@@ -109,6 +114,7 @@ export async function dispatchChangeReviews(
   for (const agent of agents.slice(0, budget)) {
     const options: DispatchOptions = { riskTier: tier };
     if (modelOverride) options.modelOverride = modelOverride;
+    if (stageRunId !== undefined) options.stageRunId = stageRunId;
     if (await dispatch(agent, repo, change.number, url, trigger, options)) {
       dispatched.push(agent.slug);
     }

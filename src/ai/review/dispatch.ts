@@ -21,6 +21,7 @@ export async function dispatchReviewAgent(
   opts: {
     riskTier?: string;
     modelOverride?: string;
+    stageRunId?: number;
     // Present for native change requests (docs/artifacts-provider.md): the
     // same agent runs, with CR-backed tools swapped in by the pin.
     changeRequest?: { id: number; number: number };
@@ -39,6 +40,7 @@ export async function dispatchReviewAgent(
     agent.slug,
     instanceId,
     opts.riskTier ?? null,
+    opts.stageRunId ?? null,
   );
   if (reviewId === null) return false;
 

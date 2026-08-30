@@ -1,13 +1,18 @@
 import {
   claimStageRun,
+  completeReview,
   createFactoryRunWithStage,
   finishStageRun,
   getChange,
   getChangeRequestByChangeId,
   getFactoryRun,
   getRepoById,
+  getStageRun,
   listStageRuns,
+  markReviewFailed,
   recordLifecycleDecision,
+  recordStageRunOutput,
+  reviewStageProgress,
 } from '../data/db.ts';
 import { decideLifecycle, type LifecycleContext } from '../domain/lifecycle-coordinator.ts';
 import { processProfile } from '../domain/process-profiles.ts';
@@ -21,7 +26,10 @@ import { dispatchChangeReviews, type ReviewDispatcher } from './change-review.ts
 import { enqueueFactoryMessage } from './factory-queue.ts';
 import { computeRiskTier } from './review-policy.ts';
 
-export type NativeReviewDispatcher = (changeRequestId: number) => Promise<boolean>;
+export type NativeReviewDispatcher = (
+  changeRequestId: number,
+  stageRunId?: number,
+) => Promise<boolean>;
 
 function reviewContext(
   event: LifecycleEventKind,
@@ -114,6 +122,7 @@ async function coordinateStageOutcome(
   command: RunStageCommand,
   success: boolean,
   enqueue: typeof enqueueFactoryMessage,
+  outcomeFacts: LifecycleContext['facts'] = {},
 ): Promise<void> {
   const run = await getFactoryRun(command.factoryRunId);
   const change = command.changeId ? await getChange(command.changeId) : null;
@@ -131,7 +140,7 @@ async function coordinateStageOutcome(
     stopAfterStage: run.stop_after_stage,
     completedStages: completed,
     capabilities: change?.capabilities,
-    facts: { repositoryEnabled: repo.enabled },
+    facts: { repositoryEnabled: repo.enabled, ...outcomeFacts },
   };
   const decision = decideLifecycle(run.profile_key, context);
   const next = await recordLifecycleDecision(
@@ -152,6 +161,58 @@ async function coordinateStageOutcome(
       idempotencyKey: next.idempotency_key,
     });
   }
+}
+
+async function settleReviewStage(
+  stageRunId: number,
+  enqueue: typeof enqueueFactoryMessage,
+): Promise<void> {
+  const stageRun = await getStageRun(stageRunId);
+  if (!stageRun || stageRun.stage !== 'review' || stageRun.status !== 'running') return;
+  const progress = await reviewStageProgress(stageRunId);
+  if (progress.running > 0) return;
+  const output: JsonValue = {
+    running: progress.running,
+    completed: progress.completed,
+    failed: progress.failed,
+    blocking: progress.blocking,
+  };
+  const command: RunStageCommand = {
+    kind: 'run_stage',
+    factoryRunId: stageRun.factory_run_id,
+    stageRunId: stageRun.id,
+    stage: 'review',
+    idempotencyKey: stageRun.idempotency_key,
+  };
+  if (stageRun.change_id !== null) command.changeId = stageRun.change_id;
+  if (progress.completed === 0) {
+    await finishStageRun(stageRun.id, 'failed', output, 'all review dispatches failed');
+    await coordinateStageOutcome(command, false, enqueue);
+    return;
+  }
+  await finishStageRun(stageRun.id, 'completed', output);
+  await coordinateStageOutcome(command, true, enqueue, {
+    blockingFindings: progress.blocking,
+  });
+}
+
+export async function completeLifecycleReview(
+  agentInstanceId: string,
+  reviewUrl: string | null,
+  findingsCount: number,
+  verdict: 'approve' | 'comment' | 'request_changes',
+  enqueue: typeof enqueueFactoryMessage = enqueueFactoryMessage,
+): Promise<void> {
+  const completed = await completeReview(agentInstanceId, reviewUrl, findingsCount, verdict);
+  if (completed?.stage_run_id) await settleReviewStage(completed.stage_run_id, enqueue);
+}
+
+export async function failLifecycleReview(
+  agentInstanceId: string,
+  enqueue: typeof enqueueFactoryMessage = enqueueFactoryMessage,
+): Promise<void> {
+  const failed = await markReviewFailed(agentInstanceId);
+  if (failed?.stage_run_id) await settleReviewStage(failed.stage_run_id, enqueue);
 }
 
 export async function runLifecycleStage(
@@ -199,17 +260,16 @@ export async function runLifecycleStage(
         await coordinateStageOutcome(command, false, enqueue);
         return;
       }
-      const dispatched = await dependencies.dispatchNativeReview(cr.id);
+      const dispatched = await dependencies.dispatchNativeReview(cr.id, stageRun.id);
       if (!dispatched) {
         await finishStageRun(stageRun.id, 'failed', undefined, 'native review dispatch failed');
         await coordinateStageOutcome(command, false, enqueue);
         return;
       }
-      await finishStageRun(stageRun.id, 'completed', {
+      await recordStageRunOutput(stageRun.id, {
         kind: 'dispatched',
         provider: 'artifacts',
       });
-      await coordinateStageOutcome(command, true, enqueue);
       return;
     }
 
@@ -220,15 +280,15 @@ export async function runLifecycleStage(
       dispatchReview,
       dependencies.computeRisk ?? computeRiskTier,
       run.trigger === 'synchronize',
+      stageRun.id,
     );
     const success = result.kind === 'dispatched';
-    await finishStageRun(
-      stageRun.id,
-      success ? 'completed' : 'failed',
-      stageResultOutput(result),
-      success ? undefined : result.reason,
-    );
-    await coordinateStageOutcome(command, success, enqueue);
+    if (success) {
+      await recordStageRunOutput(stageRun.id, stageResultOutput(result));
+    } else {
+      await finishStageRun(stageRun.id, 'failed', stageResultOutput(result), result.reason);
+      await coordinateStageOutcome(command, false, enqueue);
+    }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     console.error(

@@ -646,6 +646,11 @@ export const reviews = appSchema.table(
     agentInstanceId: text('agent_instance_id'),
     riskTier: text('risk_tier'),
     findingsCount: integer('findings_count'),
+    stageRunId: bigint('stage_run_id', { mode: 'number' }).references(
+      (): AnyPgColumn => stageRuns.id,
+      { onDelete: 'set null' },
+    ),
+    verdict: text(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .default(sql`CURRENT_TIMESTAMP`)
       .notNull(),
@@ -674,6 +679,9 @@ export const reviews = appSchema.table(
     index('reviews_running_installation_idx')
       .using('btree', table.installationId, table.createdAt)
       .where(sql`(status = 'running'::text)`),
+    index('reviews_stage_run_idx')
+      .using('btree', table.stageRunId, table.id)
+      .where(sql`(stage_run_id IS NOT NULL)`),
     foreignKey({
       columns: [table.repositoryId, table.installationId],
       foreignColumns: [repositories.id, repositories.installationId],
@@ -694,6 +702,10 @@ export const reviews = appSchema.table(
       sql`(risk_tier IS NULL) OR (risk_tier = ANY (ARRAY['trivial'::text, 'lite'::text, 'full'::text]))`,
     ),
     check('reviews_findings_count_check', sql`(findings_count IS NULL) OR (findings_count >= 0)`),
+    check(
+      'reviews_verdict_check',
+      sql`(verdict IS NULL) OR (verdict = ANY (ARRAY['approve'::text, 'comment'::text, 'request_changes'::text]))`,
+    ),
     check(
       'reviews_completion_shape',
       sql`((status = 'running'::text) AND (completed_at IS NULL)) OR (status <> 'running'::text)`,

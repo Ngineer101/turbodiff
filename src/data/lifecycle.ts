@@ -149,6 +149,13 @@ export async function finishStageRun(
   `);
 }
 
+export async function recordStageRunOutput(id: number, output: JsonValue): Promise<void> {
+  await execute(sql`
+    UPDATE app.stage_runs SET output = ${JSON.stringify(output)}::jsonb
+    WHERE id = ${id} AND status = 'running'
+  `);
+}
+
 export async function recordLifecycleDecision(
   runId: number,
   changeId: number | null,

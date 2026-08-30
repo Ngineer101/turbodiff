@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { STALL_AFTER_MINUTES } from '../shared/time.ts';
-import { execute, queryOne, queryRows } from './database.ts';
+import { queryOne, queryRows } from './database.ts';
 import { bigintArray, minutesAgo } from './sql.ts';
 
 export interface AgentUsageRow {
@@ -46,6 +46,8 @@ export interface ReviewActivityRow {
   agent_instance_id: string | null;
   risk_tier: string | null; // null before tiering, and on mention/manual dispatch
   findings_count: number | null; // null until post_review completes the row
+  stage_run_id: number | null;
+  verdict: string | null;
   repo_owner: string | null; // null if the repo was since removed
   repo_name: string | null;
 }
@@ -189,15 +191,37 @@ export async function dashboardStats(installationIds: number[]): Promise<Dashboa
 // Fired from the metering subscriber when the agent's submission settles
 // without post_review having completed the row (agent error, abort, or a run
 // that never posted). No-op when the row is already completed.
-export async function markReviewFailed(agentInstanceId: string): Promise<void> {
-  await execute(sql`
+export async function markReviewFailed(
+  agentInstanceId: string,
+): Promise<{ stage_run_id: number | null } | null> {
+  return queryOne<{ stage_run_id: number | null }>(sql`
     UPDATE app.reviews SET status = 'failed', completed_at = CURRENT_TIMESTAMP
     WHERE id = (
       SELECT id FROM app.reviews
       WHERE agent_instance_id = ${agentInstanceId} AND status = 'running'
       ORDER BY id DESC LIMIT 1
     )
+    RETURNING stage_run_id
   `);
+}
+
+export interface ReviewStageProgress {
+  running: number;
+  completed: number;
+  failed: number;
+  blocking: boolean;
+}
+
+export async function reviewStageProgress(stageRunId: number): Promise<ReviewStageProgress> {
+  const row = await queryOne<ReviewStageProgress>(sql`
+    SELECT
+      COUNT(*) FILTER (WHERE status = 'running') AS running,
+      COUNT(*) FILTER (WHERE status = 'completed') AS completed,
+      COUNT(*) FILTER (WHERE status = 'failed') AS failed,
+      COALESCE(BOOL_OR(verdict = 'request_changes'), FALSE) AS blocking
+    FROM app.reviews WHERE stage_run_id = ${stageRunId}
+  `);
+  return row ?? { running: 0, completed: 0, failed: 0, blocking: false };
 }
 
 // True when this agent's review of this PR is running and young enough to

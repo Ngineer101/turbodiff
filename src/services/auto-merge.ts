@@ -41,7 +41,10 @@ export async function mergePullRequest(
 // leaves the merge to a human. Never applies to human-authored PRs (those have
 // no feature row).
 export async function maybeAutoMerge(repo: RepositoryRow, prNumber: number): Promise<void> {
-  if (!repo.auto_merge) return; // cheap pre-check before any I/O
+  // Composable profiles leave merge scheduling to the lifecycle coordinator.
+  // The direct gate remains solely as the compatibility executor while the
+  // merge stage is migrated.
+  if (!repo.auto_merge || repo.process_profile !== 'legacy_factory') return;
   const label = `${repo.owner}/${repo.name}#${prNumber}`;
   try {
     const feature = await getFeatureByRepoPr(repo.id, prNumber);
