@@ -391,6 +391,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (!user) return c.json({ error: 'unauthorized' }, 401);
     c.set('user', user);
     if (user.membershipRefresh) deferredExecution(c).waitUntil(user.membershipRefresh());
+    if (user.repositoryRepair) deferredExecution(c).waitUntil(user.repositoryRepair());
     await next();
   });
 
@@ -421,6 +422,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       login: user.githubConnected ? user.session.login : null,
       name: user.name,
       github_connected: user.githubConnected,
+      github_status: user.githubStatus,
       github_app_slug: env.GITHUB_APP_SLUG,
       vapid_public_key: env.VAPID_PUBLIC_KEY,
       installation_ids: user.installationIds,

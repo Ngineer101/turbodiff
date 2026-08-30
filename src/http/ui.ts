@@ -208,9 +208,19 @@ export function createUiRoutes() {
     // landing on / would strand the client's OAuth flow.
     const query = new URL(c.req.url).searchParams;
     const oauthAuthorize = query.has('client_id') && query.has('redirect_uri');
+    const renewSession = query.get('expired') === '1';
     const next = oauthAuthorize ? `/api/auth/mcp/authorize?${query.toString()}` : '/';
-    if (await hasSession(c)) return c.redirect(next);
-    return c.html(renderAuthPage(oauthAuthorize ? next : undefined));
+    // An API 401 can arrive while a cookie-cached shell session still exists.
+    // Do not redirect that recovery request back to the dashboard.
+    if (!renewSession && (await hasSession(c))) return c.redirect(next);
+    return c.html(
+      renderAuthPage(
+        oauthAuthorize ? next : undefined,
+        renewSession
+          ? 'Your Turbodiff session needs to be renewed. Sign in to continue.'
+          : undefined,
+      ),
+    );
   });
 
   app.get('/auth/login/github', async (c) => {

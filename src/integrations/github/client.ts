@@ -2,6 +2,16 @@ import type { JsonValue } from '../../shared/json.ts';
 
 const API = 'https://api.github.com';
 
+export class GitHubApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'GitHubApiError';
+  }
+}
+
 function apiUrl(pathOrUrl: string): string {
   if (pathOrUrl.startsWith('/')) return `${API}${pathOrUrl}`;
   const url = new URL(pathOrUrl);
@@ -33,7 +43,8 @@ export async function githubRequest(
   const response = await fetch(apiUrl(pathOrUrl), { ...requestInit, headers });
   // 304 is a success for conditional requests, not an error.
   if (!response.ok && !(allow304 && response.status === 304)) {
-    throw new Error(
+    throw new GitHubApiError(
+      response.status,
       `GitHub API ${response.status} on ${pathOrUrl}: ${(await response.text()).slice(0, 500)}`,
     );
   }

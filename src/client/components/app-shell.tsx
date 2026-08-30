@@ -59,6 +59,71 @@ const BOTTOM_NAV = [
   { to: '/settings', label: 'Settings', short: 'Settings', icon: Settings },
 ] as const;
 
+function GithubRecoveryBanner({ me }: { me: ApiMe }) {
+  if (me.github_status === 'ready') return null;
+
+  let message: ReactNode;
+  let action: ReactNode;
+  switch (me.github_status) {
+    case 'not_connected':
+      message = <>GitHub isn&rsquo;t connected — the factory can&rsquo;t reach repositories yet.</>;
+      action = (
+        <a href="/onboarding" className="font-medium text-accent-bright hover:underline">
+          Connect GitHub &rarr;
+        </a>
+      );
+      break;
+    case 'reauthorization_required':
+      message = (
+        <>Your GitHub authorization is missing or expired. Your Turbodiff account is safe.</>
+      );
+      action = (
+        <a
+          href="/auth/connect/github?next=/onboarding"
+          className="font-medium text-accent-bright hover:underline"
+        >
+          Re-authorize GitHub &rarr;
+        </a>
+      );
+      break;
+    case 'temporarily_unavailable':
+      message = <>GitHub access couldn&rsquo;t be verified. Native projects remain available.</>;
+      action = (
+        <a href="/onboarding" className="font-medium text-accent-bright hover:underline">
+          Retry or re-authorize &rarr;
+        </a>
+      );
+      break;
+    case 'app_not_installed':
+      message = <>GitHub is connected, but no GitHub App installation is available to you.</>;
+      action = (
+        <a
+          href={`https://github.com/apps/${me.github_app_slug}/installations/new`}
+          className="font-medium text-accent-bright hover:underline"
+        >
+          Install or configure the GitHub App &rarr;
+        </a>
+      );
+      break;
+    case 'syncing':
+      message = <>Restoring your GitHub installations and repositories after sign-in.</>;
+      action = (
+        <a href="/onboarding" className="font-medium text-accent-bright hover:underline">
+          View recovery status &rarr;
+        </a>
+      );
+      break;
+  }
+
+  return (
+    <div className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-line-2/70 bg-surface/60 px-4 py-3 text-[0.85rem] text-ink-dim">
+      <Lamp tone={me.github_status === 'syncing' ? 'go' : 'hold'} />
+      {message}
+      {action}
+    </div>
+  );
+}
+
 function Logo() {
   return (
     <Link
@@ -346,17 +411,7 @@ export function AppShell({ me, children }: { me: ApiMe; children: ReactNode }) {
                   : 'max-w-4xl',
           )}
         >
-          {/* Password account without GitHub: every station reads empty until
-              a GitHub account is connected, so say why once, up top. */}
-          {!me.github_connected && (
-            <div className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-line-2/70 bg-surface/60 px-4 py-3 text-[0.85rem] text-ink-dim">
-              <Lamp tone="hold" />
-              GitHub isn&rsquo;t connected — the factory can&rsquo;t reach any repositories yet.
-              <a href="/onboarding" className="font-medium text-accent-bright hover:underline">
-                Connect GitHub &rarr;
-              </a>
-            </div>
-          )}
+          <GithubRecoveryBanner me={me} />
           {children}
         </div>
       </main>

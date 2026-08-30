@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { sql } from 'drizzle-orm';
 import { queryOne } from '../data/database.ts';
+import { ensureBuiltinAgents } from '../data/db.ts';
 import { withAuth, type AuthUser } from '../integrations/auth/better-auth.ts';
 import {
   installationAccessSnapshot,
@@ -12,7 +13,9 @@ import {
   fetchUserInstallationIds,
   fetchUserOrgRole,
 } from '../integrations/github/app.ts';
+import { GitHubApiError } from '../integrations/github/client.ts';
 import { isNumber, isString } from '../shared/json.ts';
+import { syncInstallationRepos } from './repository-sync.ts';
 
 // Application authorization on top of better-auth sessions. The session
 // (who you are) is durable and only ends by explicit sign-out or 30-day
@@ -31,6 +34,7 @@ export type AuthedUser = {
   session: { authUserId: string; userId: number; login: string };
   installationIds: number[];
   githubConnected: boolean;
+  githubStatus: GitHubStatus;
   // Display identity for the shell — the GitHub login when connected, the
   // sign-up name otherwise.
   name: string;
@@ -38,10 +42,22 @@ export type AuthedUser = {
   // snapshot after responding. HTTP middleware attaches this to waitUntil;
   // non-HTTP callers simply use the bounded stale snapshot.
   membershipRefresh?: () => Promise<void>;
+  // A fresh GitHub membership answer may be the first one since a database
+  // migration. Rebuild the recoverable installation/repository mirror after
+  // the response; historical factory records remain a separate migration.
+  repositoryRepair?: () => Promise<void>;
   // Local DEV_FAKE_INSTALLATIONS session — no GitHub token to verify repo
   // permissions with, so permission checks pass by construction.
   devFake?: boolean;
 };
+
+export type GitHubStatus =
+  | 'not_connected'
+  | 'reauthorization_required'
+  | 'temporarily_unavailable'
+  | 'app_not_installed'
+  | 'syncing'
+  | 'ready';
 
 // Per-isolate caches. Entries are tiny (a token string / a handful of ids);
 // isolate recycling is the eviction policy.
@@ -52,7 +68,17 @@ const INSTALLATIONS_TTL_MS = 5 * 60_000;
 const INSTALLATIONS_STALE_MAX_MS = 60 * 60_000;
 const tokenCache = new Map<string, { token: string; exp: number }>();
 const installationsCache = new Map<string, { ids: number[]; fetchedAt: number }>();
-const installationRefreshes = new Map<string, Promise<number[] | null>>();
+const repositoryRepairs = new Map<string, Promise<void>>();
+type InstallationRefresh =
+  | { kind: 'success'; ids: number[] }
+  | { kind: 'reauthorization_required' }
+  | { kind: 'temporarily_unavailable' };
+
+const installationRefreshes = new Map<string, Promise<InstallationRefresh>>();
+const githubAccessIssues = new Map<
+  string,
+  'reauthorization_required' | 'temporarily_unavailable'
+>();
 // Synthetic (Artifacts) installation ids were the one uncached PostgreSQL read on
 // every API request — same TTL discipline as the GitHub installation list,
 // with the same bounded staleness on membership revocation.
@@ -89,21 +115,34 @@ async function githubToken(userId: string): Promise<string> {
 }
 
 // GitHub-verified installation ids, cached for 5 minutes and served stale
-// (up to an hour) when GitHub is unreachable. Null only when there is no
-// answer at all — fresh fetch failed and nothing usable is cached.
-async function refreshInstallationIds(userId: string): Promise<number[] | null> {
+// (up to an hour) when GitHub is unreachable. Without a usable snapshot, the
+// result preserves whether the user should retry or re-authorize.
+async function refreshInstallationIds(userId: string): Promise<InstallationRefresh> {
   const running = installationRefreshes.get(userId);
   if (running) return running;
   const refresh = (async () => {
     const ghToken = await githubToken(userId);
-    if (!ghToken) return null;
+    if (!ghToken) {
+      githubAccessIssues.set(userId, 'reauthorization_required');
+      return { kind: 'reauthorization_required' } as const;
+    }
     try {
       const ids = await fetchUserInstallationIds(ghToken);
       await storeInstallationAccessSnapshot(userId, ids);
       installationsCache.set(userId, { ids, fetchedAt: Date.now() });
-      return ids;
-    } catch {
-      return null;
+      githubAccessIssues.delete(userId);
+      return { kind: 'success', ids } as const;
+    } catch (err) {
+      // Never keep retrying a rejected credential from isolate memory. A
+      // successful relink updates PostgreSQL; the next request must read it.
+      tokenCache.delete(userId);
+      if (err instanceof GitHubApiError && err.status === 401) {
+        githubAccessIssues.set(userId, 'reauthorization_required');
+        return { kind: 'reauthorization_required' } as const;
+      }
+      githubAccessIssues.set(userId, 'temporarily_unavailable');
+      console.warn('turbodiff: GitHub installation membership is temporarily unavailable', err);
+      return { kind: 'temporarily_unavailable' } as const;
     }
   })();
   installationRefreshes.set(userId, refresh);
@@ -115,14 +154,51 @@ async function refreshInstallationIds(userId: string): Promise<number[] | null> 
 }
 
 interface InstallationResolution {
+  kind: 'success';
   ids: number[];
   refresh?: () => Promise<void>;
+  repair?: () => Promise<void>;
 }
 
-async function installationIds(userId: string): Promise<InstallationResolution | null> {
+type InstallationResult =
+  | InstallationResolution
+  | { kind: 'reauthorization_required' | 'temporarily_unavailable' };
+
+async function repairRepositoryMirror(userId: string, installationIds: number[]): Promise<void> {
+  const running = repositoryRepairs.get(userId);
+  if (running) return running;
+  const repair = Promise.all(
+    installationIds.map((installationId) =>
+      syncInstallationRepos(installationId)
+        .then(() => ensureBuiltinAgents(installationId))
+        .catch((err) => {
+          console.warn(
+            `turbodiff: installation recovery failed for installation ${installationId}:`,
+            err,
+          );
+        }),
+    ),
+  ).then(() => undefined);
+  repositoryRepairs.set(userId, repair);
+  try {
+    await repair;
+  } finally {
+    if (repositoryRepairs.get(userId) === repair) repositoryRepairs.delete(userId);
+  }
+}
+
+async function installationIds(userId: string): Promise<InstallationResult> {
   const cached = installationsCache.get(userId);
   if (cached && Date.now() - cached.fetchedAt < INSTALLATIONS_TTL_MS) {
-    return { ids: cached.ids };
+    return {
+      kind: 'success',
+      ids: cached.ids,
+      refresh: githubAccessIssues.has(userId)
+        ? async () => {
+            await refreshInstallationIds(userId);
+          }
+        : undefined,
+    };
   }
 
   const durable = await installationAccessSnapshot(userId);
@@ -133,9 +209,20 @@ async function installationIds(userId: string): Promise<InstallationResolution |
       fetchedAt: durable.verifiedAt,
     });
     const age = now - durable.verifiedAt;
-    if (age < INSTALLATIONS_TTL_MS) return { ids: durable.installationIds };
+    if (age < INSTALLATIONS_TTL_MS) {
+      return {
+        kind: 'success',
+        ids: durable.installationIds,
+        refresh: githubAccessIssues.has(userId)
+          ? async () => {
+              await refreshInstallationIds(userId);
+            }
+          : undefined,
+      };
+    }
     if (age < INSTALLATIONS_STALE_MAX_MS) {
       return {
+        kind: 'success',
         ids: durable.installationIds,
         refresh: async () => {
           await refreshInstallationIds(userId);
@@ -145,11 +232,17 @@ async function installationIds(userId: string): Promise<InstallationResolution |
   }
 
   const fresh = await refreshInstallationIds(userId);
-  if (fresh) return { ids: fresh };
-  if (cached && now - cached.fetchedAt < INSTALLATIONS_STALE_MAX_MS) {
-    return { ids: cached.ids };
+  if (fresh.kind === 'success') {
+    return {
+      kind: 'success',
+      ids: fresh.ids,
+      repair: fresh.ids.length > 0 ? () => repairRepositoryMirror(userId, fresh.ids) : undefined,
+    };
   }
-  return null;
+  if (cached && now - cached.fetchedAt < INSTALLATIONS_STALE_MAX_MS) {
+    return { kind: 'success', ids: cached.ids };
+  }
+  return fresh;
 }
 
 export async function githubTokenForUser(user: AuthedUser): Promise<string> {
@@ -231,6 +324,7 @@ export async function requireUser(request: Request): Promise<AuthedUser | null> 
         .map(Number)
         .filter((n) => Number.isInteger(n)),
       githubConnected: true,
+      githubStatus: 'ready',
       name: 'dev',
       devFake: true,
     };
@@ -260,6 +354,7 @@ async function resolveAuthedUser(user: AuthUser): Promise<AuthedUser | null> {
       session: { authUserId: user.id, userId: 0, login: '' },
       installationIds: [],
       githubConnected: false,
+      githubStatus: 'not_connected',
       name: user.name || user.email,
     };
   }
@@ -268,15 +363,34 @@ async function resolveAuthedUser(user: AuthUser): Promise<AuthedUser | null> {
     installationIds(user.id),
     cachedSyntheticInstallationIds(githubId),
   ]);
-  if (resolved === null) return null;
+  if (resolved.kind !== 'success') {
+    return {
+      session: { authUserId: user.id, userId: githubId, login },
+      // A GitHub credential problem must not lock a user out of native
+      // projects whose authorization is already durable in PostgreSQL.
+      installationIds: synthetic,
+      githubConnected: true,
+      githubStatus: resolved.kind,
+      name: login,
+    };
+  }
   // GitHub cannot know about Artifacts-hosted projects, so membership-derived
   // installation ids are unioned in.
+  const accessIssue = githubAccessIssues.get(user.id);
   return {
     session: { authUserId: user.id, userId: githubId, login },
     installationIds: [...new Set([...resolved.ids, ...synthetic])],
     githubConnected: true,
+    githubStatus:
+      accessIssue ??
+      (resolved.ids.length === 0
+        ? 'app_not_installed'
+        : resolved.repair || repositoryRepairs.has(user.id)
+          ? 'syncing'
+          : 'ready'),
     name: login,
     membershipRefresh: resolved.refresh,
+    repositoryRepair: resolved.repair,
   };
 }
 

@@ -1,9 +1,9 @@
 import { useSuspenseQuery } from '@tanstack/react-query';
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, RefreshCw } from 'lucide-react';
 import { meQuery } from '../lib/queries.ts';
 import { Lamp } from '../components/identity.tsx';
 import { Card } from '../components/ui/card.tsx';
-import { buttonVariants } from '../components/ui/button.tsx';
+import { Button, buttonVariants } from '../components/ui/button.tsx';
 import { cn } from '../lib/utils.ts';
 
 // lucide-react dropped brand icons; GitHub's mark is inlined.
@@ -22,7 +22,7 @@ function GitHubMark({ className }: { className?: string }) {
 // AppShell chrome (see main.tsx) so the only ways out are connect or skip.
 
 export function OnboardingPage() {
-  const { data: me } = useSuspenseQuery(meQuery);
+  const { data: me, refetch, isFetching } = useSuspenseQuery(meQuery);
   // The connect flow round-trips through GitHub; better-auth redirects
   // failures back here with ?error=link_failed.
   const linkFailed = new URLSearchParams(window.location.search).has('error');
@@ -51,32 +51,7 @@ export function OnboardingPage() {
       )}
 
       <Card className="mt-6 space-y-4">
-        {me.github_connected ? (
-          <>
-            <div className="flex items-center gap-2 text-[0.85rem] text-ink-dim">
-              <Lamp tone="go" />
-              GitHub connected as <span className="font-mono text-ink">@{me.login}</span>
-            </div>
-            <p className="text-[0.85rem] text-mute">
-              One step left: install the GitHub App on the organizations or accounts whose
-              repositories the factory should work on.
-            </p>
-            <a
-              href={`https://github.com/apps/${me.github_app_slug}/installations/new`}
-              className={cn(buttonVariants({ variant: 'default' }), 'w-full')}
-            >
-              <GitHubMark className="size-4" />
-              Install the GitHub App
-            </a>
-            <p className="text-xs text-mute">
-              Or skip GitHub entirely:{' '}
-              <a href="/projects/new" className="text-accent-bright hover:underline">
-                create a turbodiff-hosted project
-              </a>{' '}
-              — the factory builds, reviews, and merges it natively.
-            </p>
-          </>
-        ) : (
+        {me.github_status === 'not_connected' ? (
           <>
             <div className="flex items-center gap-2 text-[0.85rem] text-ink-dim">
               <Lamp tone="hold" />
@@ -94,6 +69,98 @@ export function OnboardingPage() {
               in the app.
             </p>
           </>
+        ) : me.github_status === 'reauthorization_required' ? (
+          <>
+            <div className="flex items-center gap-2 text-[0.85rem] text-ink-dim">
+              <Lamp tone="hold" />
+              GitHub authorization needs to be renewed
+            </div>
+            <p className="text-[0.85rem] text-mute">
+              Your Turbodiff account is intact, but its GitHub credential is missing or expired.
+              Re-authorize to restore repository access.
+            </p>
+            <a
+              href="/auth/connect/github?next=/onboarding"
+              className={cn(buttonVariants({ variant: 'default' }), 'w-full')}
+            >
+              <GitHubMark className="size-4" />
+              Re-authorize GitHub
+            </a>
+          </>
+        ) : me.github_status === 'temporarily_unavailable' ? (
+          <>
+            <div className="flex items-center gap-2 text-[0.85rem] text-ink-dim">
+              <Lamp tone="hold" />
+              GitHub access could not be verified
+            </div>
+            <p className="text-[0.85rem] text-mute">
+              This is usually temporary. Retry the check, or re-authorize GitHub if it continues.
+              Native Turbodiff projects remain available.
+            </p>
+            <Button
+              type="button"
+              className="w-full"
+              loading={isFetching}
+              onClick={() => void refetch()}
+            >
+              <RefreshCw className="size-4" aria-hidden />
+              Try again
+            </Button>
+            <a
+              href="/auth/connect/github?next=/onboarding"
+              className={cn(buttonVariants({ variant: 'secondary' }), 'w-full')}
+            >
+              Re-authorize GitHub
+            </a>
+          </>
+        ) : me.github_status === 'app_not_installed' ? (
+          <>
+            <div className="flex items-center gap-2 text-[0.85rem] text-ink-dim">
+              <Lamp tone="go" />
+              GitHub connected as <span className="font-mono text-ink">@{me.login}</span>
+            </div>
+            <p className="text-[0.85rem] text-mute">
+              No GitHub App installation is available to this account yet. Install it on the
+              organizations or accounts the factory should use, or ask an organization owner to
+              grant you access.
+            </p>
+            <a
+              href={`https://github.com/apps/${me.github_app_slug}/installations/new`}
+              className={cn(buttonVariants({ variant: 'default' }), 'w-full')}
+            >
+              <GitHubMark className="size-4" />
+              Install or configure the GitHub App
+            </a>
+            <p className="text-xs text-mute">
+              Or skip GitHub entirely:{' '}
+              <a href="/projects/new" className="text-accent-bright hover:underline">
+                create a turbodiff-hosted project
+              </a>{' '}
+              — the factory builds, reviews, and merges it natively.
+            </p>
+          </>
+        ) : me.github_status === 'syncing' ? (
+          <>
+            <div className="flex items-center gap-2 text-[0.85rem] text-ink-dim">
+              <RefreshCw className="size-4 animate-spin text-accent-bright" aria-hidden />
+              Restoring GitHub repositories for <span className="font-mono">@{me.login}</span>
+            </div>
+            <p className="text-[0.85rem] text-mute">
+              Turbodiff found your GitHub App installations and is rebuilding the local repository
+              mirror. This page will update automatically.
+            </p>
+          </>
+        ) : (
+          <>
+            <div className="flex items-center gap-2 text-[0.85rem] text-ink-dim">
+              <Lamp tone="go" />
+              GitHub ready as <span className="font-mono text-ink">@{me.login}</span>
+            </div>
+            <p className="text-[0.85rem] text-mute">
+              Your account and GitHub App installations are connected. The factory is ready to use
+              the repositories you selected on GitHub.
+            </p>
+          </>
         )}
       </Card>
 
@@ -101,7 +168,7 @@ export function OnboardingPage() {
         href="/"
         className="mt-5 inline-flex items-center gap-1.5 self-start text-[0.85rem] text-mute hover:text-ink"
       >
-        {me.github_connected ? 'Go to the board' : 'Skip for now'}
+        {me.github_status === 'not_connected' ? 'Skip for now' : 'Go to the board'}
         <ArrowRight className="size-3.5" aria-hidden />
       </a>
     </div>
