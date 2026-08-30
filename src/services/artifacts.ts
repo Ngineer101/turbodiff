@@ -25,6 +25,7 @@ import { deleteRepositoryRef, recordRepositoryRef } from '../data/performance.ts
 import { listChangeRequestsForRepo } from '../data/db.ts';
 import { refreshChangeRequest } from './change-requests.ts';
 import { enqueueFactoryMessage } from './factory-queue.ts';
+import { decideReviewIntake } from '../domain/review-intake.ts';
 
 // Artifacts-hosted project lifecycle (docs/artifacts-provider.md):
 // provisioning (repo + synthetic tenancy + initial commit), user clone
@@ -188,7 +189,15 @@ export async function applyArtifactsEvent(event: ArtifactsEvent): Promise<string
         await refreshChangeRequest(row, cr);
         refreshed += 1;
         if (cr.source_branch === branch && row.review_on_push) {
-          await enqueueFactoryMessage({ kind: 'cr_review', changeRequestId: cr.id });
+          const intake = decideReviewIntake({
+            mode: row.review_intake,
+            origin: cr.opened_by === 'factory' ? 'factory' : 'human',
+            event: 'updated',
+            draft: false,
+          });
+          if (intake.kind === 'admit') {
+            await enqueueFactoryMessage({ kind: 'cr_review', changeRequestId: cr.id });
+          }
         }
       } catch (err) {
         console.error(`turbodiff: push-triggered refresh of CR ${cr.id} failed:`, err);

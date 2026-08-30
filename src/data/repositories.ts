@@ -2,6 +2,7 @@ import { inArray, sql } from 'drizzle-orm';
 import { execute, queryOne, queryRows, withDatabase, withTransaction } from './database.ts';
 import { repositories } from './schema.ts';
 import { bigintArray } from './sql.ts';
+import type { ReviewIntakeMode } from '../domain/review-intake.ts';
 
 // Thin typed layer over the PostgreSQL application schema.
 
@@ -26,6 +27,7 @@ export interface RepositoryRow {
   last_push_at: string | null; // maintained by Artifacts event ingestion
   enabled: boolean;
   review_on_push: boolean; // re-dispatch tiered agents on pushes to open PRs
+  review_intake: ReviewIntakeMode;
   blocking_reviews: boolean; // P1 → REQUEST_CHANGES, clean → APPROVE
   auto_fix: boolean; // dispatch the fix agent when a blocking review lands
   auto_merge: boolean; // merge factory PRs when verification + review are clean
@@ -281,6 +283,10 @@ export async function setRepoEnabled(id: number, enabled: boolean): Promise<void
 
 export async function setRepoReviewOnPush(id: number, on: boolean): Promise<void> {
   await execute(sql`UPDATE app.repositories SET review_on_push = ${on} WHERE id = ${id}`);
+}
+
+export async function setRepoReviewIntake(id: number, mode: ReviewIntakeMode): Promise<void> {
+  await execute(sql`UPDATE app.repositories SET review_intake = ${mode} WHERE id = ${id}`);
 }
 
 export async function setRepoBlockingReviews(id: number, on: boolean): Promise<void> {

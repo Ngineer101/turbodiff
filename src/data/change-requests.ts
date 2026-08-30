@@ -119,6 +119,14 @@ export async function getChangeRequestByRepoNumber(
   `);
 }
 
+export async function getChangeRequestByChangeId(
+  changeId: number,
+): Promise<ChangeRequestRow | null> {
+  return queryOne<ChangeRequestRow>(sql`
+    SELECT * FROM app.change_requests WHERE change_id = ${changeId}
+  `);
+}
+
 export async function getOpenChangeRequest(
   repositoryId: number,
   sourceBranch: string,

@@ -164,7 +164,7 @@ app.post('/api/auth/sign-up/email', handleEmailSignUp);
 app.on(['GET', 'POST'], '/api/auth/*', (c) => withAuth((instance) => instance.handler(c.req.raw)));
 
 // SPA data plane (session cookie auth, JSON in/out).
-app.route('/api', createApiRoutes());
+app.route('/api', createApiRoutes({ dispatchReview: dispatchReviewAgent }));
 
 // SPA shell + landing + OAuth sign-in (session cookie auth).
 app.route('/', createUiRoutes());

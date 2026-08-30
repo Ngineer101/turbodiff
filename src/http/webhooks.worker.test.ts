@@ -70,7 +70,9 @@ async function postWebhook(app: Hono, event: string, payload: JsonObject): Promi
   });
 }
 
-async function seedRepo(opts: { autoFix?: boolean } = {}): Promise<void> {
+async function seedRepo(
+  opts: { autoFix?: boolean; reviewIntake?: 'factory_only' | 'on_demand' | 'all_changes' } = {},
+): Promise<void> {
   await testDatabase().batch([
     testDatabase().prepare(
       `INSERT INTO installations (id, account_login, account_id, account_type)
@@ -78,10 +80,11 @@ async function seedRepo(opts: { autoFix?: boolean } = {}): Promise<void> {
     ),
     testDatabase()
       .prepare(
-        `INSERT INTO repositories (id, installation_id, owner, name, review_on_push, auto_fix)
-       VALUES (101, 1001, 'acme', 'api', TRUE, ?1)`,
+        `INSERT INTO repositories
+          (id, installation_id, owner, name, review_on_push, auto_fix, review_intake)
+       VALUES (101, 1001, 'acme', 'api', TRUE, ?1, ?2)`,
       )
-      .bind(opts.autoFix ?? false),
+      .bind(opts.autoFix ?? false, opts.reviewIntake ?? 'factory_only'),
   ]);
 }
 
@@ -298,7 +301,9 @@ describe('factory PR webhook decisions', () => {
     });
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ skipped: 'not a factory PR' });
+    expect(await response.json()).toMatchObject({
+      skipped: 'repository admits factory changes only',
+    });
     expect(dispatch).not.toHaveBeenCalled();
     const change = await getChangeByProviderKey(101, 'github:42');
     expect(change).toMatchObject({
@@ -337,6 +342,33 @@ describe('factory PR webhook decisions', () => {
     const refreshed = await getChangeByProviderKey(101, 'github:42');
     expect(refreshed?.id).toBe(change?.id);
     expect(refreshed?.source_head).toBe('c'.repeat(40));
+  });
+
+  it('automatically reviews a human PR only after all-changes intake is selected', async () => {
+    await seedRepo({ reviewIntake: 'all_changes' });
+    await ensureBuiltinAgents(1001);
+    const dispatch = vi.fn<ReviewDispatcher>(async () => true);
+    const response = await postWebhook(webhookApp(dispatch), 'pull_request', {
+      action: 'opened',
+      number: 77,
+      pull_request: {
+        draft: false,
+        html_url: 'https://github.com/acme/api/pull/77',
+        title: 'Human contribution',
+        user: { login: 'contributor', type: 'User' },
+        head: {
+          ref: 'contribution',
+          sha: 'd'.repeat(40),
+          repo: { full_name: 'contributor/api' },
+        },
+        base: { ref: 'main', sha: 'e'.repeat(40) },
+      },
+      repository: { id: 101, full_name: 'acme/api' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ tier: 'full', agents: ['review'] });
+    expect(dispatch).toHaveBeenCalledTimes(1);
   });
 
   it('dispatches a factory PR once and debounces a push while its review is active', async () => {

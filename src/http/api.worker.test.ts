@@ -10,6 +10,7 @@ import type { AuthedUser } from '../services/auth.ts';
 import type { ApiBoard, ApiUsage } from '../shared/api-types.ts';
 import { isJsonObject, isString, parseJson } from '../shared/json.ts';
 import { createApiRoutes, type ApiRouteDependencies } from './api.ts';
+import { ensureBuiltinAgents, upsertChange } from '../data/db.ts';
 
 type Authenticate = NonNullable<ApiRouteDependencies['authenticate']>;
 
@@ -127,6 +128,92 @@ describe('API authentication and CSRF', () => {
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({ error: 'cross-origin request rejected' });
     expect(authenticate).not.toHaveBeenCalled();
+  });
+});
+
+describe('on-demand change review', () => {
+  it('dispatches an existing human PR without requiring a feature', async () => {
+    const configured = await authenticatedApi().request('https://turbodiff.test/api/repos/101', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ review_intake: 'on_demand' }),
+    });
+    expect(configured.status).toBe(200);
+    await ensureBuiltinAgents(1001);
+    const change = await upsertChange({
+      repositoryId: 101,
+      providerKey: 'github:42',
+      number: 42,
+      origin: 'human',
+      title: 'Existing pull request',
+      externalUrl: 'https://github.com/acme/api/pull/42',
+      sourceBranch: 'contributor/topic',
+      targetBranch: 'main',
+      status: 'open',
+      sourceHead: 'a'.repeat(40),
+      targetHead: 'b'.repeat(40),
+      draft: false,
+      capabilities: ['read_change', 'publish_review'],
+    });
+    const dispatchReview = vi.fn<NonNullable<ApiRouteDependencies['dispatchReview']>>(
+      async () => true,
+    );
+    const app = apiApp({
+      authenticate: async () => acmeUser,
+      canPushToRepo: async () => true,
+      orgAdmin: async () => true,
+      computeRisk: async () => 'full',
+      dispatchReview,
+    });
+
+    const response = await app.request(`https://turbodiff.test/api/changes/${change.id}/review`, {
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      change_id: change.id,
+      tier: 'full',
+      agents: ['review'],
+    });
+    expect(dispatchReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps human PRs out of the legacy factory-only profile', async () => {
+    const change = await upsertChange({
+      repositoryId: 101,
+      providerKey: 'github:43',
+      number: 43,
+      origin: 'human',
+      title: 'Existing pull request',
+      externalUrl: 'https://github.com/acme/api/pull/43',
+      sourceBranch: 'contributor/topic',
+      targetBranch: 'main',
+      status: 'open',
+      sourceHead: null,
+      targetHead: null,
+      draft: false,
+      capabilities: ['read_change', 'publish_review'],
+    });
+    const dispatchReview = vi.fn<NonNullable<ApiRouteDependencies['dispatchReview']>>(
+      async () => true,
+    );
+    const app = apiApp({
+      authenticate: async () => acmeUser,
+      canPushToRepo: async () => true,
+      orgAdmin: async () => true,
+      computeRisk: async () => 'full',
+      dispatchReview,
+    });
+
+    const response = await app.request(`https://turbodiff.test/api/changes/${change.id}/review`, {
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: 'repository admits factory changes only' });
+    expect(dispatchReview).not.toHaveBeenCalled();
   });
 });
 

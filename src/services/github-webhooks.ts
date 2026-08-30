@@ -7,37 +7,28 @@ import {
   getFeatureByRepoPr,
   getInstallation,
   getRepoById,
-  hasActiveReview,
-  listAgentsForRepo,
   removeRepositories,
-  reviewedRecently,
   setInstallationSuspended,
   updateFeature,
   upsertChange,
   changeProviderKey,
   upsertInstallation,
-  type AgentRow,
-  type RepositoryRow,
 } from '../data/db.ts';
 import { FIX_MAX_ATTEMPTS, type FixQueueMessage } from '../shared/factory-messages.ts';
 import { enqueueFactoryMessage } from './factory-queue.ts';
 import { ensureOrganizationForInstallation, ensureOwnerMember } from './access-control.ts';
-import {
-  agentsForTier,
-  computeRiskTier,
-  tierModelOverride,
-  type RiskTier,
-  remainingDailyBudget,
-} from './review-policy.ts';
+import { computeRiskTier } from './review-policy.ts';
 import type { JsonValue } from '../shared/json.ts';
 import type { ChangeCapability, ChangeOrigin } from '../domain/lifecycle-contract.ts';
+import { decideReviewIntake } from '../domain/review-intake.ts';
+import { dispatchChangeReviews, type ReviewDispatcher } from './change-review.ts';
+
+export type { DispatchOptions, ReviewDispatcher } from './change-review.ts';
 
 // GitHub App webhook receiver. Two jobs:
 //   1. Mirror installation / repository-selection changes into PostgreSQL.
-//   2. Drive the factory's review/fix loop: auto-dispatch the repo-enabled
-//      agents when a FACTORY-GENERATED PR opens or gets pushed to, and enqueue
-//      a fix run when one of turbodiff's own blocking reviews lands.
-// Human-opened PRs are never reviewed — reviews exist to gate factory output.
+//   2. Drive the configured review/fix intake: legacy repositories admit only
+//      factory changes; composable profiles may admit human and automation PRs.
 
 interface WebhookAccount {
   login: string;
@@ -111,17 +102,6 @@ export interface WebhookHandlerResult {
   body: HandlerBody;
   status?: 502;
 }
-
-export type DispatchOptions = { riskTier?: string; modelOverride?: string };
-
-export type ReviewDispatcher = (
-  agent: AgentRow,
-  repo: RepositoryRow,
-  prNumber: number,
-  prUrl: string,
-  trigger: string,
-  opts?: DispatchOptions,
-) => Promise<boolean>;
 
 export type FixEnqueuer = (message: FixQueueMessage) => Promise<void>;
 
@@ -256,9 +236,6 @@ async function handleInstallationRepositories(p: InstallationEvent): Promise<Web
   };
 }
 
-// A push burst re-dispatches an agent at most once per window.
-const PUSH_DEBOUNCE_MINUTES = 10;
-
 function githubChangeCapabilities(p: PullRequestEvent): ChangeCapability[] {
   const capabilities: ChangeCapability[] = [
     'read_change',
@@ -339,78 +316,35 @@ async function handlePullRequest(
   if (p.action !== 'opened' && p.action !== 'ready_for_review' && p.action !== 'synchronize') {
     return { body: { ok: true, ignored: p.action } };
   }
-  if (p.pull_request.draft) return { body: { ok: true, skipped: 'draft' } };
-
-  if (!repo.enabled) return { body: { ok: true, skipped: 'factory disabled for repo' } };
   if (p.action === 'synchronize' && !repo.review_on_push) {
     return { body: { ok: true, skipped: 'push reviews disabled for repo' } };
   }
 
-  // Reviews gate factory output only: a PR gets auto-reviewed only when it
-  // belongs to a feature this factory generated. Human-opened PRs are never
-  // dispatched (the standalone auto-review product was retired).
-  if (!feature) return { body: { ok: true, skipped: 'not a factory PR' } };
+  const intake = decideReviewIntake({
+    mode: repo.review_intake,
+    origin: change.origin,
+    event: p.action === 'synchronize' ? 'updated' : 'opened',
+    draft: change.draft,
+  });
+  if (intake.kind === 'ignore') return { body: { ok: true, skipped: intake.reason } };
 
-  const installation = await getInstallation(repo.installation_id);
-  if (!installation || installation.suspended) {
-    return { body: { ok: true, skipped: 'installation missing or suspended' } };
-  }
-
-  const enabled = (await listAgentsForRepo(repo)).filter((a) => a.enabled);
-  if (enabled.length === 0) return { body: { ok: true, skipped: 'no agents enabled' } };
-
-  // Classify the PR before spending budget: small mechanical changes get one
-  // generalist, only large or security-sensitive ones the full fleet. Fail
-  // open to 'full' — a tiering hiccup must widen review, never skip it.
-  let tier: RiskTier = 'full';
-  try {
-    tier = await computeRisk(repo.installation_id, repo.owner, repo.name, p.number);
-  } catch (err) {
-    console.warn(
-      `turbodiff: risk tier computation failed for ${p.repository.full_name}#${p.number}, defaulting to full:`,
-      err,
-    );
-  }
-  let agents = agentsForTier(tier, enabled);
-  const modelOverride = tierModelOverride(tier);
-
-  // Pushes re-review with awareness (the agent reconciles against existing
-  // threads), but debounced: skip agents mid-review or dispatched within the
-  // window, so a burst of pushes costs one re-review, not one per push.
-  if (p.action === 'synchronize') {
-    const idle: typeof agents = [];
-    for (const agent of agents) {
-      const busy =
-        (await hasActiveReview(repo.id, p.number, agent.slug)) ||
-        (await reviewedRecently(repo.id, p.number, agent.slug, PUSH_DEBOUNCE_MINUTES));
-      if (!busy) idle.push(agent);
-    }
-    agents = idle;
-    if (agents.length === 0) {
-      return { body: { ok: true, skipped: 'all agents busy or within push debounce' } };
-    }
-  }
-
-  // The daily cap counts agent-runs, so N selected agents consume N units.
-  const budget = await remainingDailyBudget(repo.installation_id, installation.account_login);
-  if (budget <= 0) return { body: { ok: true, skipped: 'daily review limit reached' } };
-  if (agents.length > budget) {
-    console.warn(
-      `turbodiff: daily cap leaves budget for ${budget} of ${agents.length} agents on ${p.repository.full_name}#${p.number}`,
-    );
-  }
-
-  const dispatched: string[] = [];
-  for (const agent of agents.slice(0, budget)) {
-    const opts: DispatchOptions = { riskTier: tier };
-    if (modelOverride) opts.modelOverride = modelOverride;
-    if (await dispatch(agent, repo, p.number, p.pull_request.html_url, p.action, opts)) {
-      dispatched.push(agent.slug);
-    }
-  }
-  if (dispatched.length === 0) return { body: { error: 'dispatch failed' }, status: 502 };
+  const result = await dispatchChangeReviews(
+    change,
+    repo,
+    p.action,
+    dispatch,
+    computeRisk,
+    p.action === 'synchronize',
+  );
+  if (result.kind === 'failed') return { body: { error: result.reason }, status: 502 };
+  if (result.kind === 'skipped') return { body: { ok: true, skipped: result.reason } };
   return {
-    body: { ok: true, review: `${p.repository.full_name}#${p.number}`, tier, agents: dispatched },
+    body: {
+      ok: true,
+      review: `${p.repository.full_name}#${p.number}`,
+      tier: result.tier,
+      agents: result.agents,
+    },
   };
 }
 

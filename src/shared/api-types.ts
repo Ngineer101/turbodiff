@@ -338,6 +338,7 @@ export interface ApiRepoSettings {
   provider: string; // 'github' | 'artifacts'
   enabled: boolean;
   review_on_push: boolean;
+  review_intake: 'factory_only' | 'on_demand' | 'all_changes';
   blocking_reviews: boolean;
   auto_fix: boolean;
   auto_merge: boolean;
