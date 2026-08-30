@@ -1055,6 +1055,7 @@ export async function tryRecordReview(
   agentSlug: string,
   agentInstanceId: string,
   riskTier: string | null = null,
+  stageRunId: number | null = null,
 ): Promise<number | null> {
   return withTransaction(async (transaction) => {
     await transaction.execute(sql`
@@ -1065,9 +1066,9 @@ export async function tryRecordReview(
     const result = await transaction.execute<{ id: number }>(sql`
         INSERT INTO app.reviews
           (repository_id, installation_id, pr_number, trigger_event, status,
-           agent_slug, agent_instance_id, risk_tier)
+           agent_slug, agent_instance_id, risk_tier, stage_run_id)
         VALUES (${repositoryId}, ${installationId}, ${prNumber}, ${trigger},
-          'running', ${agentSlug}, ${agentInstanceId}, ${riskTier})
+          'running', ${agentSlug}, ${agentInstanceId}, ${riskTier}, ${stageRunId})
         ON CONFLICT DO NOTHING
         RETURNING id
       `);
@@ -1082,15 +1083,17 @@ export async function completeReview(
   agentInstanceId: string,
   reviewUrl: string | null,
   findingsCount: number | null = null,
-): Promise<void> {
-  await execute(sql`
+  verdict: 'approve' | 'comment' | 'request_changes' = 'comment',
+): Promise<{ stage_run_id: number | null } | null> {
+  return queryOne<{ stage_run_id: number | null }>(sql`
     UPDATE app.reviews SET status = 'completed', completed_at = CURRENT_TIMESTAMP,
-      review_url = ${reviewUrl}, findings_count = ${findingsCount}
+      review_url = ${reviewUrl}, findings_count = ${findingsCount}, verdict = ${verdict}
     WHERE id = (
       SELECT id FROM app.reviews
       WHERE agent_instance_id = ${agentInstanceId} AND status = 'running'
       ORDER BY id DESC LIMIT 1
     )
+    RETURNING stage_run_id
   `);
 }
 

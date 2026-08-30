@@ -12,7 +12,9 @@ import {
   ensureBuiltinAgents,
   finishFixAttempt,
   getChangeByProviderKey,
+  getFactoryRun,
   getFeature,
+  getStageRun,
   tryRecordFixAttempt,
   tryRecordReview,
   updateFeature,
@@ -22,7 +24,7 @@ import type { RunStageCommand } from '../domain/lifecycle-contract.ts';
 import type { JsonObject } from '../shared/json.ts';
 import { createWebhookRoutes, type WebhookRouteDependencies } from './webhooks.ts';
 import type { ReviewDispatcher } from '../services/change-review.ts';
-import { runLifecycleStage } from '../services/lifecycle.ts';
+import { completeLifecycleReview, runLifecycleStage } from '../services/lifecycle.ts';
 
 type TestEnv = Cloudflare.Env & { GITHUB_WEBHOOK_SECRET: string };
 interface ScheduledReviewBody {
@@ -403,6 +405,7 @@ describe('factory PR webhook decisions', () => {
         agent.slug,
         `${agent.slug}--${repo.owner}--${repo.name}--${prNumber}`,
         options?.riskTier ?? null,
+        options?.stageRunId ?? null,
       );
       return true;
     };
@@ -444,6 +447,23 @@ describe('factory PR webhook decisions', () => {
     });
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ trigger: 'opened' });
+    await expect(getStageRun(commands[0].stageRunId)).resolves.toMatchObject({
+      status: 'running',
+    });
+    await completeLifecycleReview(
+      'review--acme--api--42',
+      'https://github.com/acme/api/pull/42#pullrequestreview-1',
+      0,
+      'approve',
+      lifecycleEnqueue,
+    );
+    await expect(getStageRun(commands[0].stageRunId)).resolves.toMatchObject({
+      status: 'completed',
+    });
+    await expect(getFactoryRun(commands[0].factoryRunId)).resolves.toMatchObject({
+      status: 'handed_off',
+      handoff_reason: 'requested stop boundary reached',
+    });
   });
 
   it('tracks merged closure without overwriting an explicit abandon', async () => {

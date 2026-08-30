@@ -357,6 +357,9 @@ async function handlePullRequestReview(
 
   const repo = await getRepoById(p.repository.id);
   if (!repo) return { body: { ok: true, skipped: 'repo not tracked' } };
+  if (repo.process_profile !== 'legacy_factory') {
+    return { body: { ok: true, skipped: 'repair is owned by the lifecycle coordinator' } };
+  }
   if (!repo.enabled || !repo.auto_fix) {
     return { body: { ok: true, skipped: 'auto-fix disabled for repo' } };
   }
@@ -400,6 +403,9 @@ async function handleWorkflowRun(
 
   const repo = await getRepoById(p.repository.id);
   if (!repo) return { body: { ok: true, skipped: 'repo not tracked' } };
+  if (repo.process_profile !== 'legacy_factory') {
+    return { body: { ok: true, skipped: 'repair is owned by the lifecycle coordinator' } };
+  }
   if (!repo.enabled || !repo.auto_fix) {
     return { body: { ok: true, skipped: 'auto-fix disabled for repo' } };
   }

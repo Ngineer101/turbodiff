@@ -22,7 +22,10 @@ import { dispatchReviewAgent } from './dispatch.ts';
 // with the risk tier computed from the CR's own file summary instead of the
 // PR files API. Queue-driven ('cr_review' messages), so CR opening never
 // waits on dispatch.
-export async function dispatchNativeCrReviews(changeRequestId: number): Promise<boolean> {
+export async function dispatchNativeCrReviews(
+  changeRequestId: number,
+  stageRunId?: number,
+): Promise<boolean> {
   const cr = await getChangeRequest(changeRequestId);
   if (!cr || cr.status !== 'open') return false;
   const repo = await getRepoById(cr.repository_id);
@@ -58,6 +61,7 @@ export async function dispatchNativeCrReviews(changeRequestId: number): Promise<
       riskTier: tier,
       modelOverride,
       changeRequest: { id: cr.id, number: cr.number },
+      stageRunId,
     });
     if (ok) dispatched += 1;
   }

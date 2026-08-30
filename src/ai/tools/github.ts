@@ -3,7 +3,8 @@ import * as v from 'valibot';
 import { maybeAutoMerge } from '../../services/auto-merge.ts';
 import { maybeResolveConflict } from '../../services/merge-conflicts.ts';
 import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
-import { completeReview, getRepoByFullName } from '../../data/db.ts';
+import { getRepoByFullName } from '../../data/db.ts';
+import { completeLifecycleReview } from '../../services/lifecycle.ts';
 import { installationToken } from '../../integrations/github/app.ts';
 import {
   githubGraphql as ghGraphql,
@@ -409,11 +410,22 @@ export const makePostReview = (agentInstanceId: string, pin: RepoPin = null) =>
       // Flip this dispatch's row to completed so /reviews stops showing it
       // as running. The findings count feeds the noise metric on the
       // dashboard (fallback-posted findings still count — they reached the PR).
-      await completeReview(agentInstanceId, output.url, data.findings.length);
+      const verdict =
+        intended === 'REQUEST_CHANGES'
+          ? 'request_changes'
+          : intended === 'APPROVE'
+            ? 'approve'
+            : 'comment';
+      await completeLifecycleReview(agentInstanceId, output.url, data.findings.length, verdict);
       // Factory-PR gate: a blocking verdict on a self-authored PR never fires
       // the pull_request_review webhook trigger (the posted state is COMMENT),
       // so enqueue the fix directly. The consumer re-validates toggle and cap.
-      if (intended === 'REQUEST_CHANGES' && postEvent === 'COMMENT' && row.auto_fix) {
+      if (
+        intended === 'REQUEST_CHANGES' &&
+        postEvent === 'COMMENT' &&
+        row.auto_fix &&
+        row.process_profile === 'legacy_factory'
+      ) {
         await enqueueFactoryMessage({
           kind: 'fix',
           repoId: row.id,

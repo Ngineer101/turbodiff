@@ -177,7 +177,7 @@ export async function maybeAutoMergeCr(
   repo: RepositoryRow,
   changeRequestId: number,
 ): Promise<void> {
-  if (!repo.auto_merge) return; // cheap pre-check before any I/O
+  if (!repo.auto_merge || repo.process_profile !== 'legacy_factory') return;
   const cr = await getChangeRequest(changeRequestId);
   if (!cr || cr.status !== 'open') return;
   const feature = cr.feature_id ? await getFeature(cr.feature_id) : null;

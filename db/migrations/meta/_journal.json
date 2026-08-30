@@ -43,6 +43,13 @@
       "when": 1788107446744,
       "tag": "0005_lifecycle-coordinator",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788107707025,
+      "tag": "0006_review-stage-outcomes",
+      "breakpoints": true
     }
   ]
 }
