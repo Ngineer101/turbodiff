@@ -2,6 +2,8 @@ import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
 import {
   BarChart2,
   Bot,
+  ChevronsUpDown,
+  CircleUserRound,
   Keyboard,
   LayoutDashboard,
   LogOut,
@@ -23,6 +25,7 @@ import { useLiveRefresh } from '../lib/use-live-refresh.ts';
 import { cn } from '../lib/utils.ts';
 import { Lamp } from './identity.tsx';
 import { Kbd } from './ui/kbd.tsx';
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover.tsx';
 
 const CommandPalette = lazy(() =>
   import('./command-palette.tsx').then((module) => ({ default: module.CommandPalette })),
@@ -211,28 +214,68 @@ function BottomTabs() {
   );
 }
 
-function UserBlock({ me, collapsed = false }: { me: ApiMe; collapsed?: boolean }) {
+// The account control: the identity is the button, and its menu (sign out,
+// and room for more later) opens to the side as a popover. Styled to match
+// the Shortcuts button exactly — same height, padding, and icon size — so the
+// two stack as one flush-left column in the sidebar footer. `side` lets the
+// mobile top bar drop the menu downward instead of to the right.
+function AccountMenu({
+  me,
+  collapsed = false,
+  fullWidth = false,
+  side = 'right',
+}: {
+  me: ApiMe;
+  collapsed?: boolean;
+  // Fill the row (sidebar footer, so it aligns with the Shortcuts button);
+  // off in the mobile top bar, where it should size to its label.
+  fullWidth?: boolean;
+  side?: 'right' | 'bottom';
+}) {
+  const identity = me.login ? `@${me.login}` : me.name;
   return (
-    <div
-      className={cn('flex items-center gap-2', collapsed ? 'justify-center' : 'justify-between')}
-    >
-      <span className={cn('truncate font-mono text-xs text-mute', collapsed && 'hidden')}>
-        {me.login ? `@${me.login}` : me.name}
-      </span>
-      <form method="post" action="/auth/logout">
+    <Popover>
+      <PopoverTrigger asChild>
         <button
+          type="button"
+          title={collapsed ? identity : undefined}
+          aria-label="Account menu"
           className={cn(
-            'flex cursor-pointer items-center gap-1.5 rounded-md text-xs text-mute hover:bg-raised hover:text-ink',
-            collapsed ? 'p-1.5' : 'px-2 py-1',
+            'flex cursor-pointer items-center rounded-md font-mono text-[11px] text-mute transition-colors hover:bg-raised/60 hover:text-ink data-[state=open]:bg-raised/60 data-[state=open]:text-ink',
+            collapsed ? 'p-1.5' : 'gap-2 px-2 py-1',
+            !collapsed && fullWidth && 'w-full',
           )}
-          title="Sign out"
-          aria-label="Sign out"
         >
-          <LogOut className="size-3.5" aria-hidden />
-          <span className={cn(collapsed && 'hidden')}>Sign out</span>
+          <CircleUserRound className="size-3.5 shrink-0" aria-hidden />
+          <span className={cn('truncate', collapsed && 'hidden')}>{identity}</span>
+          <ChevronsUpDown
+            className={cn('ml-auto size-3 shrink-0 opacity-60', collapsed && 'hidden')}
+            aria-hidden
+          />
         </button>
-      </form>
-    </div>
+      </PopoverTrigger>
+      <PopoverContent side={side} align="end" sideOffset={8} className="w-52 p-1">
+        <div className="flex items-center gap-2 px-2 py-1.5">
+          <CircleUserRound className="size-4 shrink-0 text-mute" aria-hidden />
+          <div className="min-w-0">
+            <p className="truncate font-mono text-xs text-ink">{identity}</p>
+            {me.login && me.name && me.name !== me.login ? (
+              <p className="truncate text-[11px] text-mute">{me.name}</p>
+            ) : null}
+          </div>
+        </div>
+        <div className="my-1 h-px bg-line" />
+        <form method="post" action="/auth/logout">
+          <button
+            type="submit"
+            className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-ink-dim transition-colors hover:bg-raised hover:text-ink"
+          >
+            <LogOut className="size-3.5 shrink-0" aria-hidden />
+            Sign out
+          </button>
+        </form>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -368,7 +411,7 @@ export function AppShell({ me, children }: { me: ApiMe; children: ReactNode }) {
             <SidebarNav collapsed={!sidebarOpen} />
           </div>
         </div>
-        <div className="space-y-2">
+        <div className={cn('space-y-0.5', !sidebarOpen && 'flex flex-col items-center')}>
           <button
             type="button"
             onClick={() => setHelpOpen(true)}
@@ -379,17 +422,17 @@ export function AppShell({ me, children }: { me: ApiMe; children: ReactNode }) {
               sidebarOpen ? 'w-full gap-2 px-2 py-1' : 'p-1.5',
             )}
           >
-            <Keyboard className="size-3.5" aria-hidden />
+            <Keyboard className="size-3.5 shrink-0" aria-hidden />
             <span className={cn(!sidebarOpen && 'hidden')}>Shortcuts</span>
             <Kbd className={cn('ml-auto', !sidebarOpen && 'hidden')}>?</Kbd>
           </button>
-          <UserBlock me={me} collapsed={!sidebarOpen} />
+          <AccountMenu me={me} collapsed={!sidebarOpen} fullWidth />
         </div>
       </aside>
 
       <div className="sticky top-0 z-40 flex items-center justify-between border-b border-line/60 bg-bg/95 px-4 py-2.5 backdrop-blur md:hidden">
         <Logo />
-        <UserBlock me={me} />
+        <AccountMenu me={me} side="bottom" />
       </div>
 
       <main className="min-w-0 flex-1">

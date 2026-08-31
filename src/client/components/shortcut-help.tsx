@@ -1,10 +1,13 @@
+import { Code2, Compass, LayoutDashboard, List, type LucideIcon } from 'lucide-react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { navShortcuts, noOverlayOpen } from '../lib/shortcuts.ts';
 import { useIsDesktop } from '../lib/use-is-desktop.ts';
-import { Dialog, DialogContent, DialogTitle } from './ui/dialog.tsx';
+import { Card } from './ui/card.tsx';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from './ui/dialog.tsx';
 import { Kbd } from './ui/kbd.tsx';
 
 type ShortcutRow = { keys: string[]; label: string };
+type ShortcutSection = { title: string; icon: LucideIcon; rows: ShortcutRow[] };
 
 const BOARD_ROWS: ShortcutRow[] = [
   { keys: ['/'], label: 'Focus quick-add' },
@@ -27,18 +30,24 @@ const LIST_ROWS: ShortcutRow[] = [
   { keys: ['↑', '↓', 'Home', 'End'], label: 'Move through pickers and filters' },
 ];
 
-function Section({ title, rows }: { title: string; rows: ShortcutRow[] }) {
+// Each shortcut group is a self-contained card: a labelled header over a
+// divided list of rows. Cards flow into a masonry-style column layout so a
+// tall group (Navigation) never leaves dead space beside a short one.
+function SectionCard({ title, icon: Icon, rows }: ShortcutSection) {
   return (
-    <div>
-      <h3 className="font-mono text-[11px] tracking-[0.14em] text-mute uppercase">{title}</h3>
-      <ul className="mt-2 space-y-1.5">
+    <Card className="mb-4 break-inside-avoid overflow-hidden p-0">
+      <div className="flex items-center gap-2 border-b border-line/60 px-4 py-2.5">
+        <Icon className="size-3.5 shrink-0 text-mute" aria-hidden />
+        <h3 className="font-mono text-[11px] tracking-[0.14em] text-mute uppercase">{title}</h3>
+      </div>
+      <ul className="divide-y divide-line/40">
         {rows.map((row) => (
           <li
             key={row.label}
-            className="flex items-center justify-between gap-3 text-[0.85rem] text-ink-dim"
+            className="flex items-center justify-between gap-4 px-4 py-2 text-[0.85rem] text-ink-dim"
           >
-            <span>{row.label}</span>
-            <span className="flex items-center gap-1">
+            <span className="min-w-0">{row.label}</span>
+            <span className="flex shrink-0 items-center gap-1">
               {row.keys.map((k) => (
                 <Kbd key={k}>{k}</Kbd>
               ))}
@@ -46,7 +55,7 @@ function Section({ title, rows }: { title: string; rows: ShortcutRow[] }) {
           </li>
         ))}
       </ul>
-    </div>
+    </Card>
   );
 }
 
@@ -84,16 +93,32 @@ export function ShortcutHelp({
     ...navShortcuts(nav).map((s) => ({ keys: [s.key], label: s.label })),
     { keys: ['?'], label: 'Keyboard shortcuts' },
   ];
+  const sections: ShortcutSection[] = [
+    { title: 'Navigation', icon: Compass, rows: navRows },
+    { title: 'Board', icon: LayoutDashboard, rows: BOARD_ROWS },
+    { title: 'Code browser', icon: Code2, rows: CODE_ROWS },
+    { title: 'Lists', icon: List, rows: LIST_ROWS },
+  ];
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg" data-shortcut-help>
-        <DialogTitle className="text-base font-medium">Keyboard shortcuts</DialogTitle>
-        <div className="mt-4 grid gap-x-8 gap-y-5 sm:grid-cols-2">
-          <Section title="Navigation" rows={navRows} />
-          <div className="space-y-5">
-            <Section title="Board" rows={BOARD_ROWS} />
-            <Section title="Code browser" rows={CODE_ROWS} />
-            <Section title="Lists" rows={LIST_ROWS} />
+      <DialogContent
+        className="flex max-h-[85vh] max-w-lg flex-col p-0 sm:max-w-2xl lg:max-w-4xl"
+        data-shortcut-help
+      >
+        <div className="border-b border-line px-5 py-4 sm:px-6">
+          <DialogTitle className="text-base font-medium text-ink">Keyboard shortcuts</DialogTitle>
+          <DialogDescription className="mt-1 text-[0.8rem] text-mute">
+            Move around the whole app without leaving the keyboard. Press{' '}
+            <Kbd>?</Kbd> anytime to bring this back.
+          </DialogDescription>
+        </div>
+        {/* Body scrolls; the header and close button stay put. columns give a
+            balanced masonry pack across the wider footprint on large screens. */}
+        <div className="overflow-y-auto px-5 py-5 sm:px-6">
+          <div className="gap-4 sm:columns-2 lg:columns-3">
+            {sections.map((section) => (
+              <SectionCard key={section.title} {...section} />
+            ))}
           </div>
         </div>
       </DialogContent>
