@@ -4,6 +4,7 @@ import {
   Archive,
   Check,
   ChevronDown,
+  Filter,
   FolderGit2,
   Paperclip,
   Play,
@@ -56,11 +57,185 @@ function onApiError<T>(err: T) {
   toast.error(err instanceof ApiError ? err.message : 'Request failed');
 }
 
-function QuickAdd({ board, onAdd }: { board: ApiBoard; onAdd: () => void }) {
+// The optional repo target for a *new* todo — the create-side mirror of the
+// card's RepoPickerPopover, but over local state (no todo id yet). Repo stays
+// optional (you can pick it later, before Start), so "Any repo" is a valid,
+// first-class choice. When multiple installations exist and no repo is picked
+// yet, a small installation selector decides where an "Any repo" todo lands.
+function TargetPicker({
+  board,
+  installationId,
+  onInstallationChange,
+  selected,
+  onChange,
+}: {
+  board: ApiBoard;
+  installationId: number;
+  onInstallationChange: (id: number) => void;
+  selected: number[];
+  onChange: (ids: number[]) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const multiInstall = board.installations.length > 1;
+  const available = board.repos.filter((r) => r.installation_id === installationId);
+  const filtered = query.trim()
+    ? available.filter((r) => `${r.owner}/${r.name}`.toLowerCase().includes(query.toLowerCase()))
+    : available;
+  const toggle = (id: number) => {
+    const isSel = selected.includes(id);
+    const next = isSel ? selected.filter((i) => i !== id) : [...selected, id];
+    if (next.length > 3) return;
+    onChange(next);
+  };
+  const first = board.repos.find((r) => r.id === selected[0]);
+  const label =
+    selected.length === 0
+      ? multiInstall
+        ? `${board.installations.find((i) => i.id === installationId)?.account_login ?? 'Any'} · any repo`
+        : 'Any repo'
+      : selected.length === 1
+        ? (first?.name ?? '1 repo')
+        : `${first?.name} +${selected.length - 1}`;
+  const optionClasses = (on: boolean) =>
+    cn(
+      'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-40 max-sm:py-2.5',
+      on ? 'text-accent-bright' : 'text-ink-dim hover:bg-raised/70',
+    );
+  return (
+    <Popover onOpenChange={(open) => !open && setQuery('')}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label="Repository target for the new todo"
+          className={cn(
+            'inline-flex cursor-pointer items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-xs whitespace-nowrap transition-colors sm:rounded-md sm:py-1.5',
+            selected.length
+              ? 'border-accent/40 text-accent-bright'
+              : 'border-line-2/70 text-mute hover:border-line-2 hover:text-ink',
+          )}
+        >
+          <FolderGit2 className="size-3.5 shrink-0" aria-hidden />
+          <span className="max-w-44 truncate">{label}</span>
+          <ChevronDown className="size-3.5 shrink-0 opacity-60" aria-hidden />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" onKeyDown={onListboxKeyDown}>
+        {multiInstall && selected.length === 0 ? (
+          <div className="mb-1.5">
+            <Select
+              value={installationId}
+              onChange={(e) => onInstallationChange(Number(e.target.value))}
+              aria-label="Installation"
+              className="text-xs sm:py-1.5"
+            >
+              {board.installations.map((i) => (
+                <option key={i.id} value={i.id}>
+                  {i.account_login}
+                </option>
+              ))}
+            </Select>
+          </div>
+        ) : null}
+        {available.length > 6 ? (
+          <div className="relative mb-1.5">
+            <Search
+              className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-mute"
+              aria-hidden
+            />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Filter repositories…"
+              aria-label="Filter repositories"
+              className="py-1.5 pl-8 text-xs sm:py-1.5 sm:pl-8"
+            />
+          </div>
+        ) : null}
+        <div className="max-h-64 overflow-y-auto" role="listbox" aria-label="Repositories">
+          <button
+            type="button"
+            role="option"
+            aria-selected={selected.length === 0}
+            onClick={() => onChange([])}
+            className={optionClasses(selected.length === 0)}
+          >
+            <span className="flex size-4 shrink-0 items-center justify-center">
+              {selected.length === 0 ? <Check className="size-3.5" aria-hidden /> : null}
+            </span>
+            Any repo <span className="text-mute/70">— pick before Start</span>
+          </button>
+          {filtered.map((r) => {
+            const isSel = selected.includes(r.id);
+            const disabled = !isSel && selected.length >= 3;
+            return (
+              <button
+                key={r.id}
+                type="button"
+                role="option"
+                aria-selected={isSel}
+                disabled={disabled}
+                onClick={() => toggle(r.id)}
+                className={optionClasses(isSel)}
+              >
+                <span className="flex size-4 shrink-0 items-center justify-center">
+                  {isSel ? <Check className="size-3.5" aria-hidden /> : null}
+                </span>
+                <FolderGit2 className="size-3.5 shrink-0 text-mute" aria-hidden />
+                <span className="min-w-0 truncate">
+                  <span className="text-mute">{r.owner}/</span>
+                  {r.name}
+                </span>
+              </button>
+            );
+          })}
+          {filtered.length === 0 ? (
+            <p className="px-2 py-3 text-center text-xs text-mute">No repositories match.</p>
+          ) : null}
+        </div>
+        <p className="mt-1.5 border-t border-line px-2 pt-1.5 text-[11px] text-mute/70">
+          {selected.length}/3 · optional — a task targets up to 3 repos.
+        </p>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function QuickAdd({
+  board,
+  activeRepoId,
+  onShowAll,
+}: {
+  board: ApiBoard;
+  activeRepoId: number | null;
+  onShowAll: () => void;
+}) {
   const queryClient = useQueryClient();
   const inputRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState('');
-  const [installationId, setInstallationId] = useState(board.installations[0]?.id ?? 0);
+  const [targetRepoIds, setTargetRepoIds] = useState<number[]>(
+    activeRepoId ? [activeRepoId] : [],
+  );
+  // The target defaults to whatever repo you're filtered to — so filter → add
+  // keeps the new card in view — but stays a visible, editable choice. Once
+  // the user edits it, we stop mirroring the filter (touched). Render-time
+  // sync, the codebase's no-effect pattern.
+  const [touched, setTouched] = useState(false);
+  const [manualInstall, setManualInstall] = useState<number | null>(null);
+  const [prevActive, setPrevActive] = useState(activeRepoId);
+  if (activeRepoId !== prevActive) {
+    setPrevActive(activeRepoId);
+    if (!touched) setTargetRepoIds(activeRepoId ? [activeRepoId] : []);
+  }
+  const repoInstall = (id: number) => board.repos.find((r) => r.id === id)?.installation_id;
+  // A todo's repos must share one installation; derive it from the target,
+  // falling back to a manual pick, the active filter, then the first install.
+  const installationId =
+    (targetRepoIds.length ? repoInstall(targetRepoIds[0]) : undefined) ??
+    manualInstall ??
+    (activeRepoId ? repoInstall(activeRepoId) : undefined) ??
+    board.installations[0]?.id ??
+    0;
+
   // Power-user affordance: "/" focuses the quick-add from anywhere on the
   // board (form-tag suppression is the library default). Desktop-gated like
   // every other board hotkey.
@@ -68,79 +243,99 @@ function QuickAdd({ board, onAdd }: { board: ApiBoard; onAdd: () => void }) {
   useHotkeys(
     '/',
     () => inputRef.current?.focus(),
-    {
-      useKey: true,
-      preventDefault: true,
-      enabled: () => isDesktop && noOverlayOpen(),
-    },
+    { useKey: true, preventDefault: true, enabled: () => isDesktop && noOverlayOpen() },
     [isDesktop],
   );
   const add = useMutation({
-    mutationFn: (t: string) =>
-      api.post('/api/todos', { installation_id: installationId, title: t }),
+    mutationFn: (vars: { title: string; installationId: number; repoIds: number[] }) =>
+      api.post('/api/todos', {
+        installation_id: vars.installationId,
+        title: vars.title,
+        repository_ids: vars.repoIds,
+      }),
     // The card appears (and the input clears, in submit) the moment Enter is
-    // pressed; the refetch below swaps in the server row.
-    onMutate: (t) =>
+    // pressed — with its target repos already attached so it matches the
+    // filter; the refetch below swaps in the server row.
+    onMutate: (vars) =>
       applyOptimistic<ApiBoard>(queryClient, ['board'], (prev) => ({
         ...prev,
         todos: [
           {
             id: optimisticId(),
-            installation_id: installationId,
-            title: t,
+            installation_id: vars.installationId,
+            title: vars.title,
             notes: null,
             created_at: optimisticNow(),
-            repos: [],
+            repos: prev.repos
+              .filter((r) => vars.repoIds.includes(r.id))
+              .map((r) => ({ id: r.id, owner: r.owner, name: r.name })),
           },
           ...prev.todos,
         ],
       })),
-    onError: (err, _t, ctx) => {
+    onError: (err, _vars, ctx) => {
       ctx?.rollback();
       onApiError(err);
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['board'] }),
   });
+  const setTarget = (ids: number[]) => {
+    setTouched(true);
+    setTargetRepoIds(ids);
+  };
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const t = title.trim();
     if (!t) return;
-    add.mutate(t);
+    const repoIds = targetRepoIds;
+    add.mutate({ title: t, installationId, repoIds });
+    // Transparent hand-off: if a repo filter is active and the new card won't
+    // match it, say so (and offer to clear it) — never let a card silently
+    // vanish, and never wipe the filter without asking.
+    if (activeRepoId !== null && !repoIds.includes(activeRepoId)) {
+      const name = board.repos.find((r) => r.id === activeRepoId)?.name ?? 'this repo';
+      toast(`Added to backlog — hidden by the ${name} filter`, {
+        action: { label: 'Show all', onClick: onShowAll },
+      });
+    }
     setTitle('');
-    onAdd();
+    setTouched(false);
+    setManualInstall(null);
   };
   return (
-    <form onSubmit={submit} className="flex flex-col gap-2 sm:flex-row">
-      <span className="relative flex-1">
-        <Input
+    <form onSubmit={submit} className="flex flex-col gap-2 sm:flex-row sm:items-center">
+      {/* A composed create field (not the bare Input) so the leading + and the
+          "/" keycap sit inline without padding hacks — and it reads as create,
+          not search. */}
+      <div className="relative flex flex-1 items-center rounded-lg border border-line-2/70 bg-surface transition-colors focus-within:border-accent/50 sm:rounded-md">
+        <Plus className="ml-3 size-4 shrink-0 text-accent" aria-hidden />
+        <input
           ref={inputRef}
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder="Add a todo…"
           aria-label="New todo title"
           maxLength={200}
-          className="w-full"
+          className="w-full bg-transparent px-2.5 py-2 text-base text-ink outline-none placeholder:text-mute/70 sm:py-1.5 sm:text-sm"
         />
         {!title ? (
-          <Kbd className="pointer-events-none absolute top-1/2 right-2.5 hidden -translate-y-1/2 md:inline-flex">
-            /
-          </Kbd>
+          <Kbd className="pointer-events-none mr-2.5 hidden shrink-0 md:inline-flex">/</Kbd>
         ) : null}
-      </span>
-      {board.installations.length > 1 ? (
-        <Select
-          value={installationId}
-          onChange={(e) => setInstallationId(Number(e.target.value))}
-          aria-label="Installation"
-          className="sm:w-44"
-        >
-          {board.installations.map((i) => (
-            <option key={i.id} value={i.id}>
-              {i.account_login}
-            </option>
-          ))}
-        </Select>
-      ) : null}
+      </div>
+      <TargetPicker
+        board={board}
+        installationId={installationId}
+        onInstallationChange={(id) => {
+          setManualInstall(id);
+          setTarget([]);
+        }}
+        selected={targetRepoIds}
+        onChange={setTarget}
+      />
+      <Button type="submit">
+        <Plus className="size-4" aria-hidden />
+        Add
+      </Button>
     </form>
   );
 }
@@ -660,10 +855,82 @@ function Column({
 
 type FilterRepo = { id: number; owner: string; name: string; count: number };
 
-// Single-select repo filter for the whole board. Options come from the repos
-// actually on the cards (not the installation's full repo list), so every
-// choice matches at least one card; the count shows what it matches.
-function RepoFilter({
+// Whole-board repo filter as a pill row: every repo on the cards is one
+// toggle, with its match count inline, so the filter reads as a filter (not a
+// search) and the whole set is visible at a glance. Options come from the
+// repos actually on the cards, so every pill matches at least one card.
+const FILTER_PILL_CAP = 8;
+
+function filterPill(active: boolean) {
+  return cn(
+    'inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1 font-mono text-xs whitespace-nowrap transition-colors',
+    active
+      ? 'border-accent/40 bg-accent/10 text-accent-bright'
+      : 'border-line-2/70 text-mute hover:border-line-2 hover:text-ink',
+  );
+}
+
+function RepoFilterPills({
+  repos,
+  value,
+  onChange,
+  allCount,
+}: {
+  repos: FilterRepo[];
+  value: number | null;
+  onChange: (id: number | null) => void;
+  allCount: number;
+}) {
+  // Show a capped row of pills; the rest fold into a searchable "More". The
+  // active repo is always pulled into the visible set so a filtered board
+  // never hides which pill is lit.
+  const head = repos.slice(0, FILTER_PILL_CAP);
+  const activeHidden = value !== null && !head.some((r) => r.id === value);
+  const visible = activeHidden
+    ? [repos.find((r) => r.id === value)!, ...repos.filter((r) => r.id !== value).slice(0, FILTER_PILL_CAP - 1)]
+    : head;
+  const hidden = repos.filter((r) => !visible.some((v) => v.id === r.id));
+  return (
+    <div className="flex min-w-0 items-center gap-2.5">
+      <span className="flex shrink-0 items-center gap-1.5 font-mono text-[10px] tracking-[0.14em] text-mute uppercase">
+        <Filter className="size-3" aria-hidden />
+        Filter
+      </span>
+      <div className="flex min-w-0 items-center gap-2 overflow-x-auto pb-1">
+        <button
+          type="button"
+          onClick={() => onChange(null)}
+          aria-pressed={value === null}
+          className={filterPill(value === null)}
+        >
+          All <span className="text-[10px] opacity-70">{allCount}</span>
+        </button>
+        {visible.map((r) => {
+          const active = r.id === value;
+          return (
+            <button
+              key={r.id}
+              type="button"
+              onClick={() => onChange(active ? null : r.id)}
+              aria-pressed={active}
+              title={`${r.owner}/${r.name}`}
+              className={filterPill(active)}
+            >
+              {r.name} <span className="text-[10px] opacity-70">{r.count}</span>
+            </button>
+          );
+        })}
+        {hidden.length > 0 ? (
+          <RepoFilterMore repos={hidden} value={value} onChange={onChange} />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+// Overflow for the pill row: the repos that didn't fit, in the same searchable
+// list the picker uses elsewhere. Single-select, mirroring the pills.
+function RepoFilterMore({
   repos,
   value,
   onChange,
@@ -677,16 +944,11 @@ function RepoFilter({
   const filtered = query.trim()
     ? repos.filter((r) => `${r.owner}/${r.name}`.toLowerCase().includes(query.toLowerCase()))
     : repos;
-  const active = repos.find((r) => r.id === value);
   const pick = (id: number | null) => {
     onChange(id);
     setOpen(false);
   };
-  const optionClasses = (selected: boolean) =>
-    cn(
-      'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors max-sm:py-2.5',
-      selected ? 'text-accent-bright' : 'text-ink-dim hover:bg-raised/70',
-    );
+  const activeHere = repos.some((r) => r.id === value);
   return (
     <Popover
       open={open}
@@ -696,19 +958,8 @@ function RepoFilter({
       }}
     >
       <PopoverTrigger asChild>
-        <button
-          type="button"
-          aria-label="Filter board by repository"
-          className={cn(
-            'inline-flex cursor-pointer items-center gap-1.5 self-start rounded-lg border bg-surface px-3 py-2 text-xs whitespace-nowrap transition-colors sm:rounded-md sm:py-1.5',
-            active
-              ? 'border-accent/40 text-accent-bright'
-              : 'border-line-2/70 text-mute hover:text-ink',
-          )}
-        >
-          <FolderGit2 className="size-3.5 shrink-0" aria-hidden />
-          <span className="max-w-44 truncate">{active ? active.name : 'All repos'}</span>
-          <ChevronDown className="size-3.5 shrink-0 opacity-60" aria-hidden />
+        <button type="button" aria-label="More repositories" className={filterPill(activeHere)}>
+          More <ChevronDown className="size-3 shrink-0 opacity-60" aria-hidden />
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" onKeyDown={onListboxKeyDown}>
@@ -728,18 +979,6 @@ function RepoFilter({
           </div>
         ) : null}
         <div className="max-h-64 overflow-y-auto" role="listbox" aria-label="Repository filter">
-          <button
-            type="button"
-            role="option"
-            aria-selected={!active}
-            onClick={() => pick(null)}
-            className={optionClasses(!active)}
-          >
-            <span className="flex size-4 shrink-0 items-center justify-center">
-              {!active ? <Check className="size-3.5" aria-hidden /> : null}
-            </span>
-            All repositories
-          </button>
           {filtered.length === 0 ? (
             <p className="px-2 py-3 text-center text-xs text-mute">No repositories match.</p>
           ) : (
@@ -752,7 +991,10 @@ function RepoFilter({
                   role="option"
                   aria-selected={selected}
                   onClick={() => pick(selected ? null : r.id)}
-                  className={optionClasses(selected)}
+                  className={cn(
+                    'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors max-sm:py-2.5',
+                    selected ? 'text-accent-bright' : 'text-ink-dim hover:bg-raised/70',
+                  )}
                 >
                   <span className="flex size-4 shrink-0 items-center justify-center">
                     {selected ? <Check className="size-3.5" aria-hidden /> : null}
@@ -931,18 +1173,17 @@ export function BoardPage() {
         ]}
       />
 
-      <div className="mt-5 flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0 flex-1 lg:max-w-xl">
-          <QuickAdd
-            board={data}
-            onAdd={() => {
-              setRepoId(null);
-              setFilter('all');
-            }}
-          />
-        </div>
+      <div className="mt-5 space-y-3">
+        <QuickAdd board={data} activeRepoId={repoFilter} onShowAll={() => setRepoId(null)} />
         {filterRepos.length > 1 ? (
-          <RepoFilter repos={filterRepos} value={repoFilter} onChange={setRepoId} />
+          <div className="border-t border-line/70 pt-3">
+            <RepoFilterPills
+              repos={filterRepos}
+              value={repoFilter}
+              onChange={setRepoId}
+              allCount={data.todos.length + data.tasks.length}
+            />
+          </div>
         ) : null}
       </div>
 
