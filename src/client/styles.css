@@ -40,6 +40,11 @@
 
   --animate-accordion-down: accordion-down 0.18s ease-out;
   --animate-accordion-up: accordion-up 0.18s ease-out;
+
+  /* Modal entrance: the scrim fades and the panel fades + settles up from a
+     hair below full size — soft on the eyes vs. a hard pop. */
+  --animate-overlay-in: overlay-in 0.2s ease-out;
+  --animate-dialog-in: dialog-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @layer base {
@@ -118,6 +123,30 @@
   to {
     opacity: 1;
     transform: none;
+  }
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Animates the standalone `scale` property (not `transform`) so it composes
+   with — instead of clobbering — the translate utilities that position the
+   panel. Works for both centered dialogs and the top-anchored command
+   palette without either jumping on open. */
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    scale: 0.96;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
   }
 }
 

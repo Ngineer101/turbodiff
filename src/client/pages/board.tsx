@@ -787,23 +787,32 @@ function TaskCard({ task }: { task: ApiPlan }) {
       {done ? null : (
         <>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
-            <Pill tone={state.tone}>{state.label}</Pill>
+            <Pill tone={state.tone} className="max-w-full">
+              <span className="min-w-0 truncate">{state.label}</span>
+            </Pill>
             {task.repos
               .filter((r) => r.verification && r.feature_status !== 'merged')
-              .map((r) => (
-                <Pill
-                  key={r.repository_id}
-                  tone={
-                    r.verification!.status === 'passed'
-                      ? 'on'
-                      : r.verification!.status === 'running'
-                        ? 'running'
-                        : 'red'
-                  }
-                >
-                  {r.owner}/{r.name} Verify: {r.verification!.status}
-                </Pill>
-              ))}
+              .map((r) => {
+                // Full label truncates with an ellipsis (title carries the rest)
+                // so a long repo path can never run off the card edge.
+                const label = `${r.owner}/${r.name} Verify: ${r.verification!.status}`;
+                return (
+                  <Pill
+                    key={r.repository_id}
+                    title={label}
+                    className="max-w-full"
+                    tone={
+                      r.verification!.status === 'passed'
+                        ? 'on'
+                        : r.verification!.status === 'running'
+                          ? 'running'
+                          : 'red'
+                    }
+                  >
+                    <span className="min-w-0 truncate">{label}</span>
+                  </Pill>
+                );
+              })}
           </div>
           <StageLights stages={taskStages(task)} className="mt-2" />
         </>
