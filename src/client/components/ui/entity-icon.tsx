@@ -5,8 +5,10 @@ import {
   Database,
   FlaskConical,
   Gauge,
+  Plug,
   Repeat,
   ScanSearch,
+  Server,
   ShieldCheck,
   Sparkles,
   SquareTerminal,
@@ -15,7 +17,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../../lib/utils.ts';
 
-export type EntityKind = 'agent' | 'skill' | 'automation';
+export type EntityKind = 'agent' | 'skill' | 'automation' | 'integration';
 
 // Keyword → glyph, matched against the slug + name. Lets built-ins *and*
 // meaningfully-named custom entities get a fitting icon; anything unmatched
@@ -26,16 +28,18 @@ const KEYWORD_ICONS: [RegExp, LucideIcon][] = [
   [/perf|speed|latency|n\+1/, Gauge],
   [/test|spec|qa/, FlaskConical],
   [/lint|format|style|fix/, Wand2],
-  [/db|migrat|schema|sql/, Database],
+  [/db|migrat|schema|sql|postgres|redis|mysql/, Database],
   [/shell|bash|script|terminal/, SquareTerminal],
   [/review|scan|inspect/, ScanSearch],
   [/observ|o11y|log|metric|trace|monitor/, Activity],
+  [/mcp|server/, Server],
 ];
 
 const KIND_DEFAULT: Record<EntityKind, LucideIcon> = {
   agent: Bot,
   skill: Sparkles,
   automation: Repeat,
+  integration: Plug,
 };
 
 export function entityIcon(kind: EntityKind, slug: string, name = ''): LucideIcon {
