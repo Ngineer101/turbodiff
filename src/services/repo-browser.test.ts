@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
 import type { RepositoryRow } from '../data/db.ts';
 import { readFile } from './repo-browser.ts';
 
-// readFile only reads owner/name off the row; the rest never leaves the DB
-// layer in these tests.
+// SAFETY: readFile only reads owner/name off the row; the rest never leaves
+// the DB layer in these tests.
 const repo = { owner: 'octo', name: 'shop' } as RepositoryRow;
 
 const BLOB_SHA = 'a0373c127e472633630c8da9f9440ae5bb4c9127';
