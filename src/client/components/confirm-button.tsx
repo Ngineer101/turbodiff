@@ -22,7 +22,10 @@ export function ConfirmButton({
   const [open, setOpen] = useState(false);
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <Button {...buttonProps} loading={busy} onClick={() => setOpen(true)}>
+      {/* type="button" is load-bearing: this trigger often lives inside a
+          <form> (e.g. the entity edit forms), where a button with no explicit
+          type defaults to submit — clicking Delete would submit the form. */}
+      <Button {...buttonProps} type="button" loading={busy} onClick={() => setOpen(true)}>
         {children}
       </Button>
       <DialogContent>
@@ -31,10 +34,11 @@ export function ConfirmButton({
           {description}
         </DialogDescription>
         <div className="mt-5 flex justify-end gap-2">
-          <Button variant="secondary" onClick={() => setOpen(false)}>
+          <Button type="button" variant="secondary" onClick={() => setOpen(false)}>
             Cancel
           </Button>
           <Button
+            type="button"
             variant={buttonProps.variant === 'danger' ? 'danger' : 'default'}
             onClick={() => {
               setOpen(false);

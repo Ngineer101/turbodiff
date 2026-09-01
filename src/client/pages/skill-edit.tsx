@@ -1,12 +1,12 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { useNavigate, useParams } from '@tanstack/react-router';
+import { Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { api, ApiError } from '../lib/api.ts';
 import { skillQuery } from '../lib/queries.ts';
 import { SkillForm, type SkillFormValues } from '../components/skill-form.tsx';
 import { ConfirmButton } from '../components/confirm-button.tsx';
-import { PageTitle } from '../components/section.tsx';
 
 function onApiError<T>(err: T) {
   toast.error(err instanceof ApiError ? err.message : 'request failed');
@@ -41,22 +41,20 @@ export function SkillEditPage() {
   });
 
   return (
-    <>
-      <PageTitle>edit skill</PageTitle>
-      <SkillForm
-        initial={{
-          name: data.skill.name,
-          slug: data.skill.slug,
-          description: data.skill.description ?? '',
-          instructions: data.skill.instructions,
-        }}
-        slugEditable={false}
-        error={error}
-        busy={save.isPending}
-        onSubmit={(values) => save.mutate(values)}
-        onCancel={() => navigate({ to: '/skills' })}
-      />
-      <div className="mt-6 border-t border-line pt-4">
+    <SkillForm
+      mode="edit"
+      initial={{
+        name: data.skill.name,
+        slug: data.skill.slug,
+        description: data.skill.description ?? '',
+        instructions: data.skill.instructions,
+      }}
+      slugEditable={false}
+      error={error}
+      busy={save.isPending}
+      onSubmit={(values) => save.mutate(values)}
+      onCancel={() => navigate({ to: '/skills' })}
+      footerAction={
         <ConfirmButton
           variant="danger"
           title="Delete this skill?"
@@ -65,9 +63,9 @@ export function SkillEditPage() {
           onConfirm={() => remove.mutate()}
           busy={remove.isPending}
         >
-          Delete skill
+          <Trash2 className="size-4" aria-hidden /> Delete skill
         </ConfirmButton>
-      </div>
-    </>
+      }
+    />
   );
 }

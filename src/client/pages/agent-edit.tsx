@@ -1,13 +1,12 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { useNavigate, useParams } from '@tanstack/react-router';
+import { Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { api, ApiError } from '../lib/api.ts';
 import { agentQuery } from '../lib/queries.ts';
 import { AgentForm, type AgentFormValues } from '../components/agent-form.tsx';
 import { ConfirmButton } from '../components/confirm-button.tsx';
-import { PageTitle } from '../components/section.tsx';
-import { Pill } from '../components/ui/pill.tsx';
 
 function onApiError<T>(err: T) {
   toast.error(err instanceof ApiError ? err.message : 'Request failed');
@@ -42,27 +41,23 @@ export function AgentEditPage() {
   });
 
   return (
-    <>
-      <PageTitle aside={data.agent.is_builtin ? <Pill>Built-in</Pill> : undefined}>
-        Edit agent
-      </PageTitle>
-      <AgentForm
-        initial={{
-          name: data.agent.name,
-          slug: data.agent.slug,
-          description: data.agent.description ?? '',
-          instructions: data.agent.instructions,
-          model: data.agent.model,
-        }}
-        slugEditable={false}
-        defaultModel={data.default_model}
-        error={error}
-        busy={save.isPending}
-        onSubmit={(values) => save.mutate(values)}
-        onCancel={() => navigate({ to: '/agents' })}
-      />
-      {!data.agent.is_builtin ? (
-        <div className="mt-6 border-t border-line pt-4">
+    <AgentForm
+      mode="edit"
+      initial={{
+        name: data.agent.name,
+        slug: data.agent.slug,
+        description: data.agent.description ?? '',
+        instructions: data.agent.instructions,
+        model: data.agent.model,
+      }}
+      slugEditable={false}
+      defaultModel={data.default_model}
+      error={error}
+      busy={save.isPending}
+      onSubmit={(values) => save.mutate(values)}
+      onCancel={() => navigate({ to: '/agents' })}
+      footerAction={
+        data.agent.is_builtin ? undefined : (
           <ConfirmButton
             variant="danger"
             title="Delete this agent?"
@@ -71,10 +66,10 @@ export function AgentEditPage() {
             onConfirm={() => remove.mutate()}
             busy={remove.isPending}
           >
-            Delete agent
+            <Trash2 className="size-4" aria-hidden /> Delete agent
           </ConfirmButton>
-        </div>
-      ) : null}
-    </>
+        )
+      }
+    />
   );
 }
