@@ -392,6 +392,96 @@ describe('composable feature delivery', () => {
     });
   });
 
+  it('retries a stopped implementation as a fresh attempt on the same delivery run', async () => {
+    await seedRepo();
+    await testDatabase()
+      .prepare(`UPDATE repositories SET process_profile = 'full_delivery' WHERE id = 101`)
+      .run();
+    const featureId = await createFeature(101, 'Retried delivery', 'Fix the flash', ['No flash']);
+    const queued: FactoryMessage[] = [];
+    const enqueue = async (message: FactoryMessage) => void queued.push(message);
+    const dispatch = vi.fn<ReviewDispatcher>(async () => true);
+
+    await expect(scheduleFeatureDelivery(featureId, enqueue)).resolves.toBe(true);
+    const [first] = stageCommands(queued);
+    await runLifecycleStage(first, dispatch, { enqueue });
+    // The generation ran, failed its checks, and settled the stage.
+    await updateFeature(featureId, { status: 'checks_failed', error: 'vp: command not found' });
+    await completeLifecycleStage(
+      first.stageRunId,
+      'implement',
+      false,
+      { kind: 'checks_failed', featureId },
+      {},
+      enqueue,
+    );
+    await expect(getFactoryRun(first.factoryRunId)).resolves.toMatchObject({
+      status: 'awaiting_human',
+    });
+
+    // The retry route re-sends the approval's plain generate message, which
+    // the consumer routes back through scheduleFeatureDelivery.
+    await updateFeature(featureId, { error: 'retry queued' });
+    queued.length = 0;
+    await expect(scheduleFeatureDelivery(featureId, enqueue)).resolves.toBe(true);
+    const [retry] = stageCommands(queued);
+    expect(retry).toMatchObject({
+      stage: 'implement',
+      factoryRunId: first.factoryRunId,
+      idempotencyKey: `${first.factoryRunId}:implement:2`,
+    });
+    expect(retry.stageRunId).not.toBe(first.stageRunId);
+    await expect(getFactoryRun(first.factoryRunId)).resolves.toMatchObject({
+      status: 'active',
+      handoff_reason: null,
+    });
+
+    // A duplicate delivery of the same retry re-sends the scheduled attempt
+    // instead of adding another.
+    await expect(scheduleFeatureDelivery(featureId, enqueue)).resolves.toBe(true);
+    expect(stageCommands(queued)).toEqual([retry, retry]);
+
+    await runLifecycleStage(retry, dispatch, { enqueue });
+    expect(queued.filter((message) => message.kind === 'generate')).toEqual([
+      {
+        kind: 'generate',
+        featureId,
+        factoryRunId: first.factoryRunId,
+        stageRunId: retry.stageRunId,
+      },
+    ]);
+    await expect(listStageRuns(first.factoryRunId)).resolves.toMatchObject([
+      { stage: 'implement', attempt: 1, status: 'failed' },
+      { stage: 'implement', attempt: 2, status: 'running', input: { featureId } },
+    ]);
+
+    // A stage left 'running' by a generation the strand sweep gave up on is
+    // settled as failed and retried the same way.
+    await testDatabase()
+      .prepare(
+        `UPDATE app.stage_runs SET started_at = CURRENT_TIMESTAMP - INTERVAL '2 hours'
+         WHERE id = ?1`,
+      )
+      .bind(retry.stageRunId)
+      .run();
+    await updateFeature(featureId, {
+      status: 'failed',
+      error: 'generation run was killed — retry',
+    });
+    queued.length = 0;
+    await expect(scheduleFeatureDelivery(featureId, enqueue)).resolves.toBe(true);
+    const [third] = stageCommands(queued);
+    expect(third).toMatchObject({
+      stage: 'implement',
+      idempotencyKey: `${first.factoryRunId}:implement:3`,
+    });
+    await expect(listStageRuns(first.factoryRunId)).resolves.toMatchObject([
+      { attempt: 1, status: 'failed' },
+      { attempt: 2, status: 'failed', error: 'generation run was killed — retry' },
+      { attempt: 3, status: 'queued' },
+    ]);
+  });
+
   it('hands verified delivery to the merge executor and completes the run', async () => {
     await seedRepo();
     const featureId = await createFeature(101, 'Verified delivery', 'Ship it', [
