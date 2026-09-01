@@ -122,6 +122,46 @@ export async function readTree(
   return { path, entries };
 }
 
+// Cap for the git/blobs fallback on too_large previewable files: past this,
+// showing the notice beats shipping tens of MB of base64 to the client.
+const PREVIEW_FALLBACK_MAX_BYTES = 10 * 1024 * 1024;
+
+// The contents API rejects 1–100 MB blobs with too_large, so a large PNG
+// screenshot would get a notice instead of a preview. For previewable types
+// under the cap, recover the bytes via the git/blobs API — the parent
+// directory listing supplies the blob sha and size.
+async function readPreviewFallback(
+  token: string,
+  repo: RepositoryRow,
+  ref: string,
+  path: string,
+): Promise<ApiRepoFile | null> {
+  if (!binaryPreviewKind(path)) return null;
+  const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+  const listing = await githubJson<GithubContentsEntry[] | GithubContentsEntry>(
+    token,
+    `/repos/${repo.owner}/${repo.name}/contents/${encodePath(dir)}?ref=${encodeURIComponent(ref)}`,
+  );
+  if (!Array.isArray(listing)) return null;
+  const entry = listing.find((item) => item.path === path);
+  if (!entry || entry.size > PREVIEW_FALLBACK_MAX_BYTES) return null;
+  const blob = await githubJson<{ content?: string; encoding?: string }>(
+    token,
+    `/repos/${repo.owner}/${repo.name}/git/blobs/${entry.sha}`,
+  );
+  if (!isString(blob.content) || blob.encoding !== 'base64') return null;
+  return {
+    path,
+    ref,
+    sha: entry.sha,
+    size: entry.size,
+    text: null,
+    binary: true,
+    too_large: false,
+    content_base64: blob.content.replace(/\s+/g, ''),
+  };
+}
+
 export async function readFile(
   token: string,
   repo: RepositoryRow,
@@ -136,9 +176,11 @@ export async function readFile(
     );
   } catch (err) {
     // GitHub's documented error code for 1–100 MB blobs, embedded in the
-    // thrown message by githubRequest. v1 shows a notice instead of falling
-    // back to git/blobs.
+    // thrown message by githubRequest. Previewable types get a git/blobs
+    // fallback under the cap; everything else shows a notice.
     if (err instanceof Error && err.message.includes('too_large')) {
+      const fallback = await readPreviewFallback(token, repo, ref, path).catch(() => null);
+      if (fallback) return fallback;
       return {
         path,
         ref,
