@@ -181,13 +181,17 @@ export async function createArtifactsRepository(input: {
   name: string;
   artifactsRepo: string;
   defaultBranch: string;
+  // Chosen at creation on the new-project form; falls back to the column
+  // default when omitted.
+  processProfile?: ProcessProfileKey;
 }): Promise<RepositoryRow> {
   const row = await queryOne<RepositoryRow>(sql`
     INSERT INTO app.repositories
-      (installation_id, owner, name, provider, artifacts_repo, default_branch)
+      (installation_id, owner, name, provider, artifacts_repo, default_branch, process_profile)
     VALUES (
       ${input.installationId}, ${input.owner}, ${input.name},
-      'artifacts', ${input.artifactsRepo}, ${input.defaultBranch}
+      'artifacts', ${input.artifactsRepo}, ${input.defaultBranch},
+      ${input.processProfile ?? 'legacy_factory'}
     )
     RETURNING *
   `);

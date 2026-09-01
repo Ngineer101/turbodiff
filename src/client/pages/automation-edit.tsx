@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
+import { Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import type { ApiAutomationRunSummary } from '../../shared/api-types.ts';
@@ -8,7 +9,7 @@ import { ago } from '../lib/format.ts';
 import { automationQuery, automationRunsQuery } from '../lib/queries.ts';
 import { AutomationForm, type AutomationSubmitValues } from '../components/automation-form.tsx';
 import { ConfirmButton } from '../components/confirm-button.tsx';
-import { EmptyState, PageTitle, SectionHeading } from '../components/section.tsx';
+import { EmptyState, SectionHeading } from '../components/section.tsx';
 import { Button } from '../components/ui/button.tsx';
 import { Pill, type PillProps } from '../components/ui/pill.tsx';
 
@@ -93,22 +94,9 @@ export function AutomationEditPage() {
   const repo = `${data.automation.repository.owner}/${data.automation.repository.name}`;
 
   return (
-    <>
-      <PageTitle
-        aside={
-          <Button
-            size="sm"
-            variant="secondary"
-            loading={runNow.isPending}
-            onClick={() => runNow.mutate()}
-          >
-            Run now
-          </Button>
-        }
-      >
-        edit automation
-      </PageTitle>
+    <div className="max-w-3xl">
       <AutomationForm
+        mode="edit"
         initial={{
           name: data.automation.name,
           repository_id: data.automation.repository.id,
@@ -125,21 +113,34 @@ export function AutomationEditPage() {
         busy={save.isPending}
         onSubmit={(values) => save.mutate(values)}
         onCancel={() => navigate({ to: '/automations' })}
+        footerAction={
+          <ConfirmButton
+            variant="danger"
+            title="Delete this automation?"
+            description="This cannot be undone."
+            confirmLabel="Delete automation"
+            onConfirm={() => remove.mutate()}
+            busy={remove.isPending}
+          >
+            <Trash2 className="size-4" aria-hidden /> Delete automation
+          </ConfirmButton>
+        }
       />
-      <div className="mt-6 border-t border-line pt-4">
-        <ConfirmButton
-          variant="danger"
-          title="Delete this automation?"
-          description="This cannot be undone."
-          confirmLabel="Delete automation"
-          onConfirm={() => remove.mutate()}
-          busy={remove.isPending}
-        >
-          Delete automation
-        </ConfirmButton>
-      </div>
 
-      <SectionHeading>Runs</SectionHeading>
+      <SectionHeading
+        aside={
+          <Button
+            size="sm"
+            variant="secondary"
+            loading={runNow.isPending}
+            onClick={() => runNow.mutate()}
+          >
+            Run now
+          </Button>
+        }
+      >
+        Runs
+      </SectionHeading>
       {!runsData || runsData.runs.length === 0 ? (
         <EmptyState>No runs yet.</EmptyState>
       ) : (
@@ -149,6 +150,6 @@ export function AutomationEditPage() {
           ))}
         </div>
       )}
-    </>
+    </div>
   );
 }

@@ -5,7 +5,6 @@ import { toast } from 'sonner';
 import { api, ApiError } from '../lib/api.ts';
 import { automationsQuery } from '../lib/queries.ts';
 import { AutomationForm, type AutomationSubmitValues } from '../components/automation-form.tsx';
-import { PageTitle, SectionHeading } from '../components/section.tsx';
 
 export function AutomationNewPage() {
   const navigate = useNavigate();
@@ -24,27 +23,24 @@ export function AutomationNewPage() {
   });
 
   return (
-    <>
-      <PageTitle>automations</PageTitle>
-      <SectionHeading>new automation</SectionHeading>
-      <AutomationForm
-        initial={{
-          name: '',
-          repository_id: data.repos[0]?.id ?? 0,
-          prompt: '',
-          schedule_kind: 'daily',
-          time_of_day: '09:00',
-          day_of_week: 1,
-          enabled: true,
-        }}
-        repos={data.repos}
-        repoEditable
-        showEnabled={false}
-        error={error}
-        busy={create.isPending}
-        onSubmit={(values) => create.mutate(values)}
-        onCancel={() => navigate({ to: '/automations' })}
-      />
-    </>
+    <AutomationForm
+      mode="new"
+      initial={{
+        name: '',
+        repository_id: data.repos[0]?.id ?? 0,
+        prompt: '',
+        schedule_kind: 'daily',
+        time_of_day: '09:00',
+        day_of_week: 1,
+        enabled: true,
+      }}
+      repos={data.repos}
+      repoEditable
+      showEnabled={false}
+      error={error}
+      busy={create.isPending}
+      onSubmit={(values) => create.mutate(values)}
+      onCancel={() => navigate({ to: '/automations' })}
+    />
   );
 }

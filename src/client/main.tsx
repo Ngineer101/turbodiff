@@ -161,6 +161,13 @@ const integrationsRoute = createRoute({
   component: lazyRouteComponent(() => import('./pages/integrations.tsx'), 'IntegrationsPage'),
 });
 
+const integrationNewRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: '/integrations/new',
+  loader: () => queryClient.ensureQueryData(integrationsQuery),
+  component: lazyRouteComponent(() => import('./pages/integration-new.tsx'), 'IntegrationNewPage'),
+});
+
 // The cockpit pulls in @pierre/diffs (+ syntax themes) — lazy so the rest of
 // the app doesn't pay for it.
 const featureRoute = createRoute({
@@ -290,6 +297,7 @@ const routeTree = rootRoute.addChildren([
     taskRoute,
     usageRoute,
     integrationsRoute,
+    integrationNewRoute,
     featureRoute,
     repoCodeRoute,
     agentsRoute,

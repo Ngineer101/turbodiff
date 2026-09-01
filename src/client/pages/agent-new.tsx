@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 import { api, ApiError } from '../lib/api.ts';
 import { AgentForm, type AgentFormValues } from '../components/agent-form.tsx';
-import { PageTitle, SectionHeading } from '../components/section.tsx';
 
 // Default model mirrors src/domain/personas.ts; the server substitutes it when
 // the field is blank and validates the final value either way.
@@ -28,24 +27,15 @@ export function AgentNewPage() {
   });
 
   return (
-    <>
-      <PageTitle>Agents</PageTitle>
-      <SectionHeading>New agent</SectionHeading>
-      <AgentForm
-        initial={{
-          name: '',
-          slug: '',
-          description: '',
-          instructions: '',
-          model: DEFAULT_MODEL_HINT,
-        }}
-        slugEditable
-        defaultModel={DEFAULT_MODEL_HINT}
-        error={error}
-        busy={create.isPending}
-        onSubmit={(values) => create.mutate(values)}
-        onCancel={() => navigate({ to: '/agents' })}
-      />
-    </>
+    <AgentForm
+      mode="new"
+      initial={{ name: '', slug: '', description: '', instructions: '', model: DEFAULT_MODEL_HINT }}
+      slugEditable
+      defaultModel={DEFAULT_MODEL_HINT}
+      error={error}
+      busy={create.isPending}
+      onSubmit={(values) => create.mutate(values)}
+      onCancel={() => navigate({ to: '/agents' })}
+    />
   );
 }

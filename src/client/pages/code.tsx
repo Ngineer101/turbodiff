@@ -7,8 +7,6 @@ import {
   Code,
   Eye,
   GitBranch,
-  PanelLeftClose,
-  PanelLeftOpen,
   Pencil,
   WrapText,
 } from 'lucide-react';
@@ -122,10 +120,6 @@ function Browser({
       search: { ref },
     });
 
-  // Entering the code browser always opens the tree — it's the point of
-  // focus (see RepoTree autoFocus) — so the old turbodiff.codeTree
-  // persistence no longer has anywhere to take effect; drop it.
-  const [treeOpen, setTreeOpen] = useState(true);
   // Focus hand-off is desktop-only: on mobile the tree is either the whole
   // screen (no file) or hidden entirely, and moving focus there is wrong
   // both ways.
@@ -157,47 +151,15 @@ function Browser({
         </p>
       ) : null}
 
-      <div
-        className={cn(
-          'mt-4 lg:grid lg:min-h-0 lg:flex-1 lg:gap-6 lg:transition-[grid-template-columns] lg:duration-200',
-          treeOpen ? 'lg:grid-cols-[16rem_minmax(0,1fr)]' : 'lg:grid-cols-[2.25rem_minmax(0,1fr)]',
-        )}
-      >
-        {/* Mobile shows tree OR file (feature #44's no-zoom, plain-button
-            investment); desktop keeps the cockpit's collapsible rail. */}
+      <div className="mt-4 lg:grid lg:min-h-0 lg:flex-1 lg:grid-cols-[16rem_minmax(0,1fr)] lg:gap-6">
+        {/* A fixed, always-visible file tree — the point of focus for the code
+            browser. Mobile shows tree OR file (feature #44's no-zoom, plain
+            buttons); desktop keeps it pinned as the left rail. */}
         <aside className={cn(filePath && 'hidden', 'lg:flex lg:min-h-0 lg:flex-col')}>
-          {treeOpen ? (
-            <div className="hidden items-center justify-between gap-2 px-1.5 pb-2 lg:flex">
-              <span className="font-mono text-xs font-medium tracking-[0.14em] text-mute uppercase">
-                Files
-              </span>
-              <button
-                type="button"
-                onClick={() => setTreeOpen(false)}
-                title="Hide the file tree"
-                aria-label="Hide the file tree"
-                className="cursor-pointer rounded-md p-1 text-mute transition-colors hover:bg-raised/60 hover:text-ink"
-              >
-                <PanelLeftClose className="size-3.5" aria-hidden />
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setTreeOpen(true)}
-              title="Show the file tree"
-              aria-label="Show the file tree"
-              className="hidden cursor-pointer flex-col items-center gap-2 rounded-md border border-line bg-surface px-1.5 py-2 text-mute transition-colors hover:border-line-2 hover:text-ink lg:flex"
-            >
-              <PanelLeftOpen className="size-3.5" aria-hidden />
-              <span className="font-mono text-[10px] [writing-mode:vertical-rl]">Files</span>
-            </button>
-          )}
-          {/* The collapse-to-rail preference is desktop-only — the mobile
-              tree (the whole screen when no file is open) always renders. */}
-          <div
-            className={cn('min-h-0 flex-1 lg:overflow-y-auto lg:pb-2', !treeOpen && 'lg:hidden')}
-          >
+          <p className="hidden px-1.5 pb-2 font-mono text-[10px] font-medium tracking-[0.16em] text-mute uppercase lg:block">
+            Files
+          </p>
+          <div className="min-h-0 flex-1 lg:overflow-y-auto lg:pb-2">
             <RepoTree
               repoId={repoId}
               treeRef={refName}

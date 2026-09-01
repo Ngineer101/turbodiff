@@ -9,8 +9,9 @@ import { applyOptimistic, optimisticId, optimisticNow } from '../lib/optimistic.
 import { CHAT_TURN_PENDING, chatQuery } from '../lib/queries.ts';
 import { Markdown } from './markdown.tsx';
 import { MicButton } from './mic-button.tsx';
-import { Muted, SectionHeading } from './section.tsx';
+import { Muted } from './section.tsx';
 import { Button } from './ui/button.tsx';
+import { BlockLabel } from './ui/panel.tsx';
 import { Textarea } from './ui/input.tsx';
 import { Pill } from './ui/pill.tsx';
 
@@ -124,36 +125,39 @@ export function ChatPanel({ featureId, canWrite }: { featureId: number; canWrite
   if (!canWrite && messages.length === 0) return null;
 
   return (
-    <div className="mt-4 max-w-3xl">
-      <SectionHeading>Agent chat</SectionHeading>
-      {chatLoading ? (
-        // History-shaped placeholder — the "ask the agent" empty-state copy
-        // must not flash while the real history is still loading.
-        <div className="mt-3 animate-pulse space-y-3" role="status" aria-label="Loading chat">
-          <div className="ml-auto h-12 w-3/5 rounded-lg bg-surface" />
-          <div className="h-16 w-4/5 rounded-lg bg-surface" />
-        </div>
-      ) : messages.length === 0 ? (
-        <Muted className="block">
-          Ask the agent to tweak this PR — small iterative changes, one message at a time. Each
-          change is committed as you and pushed to the branch.
-        </Muted>
-      ) : (
-        <div className="mt-3 flex flex-col gap-3">
-          {messages.map((m) => (
-            <ChatMessage key={m.id} message={m} />
-          ))}
-        </div>
-      )}
-      {pending ? (
-        <p className="mt-3">
-          <Pill tone="running">
-            Agent is working — replies land here, usually within a few minutes
-          </Pill>
-        </p>
-      ) : null}
+    <div className="flex min-h-0 flex-1 flex-col">
+      <BlockLabel className="mb-3 shrink-0">Agent chat</BlockLabel>
+      {/* Transcript scrolls inside the rail so the composer stays pinned. */}
+      <div className="min-h-0 flex-1 lg:overflow-y-auto">
+        {chatLoading ? (
+          // History-shaped placeholder — the "ask the agent" empty-state copy
+          // must not flash while the real history is still loading.
+          <div className="animate-pulse space-y-3" role="status" aria-label="Loading chat">
+            <div className="ml-auto h-12 w-3/5 rounded-lg bg-surface" />
+            <div className="h-16 w-4/5 rounded-lg bg-surface" />
+          </div>
+        ) : messages.length === 0 ? (
+          <Muted className="block">
+            Ask the agent to tweak this PR — small iterative changes, one message at a time. Each
+            change is committed as you and pushed to the branch.
+          </Muted>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {messages.map((m) => (
+              <ChatMessage key={m.id} message={m} />
+            ))}
+          </div>
+        )}
+        {pending ? (
+          <p className="mt-3">
+            <Pill tone="running">
+              Agent is working — replies land here, usually within a few minutes
+            </Pill>
+          </p>
+        ) : null}
+      </div>
       {canWrite ? (
-        <div className="mt-3">
+        <div className="mt-3 shrink-0">
           <Textarea
             className="min-h-20"
             value={

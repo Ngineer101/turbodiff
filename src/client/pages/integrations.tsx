@@ -1,6 +1,16 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
-import { KeyRound, Server, ShieldAlert } from 'lucide-react';
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { Link } from '@tanstack/react-router';
+import {
+  FolderGit2,
+  Globe,
+  Plus,
+  PlugZap,
+  Server,
+  ShieldAlert,
+  Trash2,
+  Wrench,
+} from 'lucide-react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import type {
   ApiConnectionTest,
@@ -14,24 +24,19 @@ import { integrationsQuery } from '../lib/queries.ts';
 import { cn } from '../lib/utils.ts';
 import { ConfirmButton } from '../components/confirm-button.tsx';
 import { EmptyState, Muted, PageTitle, SectionHeading } from '../components/section.tsx';
-import { Button } from '../components/ui/button.tsx';
+import { Button, buttonVariants } from '../components/ui/button.tsx';
 import { Card } from '../components/ui/card.tsx';
 import { Dialog, DialogContent, DialogTitle } from '../components/ui/dialog.tsx';
-import { Field, Input, Select } from '../components/ui/input.tsx';
+import { EntityIcon } from '../components/ui/entity-icon.tsx';
 import { Pill } from '../components/ui/pill.tsx';
+import { Switch } from '../components/ui/switch.tsx';
 import { Table, Td, Th } from '../components/ui/table.tsx';
+import { Tooltip } from '../components/ui/tooltip.tsx';
 
 // Central integrations registry: MCP servers (mountable as run tools) and
 // bearer-auth APIs, added once per installation. MCP integrations attach to
 // factory-enabled repos with the toggles on each card, with per-context
 // switches for reviews and automations.
-
-const AUTH_TYPES = ['none', 'bearer', 'api_key', 'client_credentials', 'oauth'] as const;
-type AuthType = (typeof AUTH_TYPES)[number];
-
-function isAuthType(value: string): value is AuthType {
-  return AUTH_TYPES.some((t) => t === value);
-}
 
 function onApiError<T>(err: T) {
   toast.error(err instanceof ApiError ? err.message : 'Request failed');
@@ -135,37 +140,6 @@ function AuthPill({ conn }: { conn: ApiIntegration }) {
   }
 }
 
-// One small secondary pill toggle for a per-context mount switch (Reviews /
-// Automations) on an attached repo.
-function ContextToggle({
-  label,
-  on,
-  repoLabel,
-  onToggle,
-}: {
-  label: string;
-  on: boolean;
-  repoLabel: string;
-  onToggle: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      aria-pressed={on}
-      title={`${on ? 'Disable' : 'Enable'} ${label.toLowerCase()} for ${repoLabel}`}
-      onClick={onToggle}
-      className={cn(
-        'cursor-pointer rounded-full border px-2 py-0.5 font-mono text-[10px] whitespace-nowrap transition-colors max-sm:px-3 max-sm:py-1.5',
-        on
-          ? 'border-accent/40 bg-accent/10 text-accent-bright'
-          : 'border-line-2/70 text-mute hover:border-line-2 hover:bg-raised hover:text-ink-dim',
-      )}
-    >
-      {label}
-    </button>
-  );
-}
-
 interface RepoLinkUpdate {
   repoId: number;
   attached: boolean;
@@ -234,19 +208,51 @@ function IntegrationCard({ conn, repos }: { conn: ApiIntegration; repos: ApiInte
   ).length;
 
   return (
-    <Card className="p-3.5 sm:p-4">
-      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2.5">
-        <span className="flex min-w-0 flex-wrap items-center gap-2">
-          <Pill>{conn.kind === 'mcp' ? 'MCP' : 'API'}</Pill>
-          <span className="font-medium break-all">{conn.name}</span>
-          <AuthPill conn={conn} />
-        </span>
-        <span className="flex flex-wrap gap-1.5 max-sm:w-full">
+    <Card className="p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 flex-1 items-start gap-3">
+          <EntityIcon kind="integration" slug={conn.kind} />
+          {/* min-h-10 = the tile's height; justify-between pins the name row to
+              the tile's top and the meta row to its bottom. */}
+          <div className="flex min-h-10 min-w-0 flex-col justify-between">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium break-all">{conn.name}</span>
+              <Pill>{conn.kind === 'mcp' ? 'MCP' : 'API'}</Pill>
+              <AuthPill conn={conn} />
+            </div>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 font-mono text-[11px] leading-none text-mute">
+              <span className="inline-flex min-w-0 items-center gap-1.5">
+                <Globe className="size-3 shrink-0" aria-hidden />
+                <span className="truncate">{conn.url}</span>
+              </span>
+              {conn.kind === 'mcp' ? (
+                <span
+                  className="inline-flex shrink-0 items-center gap-1.5"
+                  title={
+                    conn.tools && conn.tools.length > 0
+                      ? conn.tools.join(', ')
+                      : 'all tools the server exposes'
+                  }
+                >
+                  <Wrench className="size-3 shrink-0" aria-hidden />
+                  {conn.tools && conn.tools.length > 0
+                    ? `${conn.tools.length} tool${conn.tools.length === 1 ? '' : 's'}`
+                    : 'all tools'}
+                </span>
+              ) : null}
+              {conn.kind === 'mcp' ? (
+                <span className="inline-flex shrink-0 items-center gap-1.5">
+                  <FolderGit2 className="size-3 shrink-0" aria-hidden />
+                  {attachedCount}/{repos.length} repos
+                </span>
+              ) : null}
+            </div>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
           {needsOAuthConnect ? (
             <Button
               size="sm"
-              variant="secondary"
-              className="max-sm:flex-1"
               onClick={() => {
                 window.location.href = `/api/integrations/${conn.id}/oauth/start`;
               }}
@@ -254,465 +260,115 @@ function IntegrationCard({ conn, repos }: { conn: ApiIntegration; repos: ApiInte
               Connect via OAuth
             </Button>
           ) : null}
-          <Button
-            size="sm"
-            variant="secondary"
-            className="max-sm:flex-1"
-            onClick={() => runTest.mutate()}
-            loading={runTest.isPending}
-          >
-            Test
-          </Button>
-          <ConfirmButton
-            size="sm"
-            variant="secondary"
-            className="max-sm:flex-1"
-            title="Remove this integration?"
-            description={`Attached repos lose access to "${conn.name}" on their next run. The stored credential is deleted.`}
-            confirmLabel="Remove"
-            onConfirm={() => remove.mutate()}
-            busy={remove.isPending}
-          >
-            Remove
-          </ConfirmButton>
-        </span>
-      </div>
-
-      <div className="mt-3 flex flex-wrap items-baseline gap-x-2.5 gap-y-1 rounded-lg border border-line/70 bg-bg/40 px-2.5 py-2">
-        <Placard>URL</Placard>
-        <span className="min-w-0 font-mono text-xs break-all text-ink-dim">{conn.url}</span>
-      </div>
-
-      <div className="mt-2.5 flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
-        <Placard>Tools</Placard>
-        {conn.tools && conn.tools.length > 0 ? (
-          conn.tools.map((t) => (
-            <Pill key={t} className="max-w-full truncate">
-              {t}
-            </Pill>
-          ))
-        ) : (
-          <Muted className="text-xs">all tools exposed by the server</Muted>
-        )}
+          <Tooltip label="Test connection">
+            <Button
+              size="icon"
+              variant="secondary"
+              onClick={() => runTest.mutate()}
+              loading={runTest.isPending}
+              aria-label="Test connection"
+            >
+              <PlugZap className="size-3.5" aria-hidden />
+            </Button>
+          </Tooltip>
+          <Tooltip label="Remove integration">
+            <ConfirmButton
+              size="icon"
+              variant="danger"
+              title="Remove this integration?"
+              description={`Attached repos lose access to "${conn.name}" on their next run. The stored credential is deleted.`}
+              confirmLabel="Remove"
+              onConfirm={() => remove.mutate()}
+              busy={remove.isPending}
+              aria-label="Remove integration"
+            >
+              <Trash2 className="size-3.5" aria-hidden />
+            </ConfirmButton>
+          </Tooltip>
+        </div>
       </div>
 
       {conn.auth_type === 'api_key' && conn.kind === 'mcp' ? (
-        <p className="mt-2.5 text-xs text-mute/80">
+        <p className="mt-3 text-xs text-mute/80">
           Mounted into reviews only when the header name is exactly "Authorization" — otherwise this
           credential is verified by Test but not used at review time (a @flue/runtime limitation).
         </p>
       ) : null}
 
       {conn.kind === 'mcp' ? (
-        <div className="mt-3 border-t border-line/70 pt-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <Placard>Attached repos</Placard>
-            <span className="font-mono text-[10px] text-mute/70 tabular-nums">
-              {attachedCount}/{repos.length}
-            </span>
-          </div>
-          {repos.length === 0 ? (
-            <Muted className="mt-2 block text-xs">
-              This installation has no factory-enabled repos yet — enable one in settings first.
-            </Muted>
-          ) : (
-            <div className="mt-2 flex flex-col gap-1.5">
-              {repos.map((r) => {
-                const repoLabel = `${r.owner}/${r.name}`;
-                const link = conn.repo_links.find((l) => l.repository_id === r.id);
-                return (
-                  <div key={r.id} className="flex flex-wrap items-center gap-1.5">
-                    <button
-                      type="button"
-                      aria-pressed={link !== undefined}
-                      title={`${link ? 'Detach from' : 'Attach to'} ${repoLabel}`}
-                      onClick={() =>
-                        toggleRepo.mutate({ repoId: r.id, attached: link === undefined })
-                      }
-                      className={cn(
-                        'cursor-pointer rounded-full border px-2.5 py-1 font-mono text-xs whitespace-nowrap transition-colors max-sm:px-3.5 max-sm:py-2',
-                        link
-                          ? 'border-accent/40 bg-accent/10 text-accent-bright'
-                          : 'border-line-2/70 text-mute hover:border-line-2 hover:bg-raised hover:text-ink-dim',
-                      )}
-                    >
-                      {repoLabel}
-                    </button>
-                    {link ? (
-                      <>
-                        <ContextToggle
-                          label="Reviews"
-                          on={link.reviews}
-                          repoLabel={repoLabel}
-                          onToggle={() =>
-                            toggleRepo.mutate({
-                              repoId: r.id,
-                              attached: true,
-                              reviews: !link.reviews,
-                              automations: link.automations,
-                            })
-                          }
-                        />
-                        <ContextToggle
-                          label="Automations"
-                          on={link.automations}
-                          repoLabel={repoLabel}
-                          onToggle={() =>
-                            toggleRepo.mutate({
-                              repoId: r.id,
-                              attached: true,
-                              reviews: link.reviews,
-                              automations: !link.automations,
-                            })
-                          }
-                        />
-                      </>
-                    ) : null}
-                  </div>
-                );
-              })}
+        repos.length === 0 ? (
+          <Muted className="mt-3 block border-t border-line/70 pt-3 text-xs">
+            This installation has no factory-enabled repos yet — enable one in settings first.
+          </Muted>
+        ) : (
+          <div className="mt-3.5 overflow-hidden rounded-lg border border-line">
+            <div className="grid grid-cols-[1fr_5.5rem_6.5rem] gap-2 bg-surface-2 px-3 py-2">
+              <Placard>Repository</Placard>
+              <Placard className="text-center">Reviews</Placard>
+              <Placard className="text-center">Automations</Placard>
             </div>
-          )}
-        </div>
+            {repos.map((r) => {
+              const repoLabel = `${r.owner}/${r.name}`;
+              const link = conn.repo_links.find((l) => l.repository_id === r.id);
+              const attached = link !== undefined;
+              return (
+                <div
+                  key={r.id}
+                  className="grid grid-cols-[1fr_5.5rem_6.5rem] items-center gap-2 border-t border-line px-3 py-2"
+                >
+                  <label className="flex min-w-0 cursor-pointer items-center gap-2 text-xs">
+                    <Switch
+                      checked={attached}
+                      onCheckedChange={(v) => toggleRepo.mutate({ repoId: r.id, attached: v })}
+                      aria-label={`Attach ${repoLabel}`}
+                    />
+                    <FolderGit2 className="size-3.5 shrink-0 text-mute" aria-hidden />
+                    <span className={cn('truncate', attached ? 'text-ink-dim' : 'text-mute')}>
+                      <span className="text-mute">{r.owner}/</span>
+                      {r.name}
+                    </span>
+                  </label>
+                  <div className="flex justify-center">
+                    <Switch
+                      checked={attached && !!link?.reviews}
+                      disabled={!attached}
+                      onCheckedChange={(v) =>
+                        toggleRepo.mutate({
+                          repoId: r.id,
+                          attached: true,
+                          reviews: v,
+                          automations: link?.automations,
+                        })
+                      }
+                      aria-label={`Reviews for ${repoLabel}`}
+                    />
+                  </div>
+                  <div className="flex justify-center">
+                    <Switch
+                      checked={attached && !!link?.automations}
+                      disabled={!attached}
+                      onCheckedChange={(v) =>
+                        toggleRepo.mutate({
+                          repoId: r.id,
+                          attached: true,
+                          reviews: link?.reviews,
+                          automations: v,
+                        })
+                      }
+                      aria-label={`Automations for ${repoLabel}`}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )
       ) : (
         <p className="mt-3 border-t border-line/70 pt-3 text-xs text-mute">
           Stored API credential — not mounted into runs (MCP integrations are).
         </p>
       )}
       {test ? <TestDialog name={conn.name} result={test} onClose={() => setTest(null)} /> : null}
-    </Card>
-  );
-}
-
-// Two-option picker rendered as a segmented control — a native select for a
-// binary choice reads as heavier than the choice deserves.
-function Segmented<T extends string>({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: T;
-  options: { value: T; label: string; hint: string }[];
-  onChange: (value: T) => void;
-}) {
-  return (
-    <div>
-      <span className="block text-xs text-mute">{label}</span>
-      <div
-        role="group"
-        aria-label={label}
-        className="mt-1 grid grid-cols-2 gap-1 rounded-lg border border-line-2/70 bg-surface p-1 sm:rounded-md"
-      >
-        {options.map((o) => {
-          const selected = o.value === value;
-          return (
-            <button
-              key={o.value}
-              type="button"
-              aria-pressed={selected}
-              aria-label={`${o.label} — ${o.hint}`}
-              onClick={() => onChange(o.value)}
-              className={cn(
-                'cursor-pointer rounded-md px-2.5 py-1.5 text-left transition-colors max-sm:min-h-11',
-                selected
-                  ? 'bg-accent/12 text-ink inset-ring inset-ring-accent/40'
-                  : 'text-mute hover:bg-raised hover:text-ink-dim',
-              )}
-            >
-              <span className="block text-[0.8rem] font-medium">{o.label}</span>
-              <span className="block text-[0.7rem] text-mute/80">{o.hint}</span>
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// The credential fields for the selected auth type, grouped into their own
-// panel so the form's shape doesn't shift with every auth change.
-function CredentialsPanel({ children, note }: { children?: ReactNode; note?: ReactNode }) {
-  return (
-    <div className="rounded-xl border border-line/80 bg-surface/50 p-3.5">
-      <Placard>Credentials</Placard>
-      {children}
-      {note ? <p className="mt-3 text-xs text-mute/80">{note}</p> : null}
-    </div>
-  );
-}
-
-interface AddFormState {
-  installation_id: number;
-  kind: string;
-  name: string;
-  url: string;
-  auth_type: AuthType;
-  token: string;
-  header_name: string;
-  header_value: string;
-  client_id: string;
-  client_secret: string;
-  token_endpoint: string;
-  scope: string;
-  tools: string;
-}
-
-function AddForm() {
-  const queryClient = useQueryClient();
-  const { data } = useSuspenseQuery(integrationsQuery);
-  const [form, setForm] = useState<AddFormState>({
-    installation_id: data.installations[0]?.id ?? 0,
-    kind: 'mcp',
-    name: '',
-    url: '',
-    auth_type: 'none',
-    token: '',
-    header_name: '',
-    header_value: '',
-    client_id: '',
-    client_secret: '',
-    token_endpoint: '',
-    scope: '',
-    tools: '',
-  });
-  const [error, setError] = useState<string | null>(null);
-  const add = useMutation({
-    mutationFn: () => api.post('/api/integrations', form),
-    onSuccess: () => {
-      setForm((f) => ({
-        ...f,
-        name: '',
-        url: '',
-        auth_type: 'none',
-        token: '',
-        header_name: '',
-        header_value: '',
-        client_id: '',
-        client_secret: '',
-        token_endpoint: '',
-        scope: '',
-        tools: '',
-      }));
-      setError(null);
-      toast.success('Integration added');
-      void queryClient.invalidateQueries({ queryKey: ['integrations'] });
-    },
-    onError: (err) => setError(err instanceof ApiError ? err.message : 'Request failed'),
-  });
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    add.mutate();
-  };
-  const secretHint = 'stored encrypted, never shown again';
-  const needsSecret =
-    form.auth_type === 'bearer' ||
-    form.auth_type === 'api_key' ||
-    form.auth_type === 'client_credentials';
-
-  return (
-    <Card className="p-3.5 sm:p-5">
-      <form onSubmit={submit} className="flex flex-col gap-4">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Segmented
-            label="Type"
-            value={form.kind}
-            options={[
-              { value: 'mcp', label: 'MCP server', hint: 'mounts tools on repo runs' },
-              { value: 'api', label: 'API', hint: 'stored-credential endpoint' },
-            ]}
-            onChange={(kind) =>
-              setForm((f) => ({
-                ...f,
-                kind,
-                // The OAuth auth type only makes sense for MCP-kind servers.
-                auth_type: kind !== 'mcp' && f.auth_type === 'oauth' ? 'none' : f.auth_type,
-              }))
-            }
-          />
-          {data.installations.length > 1 ? (
-            <Field label="Installation" className="mt-0">
-              <Select
-                value={form.installation_id}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, installation_id: Number(e.target.value) }))
-                }
-              >
-                {data.installations.map((i) => (
-                  <option key={i.id} value={i.id}>
-                    {i.account_login}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-          ) : null}
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field
-            label="Name"
-            hint={form.kind === 'mcp' ? 'tools mount as mcp__<name>__<tool>' : 'identifier'}
-            className="mt-0"
-          >
-            <Input
-              value={form.name}
-              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              required
-              maxLength={31}
-              placeholder="executor"
-              className="font-mono"
-            />
-          </Field>
-          <Field label="Auth type" className="mt-0">
-            <Select
-              value={form.auth_type}
-              onChange={(e) => {
-                const value = e.target.value;
-                if (isAuthType(value)) setForm((f) => ({ ...f, auth_type: value }));
-              }}
-            >
-              <option value="none">None</option>
-              <option value="bearer">Bearer token</option>
-              <option value="api_key">API key (custom header)</option>
-              <option value="client_credentials">OAuth client credentials</option>
-              {form.kind === 'mcp' ? <option value="oauth">OAuth (sign-in)</option> : null}
-            </Select>
-          </Field>
-        </div>
-
-        <Field label="Endpoint URL" hint="https" className="mt-0">
-          <Input
-            type="url"
-            value={form.url}
-            onChange={(e) => setForm((f) => ({ ...f, url: e.target.value }))}
-            required
-            placeholder="https://mcp.example.com/…"
-            className="font-mono"
-          />
-        </Field>
-
-        {needsSecret && !data.encryption_configured ? (
-          <p className="flex items-start gap-2 rounded-lg border border-warn/40 bg-warn/5 px-3 py-2 text-xs text-warn">
-            <KeyRound className="mt-px size-3.5 shrink-0" aria-hidden />
-            <span>
-              Credential encryption isn't configured — set the{' '}
-              <span className="font-mono">TOKEN_ENCRYPTION_KEY</span> secret before storing one.
-            </span>
-          </p>
-        ) : null}
-
-        {form.auth_type === 'bearer' ? (
-          <CredentialsPanel>
-            <Field label="bearer token" hint={secretHint}>
-              <Input
-                value={form.token}
-                onChange={(e) => setForm((f) => ({ ...f, token: e.target.value }))}
-                autoComplete="off"
-              />
-            </Field>
-          </CredentialsPanel>
-        ) : null}
-
-        {form.auth_type === 'api_key' ? (
-          <CredentialsPanel>
-            <div className="grid gap-x-4 sm:grid-cols-2">
-              <Field label="header name">
-                <Input
-                  value={form.header_name}
-                  onChange={(e) => setForm((f) => ({ ...f, header_name: e.target.value }))}
-                  placeholder="X-API-Key"
-                  className="font-mono"
-                />
-              </Field>
-              <Field label="header value" hint={secretHint}>
-                <Input
-                  value={form.header_value}
-                  onChange={(e) => setForm((f) => ({ ...f, header_value: e.target.value }))}
-                  autoComplete="off"
-                />
-              </Field>
-            </div>
-          </CredentialsPanel>
-        ) : null}
-
-        {form.auth_type === 'client_credentials' ? (
-          <CredentialsPanel>
-            <div className="grid gap-x-4 sm:grid-cols-2">
-              <Field label="client id">
-                <Input
-                  value={form.client_id}
-                  onChange={(e) => setForm((f) => ({ ...f, client_id: e.target.value }))}
-                  className="font-mono"
-                />
-              </Field>
-              <Field label="client secret" hint={secretHint}>
-                <Input
-                  value={form.client_secret}
-                  onChange={(e) => setForm((f) => ({ ...f, client_secret: e.target.value }))}
-                  autoComplete="off"
-                />
-              </Field>
-              <Field label="token endpoint" hint="https">
-                <Input
-                  type="url"
-                  value={form.token_endpoint}
-                  onChange={(e) => setForm((f) => ({ ...f, token_endpoint: e.target.value }))}
-                  placeholder="https://auth.example.com/token"
-                  className="font-mono"
-                />
-              </Field>
-              <Field label="scope" hint="optional">
-                <Input
-                  value={form.scope}
-                  onChange={(e) => setForm((f) => ({ ...f, scope: e.target.value }))}
-                  className="font-mono"
-                />
-              </Field>
-            </div>
-          </CredentialsPanel>
-        ) : null}
-
-        {form.auth_type === 'oauth' ? (
-          <CredentialsPanel
-            note={
-              <>
-                turbodiff auto-discovers this server's OAuth endpoints and registers itself as a
-                client — nothing to enter here. Click "Connect via OAuth" on the card above after
-                adding.
-              </>
-            }
-          />
-        ) : null}
-
-        {form.kind === 'mcp' ? (
-          <Field
-            label="Tool allowlist"
-            hint="optional, comma-separated; empty = all"
-            className="mt-0"
-          >
-            <Input
-              value={form.tools}
-              onChange={(e) => setForm((f) => ({ ...f, tools: e.target.value }))}
-              placeholder="search_deps, check_license"
-              className="font-mono"
-            />
-          </Field>
-        ) : null}
-
-        {error ? <p className="text-[0.85rem] text-danger">{error}</p> : null}
-
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line/70 pt-4">
-          <Muted className="text-xs">
-            {form.kind === 'mcp'
-              ? 'Attach it to repos on its card once added.'
-              : 'Stored for use by the API tools — not mounted into runs.'}
-          </Muted>
-          <Button type="submit" loading={add.isPending} className="max-sm:w-full">
-            Add integration
-          </Button>
-        </div>
-      </form>
     </Card>
   );
 }
@@ -760,7 +416,12 @@ export function IntegrationsPage() {
     <>
       <PageTitle
         aside={
-          data.connections.length > 0 ? <Pill>{data.connections.length} connected</Pill> : null
+          <Link
+            to="/integrations/new"
+            className={buttonVariants({ variant: 'default', size: 'default' })}
+          >
+            <Plus className="size-4" aria-hidden /> New integration
+          </Link>
         }
       >
         MCP &amp; integrations
@@ -771,9 +432,19 @@ export function IntegrationsPage() {
       </p>
       <Notes />
 
-      <SectionHeading>Connected</SectionHeading>
+      <SectionHeading
+        aside={
+          data.connections.length > 0 ? (
+            <span className="text-xs text-mute tabular-nums">
+              {data.connections.length} connected
+            </span>
+          ) : null
+        }
+      >
+        Connected
+      </SectionHeading>
       {data.connections.length === 0 ? (
-        <EmptyState>No integrations yet — add one below.</EmptyState>
+        <EmptyState>No integrations yet — add your first with “New integration”.</EmptyState>
       ) : (
         <div className="flex flex-col gap-4">
           {groups.map(({ installation, connections, repos }) => (
@@ -788,9 +459,6 @@ export function IntegrationsPage() {
           ))}
         </div>
       )}
-
-      <SectionHeading>Add integration</SectionHeading>
-      <AddForm />
     </>
   );
 }

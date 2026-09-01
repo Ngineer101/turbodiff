@@ -13,7 +13,8 @@ import { useEffect, useRef } from 'react';
 // this from an eagerly-loaded module.
 
 // The app's CSS tokens (src/client/styles.css) mapped onto CodeMirror, so
-// the editor reads like the rest of the surface.
+// the editor — including its search panel, autocomplete popup, matching
+// brackets, and folds — reads like the rest of the surface.
 const theme = EditorView.theme(
   {
     '&': {
@@ -24,66 +25,212 @@ const theme = EditorView.theme(
     },
     '&.cm-focused': { outline: 'none' },
     '.cm-scroller': { overflow: 'auto', fontFamily: 'var(--font-mono)', lineHeight: '1.6' },
-    '.cm-content': { caretColor: 'var(--color-accent-bright)' },
+    '.cm-content': { caretColor: 'var(--color-accent-bright)', padding: '4px 0' },
     '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--color-accent-bright)' },
     '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection':
       { backgroundColor: 'color-mix(in srgb, var(--color-accent) 35%, transparent)' },
+    // Word-occurrence highlights from the current selection.
+    '.cm-selectionMatch': {
+      backgroundColor: 'color-mix(in srgb, var(--color-accent) 18%, transparent)',
+    },
+    // Matching-bracket pair when the caret is on a bracket.
+    '.cm-matchingBracket, &.cm-focused .cm-matchingBracket': {
+      backgroundColor: 'color-mix(in srgb, var(--color-accent) 28%, transparent)',
+      outline: '1px solid color-mix(in srgb, var(--color-accent) 55%, transparent)',
+    },
+    '.cm-nonmatchingBracket': { color: 'var(--color-danger)' },
     '.cm-gutters': {
       backgroundColor: 'var(--color-bg)',
       color: 'var(--color-mute)',
       borderRight: '1px solid var(--color-line)',
     },
+    '.cm-lineNumbers .cm-gutterElement': { padding: '0 8px 0 12px' },
+    '.cm-foldGutter .cm-gutterElement': { color: 'var(--color-mute)' },
     '.cm-activeLine': {
       backgroundColor: 'color-mix(in srgb, var(--color-raised) 45%, transparent)',
     },
     '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--color-ink-dim)' },
+    '.cm-foldPlaceholder': {
+      backgroundColor: 'var(--color-raised)',
+      border: '1px solid var(--color-line-2)',
+      color: 'var(--color-mute)',
+      borderRadius: '4px',
+      padding: '0 6px',
+      margin: '0 4px',
+    },
+    // Panels (search/replace) and dialog controls.
     '.cm-panels': {
       backgroundColor: 'var(--color-surface-2)',
       color: 'var(--color-ink)',
       fontFamily: 'var(--font-sans)',
     },
+    '.cm-panels.cm-panels-top': { borderBottom: '1px solid var(--color-line)' },
+    '.cm-panels.cm-panels-bottom': { borderTop: '1px solid var(--color-line)' },
+    '.cm-textfield': {
+      backgroundColor: 'var(--color-bg)',
+      border: '1px solid var(--color-line-2)',
+      borderRadius: '5px',
+      color: 'var(--color-ink)',
+    },
+    '.cm-button': {
+      backgroundColor: 'var(--color-raised)',
+      backgroundImage: 'none',
+      border: '1px solid var(--color-line-2)',
+      borderRadius: '5px',
+      color: 'var(--color-ink)',
+    },
     '.cm-searchMatch': {
       backgroundColor: 'color-mix(in srgb, var(--color-warn) 30%, transparent)',
+    },
+    '.cm-searchMatch.cm-searchMatch-selected': {
+      backgroundColor: 'color-mix(in srgb, var(--color-warn) 55%, transparent)',
     },
     '.cm-tooltip': {
       backgroundColor: 'var(--color-raised)',
       border: '1px solid var(--color-line-2)',
+      borderRadius: '8px',
       color: 'var(--color-ink)',
     },
+    // Autocomplete popup.
+    '.cm-tooltip.cm-tooltip-autocomplete': { overflow: 'hidden', padding: '0' },
+    '.cm-tooltip-autocomplete > ul': {
+      fontFamily: 'var(--font-mono)',
+      fontSize: '0.8125rem',
+      maxHeight: '16rem',
+    },
+    '.cm-tooltip-autocomplete > ul > li': { padding: '3px 10px' },
+    '.cm-tooltip-autocomplete > ul > li[aria-selected]': {
+      backgroundColor: 'color-mix(in srgb, var(--color-accent) 25%, transparent)',
+      color: 'var(--color-ink)',
+    },
+    '.cm-completionIcon': { color: 'var(--color-mute)', opacity: '0.8' },
+    '.cm-completionMatchedText': {
+      color: 'var(--color-accent-bright)',
+      textDecoration: 'none',
+      fontWeight: '600',
+    },
+    '.cm-completionDetail': { color: 'var(--color-mute)', fontStyle: 'normal' },
   },
   { dark: true },
 );
 
-// Same palette the cockpit's highlight.js theme uses (--color-code-* in
-// styles.css), so code renders with the app's syntax colors everywhere.
+// Syntax colors, mapped onto the same --color-code-* palette the cockpit's
+// highlight.js theme uses (GitHub-dark lineage), so code reads identically
+// everywhere. Coverage is deliberately broad: control-flow keywords, JSX/HTML
+// tags, escapes, diffs, and markdown formatting all get a rule so nothing
+// falls through to CodeMirror's light-theme fallback. Punctuation, operators,
+// and plain identifiers are intentionally left at the default ink color, the
+// same restraint GitHub's own theme shows.
 const highlight = HighlightStyle.define([
+  // Comments & metadata
   {
-    tag: [tags.keyword, tags.operatorKeyword, tags.modifier, tags.moduleKeyword],
+    tag: [tags.comment, tags.lineComment, tags.blockComment, tags.docComment],
+    color: 'var(--color-mute)',
+    fontStyle: 'italic',
+  },
+  { tag: [tags.meta, tags.documentMeta, tags.processingInstruction], color: 'var(--color-mute)' },
+
+  // Keywords, control flow, modifiers, this/super
+  {
+    tag: [
+      tags.keyword,
+      tags.controlKeyword,
+      tags.definitionKeyword,
+      tags.operatorKeyword,
+      tags.moduleKeyword,
+      tags.modifier,
+      tags.self,
+    ],
     color: 'var(--color-code-keyword)',
   },
+
+  // Functions, methods, labels, macros
   {
-    tag: [tags.function(tags.variableName), tags.function(tags.propertyName), tags.labelName],
+    tag: [
+      tags.function(tags.variableName),
+      tags.function(tags.propertyName),
+      tags.labelName,
+      tags.macroName,
+    ],
     color: 'var(--color-code-fn)',
   },
-  { tag: [tags.string, tags.special(tags.string), tags.regexp], color: 'var(--color-code-string)' },
+
+  // Strings, chars, regex, escapes, attribute values
+  {
+    tag: [
+      tags.string,
+      tags.docString,
+      tags.special(tags.string),
+      tags.character,
+      tags.regexp,
+      tags.escape,
+      tags.attributeValue,
+    ],
+    color: 'var(--color-code-string)',
+  },
+
+  // Numbers, booleans, constants, atoms, attributes, units, CSS colors
   {
     tag: [
       tags.number,
+      tags.integer,
+      tags.float,
       tags.bool,
       tags.null,
       tags.atom,
+      tags.unit,
+      tags.color,
+      tags.constant(tags.variableName),
       tags.constant(tags.name),
+      tags.standard(tags.name),
       tags.attributeName,
     ],
     color: 'var(--color-code-const)',
   },
+
+  // Types, classes, namespaces, annotations
   {
-    tag: [tags.typeName, tags.className, tags.namespace, tags.tagName],
+    tag: [
+      tags.typeName,
+      tags.className,
+      tags.namespace,
+      tags.definition(tags.typeName),
+      tags.definition(tags.className),
+      tags.annotation,
+    ],
     color: 'var(--color-code-type)',
   },
-  { tag: [tags.comment, tags.meta], color: 'var(--color-mute)', fontStyle: 'italic' },
-  { tag: tags.heading, color: 'var(--color-ink)', fontWeight: '600' },
-  { tag: tags.link, color: 'var(--color-accent-bright)' },
+
+  // Element/tag names (HTML, JSX, XML)
+  { tag: tags.tagName, color: 'var(--color-accent-bright)' },
+
+  // Diff / change markers
+  { tag: [tags.inserted, tags.changed], color: 'var(--color-accent-bright)' },
+  { tag: tags.deleted, color: 'var(--color-danger)' },
+  { tag: tags.invalid, color: 'var(--color-danger)' },
+
+  // Links & URLs
+  { tag: [tags.link, tags.url], color: 'var(--color-accent-bright)', textDecoration: 'underline' },
+
+  // Markdown / prose formatting
+  {
+    tag: [
+      tags.heading,
+      tags.heading1,
+      tags.heading2,
+      tags.heading3,
+      tags.heading4,
+      tags.heading5,
+      tags.heading6,
+    ],
+    color: 'var(--color-ink)',
+    fontWeight: '600',
+  },
+  { tag: tags.strong, fontWeight: '600' },
+  { tag: tags.emphasis, fontStyle: 'italic' },
+  { tag: tags.strikethrough, textDecoration: 'line-through' },
+  { tag: tags.monospace, color: 'var(--color-code-string)' },
+  { tag: tags.quote, color: 'var(--color-mute)' },
 ]);
 
 function readOnlyExtensions(readOnly: boolean) {

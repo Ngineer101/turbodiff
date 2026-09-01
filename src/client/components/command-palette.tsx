@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { CornerDownLeft, FolderGit2, LayoutDashboard, Ticket } from 'lucide-react';
+import { CornerDownLeft, FolderGit2, Ticket } from 'lucide-react';
 import { useMemo, useState, type ComponentType } from 'react';
 import { boardQuery } from '../lib/queries.ts';
 import { onListboxKeyDown } from '../lib/shortcuts.ts';
@@ -32,7 +32,11 @@ export function CommandPalette({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  nav: readonly { to: string; label: string }[];
+  nav: readonly {
+    to: string;
+    label: string;
+    icon: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
+  }[];
 }) {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
@@ -55,7 +59,9 @@ export function CommandPalette({
       .map((item) => ({
         key: `nav:${item.to}`,
         label: item.label,
-        icon: LayoutDashboard,
+        // The sidebar's own per-page icon, so the palette's "Go to" rows read
+        // as the same destinations rather than a column of identical glyphs.
+        icon: item.icon,
         go: () => void navigate({ to: item.to }),
       }));
     const tasks: Item[] = (board.data?.tasks ?? [])
@@ -93,7 +99,10 @@ export function CommandPalette({
 
   return (
     <Dialog open={open} onOpenChange={(next) => (next ? onOpenChange(true) : close())}>
-      <DialogContent className="top-24 max-w-lg translate-y-0 p-3" onKeyDown={onListboxKeyDown}>
+      <DialogContent
+        className="top-24 max-w-xl translate-y-0 p-3 lg:max-w-2xl"
+        onKeyDown={onListboxKeyDown}
+      >
         <DialogTitle className="sr-only">Jump to</DialogTitle>
         <Input
           autoFocus
@@ -111,7 +120,11 @@ export function CommandPalette({
           aria-label="Jump to"
           className="font-mono text-xs sm:text-xs"
         />
-        <div className="mt-2 max-h-80 overflow-y-auto" role="listbox" aria-label="Results">
+        <div
+          className="mt-2 max-h-[min(60vh,30rem)] overflow-y-auto"
+          role="listbox"
+          aria-label="Results"
+        >
           {sections.map((section) => (
             <div key={section.title}>
               <p className="px-2 pt-2 pb-1 font-mono text-[10px] tracking-[0.14em] text-mute uppercase">
