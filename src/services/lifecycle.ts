@@ -17,16 +17,21 @@ import {
   markReviewFailed,
   recordLifecycleDecision,
   recordStageRunOutput,
+  resumeFactoryRun,
   reviewStageProgress,
+  type FactoryRunRow,
+  type StageRunRow,
 } from '../data/db.ts';
 import { decideLifecycle, type LifecycleContext } from '../domain/lifecycle-coordinator.ts';
 import { isDeliveryProcessProfile, processProfile } from '../domain/process-profiles.ts';
 import type {
   LifecycleDecision,
   LifecycleEventKind,
+  LifecycleStage,
   RunStageCommand,
 } from '../domain/lifecycle-contract.ts';
 import { isJsonObject, isNumber, parseJson, type JsonValue } from '../shared/json.ts';
+import { parseUtc } from '../shared/time.ts';
 import type { GenerateQueueMessage, VerifyQueueMessage } from '../shared/factory-messages.ts';
 import { installationToken } from '../integrations/github/app.ts';
 import { githubJson, githubPaginate } from '../integrations/github/client.ts';
@@ -129,6 +134,94 @@ export async function scheduleChangeReview(input: {
   };
 }
 
+// Feature statuses the retry routes (api.ts, internal.ts) accept — a feature
+// in one of these has no generation in flight, whatever its stage run says.
+const RETRYABLE_FEATURE_STATUSES = new Set(['failed', 'checks_failed', 'no_changes']);
+
+// How long a claimed implement stage run is trusted to have a generation
+// starting behind it — mirrors startGeneration's in-flight guard, and is past
+// the strand sweep's threshold, so a stage still 'running' beyond it belongs
+// to a generation that died without settling.
+const IMPLEMENT_CLAIM_FRESH_MS = 45 * 60_000;
+
+function latestImplementStageRun(stageRuns: StageRunRow[]): StageRunRow | null {
+  let latest: StageRunRow | null = null;
+  for (const stageRun of stageRuns) {
+    if (stageRun.stage !== 'implement') continue;
+    if (!latest || stageRun.attempt > latest.attempt) latest = stageRun;
+  }
+  return latest;
+}
+
+// A retry of a stopped generation arrives as the same `generate` message the
+// approval sent, so it lands in scheduleFeatureDelivery with the delivery run
+// already created and its implement stage run already settled as failed (or
+// left 'running' by a generation the strand sweep gave up on). claimStageRun
+// only claims a queued stage run, so re-sending that stage's command was a
+// silent no-op — the feature sat at "retry queued" forever (live finding).
+// Record the retry as a resume on the same run and schedule a fresh implement
+// attempt, so the rest of the delivery (verify, merge) still follows once the
+// retry publishes. Returns the stage run whose command to send, or null when
+// the run is terminal and cannot be resumed.
+async function resumeStoppedImplementation(
+  run: FactoryRunRow,
+  feature: { id: number; status: string; error: string | null },
+  repo: { enabled: boolean },
+  stopAfterStage: LifecycleStage,
+): Promise<StageRunRow | null> {
+  const previous = latestImplementStageRun(await listStageRuns(run.id));
+  if (!previous) return null;
+  // Scheduled but never claimed (a lost stage command): re-sending the same
+  // command is the retry.
+  if (previous.status === 'queued') return previous;
+  if (previous.status === 'running') {
+    // Claimed moments ago — a duplicate retry racing the attempt it
+    // scheduled, whose generation is starting. Re-sending is harmless: the
+    // claim is idempotent.
+    const claimedMs = previous.started_at ? parseUtc(previous.started_at) : 0;
+    if (Date.now() - claimedMs < IMPLEMENT_CLAIM_FRESH_MS) return previous;
+    // Otherwise the generation it launched died without settling the stage.
+    await finishStageRun(
+      previous.id,
+      'failed',
+      { kind: 'generation_stopped', featureId: feature.id },
+      feature.error ?? 'generation stopped before the implement stage settled',
+    );
+  }
+  const decision = decideLifecycle(run.profile_key, {
+    event: 'human.resume_requested',
+    origin: 'factory',
+    startStage: 'implement',
+    stopAfterStage,
+    facts: { repositoryEnabled: repo.enabled, runStatus: run.status },
+  });
+  if (decision.kind !== 'schedule') {
+    console.warn(
+      `turbodiff: delivery run ${run.id} cannot resume feature ${feature.id} ` +
+        `(${decision.kind === 'complete' ? 'run complete' : decision.reason}) — ` +
+        'retrying the generation outside the lifecycle',
+    );
+    return null;
+  }
+  const next = await recordLifecycleDecision(
+    run.id,
+    null,
+    'human.resume_requested',
+    { featureId: feature.id, retryOf: previous.id },
+    decision,
+    `feature-retry:${feature.id}:${previous.id}`,
+    { featureId: feature.id },
+  );
+  if (next) {
+    await resumeFactoryRun(run.id);
+    return next;
+  }
+  // This retry was already recorded (a duplicate delivery): re-send the
+  // attempt it scheduled.
+  const scheduled = latestImplementStageRun(await listStageRuns(run.id));
+  return scheduled && scheduled.id !== previous.id ? scheduled : null;
+}
+
 export async function scheduleFeatureDelivery(
   featureId: number,
   enqueue: typeof enqueueFactoryMessage = enqueueFactoryMessage,
@@ -172,8 +265,17 @@ export async function scheduleFeatureDelivery(
       description: feature.spec,
     },
   });
-  if (created.stageRun) {
-    await enqueue(commandFor(created.run.id, created.stageRun.id, created.stageRun.stage, null));
+  let stageRun = created.stageRun;
+  if (stageRun && RETRYABLE_FEATURE_STATUSES.has(feature.status)) {
+    stageRun = await resumeStoppedImplementation(created.run, feature, repo, stopAfterStage);
+    // The run can't take another attempt (it already ended): let the caller
+    // run the generation outside the lifecycle rather than drop the retry.
+    if (!stageRun) return false;
+  }
+  if (stageRun) {
+    await enqueue(
+      commandFor(created.run.id, stageRun.id, stageRun.stage, null, stageRun.idempotency_key),
+    );
   }
   return true;
 }

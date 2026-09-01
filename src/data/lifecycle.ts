@@ -273,6 +273,16 @@ export async function recordLifecycleDecision(
   });
 }
 
+// A run parked by a stage failure ('awaiting_human') is active again once a
+// retry schedules the next attempt; terminal runs are left alone.
+export async function resumeFactoryRun(runId: number): Promise<void> {
+  await execute(sql`
+    UPDATE app.factory_runs SET status = 'active', handoff_reason = NULL,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ${runId} AND status = 'awaiting_human'
+  `);
+}
+
 export async function attachFactoryRunChange(runId: number, changeId: number): Promise<void> {
   await withTransaction(async () => {
     await execute(sql`
