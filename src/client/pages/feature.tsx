@@ -906,7 +906,7 @@ export default function FeaturePage() {
           chat — two matched-height panels that use the full width. Merge is the
           primary CTA, a guarded control that reads as armed only when green. */}
       <div className={cn('grid gap-4', showChat && 'lg:grid-cols-2 lg:items-stretch')}>
-        <Panel className="flex flex-col">
+        <Panel className="flex min-w-0 flex-col">
           <BlockLabel className="mb-3">Pipeline</BlockLabel>
           <GoNoGoBoard data={data} />
           {prState === 'open' || pendingCount > 0 || batchRunning ? (
@@ -970,7 +970,7 @@ export default function FeaturePage() {
         </Panel>
 
         {showChat ? (
-          <Panel className="flex flex-col lg:max-h-[26rem] lg:min-h-0">
+          <Panel className="flex min-w-0 flex-col lg:max-h-[26rem] lg:min-h-0">
             <ChatPanel featureId={data.feature.id} canWrite={prState === 'open'} />
           </Panel>
         ) : null}
