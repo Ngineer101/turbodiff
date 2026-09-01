@@ -973,13 +973,27 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       );
     }
     const body = await c.req
-      .json<{ owner?: string; name?: string; description?: string }>()
+      .json<{
+        owner?: string;
+        name?: string;
+        description?: string;
+        process_profile?: AdoptableProcessProfileKey;
+      }>()
       .catch(() => null);
     const owner = body?.owner?.trim().toLowerCase() ?? '';
     const name = body?.name?.trim() ?? '';
     if (!PROJECT_SEGMENT.test(owner) || !PROJECT_SEGMENT.test(name)) {
       return c.json(
         { error: 'owner and name must be 1-80 letters, digits, dots, dashes, or underscores' },
+        400,
+      );
+    }
+    if (
+      body?.process_profile !== undefined &&
+      !ADOPTABLE_PROCESS_PROFILE_KEYS.includes(body.process_profile)
+    ) {
+      return c.json(
+        { error: `process_profile must be ${ADOPTABLE_PROCESS_PROFILE_KEYS.join(', ')}` },
         400,
       );
     }
@@ -992,6 +1006,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         name,
         description: isString(body?.description) ? body.description : undefined,
         creatorGithubId: user.session.userId,
+        processProfile: body?.process_profile,
       });
       const response: ApiCreatedProject = {
         ok: true,

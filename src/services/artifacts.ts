@@ -16,6 +16,7 @@ import {
   deriveArtifactsRepoName,
 } from '../integrations/git/provider.ts';
 import { ensureOrganizationForInstallation, ensureOwnerMember } from './access-control.ts';
+import type { ProcessProfileKey } from '../domain/lifecycle-contract.ts';
 import {
   isArtifactsPushedEvent,
   ARTIFACTS_REPO_DELETED,
@@ -56,6 +57,8 @@ export async function createArtifactsProject(input: {
   // GitHub id of the creating user; when present they become the linked
   // organization's owner (member rows join on githubId).
   creatorGithubId?: number;
+  // Process profile chosen on the new-project form; defaults in the data layer.
+  processProfile?: ProcessProfileKey;
 }): Promise<CreatedProject> {
   if (!PROJECT_SEGMENT.test(input.owner) || !PROJECT_SEGMENT.test(input.name)) {
     throw new Error(`owner and name must match ${PROJECT_SEGMENT}`);
@@ -92,6 +95,7 @@ export async function createArtifactsProject(input: {
       name: input.name,
       artifactsRepo: created.name,
       defaultBranch: created.defaultBranch,
+      processProfile: input.processProfile,
     });
     return { repo, remote: created.remote };
   } catch (err) {

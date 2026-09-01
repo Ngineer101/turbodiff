@@ -3,13 +3,18 @@ import { Link } from '@tanstack/react-router';
 import {
   BarChart2,
   Bell,
+  ChevronRight,
   Clapperboard,
   Code,
+  ExternalLink,
+  FolderGit2,
   GitCompare,
   GitMerge,
   OctagonMinus,
+  Plus,
   RefreshCw,
   Search,
+  SlidersHorizontal,
   Users,
   Wrench,
 } from 'lucide-react';
@@ -18,12 +23,14 @@ import { toast } from 'sonner';
 import type { ApiRepoSettings, ApiSettings } from '../../shared/api-types.ts';
 import { cloneCommand } from '../../shared/projects.ts';
 import { api, ApiError } from '../lib/api.ts';
+import { PROCESS_PROFILES } from '../lib/process-profiles.ts';
 import { pushSupported, subscribeToPush, unsubscribeFromPush } from '../lib/push.ts';
 import { meQuery, settingsQuery } from '../lib/queries.ts';
-import { EmptyState, Muted, PageTitle, SectionHeading } from '../components/section.tsx';
+import { EmptyState, Muted, SectionHeading } from '../components/section.tsx';
 import { Button, buttonVariants } from '../components/ui/button.tsx';
 import { Card } from '../components/ui/card.tsx';
-import { Input } from '../components/ui/input.tsx';
+import { IconTile } from '../components/ui/entity-icon.tsx';
+import { Input, Select } from '../components/ui/input.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 import { Switch } from '../components/ui/switch.tsx';
 import { cn } from '../lib/utils.ts';
@@ -90,6 +97,25 @@ function Chip({
       {children}
     </button>
   );
+}
+
+// The collapsed-row summary: process profile + enabled counts + the behaviors
+// that are on — enough to know a repo's setup without expanding it.
+function repoSummary(repo: ApiRepoSettings): string {
+  const label =
+    PROCESS_PROFILES.find((p) => p.value === repo.process_profile)?.label ?? repo.process_profile;
+  const agents = repo.agents.filter((a) => a.enabled).length;
+  const skills = repo.skills.filter((s) => s.enabled).length;
+  const flags = [
+    repo.review_on_push && 'on push',
+    repo.blocking_reviews && 'blocking',
+    repo.auto_fix && 'auto-fix',
+    repo.auto_merge && 'auto-merge',
+  ].filter(Boolean);
+  const parts = [label, `${agents} agent${agents === 1 ? '' : 's'}`];
+  if (skills > 0) parts.push(`${skills} skill${skills === 1 ? '' : 's'}`);
+  if (flags.length > 0) parts.push(flags.join(', '));
+  return parts.join(' · ');
 }
 
 // Label column for one config group inside a repo card.
@@ -206,19 +232,58 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
     onError: onApiError,
   });
 
+  const [open, setOpen] = useState(false);
+  const selectedProfile = PROCESS_PROFILES.find((p) => p.value === repo.process_profile);
+  const profileOptions = PROCESS_PROFILES.filter(
+    (p) => !p.artifactsOnly || repo.provider === 'artifacts',
+  );
+  // The icon tile + name + one-line summary — shared between the collapsed
+  // toggle button (enabled) and the static row (factory off).
+  const nameBlock = (
+    <>
+      <IconTile icon={FolderGit2} size="sm" className={cn(!repo.enabled && 'opacity-60')} />
+      <div className="min-w-0">
+        <div className="truncate font-mono text-sm font-medium">
+          <span className="text-mute">{repo.owner}/</span>
+          {repo.name}
+          {repo.provider === 'artifacts' ? (
+            <Pill tone={repo.enabled ? 'on' : 'neutral'} className="ml-2">
+              Artifacts
+            </Pill>
+          ) : null}
+        </div>
+        <div className="truncate text-xs text-mute">
+          {repo.enabled ? repoSummary(repo) : 'Factory off'}
+        </div>
+      </div>
+    </>
+  );
+
   return (
-    <Card className="mt-2">
-      <div className="flex items-center justify-between gap-3">
-        <span
-          className="flex min-w-0 items-center gap-2 truncate font-mono font-medium"
-          title={`${repo.owner}/${repo.name}`}
-        >
-          <span className="truncate">
-            <span className="text-mute">{repo.owner}/</span>
-            {repo.name}
-          </span>
-          {repo.provider === 'artifacts' && <Pill tone="on">Artifacts</Pill>}
-        </span>
+    <Card className="mt-2 overflow-hidden p-0">
+      <div className="flex items-center gap-2 px-3.5 py-3">
+        {repo.enabled ? (
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            aria-expanded={open}
+            className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left"
+          >
+            <ChevronRight
+              className={cn(
+                'size-4 shrink-0 text-mute transition-transform',
+                open && 'rotate-90',
+              )}
+              aria-hidden
+            />
+            {nameBlock}
+          </button>
+        ) : (
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <span className="size-4 shrink-0" aria-hidden />
+            {nameBlock}
+          </div>
+        )}
         {/* Shown for artifacts repos too — the code page owns the "not yet
             supported" message. */}
         <Link
@@ -259,8 +324,8 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
         </label>
       </div>
 
-      {repo.enabled ? (
-        <div className="mt-3 flex flex-col gap-2 border-t border-line/70 pt-3">
+      {repo.enabled && open ? (
+        <div className="flex flex-col gap-3 border-t border-line/70 px-3.5 py-3">
           <ConfigRow label="Agents">
             {repo.agents.map((a) => (
               <Chip
@@ -332,64 +397,30 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
             </Chip>
           </ConfigRow>
           <ConfigRow label="Process">
-            <Chip
-              on={repo.process_profile === 'legacy_factory'}
-              title="Preserve the existing end-to-end factory behavior for factory-created changes"
-              onClick={() => patchRepo.mutate({ process_profile: 'legacy_factory' })}
-            >
-              Legacy factory
-            </Chip>
-            <Chip
-              on={repo.process_profile === 'review_on_demand'}
-              title="Review any open change only when a person explicitly requests it"
-              onClick={() => patchRepo.mutate({ process_profile: 'review_on_demand' })}
-            >
-              Review on demand
-            </Chip>
-            <Chip
-              on={repo.process_profile === 'automatic_review'}
-              title="Automatically review qualifying human, automation, and factory changes"
-              onClick={() => patchRepo.mutate({ process_profile: 'automatic_review' })}
-            >
-              Automatic review
-            </Chip>
-            <Chip
-              on={repo.process_profile === 'review_and_repair'}
-              title="Automatically review writable changes, repair blocking findings, and re-review until clean or handed off"
-              onClick={() => patchRepo.mutate({ process_profile: 'review_and_repair' })}
-            >
-              Review + repair
-            </Chip>
-            <Chip
-              on={repo.process_profile === 'idea_to_pr'}
-              title="Turn approved feature specifications into changes, then hand off at the pull request"
-              onClick={() => patchRepo.mutate({ process_profile: 'idea_to_pr' })}
-            >
-              Idea to PR
-            </Chip>
-            <Chip
-              on={repo.process_profile === 'assisted_delivery'}
-              title="Implement, publish, review, repair, and verify; leave merge to the team"
-              onClick={() => patchRepo.mutate({ process_profile: 'assisted_delivery' })}
-            >
-              Assisted delivery
-            </Chip>
-            <Chip
-              on={repo.process_profile === 'full_delivery'}
-              title="Run the full lifecycle through merge when every gate passes"
-              onClick={() => patchRepo.mutate({ process_profile: 'full_delivery' })}
-            >
-              Full delivery
-            </Chip>
-            {repo.provider === 'artifacts' ? (
-              <Chip
-                on={repo.process_profile === 'native_turnkey'}
-                title="Run full delivery using native Artifacts change requests"
-                onClick={() => patchRepo.mutate({ process_profile: 'native_turnkey' })}
+            <div className="w-full max-w-sm">
+              <Select
+                value={repo.process_profile}
+                onChange={(e) => {
+                  // The option value is one of profileOptions — read the typed
+                  // profile off the list rather than casting the raw string.
+                  const p = profileOptions.find((x) => x.value === e.target.value);
+                  if (p) patchRepo.mutate({ process_profile: p.value });
+                }}
+                aria-label={`Process profile for ${repo.owner}/${repo.name}`}
+                className="py-1.5 text-xs sm:text-xs"
               >
-                Native turnkey
-              </Chip>
-            ) : null}
+                {profileOptions.map((p) => (
+                  <option key={p.value} value={p.value}>
+                    {p.label}
+                  </option>
+                ))}
+              </Select>
+              {selectedProfile ? (
+                <p className="mt-1.5 text-xs leading-relaxed text-mute/80">
+                  {selectedProfile.description}
+                </p>
+              ) : null}
+            </div>
           </ConfigRow>
           <ConfigRow label="Check">
             <CheckCommandForm repo={repo} />
@@ -499,33 +530,42 @@ export function SettingsPage() {
 
   return (
     <>
-      <PageTitle
-        aside={
-          <span className="flex items-center gap-4">
-            <Link to="/projects/new" className="text-[0.85rem] text-accent-bright hover:underline">
-              New turbodiff-hosted project &rarr;
-            </Link>
-            <a
-              href={`https://github.com/apps/${data.github_app_slug}/installations/new`}
-              className="text-[0.85rem] text-accent-bright hover:underline"
-            >
-              Add or manage repositories on GitHub &rarr;
-            </a>
-          </span>
-        }
-      >
-        Settings
-      </PageTitle>
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
+        <div className="flex items-start gap-3">
+          <IconTile icon={SlidersHorizontal} size="md" />
+          <div>
+            <h1 className="text-xl leading-tight font-medium tracking-wide">Settings</h1>
+            <p className="mt-1 text-[0.85rem] text-mute">
+              Notifications, members, and per-repo factory configuration.
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            to="/projects/new"
+            className={buttonVariants({ variant: 'default', size: 'default' })}
+          >
+            <Plus className="size-4" aria-hidden /> New project
+          </Link>
+          <a
+            href={`https://github.com/apps/${data.github_app_slug}/installations/new`}
+            className={buttonVariants({ variant: 'secondary', size: 'default' })}
+          >
+            Manage on GitHub <ExternalLink className="size-3.5" aria-hidden />
+          </a>
+        </div>
+      </div>
 
       {/* Usage has a sidebar slot on desktop; the mobile bottom bar doesn't,
           so Settings carries the link there. */}
       <Card className="mt-6 p-0 md:hidden">
         <Link
           to="/usage"
-          className="flex items-center gap-2.5 px-4 py-3 text-[0.85rem] font-medium"
+          className="flex items-center gap-3 px-3.5 py-3 text-[0.85rem] font-medium"
         >
-          <BarChart2 className="size-4 text-mute" aria-hidden />
-          Usage
+          <IconTile icon={BarChart2} size="sm" />
+          <span className="flex-1">Usage</span>
+          <ChevronRight className="size-4 text-mute" aria-hidden />
         </Link>
       </Card>
 
@@ -541,10 +581,11 @@ export function SettingsPage() {
               <Link
                 to="/settings/members/$installationId"
                 params={{ installationId: String(inst.id) }}
-                className="flex items-center gap-2.5 px-4 py-3 text-[0.85rem] font-medium"
+                className="flex items-center gap-3 px-3.5 py-3 text-[0.85rem] font-medium"
               >
-                <Users className="size-4 text-mute" aria-hidden />
-                {inst.account_login}
+                <IconTile icon={Users} size="sm" />
+                <span className="flex-1">{inst.account_login}</span>
+                <ChevronRight className="size-4 text-mute" aria-hidden />
               </Link>
             </Card>
           ))}

@@ -1,15 +1,16 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { useParams } from '@tanstack/react-router';
-import { Trash2, UserPlus } from 'lucide-react';
+import { CircleUserRound, Trash2, UserPlus, Users } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 import type { ApiInvitation, ApiMember, ApiOrgMembers, ApiRole } from '../../shared/api-types.ts';
 import { api, ApiError } from '../lib/api.ts';
 import { applyOptimistic } from '../lib/optimistic.ts';
 import { orgMembersQuery } from '../lib/queries.ts';
-import { EmptyState, Muted, PageTitle, SectionHeading } from '../components/section.tsx';
+import { EmptyState, Muted, SectionHeading } from '../components/section.tsx';
 import { Button } from '../components/ui/button.tsx';
 import { Card } from '../components/ui/card.tsx';
+import { IconTile } from '../components/ui/entity-icon.tsx';
 import { Input, Select } from '../components/ui/input.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 
@@ -66,11 +67,14 @@ function MemberRow({
 
   return (
     <Card className="mt-2 flex items-center justify-between gap-3">
-      <div className="min-w-0">
-        <div className="truncate font-mono text-sm">
-          {member.login ? `@${member.login}` : member.email}
+      <div className="flex min-w-0 items-center gap-3">
+        <IconTile icon={CircleUserRound} size="sm" />
+        <div className="min-w-0">
+          <div className="truncate font-mono text-sm">
+            {member.login ? `@${member.login}` : member.email}
+          </div>
+          {member.login ? <Muted className="text-xs">{member.email}</Muted> : null}
         </div>
-        {member.login ? <Muted className="text-xs">{member.email}</Muted> : null}
       </div>
       <div className="flex shrink-0 items-center gap-2">
         {canManage ? (
@@ -183,9 +187,17 @@ export function MembersPage() {
 
   return (
     <>
-      <PageTitle>Members</PageTitle>
+      <div className="flex items-start gap-3">
+        <IconTile icon={Users} size="md" />
+        <div>
+          <h1 className="text-xl leading-tight font-medium tracking-wide">Members</h1>
+          <p className="mt-1 text-[0.85rem] text-mute">
+            People with access to this organization's repositories.
+          </p>
+        </div>
+      </div>
 
-      {canManage ? <InviteForm installationId={id} /> : null}
+      <div className="mt-6">{canManage ? <InviteForm installationId={id} /> : null}</div>
 
       <SectionHeading>Members</SectionHeading>
       {data.members.length === 0 ? (
