@@ -38,13 +38,13 @@ function OutcomePill({ message }: { message: ApiChatMessage }) {
 function ChatMessage({ message }: { message: ApiChatMessage }) {
   if (message.role === 'user') {
     return (
-      <div className="ml-auto max-w-[85%] rounded-md border border-line-2 border-r-2 border-r-accent bg-surface px-3 py-2 text-[0.82rem]">
+      <div className="ml-auto min-w-0 max-w-[85%] rounded-md border border-line-2 border-r-2 border-r-accent bg-surface px-3 py-2 text-[0.82rem]">
         <div className="mb-1 flex items-center gap-1.5 text-xs text-mute">
           <strong>@{message.author}</strong>
           <span>{ago(message.created_at)}</span>
           {message.status === 'failed' ? <Pill tone="red">Failed</Pill> : null}
         </div>
-        <p className="whitespace-pre-wrap">{message.body}</p>
+        <p className="break-words whitespace-pre-wrap">{message.body}</p>
         {message.status === 'failed' && message.error ? (
           <p className="mt-1 text-xs text-danger">{message.error}</p>
         ) : null}
@@ -52,7 +52,7 @@ function ChatMessage({ message }: { message: ApiChatMessage }) {
     );
   }
   return (
-    <div className="max-w-[85%] rounded-md border border-line-2 border-l-2 border-l-accent bg-surface px-3 py-2 text-[0.82rem]">
+    <div className="min-w-0 max-w-[85%] rounded-md border border-line-2 border-l-2 border-l-accent bg-surface px-3 py-2 text-[0.82rem]">
       <div className="mb-1 flex items-center gap-1.5 text-xs text-mute">
         <strong>Agent</strong>
         <span>{ago(message.created_at)}</span>
@@ -125,10 +125,10 @@ export function ChatPanel({ featureId, canWrite }: { featureId: number; canWrite
   if (!canWrite && messages.length === 0) return null;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <BlockLabel className="mb-3 shrink-0">Agent chat</BlockLabel>
       {/* Transcript scrolls inside the rail so the composer stays pinned. */}
-      <div className="min-h-0 flex-1 lg:overflow-y-auto">
+      <div className="min-h-0 min-w-0 flex-1 lg:overflow-y-auto">
         {chatLoading ? (
           // History-shaped placeholder — the "ask the agent" empty-state copy
           // must not flash while the real history is still loading.
