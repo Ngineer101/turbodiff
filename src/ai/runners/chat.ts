@@ -30,6 +30,7 @@ import {
 } from '../../integrations/github/app.ts';
 import { UNTRUSTED_CONTENT_RULES } from '../../domain/prompt-security.ts';
 import { installDependencies, NPM_CACHE_ENV } from '../runtime/sandbox-deps.ts';
+import { checkCommandUnrunnable, runCheckCommand } from '../runtime/check-command.ts';
 import {
   CHAT_BUSY_DELAY_SECONDS,
   CHAT_BUSY_RETRIES,
@@ -313,15 +314,13 @@ export async function runChatTurn(params: ChatTurnParams): Promise<ChatTurnResul
     }
 
     if (params.testCommand) {
-      const runTests = async () => {
-        const tests = await sandbox.exec(params.testCommand!, {
-          cwd: CLONE_DIR,
-          timeout: TEST_TIMEOUT_MS,
-          env: NPM_CACHE_ENV,
-        });
-        return { ok: tests.success, output: scrub(`${tests.stdout}\n${tests.stderr}`.trim()) };
-      };
+      const runTests = () =>
+        runCheckCommand(sandbox, CLONE_DIR, params.testCommand!, scrub, TEST_TIMEOUT_MS);
       let tests = await runTests();
+      // A check command that can't even be executed is a misconfiguration,
+      // not a failing test — fail loudly rather than silently discarding the
+      // committed work as `tests_failed`.
+      if (tests.notExecutable) throw checkCommandUnrunnable(params.testCommand, tests.output);
       for (let round = 1; !tests.ok && round <= REPAIR_ROUNDS; round++) {
         // Drop test-command working-tree mutations before the agent looks.
         await sandbox.exec(`git -C ${CLONE_DIR} checkout -- . && git -C ${CLONE_DIR} clean -fd`);
