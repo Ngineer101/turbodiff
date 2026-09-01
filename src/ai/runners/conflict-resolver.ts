@@ -18,6 +18,7 @@ import {
 import { resolveRunnerAuth, runnerEnvironment } from '../runtime/runner-auth.ts';
 import { runnerSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
+import { checkCommandUnrunnable, runCheckCommand } from '../runtime/check-command.ts';
 import { prepareFreshClone, pushHeadCommand } from '../runtime/repository-workspace.ts';
 import { githubWorkspaceRemote } from '../../integrations/git/provider.ts';
 import { mountSkills } from '../runtime/skills.ts';
@@ -303,11 +304,18 @@ async function runConflictResolve(
     }
 
     if (repo.check_command) {
-      const tests = await sandbox.exec(repo.check_command, {
-        cwd: CLONE_DIR,
-        timeout: TEST_TIMEOUT_MS,
-      });
-      if (!tests.success) {
+      const tests = await runCheckCommand(
+        sandbox,
+        CLONE_DIR,
+        repo.check_command,
+        scrub,
+        TEST_TIMEOUT_MS,
+      );
+      // A check command that can't even be executed is a misconfiguration,
+      // not a failing test — fail loudly (reported on the PR) rather than
+      // silently discarding the resolved merge as tests_failed.
+      if (tests.notExecutable) throw checkCommandUnrunnable(repo.check_command, tests.output);
+      if (!tests.ok) {
         return { status: 'tests_failed' };
       }
     }

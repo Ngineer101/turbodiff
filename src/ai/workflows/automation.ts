@@ -29,6 +29,7 @@ import {
   type RemoteSource,
 } from '../../integrations/git/provider.ts';
 import { NPM_CACHE_ENV } from '../runtime/sandbox-deps.ts';
+import { checkCommandUnrunnable, runCheckCommand } from '../runtime/check-command.ts';
 import {
   authorizesWorkflowFiles,
   describePushFailure,
@@ -272,13 +273,24 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
           'run check command',
           { retries: { limit: 1, delay: '1 minute' }, timeout: '15 minutes' },
           async (): Promise<{ ok: boolean; output: string }> => {
-            const sandbox = sandboxFor(ctx);
-            const res = await sandbox.exec(ctx.checkCommand!, {
-              cwd: WORK,
-              timeout: CHECK_TIMEOUT_MS,
-              env: NPM_CACHE_ENV,
-            });
-            return { ok: res.success, output: `${res.stdout}\n${res.stderr}`.trim().slice(-500) };
+            // Same PATH handling and executable-vs-failing distinction as
+            // the generation workflow: a check that cannot run at all is a
+            // misconfiguration to report, not a checks_failed verdict.
+            const auth = resolveRunnerAuth();
+            const scrub = (s: string) => redactSecrets(s, Object.values(auth.vars));
+            const res = await runCheckCommand(
+              sandboxFor(ctx),
+              WORK,
+              ctx.checkCommand!,
+              scrub,
+              CHECK_TIMEOUT_MS,
+            );
+            if (res.notExecutable) {
+              throw new NonRetryableError(
+                checkCommandUnrunnable(ctx.checkCommand!, res.output).message,
+              );
+            }
+            return { ok: res.ok, output: res.output.slice(-500) };
           },
         );
         if (!checks.ok) {

@@ -43,6 +43,7 @@ import {
 } from '../../integrations/github/app.ts';
 import { UNTRUSTED_CONTENT_RULES } from '../../domain/prompt-security.ts';
 import { installDependencies, NPM_CACHE_ENV } from '../runtime/sandbox-deps.ts';
+import { checkCommandUnrunnable, runCheckCommand } from '../runtime/check-command.ts';
 import { mintUserToken } from '../../services/user-tokens.ts';
 import { openNativeChangeRequest } from '../../services/change-requests.ts';
 import { notifyFeatureLive } from '../../services/live-updates.ts';
@@ -336,16 +337,21 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
       // Install dependencies up front so the agent can run the repo's check
       // command while it works instead of flying blind until the post-run
       // check (and so the repair loop's re-checks don't each pay an install).
+      // A failed install is only a warning here (some repos' check commands
+      // install for themselves), but it is remembered: if the check command
+      // then turns out not to exist, it is the most likely reason.
+      let installFailure: string | null = null;
       if (ctx.checkCommand) {
-        await step.do(
+        installFailure = await step.do(
           'install dependencies',
           { retries: { limit: 1, delay: '30 seconds' }, timeout: '12 minutes' },
-          async () => {
+          async (): Promise<string | null> => {
             await updateFeature(featureId, { runStartedAt: 'now' });
             const failure = await installDependencies(sandboxFor(ctx), WORK);
             if (failure) {
               console.warn(`turbodiff: dependency preinstall failed for ${label}: ${failure}`);
             }
+            return failure;
           },
         );
       }
@@ -454,21 +460,39 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
         // returned, never thrown, so the step is never retried for it. The
         // tail is sized for the repair prompt to see the actual errors;
         // features.error gets a shorter slice below.
+        //
+        // runCheckCommand puts the checkout's node_modules/.bin on PATH (so
+        // `vp check` resolves here exactly as it does for the agent) and
+        // tells a check that could not be executed at all apart from one
+        // that ran and failed. The former is a misconfiguration — feeding
+        // "command not found" to the repair loop just burns agent rounds on
+        // a problem no code change can fix, and then records the run as
+        // checks_failed against work that was never checked. Fail the run
+        // loudly instead, naming the install failure when there was one.
         const runCheck = (name: string) =>
           step.do(
             name,
             { retries: { limit: 1, delay: '1 minute' }, timeout: '15 minutes' },
             async (): Promise<{ ok: boolean; output: string }> => {
               await updateFeature(featureId, { runStartedAt: 'now' });
-              const res = await sandboxFor(ctx).exec(ctx.checkCommand!, {
-                cwd: WORK,
-                timeout: CHECK_TIMEOUT_MS,
-                env: NPM_CACHE_ENV,
-              });
-              return {
-                ok: res.success,
-                output: `${res.stdout}\n${res.stderr}`.trim().slice(-6_000),
-              };
+              const auth = resolveRunnerAuth(undefined, ctx.runnerModel);
+              const scrub = (s: string) => redactSecrets(s, Object.values(auth.vars));
+              const res = await runCheckCommand(
+                sandboxFor(ctx),
+                WORK,
+                ctx.checkCommand!,
+                scrub,
+                CHECK_TIMEOUT_MS,
+              );
+              if (res.notExecutable) {
+                const cause = installFailure
+                  ? ` (dependency install failed first: ${installFailure.slice(-300)})`
+                  : '';
+                throw new NonRetryableError(
+                  checkCommandUnrunnable(ctx.checkCommand!, res.output).message + cause,
+                );
+              }
+              return { ok: res.ok, output: res.output.slice(-6_000) };
             },
           );
 
