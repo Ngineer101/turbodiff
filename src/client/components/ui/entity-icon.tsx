@@ -35,12 +35,12 @@ const KEYWORD_ICONS: [RegExp, LucideIcon][] = [
   [/mcp|server/, Server],
 ];
 
-const KIND_DEFAULT: Record<EntityKind, LucideIcon> = {
+const KIND_DEFAULT = {
   agent: Bot,
   skill: Sparkles,
   automation: Repeat,
   integration: Plug,
-};
+} satisfies Record<EntityKind, LucideIcon>;
 
 export function entityIcon(kind: EntityKind, slug: string, name = ''): LucideIcon {
   const hay = `${slug} ${name}`.toLowerCase();

@@ -130,7 +130,12 @@ export function ProjectNewPage() {
             >
               <Select
                 value={processProfile}
-                onChange={(e) => setProcessProfile(e.target.value as ApiProcessProfile)}
+                onChange={(e) => {
+                  // The options are exactly PROCESS_PROFILES, so a match always
+                  // exists — look it up instead of asserting the raw string.
+                  const next = PROCESS_PROFILES.find((p) => p.value === e.target.value);
+                  if (next) setProcessProfile(next.value);
+                }}
               >
                 {PROCESS_PROFILES.map((p) => (
                   <option key={p.value} value={p.value}>
