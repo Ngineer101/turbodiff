@@ -27,7 +27,10 @@ export function AgentsPage() {
           </>
         }
         action={
-          <Link to="/agents/new" className={buttonVariants({ variant: 'default', size: 'default' })}>
+          <Link
+            to="/agents/new"
+            className={buttonVariants({ variant: 'default', size: 'default' })}
+          >
             <Plus className="size-4" aria-hidden /> New agent
           </Link>
         }
@@ -58,7 +61,11 @@ export function AgentsPage() {
                   </>
                 }
                 description={a.description ?? undefined}
-                meta={<span className="font-mono text-mute/70">{a.model.replace('cloudflare/', '')}</span>}
+                meta={
+                  <span className="font-mono text-mute/70">
+                    {a.model.replace('cloudflare/', '')}
+                  </span>
+                }
               />
             </Link>
           ))}

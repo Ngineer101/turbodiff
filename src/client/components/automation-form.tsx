@@ -103,7 +103,11 @@ export function AutomationForm({
       </FormSection>
 
       <FormSection label="Trigger">
-        <Field label="Repository" className="mt-0" hint={repoEditable ? undefined : 'fixed after creation'}>
+        <Field
+          label="Repository"
+          className="mt-0"
+          hint={repoEditable ? undefined : 'fixed after creation'}
+        >
           <Select
             value={values.repository_id || ''}
             onChange={(e) => set({ repository_id: Number(e.target.value) })}

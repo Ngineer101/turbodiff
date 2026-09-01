@@ -19,13 +19,7 @@ export function FormLabel({ className, children }: { className?: string; childre
 // A labelled group of fields inside a panel — replaces the old flat stack so
 // related inputs read as one unit. Fields inside should pass `className="mt-0"`
 // (the panel supplies the rhythm via space-y).
-export function FormSection({
-  label,
-  children,
-}: {
-  label: string;
-  children: ReactNode;
-}) {
+export function FormSection({ label, children }: { label: string; children: ReactNode }) {
   return (
     <section>
       <FormLabel className="mb-2">{label}</FormLabel>

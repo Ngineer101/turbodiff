@@ -108,8 +108,8 @@ export function ShortcutHelp({
         <div className="border-b border-line px-5 py-4 sm:px-6">
           <DialogTitle className="text-base font-medium text-ink">Keyboard shortcuts</DialogTitle>
           <DialogDescription className="mt-1 text-[0.8rem] text-mute">
-            Move around the whole app without leaving the keyboard. Press{' '}
-            <Kbd>?</Kbd> anytime to bring this back.
+            Move around the whole app without leaving the keyboard. Press <Kbd>?</Kbd> anytime to
+            bring this back.
           </DialogDescription>
         </div>
         {/* Body scrolls; the header and close button stay put. columns give a

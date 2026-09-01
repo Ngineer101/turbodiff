@@ -1,6 +1,15 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { FolderGit2, Globe, Plus, PlugZap, Server, ShieldAlert, Trash2, Wrench } from 'lucide-react';
+import {
+  FolderGit2,
+  Globe,
+  Plus,
+  PlugZap,
+  Server,
+  ShieldAlert,
+  Trash2,
+  Wrench,
+} from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import type {

@@ -124,7 +124,10 @@ export function ProjectNewPage() {
                 placeholder="What this project is about"
               />
             </Field>
-            <Field label="Process" hint="How much of the factory loop runs on its own. Change any time per repo in Settings.">
+            <Field
+              label="Process"
+              hint="How much of the factory loop runs on its own. Change any time per repo in Settings."
+            >
               <Select
                 value={processProfile}
                 onChange={(e) => setProcessProfile(e.target.value as ApiProcessProfile)}

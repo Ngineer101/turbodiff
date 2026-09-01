@@ -270,10 +270,7 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
             className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left"
           >
             <ChevronRight
-              className={cn(
-                'size-4 shrink-0 text-mute transition-transform',
-                open && 'rotate-90',
-              )}
+              className={cn('size-4 shrink-0 text-mute transition-transform', open && 'rotate-90')}
               aria-hidden
             />
             {nameBlock}

@@ -212,9 +212,7 @@ function QuickAdd({
   const queryClient = useQueryClient();
   const inputRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState('');
-  const [targetRepoIds, setTargetRepoIds] = useState<number[]>(
-    activeRepoId ? [activeRepoId] : [],
-  );
+  const [targetRepoIds, setTargetRepoIds] = useState<number[]>(activeRepoId ? [activeRepoId] : []);
   // The target defaults to whatever repo you're filtered to — so filter → add
   // keeps the new card in view — but stays a visible, editable choice. Once
   // the user edits it, we stop mirroring the filter (touched). Render-time
@@ -896,7 +894,10 @@ function RepoFilterPills({
   const head = repos.slice(0, FILTER_PILL_CAP);
   const activeHidden = value !== null && !head.some((r) => r.id === value);
   const visible = activeHidden
-    ? [repos.find((r) => r.id === value)!, ...repos.filter((r) => r.id !== value).slice(0, FILTER_PILL_CAP - 1)]
+    ? [
+        repos.find((r) => r.id === value)!,
+        ...repos.filter((r) => r.id !== value).slice(0, FILTER_PILL_CAP - 1),
+      ]
     : head;
   const hidden = repos.filter((r) => !visible.some((v) => v.id === r.id));
   return (

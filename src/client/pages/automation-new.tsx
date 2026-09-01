@@ -26,21 +26,21 @@ export function AutomationNewPage() {
     <AutomationForm
       mode="new"
       initial={{
-          name: '',
-          repository_id: data.repos[0]?.id ?? 0,
-          prompt: '',
-          schedule_kind: 'daily',
-          time_of_day: '09:00',
-          day_of_week: 1,
-          enabled: true,
-        }}
-        repos={data.repos}
-        repoEditable
-        showEnabled={false}
-        error={error}
-        busy={create.isPending}
-        onSubmit={(values) => create.mutate(values)}
-        onCancel={() => navigate({ to: '/automations' })}
-      />
+        name: '',
+        repository_id: data.repos[0]?.id ?? 0,
+        prompt: '',
+        schedule_kind: 'daily',
+        time_of_day: '09:00',
+        day_of_week: 1,
+        enabled: true,
+      }}
+      repos={data.repos}
+      repoEditable
+      showEnabled={false}
+      error={error}
+      busy={create.isPending}
+      onSubmit={(values) => create.mutate(values)}
+      onCancel={() => navigate({ to: '/automations' })}
+    />
   );
 }

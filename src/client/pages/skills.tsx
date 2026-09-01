@@ -27,7 +27,10 @@ export function SkillsPage() {
           </>
         }
         action={
-          <Link to="/skills/new" className={buttonVariants({ variant: 'default', size: 'default' })}>
+          <Link
+            to="/skills/new"
+            className={buttonVariants({ variant: 'default', size: 'default' })}
+          >
             <Plus className="size-4" aria-hidden /> New skill
           </Link>
         }

@@ -359,8 +359,7 @@ export function AppShell({ me, children }: { me: ApiMe; children: ReactNode }) {
   );
   // The cockpit's diff pane and the task workspace both need room, so those
   // routes get a much wider container than the reading-width default.
-  const wide =
-    pathname.startsWith('/factory/features/') || pathname.startsWith('/tasks/');
+  const wide = pathname.startsWith('/factory/features/') || pathname.startsWith('/tasks/');
   // The board's three lanes need more room than the reading-width default.
   const board = pathname === '/';
   return (

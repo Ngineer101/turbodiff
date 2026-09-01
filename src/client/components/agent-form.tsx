@@ -105,7 +105,11 @@ export function AgentForm({
             required
           />
         </Field>
-        <Field label="Model" className="mt-0" hint={`any AI Gateway model id; default ${defaultModel}`}>
+        <Field
+          label="Model"
+          className="mt-0"
+          hint={`any AI Gateway model id; default ${defaultModel}`}
+        >
           <Input
             value={values.model}
             onChange={(e) => set({ model: e.target.value })}
