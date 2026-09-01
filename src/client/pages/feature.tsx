@@ -1,13 +1,7 @@
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { useParams } from '@tanstack/react-router';
 import type { DiffLineAnnotation, SelectedLineRange } from '@pierre/diffs/react';
-import {
-  ChevronDown,
-  ChevronRight,
-  MessageSquare,
-  PanelLeftClose,
-  PanelLeftOpen,
-} from 'lucide-react';
+import { ChevronDown, ChevronRight, MessageSquare } from 'lucide-react';
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type {
@@ -21,6 +15,7 @@ import { useDictation } from '../lib/dictation.ts';
 import { sentence } from '../lib/format.ts';
 import { applyOptimistic, optimisticId, optimisticNow } from '../lib/optimistic.ts';
 import {
+  chatQuery,
   featureDiffQuery,
   featureQuery,
   FIX_TERMINAL,
@@ -43,8 +38,8 @@ import {
   AccordionTrigger,
 } from '../components/ui/accordion.tsx';
 import { Button } from '../components/ui/button.tsx';
+import { BlockLabel, Panel } from '../components/ui/panel.tsx';
 import { Pill } from '../components/ui/pill.tsx';
-import { Table, Td } from '../components/ui/table.tsx';
 import { Card } from '../components/ui/card.tsx';
 import { Textarea } from '../components/ui/input.tsx';
 
@@ -623,6 +618,9 @@ export default function FeaturePage() {
     ...featureDiffQuery(id, summary.diff_version),
     enabled: summary.pr !== null,
   });
+  // Read here too (deduped with ChatPanel's own read) so the layout knows
+  // whether to reserve the chat rail — a terminal PR with no history skips it.
+  const chat = useQuery(chatQuery(id));
   const data = useMemo<ApiFeatureDetail>(
     () => ({
       ...summary,
@@ -660,15 +658,6 @@ export default function FeaturePage() {
     localStorage.setItem('turbodiff.diffStyle', style);
   };
   const [activeFile, setActiveFile] = useState<string | null>(null);
-  // The desktop file-tree panel collapses to a thin rail; remembered across
-  // visits since it's a workspace-layout preference.
-  const [treeOpen, setTreeOpenState] = useState(
-    () => localStorage.getItem('turbodiff.fileTree') !== 'closed',
-  );
-  const setTreeOpen = (open: boolean) => {
-    setTreeOpenState(open);
-    localStorage.setItem('turbodiff.fileTree', open ? 'open' : 'closed');
-  };
   const sectionEls = useRef(new Map<string, HTMLElement>());
 
   const commentsByFile = useMemo(() => {
@@ -822,6 +811,9 @@ export default function FeaturePage() {
   }
 
   const prState = data.pr.state;
+  // An open PR always gets the chat rail (the agent is writable); a terminal
+  // PR gets it only when there's history worth showing.
+  const showChat = prState === 'open' || (chat.data?.messages.length ?? 0) > 0;
   const totalAdditions = data.files.reduce((n, f) => n + f.additions, 0);
   const totalDeletions = data.files.reduce((n, f) => n + f.deletions, 0);
 
@@ -835,63 +827,71 @@ export default function FeaturePage() {
   );
 
   return (
-    <div className="animate-rise">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <Serial n={data.feature.id} />
-        {prState === 'merged' ? (
-          <Stamp tone="ok" className={justMerged ? 'stamp-ceremony' : undefined}>
-            MERGED
-          </Stamp>
-        ) : null}
-        {prState === 'closed' ? <Stamp tone="red">ABANDONED</Stamp> : null}
-      </div>
-      <h1 className="mt-1.5 text-base leading-snug font-medium break-words sm:text-xl">
-        {data.feature.title}
-      </h1>
-      <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-mute sm:text-[0.85rem]">
-        <span className="truncate font-mono">{data.repo}</span>
-        <span>·</span>
-        {data.pr.html_url ? (
-          <a
-            href={data.pr.html_url}
-            target="_blank"
-            rel="noopener"
-            className="font-mono text-accent-bright hover:underline"
-          >
-            PR #{data.feature.pr_number}
-          </a>
-        ) : (
-          <span className="font-mono text-ink-dim">
-            CR #{data.cr_number ?? data.feature.pr_number}
-          </span>
-        )}
-        <span>·</span>
-        <span>
-          {data.pr.changed_files} files{' '}
-          <span className="text-accent-bright">+{data.pr.additions}</span>{' '}
-          <span className="text-danger">−{data.pr.deletions}</span>
-        </span>
-      </p>
-      {data.checks.length > 0 && (
-        <p className="mt-2 flex flex-wrap items-center gap-2">
-          {data.checks.map((check) => (
-            <Pill
-              key={check.name}
-              tone={
-                check.status === 'passed'
-                  ? 'on'
-                  : check.status === 'running'
-                    ? 'running'
-                    : check.status === 'failed' || check.status === 'error'
-                      ? 'red'
-                      : 'neutral'
-              }
-            >
-              {check.name}: {check.status}
-            </Pill>
-          ))}
-        </p>
-      )}
+    <div className="animate-rise space-y-4">
+      {/* Identity: who/what this PR is, its size, and any external checks. */}
+      <Panel>
+        <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <Serial n={data.feature.id} />
+              {prState === 'merged' ? (
+                <Stamp tone="ok" className={justMerged ? 'stamp-ceremony' : undefined}>
+                  MERGED
+                </Stamp>
+              ) : null}
+              {prState === 'closed' ? <Stamp tone="red">ABANDONED</Stamp> : null}
+            </div>
+            <h1 className="mt-2 text-lg leading-snug font-medium break-words sm:text-xl">
+              {data.feature.title}
+            </h1>
+            <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-mute sm:text-[0.85rem]">
+              <span className="truncate font-mono">{data.repo}</span>
+              <span>·</span>
+              {data.pr.html_url ? (
+                <a
+                  href={data.pr.html_url}
+                  target="_blank"
+                  rel="noopener"
+                  className="font-mono text-accent-bright hover:underline"
+                >
+                  PR #{data.feature.pr_number}
+                </a>
+              ) : (
+                <span className="font-mono text-ink-dim">
+                  CR #{data.cr_number ?? data.feature.pr_number}
+                </span>
+              )}
+              <span>·</span>
+              <span>
+                {data.pr.changed_files} files{' '}
+                <span className="text-accent-bright">+{data.pr.additions}</span>{' '}
+                <span className="text-danger">−{data.pr.deletions}</span>
+              </span>
+            </p>
+          </div>
+          {data.checks.length > 0 ? (
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              {data.checks.map((check) => (
+                <Pill
+                  key={check.name}
+                  tone={
+                    check.status === 'passed'
+                      ? 'on'
+                      : check.status === 'running'
+                        ? 'running'
+                        : check.status === 'failed' || check.status === 'error'
+                          ? 'red'
+                          : 'neutral'
+                  }
+                >
+                  {check.name}: {check.status}
+                </Pill>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </Panel>
+
       {data.feature.criteria_conflict ? (
         <CriteriaConflictCard
           // Remount when the underlying text changes: the draft is captured
@@ -902,72 +902,79 @@ export default function FeaturePage() {
           proposed={data.feature.proposed_criteria}
         />
       ) : null}
-      <div className="mt-4 max-w-xl">
-        <GoNoGoBoard data={data} />
-      </div>
+      {/* Control row: the go/no-go pipeline and its actions beside the agent
+          chat — two matched-height panels that use the full width. Merge is the
+          primary CTA, a guarded control that reads as armed only when green. */}
+      <div className={cn('grid gap-4', showChat && 'lg:grid-cols-2 lg:items-stretch')}>
+        <Panel className="flex flex-col">
+          <BlockLabel className="mb-3">Pipeline</BlockLabel>
+          <GoNoGoBoard data={data} />
+        {prState === 'open' || pendingCount > 0 || batchRunning ? (
+          <div className="mt-4 flex flex-col gap-2 border-t border-line/60 pt-4 sm:flex-row sm:flex-wrap sm:items-center lg:mt-auto">
+            {prState === 'open' ? (
+              <ConfirmButton
+                className="guarded relative w-full font-mono text-[11px] font-bold tracking-[0.18em] uppercase sm:w-auto"
+                title="Merge pull request?"
+                description={
+                  data.provider === 'artifacts'
+                    ? `This merges CR #${data.cr_number ?? data.feature.pr_number} into ${data.repo} on turbodiff.`
+                    : `This merges PR #${data.feature.pr_number} into ${data.repo} on GitHub.`
+                }
+                confirmLabel="Merge"
+                onConfirm={() => merge.mutate()}
+                busy={merge.isPending}
+              >
+                Merge
+              </ConfirmButton>
+            ) : null}
+            {prState === 'open' && data.provider === 'artifacts' ? (
+              <Button
+                variant="secondary"
+                className="w-full sm:w-auto"
+                loading={rereview.isPending}
+                onClick={() => rereview.mutate()}
+              >
+                {data.reviews.length > 0 || data.checks.some((ch) => ch.name === 'review')
+                  ? 'Re-run review'
+                  : 'Run review'}
+              </Button>
+            ) : null}
+            {prState === 'open' ? (
+              <ConfirmButton
+                className="w-full sm:w-auto"
+                variant="danger"
+                title="Abandon this pull request?"
+                description={`This closes PR #${data.feature.pr_number} on ${data.repo} without merging and deletes its branch. This cannot be undone.`}
+                confirmLabel="Abandon"
+                onConfirm={() => abandon.mutate()}
+                busy={abandon.isPending}
+              >
+                Abandon
+              </ConfirmButton>
+            ) : null}
+            {pendingCount > 0 || batchRunning ? (
+              <Button
+                variant="secondary"
+                className="w-full sm:ml-auto sm:w-auto"
+                onClick={() => submitBatch.mutate()}
+                disabled={pendingCount === 0 || batchRunning}
+                loading={submitBatch.isPending}
+              >
+                {batchRunning
+                  ? 'Fix in progress…'
+                  : `Submit ${pendingCount} comment${pendingCount === 1 ? '' : 's'}`}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+        </Panel>
 
-      {/* One action row: merging is the primary CTA — a guarded control that
-          reads as armed only when the board is green — with submit-comments
-          beside it. */}
-      {prState === 'open' || pendingCount > 0 || batchRunning ? (
-        <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:items-center">
-          {prState === 'open' ? (
-            <ConfirmButton
-              className="guarded relative w-full font-mono text-[11px] font-bold tracking-[0.18em] uppercase sm:w-auto"
-              title="Merge pull request?"
-              description={
-                data.provider === 'artifacts'
-                  ? `This merges CR #${data.cr_number ?? data.feature.pr_number} into ${data.repo} on turbodiff.`
-                  : `This merges PR #${data.feature.pr_number} into ${data.repo} on GitHub.`
-              }
-              confirmLabel="Merge"
-              onConfirm={() => merge.mutate()}
-              busy={merge.isPending}
-            >
-              Merge
-            </ConfirmButton>
-          ) : null}
-          {prState === 'open' && data.provider === 'artifacts' ? (
-            <Button
-              variant="secondary"
-              size="sm"
-              className="w-full sm:w-auto"
-              loading={rereview.isPending}
-              onClick={() => rereview.mutate()}
-            >
-              {data.reviews.length > 0 || data.checks.some((ch) => ch.name === 'review')
-                ? 'Re-run review'
-                : 'Run review'}
-            </Button>
-          ) : null}
-          {prState === 'open' ? (
-            <ConfirmButton
-              className="w-full sm:w-auto"
-              variant="danger"
-              title="Abandon this pull request?"
-              description={`This closes PR #${data.feature.pr_number} on ${data.repo} without merging and deletes its branch. This cannot be undone.`}
-              confirmLabel="Abandon"
-              onConfirm={() => abandon.mutate()}
-              busy={abandon.isPending}
-            >
-              Abandon
-            </ConfirmButton>
-          ) : null}
-          {pendingCount > 0 || batchRunning ? (
-            <Button
-              variant="secondary"
-              className="w-full sm:w-auto"
-              onClick={() => submitBatch.mutate()}
-              disabled={pendingCount === 0 || batchRunning}
-              loading={submitBatch.isPending}
-            >
-              {batchRunning
-                ? 'Fix in progress…'
-                : `Submit ${pendingCount} comment${pendingCount === 1 ? '' : 's'}`}
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
+        {showChat ? (
+          <Panel className="flex flex-col lg:max-h-[26rem] lg:min-h-0">
+            <ChatPanel featureId={data.feature.id} canWrite={prState === 'open'} />
+          </Panel>
+        ) : null}
+      </div>
 
       {/* The paper the work earns: sealed once the PR merges. */}
       {data.certificate_url ? (
@@ -975,7 +982,7 @@ export default function FeaturePage() {
           href={data.certificate_url}
           target="_blank"
           rel="noopener"
-          className="mt-4 block max-w-xl hover:opacity-90"
+          className="block max-w-xl hover:opacity-90"
         >
           <CertStrip sealed={prState === 'merged'} ceremony={justMerged}>
             BUILD CERTIFICATE №{String(data.feature.id).padStart(4, '0')} —{' '}
@@ -986,267 +993,234 @@ export default function FeaturePage() {
         </a>
       ) : null}
 
-      <ChatPanel featureId={data.feature.id} canWrite={prState === 'open'} />
-
-      <div
-        className={cn(
-          'lg:grid lg:items-start lg:gap-6 lg:transition-[grid-template-columns] lg:duration-200',
-          treeOpen ? 'lg:grid-cols-[16rem_minmax(0,1fr)]' : 'lg:grid-cols-[2.25rem_minmax(0,1fr)]',
-        )}
-      >
-        {/* Sticky file tree, desktop only — collapsible to a thin rail; small
-            screens get a jump list above the diff instead. */}
-        <aside className="hidden lg:sticky lg:top-4 lg:flex lg:max-h-[calc(100dvh-2rem)] lg:flex-col lg:pt-9">
-          {treeOpen ? (
-            <>
-              <div className="flex items-center justify-between gap-2 px-1.5 pb-2">
-                <span className="font-mono text-xs font-medium tracking-[0.14em] text-mute uppercase">
-                  Files
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setTreeOpen(false)}
-                  title="Hide the file tree"
-                  aria-label="Hide the file tree"
-                  className="cursor-pointer rounded-md p-1 text-mute transition-colors hover:bg-raised/60 hover:text-ink"
-                >
-                  <PanelLeftClose className="size-3.5" aria-hidden />
-                </button>
-              </div>
-              <div className="mb-2 px-1.5 text-xs text-mute">
-                {data.files.length} file{data.files.length === 1 ? '' : 's'} ·{' '}
-                <span className="text-accent-bright">+{totalAdditions}</span>{' '}
-                <span className="text-danger">−{totalDeletions}</span>
-              </div>
-              <div className="min-h-0 flex-1 overflow-y-auto pb-2">{fileTree}</div>
-            </>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setTreeOpen(true)}
-              title="Show the file tree"
-              aria-label="Show the file tree"
-              className="flex cursor-pointer flex-col items-center gap-2 rounded-md border border-line bg-surface px-1.5 py-2 text-mute transition-colors hover:border-line-2 hover:text-ink"
-            >
-              <PanelLeftOpen className="size-3.5" aria-hidden />
-              <span className="font-mono text-[10px] tabular-nums [writing-mode:vertical-rl]">
-                {data.files.length} files
-              </span>
-            </button>
-          )}
-        </aside>
-
-        <div className="min-w-0">
-          <div className="max-w-3xl">
-            {data.demo ? (
-              <>
-                <SectionHeading>Demo</SectionHeading>
-                <video
-                  className="w-full rounded-xl bg-black border border-line-2 shadow-2xl shadow-black/60"
-                  controls
-                  autoPlay
-                  muted
-                  loop
-                  playsInline
-                  src={data.demo.url}
-                />
-                {data.demo.caption ? (
-                  <p className="mt-2 text-xs leading-relaxed text-mute">{data.demo.caption}</p>
-                ) : null}
-              </>
-            ) : null}
-
-            {data.criteria.length > 0 ? (
-              <>
-                <SectionHeading>Acceptance criteria</SectionHeading>
-                <Accordion type="single" collapsible defaultValue="criteria">
-                  <AccordionItem value="criteria">
-                    <AccordionTrigger
-                      aside={
-                        <span className="font-mono text-xs tracking-[0.1em] text-mute uppercase tabular-nums">
-                          {data.criteria.filter((c) => c.verdict === 'pass').length}/
-                          {data.criteria.length} proven
-                        </span>
-                      }
-                    >
-                      {data.criteria.length} criteri{data.criteria.length === 1 ? 'on' : 'a'}
-                    </AccordionTrigger>
-                    <AccordionContent>
-                      <Table className="mt-0">
-                        <tbody>
-                          {data.criteria.map((crit, i) => (
-                            <tr key={i}>
-                              <Td className={cn('w-6', i === 0 && 'border-t-0')}>
-                                <VerdictMark verdict={crit.verdict} />
-                              </Td>
-                              <Td className={cn(i === 0 && 'border-t-0')}>
-                                {crit.text}
-                                {crit.note ? (
-                                  <div className="text-xs text-mute">{crit.note}</div>
-                                ) : null}
-                                {crit.screenshot_url ? (
-                                  <div className="mt-1">
-                                    <img
-                                      src={crit.screenshot_url}
-                                      alt=""
-                                      className="max-h-40 rounded-xl bg-black border border-line-2 shadow-2xl shadow-black/60"
-                                    />
-                                  </div>
-                                ) : null}
-                              </Td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </Table>
-                    </AccordionContent>
-                  </AccordionItem>
-                </Accordion>
-              </>
-            ) : null}
-
-            {data.reviews.length > 0 ? (
-              <>
-                <SectionHeading>Reviews</SectionHeading>
-                <Accordion type="multiple">
-                  {data.reviews.map((r, i) => (
-                    <AccordionItem key={i} value={String(i)}>
-                      <AccordionTrigger>
-                        {r.author ?? 'Unknown'} · {sentence(r.state.toLowerCase())}
-                      </AccordionTrigger>
-                      <AccordionContent>
-                        <Markdown>{r.body || '(no body)'}</Markdown>
-                      </AccordionContent>
-                    </AccordionItem>
-                  ))}
-                </Accordion>
-              </>
-            ) : null}
-
-            {data.plan ? (
-              <>
-                <SectionHeading>Plan</SectionHeading>
-                <Accordion type="single" collapsible>
-                  <AccordionItem value="plan">
-                    <AccordionTrigger>Implementation plan (approved)</AccordionTrigger>
-                    <AccordionContent>
-                      <Markdown>{data.plan}</Markdown>
-                    </AccordionContent>
-                  </AccordionItem>
-                </Accordion>
-              </>
-            ) : null}
-
-            <LifecycleHistory runs={data.lifecycle_runs} />
-            <AgentRunLog runs={data.runs} />
-          </div>
-
-          <SectionHeading
-            aside={
-              <span className="flex flex-wrap items-center gap-1">
-                <span
-                  className="mr-1 inline-flex overflow-hidden rounded-md border border-line-2/70"
-                  role="group"
-                  aria-label="Diff layout"
-                >
-                  {(['unified', 'split'] as const).map((style) => (
-                    <button
-                      key={style}
-                      type="button"
-                      aria-pressed={diffStyle === style}
-                      onClick={() => setDiffStyle(style)}
-                      className={cn(
-                        'cursor-pointer px-2.5 py-1 text-xs transition-colors max-sm:px-3.5 max-sm:py-2',
-                        diffStyle === style
-                          ? 'bg-raised text-accent-bright'
-                          : 'text-mute hover:text-ink',
-                      )}
-                    >
-                      {style === 'split' ? 'Side-by-side' : 'Unified'}
-                    </button>
-                  ))}
-                </span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setCollapsed(new Set(data.files.map((f) => f.filename)))}
-                >
-                  Collapse all
-                </Button>
-                <Button variant="ghost" size="sm" onClick={() => setCollapsed(new Set())}>
-                  Expand all
-                </Button>
-              </span>
-            }
-          >
-            Diff
-          </SectionHeading>
-          {prState === 'open' ? (
-            <Muted className="block">
-              Select a line range in the diff to comment — click Submit to address every pending
-              comment in one pass.
-            </Muted>
-          ) : null}
-
-          <Accordion type="single" collapsible className="mt-3 lg:hidden">
-            <AccordionItem value="files">
-              <AccordionTrigger className="text-xs text-mute">
-                {data.files.length} file{data.files.length === 1 ? '' : 's'} changed — jump to a
-                file
-              </AccordionTrigger>
-              <AccordionContent>{fileTree}</AccordionContent>
-            </AccordionItem>
-          </Accordion>
-
-          {diffQuery.isPending ? (
-            <div
-              className="mt-3 h-80 animate-pulse rounded-lg border border-line bg-surface"
-              role="status"
-              aria-label="Loading diff"
-            />
-          ) : null}
-          {diffQuery.isError ? (
-            <Card className="mt-3">
-              <p className="text-sm text-danger">The diff could not be loaded.</p>
-              <Button
-                variant="secondary"
-                size="sm"
-                className="mt-3"
-                onClick={() => void diffQuery.refetch()}
-              >
-                Retry
-              </Button>
-            </Card>
-          ) : null}
-          {data.files.length > 0 ? (
-            <Suspense fallback={<div className="mt-3 h-80 animate-pulse bg-surface" />}>
-              <CockpitDiffWorkspace>
-                {data.files.map((f) => (
-                  <FileSection
-                    key={f.filename}
-                    featureId={data.feature.id}
-                    comments={commentsByFile.get(f.filename) ?? []}
-                    prOpen={prState === 'open'}
-                    file={f}
-                    diffStyle={diffStyle}
-                    collapsed={collapsed.has(f.filename)}
-                    commentCount={commentsByFile.get(f.filename)?.length ?? 0}
-                    onToggle={() => toggleFile(f.filename)}
-                    sectionRef={(el) => {
-                      if (el) sectionEls.current.set(f.filename, el);
-                      else sectionEls.current.delete(f.filename);
-                    }}
-                  />
-                ))}
-              </CockpitDiffWorkspace>
-            </Suspense>
-          ) : null}
-          {data.more_files > 0 ? (
-            <Muted className="mt-3 block">
-              …and {data.more_files} more files — see the PR on GitHub.
-            </Muted>
+      {/* Evidence: criteria fills the width in two columns; the rest are
+          collapsible full-width sections. */}
+      {data.demo ? (
+        <div>
+          <SectionHeading>Demo</SectionHeading>
+          <video
+            className="w-full max-w-3xl rounded-xl bg-black border border-line-2 shadow-2xl shadow-black/60"
+            controls
+            autoPlay
+            muted
+            loop
+            playsInline
+            src={data.demo.url}
+          />
+          {data.demo.caption ? (
+            <p className="mt-2 max-w-3xl text-xs leading-relaxed text-mute">{data.demo.caption}</p>
           ) : null}
         </div>
-      </div>
+      ) : null}
+
+      {data.criteria.length > 0 ? (
+        <div>
+          <SectionHeading>Acceptance criteria</SectionHeading>
+          <Accordion type="single" collapsible defaultValue="criteria">
+            <AccordionItem value="criteria">
+              <AccordionTrigger
+                aside={
+                  <span className="font-mono text-xs tracking-[0.1em] text-mute uppercase tabular-nums">
+                    {data.criteria.filter((c) => c.verdict === 'pass').length}/
+                    {data.criteria.length} proven
+                  </span>
+                }
+              >
+                {data.criteria.length} criteri{data.criteria.length === 1 ? 'on' : 'a'}
+              </AccordionTrigger>
+              <AccordionContent>
+                <ul className="grid gap-x-8 gap-y-4 pt-1 md:grid-cols-2">
+                  {data.criteria.map((crit, i) => (
+                    <li key={i} className="flex gap-2.5 text-[0.85rem] leading-relaxed">
+                      <span className="mt-0.5 shrink-0">
+                        <VerdictMark verdict={crit.verdict} />
+                      </span>
+                      <div className="min-w-0">
+                        {crit.text}
+                        {crit.note ? (
+                          <div className="mt-0.5 text-xs text-mute">{crit.note}</div>
+                        ) : null}
+                        {crit.screenshot_url ? (
+                          <div className="mt-1.5">
+                            <img
+                              src={crit.screenshot_url}
+                              alt=""
+                              className="max-h-40 rounded-xl bg-black border border-line-2 shadow-2xl shadow-black/60"
+                            />
+                          </div>
+                        ) : null}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </AccordionContent>
+            </AccordionItem>
+          </Accordion>
+        </div>
+      ) : null}
+
+      {data.reviews.length > 0 ? (
+        <div>
+          <SectionHeading>Reviews</SectionHeading>
+          <Accordion type="multiple">
+            {data.reviews.map((r, i) => (
+              <AccordionItem key={i} value={String(i)}>
+                <AccordionTrigger>
+                  {r.author ?? 'Unknown'} · {sentence(r.state.toLowerCase())}
+                </AccordionTrigger>
+                <AccordionContent>
+                  <Markdown>{r.body || '(no body)'}</Markdown>
+                </AccordionContent>
+              </AccordionItem>
+            ))}
+          </Accordion>
+        </div>
+      ) : null}
+
+      {data.plan ? (
+        <div>
+          <SectionHeading>Plan</SectionHeading>
+          <Accordion type="single" collapsible>
+            <AccordionItem value="plan">
+              <AccordionTrigger>Implementation plan (approved)</AccordionTrigger>
+              <AccordionContent>
+                <Markdown>{data.plan}</Markdown>
+              </AccordionContent>
+            </AccordionItem>
+          </Accordion>
+        </div>
+      ) : null}
+
+      <LifecycleHistory runs={data.lifecycle_runs} />
+      <AgentRunLog runs={data.runs} />
+
+      {/* Review workspace: an always-visible file tree beside the diff, so the
+          tree lines up with the code it navigates (not the evidence above). */}
+      <section>
+        <SectionHeading
+          aside={
+            <span className="flex flex-wrap items-center gap-1">
+              <span
+                className="mr-1 inline-flex overflow-hidden rounded-md border border-line-2/70"
+                role="group"
+                aria-label="Diff layout"
+              >
+                {(['unified', 'split'] as const).map((style) => (
+                  <button
+                    key={style}
+                    type="button"
+                    aria-pressed={diffStyle === style}
+                    onClick={() => setDiffStyle(style)}
+                    className={cn(
+                      'cursor-pointer px-2.5 py-1 text-xs transition-colors max-sm:px-3.5 max-sm:py-2',
+                      diffStyle === style
+                        ? 'bg-raised text-accent-bright'
+                        : 'text-mute hover:text-ink',
+                    )}
+                  >
+                    {style === 'split' ? 'Side-by-side' : 'Unified'}
+                  </button>
+                ))}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setCollapsed(new Set(data.files.map((f) => f.filename)))}
+              >
+                Collapse all
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setCollapsed(new Set())}>
+                Expand all
+              </Button>
+            </span>
+          }
+        >
+          Diff
+        </SectionHeading>
+        {prState === 'open' ? (
+          <Muted className="block">
+            Select a line range in the diff to comment — click Submit to address every pending
+            comment in one pass.
+          </Muted>
+        ) : null}
+
+        {/* Small screens: a jump list instead of the side rail. */}
+        <Accordion type="single" collapsible className="mt-3 lg:hidden">
+          <AccordionItem value="files">
+            <AccordionTrigger className="text-xs text-mute">
+              {data.files.length} file{data.files.length === 1 ? '' : 's'} changed — jump to a file
+            </AccordionTrigger>
+            <AccordionContent>{fileTree}</AccordionContent>
+          </AccordionItem>
+        </Accordion>
+
+        <div className="mt-3 lg:grid lg:grid-cols-[15rem_minmax(0,1fr)] lg:items-start lg:gap-6">
+          {/* Always-visible sticky file tree (desktop). */}
+          <aside className="hidden lg:sticky lg:top-4 lg:block lg:max-h-[calc(100dvh-2rem)] lg:overflow-y-auto lg:pb-2">
+            <div className="mb-2 flex items-baseline justify-between gap-2 px-1.5">
+              <span className="font-mono text-[10px] font-medium tracking-[0.16em] text-mute uppercase">
+                Files
+              </span>
+              <span className="text-xs text-mute tabular-nums">
+                {data.files.length} · <span className="text-accent-bright">+{totalAdditions}</span>{' '}
+                <span className="text-danger">−{totalDeletions}</span>
+              </span>
+            </div>
+            {fileTree}
+          </aside>
+
+          <div className="min-w-0">
+            {diffQuery.isPending ? (
+              <div
+                className="h-80 animate-pulse rounded-lg border border-line bg-surface"
+                role="status"
+                aria-label="Loading diff"
+              />
+            ) : null}
+            {diffQuery.isError ? (
+              <Card>
+                <p className="text-sm text-danger">The diff could not be loaded.</p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="mt-3"
+                  onClick={() => void diffQuery.refetch()}
+                >
+                  Retry
+                </Button>
+              </Card>
+            ) : null}
+            {data.files.length > 0 ? (
+              <Suspense fallback={<div className="h-80 animate-pulse bg-surface" />}>
+                <CockpitDiffWorkspace>
+                  {data.files.map((f) => (
+                    <FileSection
+                      key={f.filename}
+                      featureId={data.feature.id}
+                      comments={commentsByFile.get(f.filename) ?? []}
+                      prOpen={prState === 'open'}
+                      file={f}
+                      diffStyle={diffStyle}
+                      collapsed={collapsed.has(f.filename)}
+                      commentCount={commentsByFile.get(f.filename)?.length ?? 0}
+                      onToggle={() => toggleFile(f.filename)}
+                      sectionRef={(el) => {
+                        if (el) sectionEls.current.set(f.filename, el);
+                        else sectionEls.current.delete(f.filename);
+                      }}
+                    />
+                  ))}
+                </CockpitDiffWorkspace>
+              </Suspense>
+            ) : null}
+            {data.more_files > 0 ? (
+              <Muted className="mt-3 block">
+                …and {data.more_files} more files — see the PR on GitHub.
+              </Muted>
+            ) : null}
+          </div>
+        </div>
+      </section>
     </div>
   );
 }

@@ -9,7 +9,7 @@ import {
   Paperclip,
   X,
 } from 'lucide-react';
-import { useRef, useState, type ReactNode } from 'react';
+import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { ApiBoard, ApiPlan, ApiTaskDetail } from '../../shared/api-types.ts';
 import { RUNNER_MODELS } from '../../shared/runner-models.ts';
@@ -35,6 +35,7 @@ import {
 import { QuestionsCarousel } from '../components/questions-carousel.tsx';
 import { Button, buttonVariants } from '../components/ui/button.tsx';
 import { Select, Textarea } from '../components/ui/input.tsx';
+import { BlockLabel, Panel } from '../components/ui/panel.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 
 function onApiError<T>(err: T) {
@@ -44,30 +45,6 @@ function onApiError<T>(err: T) {
 // Set once regardless of the answer — "contextual" means timing (the first
 // task that hits a human-blocking state while open), not "ask every task".
 const PUSH_PROMPTED_KEY = 'turbodiff:push-prompted';
-
-// Panels give every task-page section one bounded, consistent container
-// instead of the old flat stack of loose lines.
-function Panel({ className, children }: { className?: string; children: ReactNode }) {
-  return (
-    <div className={cn('rounded-xl border border-line bg-surface/60 p-4 sm:p-5', className)}>
-      {children}
-    </div>
-  );
-}
-
-// The small mono uppercase label that heads a panel or rail block.
-function BlockLabel({ className, children }: { className?: string; children: ReactNode }) {
-  return (
-    <p
-      className={cn(
-        'font-mono text-[10px] font-medium tracking-[0.16em] text-mute uppercase',
-        className,
-      )}
-    >
-      {children}
-    </p>
-  );
-}
 
 // Compact rail affordance: an icon-only bell (tooltip'd) rather than a banner
 // that competes with the task's actual content. An explicit click — not an
