@@ -909,64 +909,64 @@ export default function FeaturePage() {
         <Panel className="flex flex-col">
           <BlockLabel className="mb-3">Pipeline</BlockLabel>
           <GoNoGoBoard data={data} />
-        {prState === 'open' || pendingCount > 0 || batchRunning ? (
-          <div className="mt-4 flex flex-col gap-2 border-t border-line/60 pt-4 sm:flex-row sm:flex-wrap sm:items-center lg:mt-auto">
-            {prState === 'open' ? (
-              <ConfirmButton
-                className="guarded relative w-full font-mono text-[11px] font-bold tracking-[0.18em] uppercase sm:w-auto"
-                title="Merge pull request?"
-                description={
-                  data.provider === 'artifacts'
-                    ? `This merges CR #${data.cr_number ?? data.feature.pr_number} into ${data.repo} on turbodiff.`
-                    : `This merges PR #${data.feature.pr_number} into ${data.repo} on GitHub.`
-                }
-                confirmLabel="Merge"
-                onConfirm={() => merge.mutate()}
-                busy={merge.isPending}
-              >
-                Merge
-              </ConfirmButton>
-            ) : null}
-            {prState === 'open' && data.provider === 'artifacts' ? (
-              <Button
-                variant="secondary"
-                className="w-full sm:w-auto"
-                loading={rereview.isPending}
-                onClick={() => rereview.mutate()}
-              >
-                {data.reviews.length > 0 || data.checks.some((ch) => ch.name === 'review')
-                  ? 'Re-run review'
-                  : 'Run review'}
-              </Button>
-            ) : null}
-            {prState === 'open' ? (
-              <ConfirmButton
-                className="w-full sm:w-auto"
-                variant="danger"
-                title="Abandon this pull request?"
-                description={`This closes PR #${data.feature.pr_number} on ${data.repo} without merging and deletes its branch. This cannot be undone.`}
-                confirmLabel="Abandon"
-                onConfirm={() => abandon.mutate()}
-                busy={abandon.isPending}
-              >
-                Abandon
-              </ConfirmButton>
-            ) : null}
-            {pendingCount > 0 || batchRunning ? (
-              <Button
-                variant="secondary"
-                className="w-full sm:ml-auto sm:w-auto"
-                onClick={() => submitBatch.mutate()}
-                disabled={pendingCount === 0 || batchRunning}
-                loading={submitBatch.isPending}
-              >
-                {batchRunning
-                  ? 'Fix in progress…'
-                  : `Submit ${pendingCount} comment${pendingCount === 1 ? '' : 's'}`}
-              </Button>
-            ) : null}
-          </div>
-        ) : null}
+          {prState === 'open' || pendingCount > 0 || batchRunning ? (
+            <div className="mt-4 flex flex-col gap-2 border-t border-line/60 pt-4 sm:flex-row sm:flex-wrap sm:items-center lg:mt-auto">
+              {prState === 'open' ? (
+                <ConfirmButton
+                  className="guarded relative w-full font-mono text-[11px] font-bold tracking-[0.18em] uppercase sm:w-auto"
+                  title="Merge pull request?"
+                  description={
+                    data.provider === 'artifacts'
+                      ? `This merges CR #${data.cr_number ?? data.feature.pr_number} into ${data.repo} on turbodiff.`
+                      : `This merges PR #${data.feature.pr_number} into ${data.repo} on GitHub.`
+                  }
+                  confirmLabel="Merge"
+                  onConfirm={() => merge.mutate()}
+                  busy={merge.isPending}
+                >
+                  Merge
+                </ConfirmButton>
+              ) : null}
+              {prState === 'open' && data.provider === 'artifacts' ? (
+                <Button
+                  variant="secondary"
+                  className="w-full sm:w-auto"
+                  loading={rereview.isPending}
+                  onClick={() => rereview.mutate()}
+                >
+                  {data.reviews.length > 0 || data.checks.some((ch) => ch.name === 'review')
+                    ? 'Re-run review'
+                    : 'Run review'}
+                </Button>
+              ) : null}
+              {prState === 'open' ? (
+                <ConfirmButton
+                  className="w-full sm:w-auto"
+                  variant="danger"
+                  title="Abandon this pull request?"
+                  description={`This closes PR #${data.feature.pr_number} on ${data.repo} without merging and deletes its branch. This cannot be undone.`}
+                  confirmLabel="Abandon"
+                  onConfirm={() => abandon.mutate()}
+                  busy={abandon.isPending}
+                >
+                  Abandon
+                </ConfirmButton>
+              ) : null}
+              {pendingCount > 0 || batchRunning ? (
+                <Button
+                  variant="secondary"
+                  className="w-full sm:ml-auto sm:w-auto"
+                  onClick={() => submitBatch.mutate()}
+                  disabled={pendingCount === 0 || batchRunning}
+                  loading={submitBatch.isPending}
+                >
+                  {batchRunning
+                    ? 'Fix in progress…'
+                    : `Submit ${pendingCount} comment${pendingCount === 1 ? '' : 's'}`}
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
         </Panel>
 
         {showChat ? (
