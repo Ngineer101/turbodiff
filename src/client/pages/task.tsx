@@ -590,7 +590,7 @@ export function TaskPage() {
       {/* Plan-review comment popover — fixed, so it lives at the tree root. */}
       {popover ? (
         <div
-          className="fixed z-50 w-72 -translate-x-1/2 rounded-xl border border-line-2 bg-surface p-3 shadow-2xl shadow-black/60"
+          className="fixed z-50 w-72 -translate-x-1/2 rounded-lg border border-line-2 bg-surface p-3 shadow-sticker-lg"
           style={{ left: popover.x, top: popover.y }}
         >
           <p className="line-clamp-2 text-xs text-mute italic">{popover.snippet}</p>

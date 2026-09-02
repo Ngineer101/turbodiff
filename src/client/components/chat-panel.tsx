@@ -52,7 +52,7 @@ function ChatMessage({ message }: { message: ApiChatMessage }) {
     );
   }
   return (
-    <div className="min-w-0 max-w-[85%] rounded-md border border-line-2 border-l-2 border-l-accent bg-surface px-3 py-2 text-[0.82rem]">
+    <div className="min-w-0 max-w-[85%] rounded-md border border-line-2 border-l-2 border-l-ink-dim bg-surface px-3 py-2 text-[0.82rem]">
       <div className="mb-1 flex flex-wrap items-center gap-1.5 text-xs text-mute">
         <strong>Agent</strong>
         <span>{ago(message.created_at)}</span>

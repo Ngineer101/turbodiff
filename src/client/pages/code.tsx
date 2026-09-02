@@ -651,7 +651,7 @@ function FilePane({
             ) : (
               <div className="mt-3">
                 <p className="font-mono text-[11px] tracking-[0.14em] text-mute uppercase">
-                  Changes <span className="text-accent-bright">+{preview.stats.additions}</span>{' '}
+                  Changes <span className="text-go-bright">+{preview.stats.additions}</span>{' '}
                   <span className="text-danger">&minus;{preview.stats.deletions}</span>
                 </p>
                 <DiffPreview hunks={preview.hunks} />
@@ -712,7 +712,7 @@ function DiffPreview({ hunks }: { hunks: DiffHunk[] }) {
               key={j}
               className={cn(
                 'flex px-2 whitespace-pre',
-                op.kind === 'add' && 'bg-accent/10 text-accent-bright',
+                op.kind === 'add' && 'bg-go/10 text-go-bright',
                 op.kind === 'del' && 'bg-danger/10 text-danger',
                 op.kind === 'same' && 'text-ink-dim',
               )}

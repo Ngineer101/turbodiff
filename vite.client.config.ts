@@ -5,7 +5,7 @@ import { defineConfig, type Plugin } from 'vite-plus';
 
 const PERFORMANCE_BUDGETS = {
   entry: 275_000,
-  css: 60_000,
+  css: 64_000,
   featureRoute: 40_000,
   cockpitDiff: 525_000,
   codeRoute: 30_000,

@@ -205,7 +205,7 @@ const highlight = HighlightStyle.define([
   { tag: tags.tagName, color: 'var(--color-accent-bright)' },
 
   // Diff / change markers
-  { tag: [tags.inserted, tags.changed], color: 'var(--color-accent-bright)' },
+  { tag: [tags.inserted, tags.changed], color: 'var(--color-go-bright)' },
   { tag: tags.deleted, color: 'var(--color-danger)' },
   { tag: tags.invalid, color: 'var(--color-danger)' },
 

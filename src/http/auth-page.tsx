@@ -8,14 +8,17 @@
 
 const CSS = `
 	:root {
-		--bg: #15171c;
-		--surface: #1b1e24;
-		--ink: #e8eaee;
-		--muted: #8b919c;
-		--green: #3fb950;
-		--green-bright: #56d364;
-		--red: #f85149;
-		--line: #2b2f37;
+		--bg: #131210;
+		--surface: #1c1a17;
+		--raised: #24211d;
+		--ink: #ece6da;
+		--muted: #9b948a;
+		--accent: #ffc72c;
+		--accent-bright: #ffd45c;
+		--accent-ink: #131210;
+		--red: #ff6b57;
+		--line: #2a2722;
+		--line-2: #3a362f;
 		--mono: "IBM Plex Mono", ui-monospace, monospace;
 	}
 	* { box-sizing: border-box; margin: 0; }
@@ -28,22 +31,22 @@ const CSS = `
 		padding: clamp(1.25rem, 3vw, 2.5rem);
 	}
 	header { display: flex; justify-content: center; }
-	.brand { display: flex; align-items: center; gap: 0.7rem; text-decoration: none; }
-	.brand img {
-		width: 30px; height: 30px;
-		filter: invert(1) drop-shadow(0 0 8px rgba(63, 185, 80, 0.5));
-		mix-blend-mode: screen;
+	.brand { display: flex; align-items: center; gap: 0.75rem; text-decoration: none; }
+	.mark {
+		display: inline-flex; align-items: center; justify-content: center;
+		width: 30px; height: 30px; border-radius: 6px;
+		background: var(--accent); color: var(--accent-ink);
+		font-weight: 700; font-size: 12px; letter-spacing: -0.02em;
+		box-shadow: 2px 2px 0 var(--ink);
+		transform: rotate(-6deg);
 	}
-	.wordmark {
-		font-family: var(--mono);
-		font-size: 0.95rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink);
-	}
-	.wordmark b { color: var(--green-bright); font-weight: 500; }
+	.wordmark { font-weight: 700; font-size: 1.2rem; letter-spacing: -0.02em; color: var(--ink); }
 	main { flex: 1; display: flex; align-items: center; justify-content: center; }
 	.panel {
 		width: 100%; max-width: 24rem;
 		background: var(--surface);
-		border: 1px solid var(--line); border-radius: 14px;
+		border: 1px solid var(--line-2); border-radius: 10px;
+		box-shadow: 4px 4px 0 var(--line);
 		padding: 1.75rem;
 	}
 	.tabs { display: flex; gap: 0.25rem; margin-bottom: 1.4rem; }
@@ -53,7 +56,7 @@ const CSS = `
 		color: var(--muted); background: none; border: none; border-bottom: 2px solid var(--line);
 		cursor: pointer;
 	}
-	.tab[aria-selected="true"] { color: var(--ink); border-color: var(--green); }
+	.tab[aria-selected="true"] { color: var(--accent); border-color: var(--accent); }
 	label {
 		display: block; margin-bottom: 0.9rem;
 		font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.12em; text-transform: uppercase;
@@ -62,28 +65,31 @@ const CSS = `
 	input {
 		display: block; width: 100%; margin-top: 0.3rem; padding: 0.55rem 0.7rem;
 		font: inherit; font-size: 0.9rem; color: var(--ink);
-		background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+		background: var(--bg); border: 1px solid var(--line-2); border-radius: 6px;
 	}
-	input:focus { outline: none; border-color: var(--green); }
+	input:focus { outline: 2px solid rgba(255, 199, 44, 0.7); outline-offset: 2px; border-color: rgba(255, 199, 44, 0.5); }
 	.error {
 		display: none; margin-bottom: 0.9rem; padding: 0.5rem 0.7rem;
 		font-size: 0.82rem; color: var(--red);
-		border: 1px solid rgba(248, 81, 73, 0.4); border-radius: 8px;
+		border: 1px solid rgba(255, 107, 87, 0.4); border-radius: 6px;
 	}
 	.error.show { display: block; }
 	.notice {
 		margin-bottom: 1rem; padding: 0.65rem 0.75rem;
 		font-size: 0.82rem; color: var(--ink);
-		background: rgba(63, 185, 80, 0.08);
-		border: 1px solid rgba(63, 185, 80, 0.35); border-radius: 8px;
+		background: rgba(255, 199, 44, 0.08);
+		border: 1px solid rgba(255, 199, 44, 0.35); border-radius: 6px;
 	}
 	.submit {
 		width: 100%; padding: 0.6rem 0; margin-top: 0.2rem;
-		font: 500 0.9rem/1 "IBM Plex Sans", system-ui, sans-serif;
-		color: #0b0f0c; background: var(--green); border: 1px solid var(--green-bright); border-radius: 8px;
+		font: 600 0.9rem/1 "IBM Plex Sans", system-ui, sans-serif;
+		color: var(--accent-ink); background: var(--accent); border: 0; border-radius: 6px;
+		box-shadow: 3px 3px 0 var(--ink);
 		cursor: pointer;
+		transition: transform 0.12s ease-out, box-shadow 0.12s ease-out, background 0.12s;
 	}
-	.submit:hover { background: var(--green-bright); }
+	.submit:hover { background: var(--accent-bright); transform: translate(-1px, -1px); box-shadow: 4px 4px 0 var(--ink); }
+	.submit:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--ink); }
 	.submit[disabled] { opacity: 0.6; cursor: default; }
 	.divider {
 		display: flex; align-items: center; gap: 0.8rem; margin: 1.2rem 0;
@@ -95,10 +101,10 @@ const CSS = `
 		display: flex; align-items: center; justify-content: center; gap: 0.6rem;
 		width: 100%; padding: 0.6rem 0;
 		font: 500 0.9rem/1 "IBM Plex Sans", system-ui, sans-serif;
-		color: var(--ink); background: none; border: 1px solid var(--line); border-radius: 8px;
+		color: var(--ink); background: none; border: 1px solid var(--line-2); border-radius: 6px;
 		text-decoration: none;
 	}
-	.github:hover { border-color: var(--green); }
+	.github:hover { border-color: var(--accent); background: var(--raised); }
 	.github svg { width: 18px; height: 18px; fill: currentColor; }
 	footer {
 		display: flex; justify-content: center; gap: 1.6rem;
@@ -192,10 +198,10 @@ function AuthPage({ next, notice }: { next?: string; notice?: string }) {
       <body>
         <header>
           <a class="brand" href="/">
-            <img src="/logo-small.png" alt="" />
-            <span class="wordmark">
-              turbo<b>diff</b>
+            <span class="mark" aria-hidden="true">
+              TD
             </span>
+            <span class="wordmark">turbodiff</span>
           </a>
         </header>
 

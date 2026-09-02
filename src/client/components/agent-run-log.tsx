@@ -53,7 +53,7 @@ export function AgentRunLog({ runs }: { runs: ApiAgentRun[] }) {
               aside={<span className="text-xs text-mute">{ago(r.created_at)}</span>}
             >
               <span
-                className={r.success ? 'font-mono text-accent-bright' : 'font-mono text-danger'}
+                className={r.success ? 'font-mono text-go-bright' : 'font-mono text-danger'}
                 aria-label={r.success ? 'succeeded' : 'failed'}
               >
                 {r.success ? '✓' : '✗'}

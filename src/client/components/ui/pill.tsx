@@ -3,15 +3,18 @@ import type { HTMLAttributes } from 'react';
 import { cn } from '../../lib/utils.ts';
 
 // The v1 status pill, kept as the app's core status vocabulary. `running`
-// prefixes a pulsing dot.
+// prefixes a pulsing dot. Tones follow the colour rule: `on` is green
+// (success), `running` is yellow (live), `accent` is yellow without the dot
+// (a recommendation, something to pick).
 const pillVariants = cva(
   'inline-flex items-center gap-1 rounded-full border px-2.5 py-px font-mono text-xs whitespace-nowrap',
   {
     variants: {
       tone: {
         neutral: 'border-line-2 text-mute',
-        on: 'border-accent/40 text-accent-bright',
-        running: 'border-accent/40 text-accent-bright',
+        on: 'border-go/40 text-go-bright',
+        running: 'border-hold/40 text-hold',
+        accent: 'border-accent/40 text-accent',
         red: 'border-danger/40 text-danger',
         warn: 'border-warn/40 text-warn',
       },

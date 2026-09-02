@@ -1,12 +1,12 @@
 // Signed-out HTTP landing page, server-rendered as a hono/jsx component (React
 // syntax, stringified in the Worker — no client-side React bundle).
 //
-// The Three.js scene occupies only the right half of desktop viewports (hidden
-// on narrow screens) so it never overlaps the hero copy. It is a floating 3D
-// terminal: a glossy dark slab whose screen is a live CanvasTexture where a
-// Turbodiff factory run types itself out on loop — plan, generate, review,
-// fix, verify, PR — over a scrolling wireframe grid floor. Grainy dark paper,
-// cool ink and the brand greens only.
+// Signage direction: warm graphite ground, bone text, chrome yellow as the one
+// working colour, phosphor green only for GO. Depth is hard-offset sticker
+// shadows. The hero object is a terminal "sticker card" that drops onto the
+// page with CSS keyframes and then types a factory run out with one timer —
+// no canvas, no WebGL, no third-party script. The Paper file is the source of
+// truth for the design: https://app.paper.design/file/01M1H1H5D09QPHCSFA3X0727EN
 //
 // CSS and the client script are kept as plain strings injected with
 // dangerouslySetInnerHTML so JSX text escaping can't mangle them. The script
@@ -16,462 +16,357 @@ const REPO_URL = 'https://github.com/Ngineer101/turbodiff';
 
 const CSS = `
 	:root {
-		--bg: #15171c;
-		--ink: #e8eaee;
-		--muted: #8b919c;
-		--green: #3fb950;
-		--green-bright: #56d364;
-		--red: #f85149;
-		--line: #2b2f37;
+		--bg: #131210;
+		--surface: #1c1a17;
+		--surface-2: #0f0e0c;
+		--raised: #24211d;
+		--line: #2a2722;
+		--line-2: #3a362f;
+		--ink: #ece6da;
+		--ink-dim: #c9c2b6;
+		--mute: #9b948a;
+		--accent: #ffc72c;
+		--accent-bright: #ffd45c;
+		--accent-ink: #131210;
+		--go: #3fb950;
+		--go-bright: #56d364;
+		--danger: #ff6b57;
 		--mono: "IBM Plex Mono", ui-monospace, monospace;
+		--sans: "IBM Plex Sans", system-ui, sans-serif;
+		--ease: cubic-bezier(0.2, 0.7, 0.2, 1);
 	}
 	* { box-sizing: border-box; margin: 0; }
-	html, body { height: 100%; }
+	html { scroll-behavior: smooth; }
 	body {
 		background: var(--bg);
 		color: var(--ink);
-		font: 400 15px/1.6 "IBM Plex Sans", system-ui, sans-serif;
-		overflow: hidden;
+		font: 400 15px/1.6 var(--sans);
+		-webkit-font-smoothing: antialiased;
 	}
-	/* --- background layers --- */
-	#scene {
-		position: fixed; top: 0; right: 0; width: 50vw; height: 100vh; display: block;
-		-webkit-mask-image: linear-gradient(to right, transparent, #000 22%);
-		mask-image: linear-gradient(to right, transparent, #000 22%);
+	a { color: inherit; text-decoration: none; }
+	.wrap { width: min(100% - 2.5rem, 1312px); margin: 0 auto; }
+
+	/* --- stickers: the shared vocabulary --- */
+	.tag {
+		display: inline-block;
+		padding: 0.3em 0.75em; border-radius: 4px;
+		background: var(--accent); color: var(--accent-ink);
+		font-family: var(--mono); font-size: 0.66rem; font-weight: 700;
+		letter-spacing: 0.18em; text-transform: uppercase;
+		box-shadow: 2px 2px 0 var(--ink);
+		transform: rotate(-3deg);
 	}
-	.vignette {
-		position: fixed; inset: 0; pointer-events: none;
-		background:
-			radial-gradient(130% 100% at 20% 40%, transparent 0%, transparent 55%, rgba(21, 23, 28, 0.7) 100%),
-			linear-gradient(to top, rgba(21, 23, 28, 0.85), transparent 25%);
+	.tag.flat { transform: rotate(-2deg); box-shadow: none; }
+	.mark {
+		display: inline-flex; align-items: center; justify-content: center;
+		width: 34px; height: 34px; border-radius: 7px;
+		background: var(--accent); color: var(--accent-ink);
+		font-weight: 700; font-size: 14px; letter-spacing: -0.02em;
+		box-shadow: 3px 3px 0 var(--ink);
+		transform: rotate(-6deg);
 	}
-	.grain {
-		position: fixed; inset: 0; pointer-events: none; opacity: 0.95; mix-blend-mode: overlay;
-		background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3'/%3E%3CfeColorMatrix values='0 0 0 0 0.5 0 0 0 0 0.52 0 0 0 0 0.56 0 0 0 0.3 0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+	.card {
+		background: var(--surface); border: 1px solid var(--line-2); border-radius: 10px;
+		box-shadow: 3px 3px 0 var(--line);
 	}
-	/* --- layout --- */
-	.frame {
-		position: relative; z-index: 2;
-		height: 100dvh;
-		display: flex; flex-direction: column;
-		padding: clamp(1.25rem, 3vw, 2.5rem) clamp(1.25rem, 4.5vw, 4rem);
+	.card.live { border-color: var(--accent); box-shadow: 3px 3px 0 var(--accent); }
+	.lamp {
+		display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
 	}
-	header {
-		display: flex; align-items: center; justify-content: space-between;
-		animation: rise 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
-	}
-	.brand { display: flex; align-items: center; gap: 0.7rem; text-decoration: none; }
-	.brand img {
-		width: 30px; height: 30px;
-		filter: invert(1) drop-shadow(0 0 8px rgba(63, 185, 80, 0.5));
-		mix-blend-mode: screen;
-	}
-	.wordmark {
-		font-family: var(--mono);
-		font-size: 0.95rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink);
-	}
-	.wordmark b { color: var(--green-bright); font-weight: 500; }
-	.nav { display: flex; align-items: center; gap: 1.6rem; }
-	.nav a {
-		font-family: var(--mono);
-		color: var(--muted); text-decoration: none; font-size: 0.85rem;
-		border-bottom: 1px solid transparent; transition: color 0.2s, border-color 0.2s;
-	}
-	.nav a:hover { color: var(--ink); border-color: var(--green); }
-	main { flex: 1; display: flex; align-items: center; }
-	.hero { max-width: 36rem; }
-	@media (min-width: 900px) { .hero { max-width: min(36rem, 48vw); } }
-	h1 {
-		margin: 0 0 1.1rem -0.04em;
-		font-family: "Instrument Serif", Georgia, serif; font-weight: 400;
-		font-size: clamp(2.6rem, 6.2vw, 4.4rem); line-height: 1.02; letter-spacing: -0.01em;
-		animation: rise 0.7s 0.16s cubic-bezier(0.2, 0.7, 0.2, 1) both;
-	}
-	h1 em { font-style: italic; color: var(--green-bright); }
-	.sub {
-		color: var(--muted); max-width: 30rem; font-size: 0.95rem;
-		animation: rise 0.7s 0.24s cubic-bezier(0.2, 0.7, 0.2, 1) both;
-	}
-	.proof-line {
-		margin-top: 1.15rem;
-		font-family: "Instrument Serif", Georgia, serif; font-style: italic;
-		font-size: clamp(1.15rem, 2vw, 1.4rem); line-height: 1.3;
-		color: var(--green-bright);
-		animation: rise 0.7s 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) both;
-	}
-	.ledger {
-		display: flex; gap: clamp(1rem, 2vw, 1.5rem); flex-wrap: wrap;
-		margin-top: 1.7rem;
-		animation: rise 0.7s 0.3s cubic-bezier(0.2, 0.7, 0.2, 1) both;
-	}
-	.ledger .stat {
-		font-family: var(--mono);
-		border-left: 2px solid rgba(63, 185, 80, 0.45);
-		padding-left: 0.7rem;
-	}
-	.ledger .stat b {
-		display: block; font-weight: 500; font-size: 1.2rem; letter-spacing: 0.02em;
-		color: var(--ink);
-	}
-	.ledger .stat span {
-		font-size: 0.62rem; letter-spacing: 0.08em; text-transform: uppercase;
-		color: var(--muted);
-	}
-	.cta-row {
-		display: flex; align-items: center; gap: 0.9rem; margin-top: 1.9rem; flex-wrap: wrap;
-		animation: rise 0.7s 0.32s cubic-bezier(0.2, 0.7, 0.2, 1) both;
-	}
-	.cta {
+	.lamp.go { background: var(--go); box-shadow: 0 0 9px 2px rgba(63, 185, 80, 0.45); }
+	.lamp.hold { background: var(--accent); box-shadow: 0 0 9px 2px rgba(255, 199, 44, 0.45); }
+	.lamp.off { background: #4a463f; }
+	.lamp.pulse { animation: pulse 1.6s ease-in-out infinite; }
+	@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+	.placard {
 		display: inline-flex; align-items: center; gap: 0.6em;
-		padding: 0.85rem 1.4rem; border-radius: 8px; text-decoration: none;
-		font-weight: 500; font-size: 0.92rem; letter-spacing: 0.02em;
-		transition: transform 0.18s cubic-bezier(0.2, 0.7, 0.2, 1), box-shadow 0.18s, background 0.18s, border-color 0.18s;
-		background: var(--green); color: #04140a;
-		box-shadow: 0 0 0 1px rgba(86, 211, 100, 0.4), 0 8px 30px rgba(63, 185, 80, 0.25);
+		font-family: var(--mono); font-size: 0.68rem; font-weight: 600;
+		letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink);
 	}
-	.cta:hover {
-		transform: translateY(-2px); background: var(--green-bright);
-		box-shadow: 0 0 0 1px rgba(86, 211, 100, 0.6), 0 12px 40px rgba(63, 185, 80, 0.4);
+	.placard.hot { color: var(--accent); }
+
+	/* --- header --- */
+	header {
+		border-bottom: 1px solid var(--line);
 	}
-	.cta svg { width: 1.1em; height: 1.1em; fill: currentColor; }
+	header .wrap {
+		display: flex; align-items: center; justify-content: space-between;
+		padding: 1.5rem 0;
+	}
+	.brand { display: flex; align-items: center; gap: 0.75rem; }
+	.wordmark { font-weight: 700; font-size: 1.35rem; letter-spacing: -0.02em; color: var(--ink); }
+	.nav { display: flex; align-items: center; gap: 1.75rem; font-family: var(--mono); font-size: 0.78rem; letter-spacing: 0.08em; color: var(--mute); }
+	.nav a { transition: color 0.15s; }
+	.nav a:hover { color: var(--ink); }
+	.nav .signin {
+		padding: 0.5rem 0.9rem; border-radius: 6px; border: 1.5px solid var(--line-2); color: var(--ink);
+		transition: border-color 0.15s, background 0.15s;
+	}
+	.nav .signin:hover { border-color: var(--accent); background: var(--raised); }
+	@media (max-width: 720px) { .nav a:not(.signin) { display: none; } }
+
+	/* --- hero --- */
+	.hero .wrap {
+		display: grid; grid-template-columns: minmax(0, 620px) minmax(0, 1fr);
+		gap: 3.5rem; align-items: center;
+		padding: clamp(3rem, 7vw, 5.5rem) 0 clamp(2.5rem, 5vw, 4.5rem);
+	}
+	.hero-copy { display: flex; flex-direction: column; align-items: flex-start; gap: 1.5rem; }
+	.hero-copy > * { animation: rise 0.7s var(--ease) both; }
+	.hero-copy > :nth-child(2) { animation-delay: 0.08s; }
+	.hero-copy > :nth-child(3) { animation-delay: 0.16s; }
+	.hero-copy > :nth-child(4) { animation-delay: 0.24s; }
+	.hero-copy > :nth-child(5) { animation-delay: 0.32s; }
+	h1 {
+		font-weight: 700; letter-spacing: -0.035em; line-height: 1.02;
+		font-size: clamp(2.05rem, 5.2vw, 3.9rem); color: var(--ink);
+	}
+	.sub { color: var(--ink-dim); font-size: clamp(1rem, 1.3vw, 1.125rem); line-height: 1.6; max-width: 32rem; }
+	.cta-row { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; padding-top: 0.25rem; }
+	.cta {
+		display: inline-flex; align-items: center; gap: 0.55em;
+		padding: 0.8rem 1.4rem; border-radius: 8px;
+		background: var(--accent); color: var(--accent-ink);
+		font-weight: 700; font-size: 0.95rem;
+		box-shadow: 4px 4px 0 var(--ink);
+		transition: transform 0.12s ease-out, box-shadow 0.12s ease-out, background 0.12s;
+	}
+	.cta:hover { background: var(--accent-bright); transform: translate(-1px, -1px); box-shadow: 5px 5px 0 var(--ink); }
+	.cta:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--ink); }
+	.cta svg { width: 1em; height: 1em; fill: currentColor; }
 	.soon {
 		display: inline-flex; align-items: center; gap: 0.6em;
-		font-family: var(--mono); font-size: 0.82rem; letter-spacing: 0.08em;
-		color: var(--ink); padding: 0.85rem 1.25rem; border-radius: 999px;
-		border: 1px solid var(--line); background: rgba(30, 33, 39, 0.7);
+		font-family: var(--mono); font-size: 0.78rem; letter-spacing: 0.08em;
+		color: var(--ink); padding: 0.75rem 1.1rem; border-radius: 999px;
+		border: 1.5px solid var(--line-2);
 	}
-	.soon::before {
-		content: ""; width: 8px; height: 8px; border-radius: 50%;
-		background: var(--green-bright);
-		box-shadow: 0 0 10px rgba(86, 211, 100, 0.8);
-		animation: soon-pulse 1.8s ease-in-out infinite;
-	}
-	@keyframes soon-pulse {
-		0%, 100% { opacity: 1; transform: scale(1); }
-		50% { opacity: 0.4; transform: scale(0.75); }
-	}
-	.cta-note {
+	.cta-note { font-family: var(--mono); color: var(--mute); font-size: 0.72rem; letter-spacing: 0.08em; }
+
+	/* --- the terminal sticker --- */
+	.term {
+		position: relative;
+		border-radius: 12px; overflow: hidden;
+		background: var(--surface); border: 1.5px solid var(--line-2);
+		box-shadow: 8px 8px 0 var(--accent);
+		transform: rotate(1deg);
 		font-family: var(--mono);
-		display: block; margin-top: 0.9rem; color: var(--muted); font-size: 0.8rem;
-		animation: rise 0.7s 0.38s cubic-bezier(0.2, 0.7, 0.2, 1) both;
 	}
-	footer {
-		font-family: var(--mono);
-		display: flex; gap: 2rem; flex-wrap: wrap;
-		color: var(--muted); font-size: 0.78rem; letter-spacing: 0.06em;
-		border-top: 1px solid var(--line); padding-top: 1.1rem;
-		animation: rise 0.7s 0.44s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+	.term .chrome {
+		display: flex; align-items: center; gap: 0.6rem;
+		padding: 0.75rem 1rem; border-bottom: 1px solid var(--line); background: var(--surface-2);
+		font-size: 0.7rem; letter-spacing: 0.06em; color: var(--mute);
 	}
-	footer span::before { content: "// "; color: var(--green); opacity: 0.7; }
-	footer a { color: inherit; text-decoration: none; border-bottom: 1px solid #3a4049; }
-	footer a:hover { color: var(--ink); border-color: var(--green); }
+	.term .dot { width: 10px; height: 10px; border-radius: 50%; }
+	.term .dot.g { background: var(--go); }
+	.term .dot.y { background: var(--accent); }
+	.term .dot.r { background: var(--danger); }
+	.term .chrome span:last-child { padding-left: 0.25rem; }
+	.term pre {
+		margin: 0; padding: 1.25rem 1.4rem 1.5rem;
+		font: inherit; font-size: clamp(0.8rem, 1vw, 0.92rem); line-height: 1.8;
+		color: var(--ink); white-space: pre; overflow: hidden;
+		min-height: 15.5em;
+	}
+	.term .ln { display: block; min-height: 1.8em; }
+	.term .ln.dim { color: var(--ink-dim); }
+	.term .ln.go { color: var(--go-bright); }
+	.term .cursor {
+		display: inline-block; width: 0.55em; height: 1.05em; vertical-align: -0.15em;
+		background: var(--accent); margin-left: 0.1em;
+	}
+	.term .cursor.blink { animation: blink 1.1s step-end infinite; }
+	@keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+	/* the drop: hidden → settled, then the shadow catches up and the card tilts */
+	.term.boot {
+		animation: drop 0.22s var(--ease) both, land 0.18s 0.22s var(--ease) both;
+	}
+	@keyframes drop {
+		from { opacity: 0; transform: translateY(12px) scale(0.94) rotate(0deg); box-shadow: 0 0 0 var(--accent); }
+		to { opacity: 1; transform: translateY(0) scale(1) rotate(0deg); box-shadow: 0 0 0 var(--accent); }
+	}
+	@keyframes land {
+		from { transform: rotate(0deg); box-shadow: 0 0 0 var(--accent); }
+		to { transform: rotate(1deg); box-shadow: 8px 8px 0 var(--accent); }
+	}
+	@media (max-width: 899px) {
+		.hero .wrap { grid-template-columns: 1fr; gap: 2.5rem; }
+		.term, .term.boot { transform: none; box-shadow: 6px 6px 0 var(--accent); }
+		@keyframes land { from { box-shadow: 0 0 0 var(--accent); } to { box-shadow: 6px 6px 0 var(--accent); } }
+	}
+
+	/* --- proof strip --- */
+	.proof { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--surface-2); }
+	.proof .wrap { padding: 3.25rem 0; display: flex; flex-direction: column; gap: 1.75rem; }
+	.proof .head { display: flex; align-items: flex-end; justify-content: space-between; gap: 2rem; }
+	h2 { font-weight: 700; letter-spacing: -0.03em; line-height: 1.08; font-size: clamp(1.7rem, 3vw, 2.5rem); }
+	.lede { color: var(--mute); max-width: 26rem; font-size: 0.95rem; }
+	.tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.25rem; }
+	.tile { padding: 1.25rem 1.4rem; display: flex; flex-direction: column; gap: 0.35rem; }
+	.tile .label { font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--mute); display: flex; align-items: center; gap: 0.5em; }
+	.tile .label.go { color: var(--go); }
+	.tile b { font-family: var(--mono); font-weight: 600; font-size: clamp(1.9rem, 3vw, 2.5rem); line-height: 1.1; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+	.tile b.hot { color: var(--accent); }
+	.tile .sub-line { font-size: 0.78rem; color: var(--mute); }
+
+	/* --- how it works --- */
+	.how .wrap { padding: clamp(3rem, 6vw, 5.5rem) 0; display: flex; flex-direction: column; gap: 2rem; }
+	.how .head { display: flex; align-items: flex-end; justify-content: space-between; gap: 2rem; }
+	.how .head > div { display: flex; flex-direction: column; align-items: flex-start; gap: 0.8rem; }
+	.stages { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1.25rem; }
+	.stage { padding: 1.5rem; display: flex; flex-direction: column; gap: 0.9rem; }
+	.stage .top { display: flex; align-items: center; justify-content: space-between; }
+	.stage .n { font-family: var(--mono); font-size: 1.6rem; font-weight: 600; color: var(--line-2); }
+	.stage p { font-size: 0.95rem; line-height: 1.5; color: var(--ink-dim); }
+	.stage .who {
+		align-self: flex-start; margin-top: auto;
+		padding: 0.35rem 0.6rem; border-radius: 4px;
+		background: var(--bg); border: 1px solid var(--line-2);
+		font-family: var(--mono); font-size: 0.68rem; color: var(--mute);
+	}
+	.stage .who.you { color: var(--accent); }
+
+	/* --- certificate --- */
+	.cert { border-top: 1px solid var(--line); }
+	.cert .wrap {
+		display: grid; grid-template-columns: minmax(0, 440px) minmax(0, 1fr); gap: 4rem; align-items: center;
+		padding: clamp(3rem, 6vw, 5rem) 0 clamp(3.5rem, 7vw, 6rem);
+	}
+	.cert-copy { display: flex; flex-direction: column; align-items: flex-start; gap: 1.2rem; }
+	.cert-copy p { color: var(--ink-dim); line-height: 1.6; }
+	.ghost {
+		display: inline-flex; align-items: center; gap: 0.5em;
+		padding: 0.7rem 1.2rem; border-radius: 8px; border: 1.5px solid var(--accent);
+		color: var(--accent); font-weight: 700; font-size: 0.9rem;
+		transition: background 0.15s;
+	}
+	.ghost:hover { background: rgba(255, 199, 44, 0.1); }
+	.certificate {
+		padding: 1.75rem; display: flex; flex-direction: column; gap: 1.1rem;
+		border-radius: 12px; border-width: 1.5px; box-shadow: 8px 8px 0 var(--line);
+		transform: rotate(-1deg);
+	}
+	.certificate .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+	.certificate .meta { font-family: var(--mono); font-size: 0.66rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--mute); }
+	.certificate h3 { font-weight: 700; font-size: 1.35rem; letter-spacing: -0.02em; line-height: 1.25; margin: 0.3rem 0 0.35rem; }
+	.certificate .sha { font-family: var(--mono); font-size: 0.72rem; color: var(--mute); }
+	.seal {
+		flex-shrink: 0;
+		padding: 0.35em 0.8em; border-radius: 5px;
+		background: var(--accent); color: var(--accent-ink);
+		font-family: var(--mono); font-size: 0.8rem; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase;
+		box-shadow: 3px 3px 0 var(--ink); transform: rotate(-8deg);
+	}
+	.criteria { padding: 0.9rem; border-radius: 8px; background: var(--bg); border: 1px solid var(--line-2); display: flex; flex-direction: column; gap: 0.55rem; }
+	.criteria .meta { font-size: 0.6rem; }
+	.criteria li { list-style: none; display: flex; align-items: center; gap: 0.65rem; font-size: 0.88rem; }
+	.criteria .ok {
+		display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+		width: 18px; height: 18px; border-radius: 50%; background: var(--go); color: #04140a;
+		font-size: 0.6rem; font-weight: 700;
+	}
+	.criteria .shot { margin-left: auto; width: 52px; height: 32px; border-radius: 4px; background: var(--line); border: 1px solid var(--line-2); flex-shrink: 0; }
+	.ledger { display: flex; gap: 1.5rem; flex-wrap: wrap; padding-top: 0.8rem; border-top: 1px solid var(--line-2); font-family: var(--mono); font-size: 0.72rem; }
+	.ledger div { display: flex; flex-direction: column; gap: 0.15rem; }
+	.ledger em { font-style: normal; }
+	.ledger span { font-size: 0.56rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--mute); }
+	.ledger .go { color: var(--go-bright); }
+	.ledger .hot { color: var(--accent); }
+
+	/* --- footer --- */
+	footer { border-top: 1px solid var(--line); }
+	footer .wrap {
+		display: flex; gap: 2rem; flex-wrap: wrap; justify-content: space-between;
+		padding: 1.6rem 0; font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.06em; color: var(--mute);
+	}
+	footer a { border-bottom: 1px solid var(--line-2); transition: color 0.15s, border-color 0.15s; }
+	footer a:hover { color: var(--ink); border-color: var(--accent); }
+	footer .signin { color: var(--accent); border: 0; }
+
 	@keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
 	@media (max-width: 899px) {
-		#scene { display: none; }
-		footer { gap: 0.4rem 1.4rem; }
+		.tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+		.stages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+		.cert .wrap { grid-template-columns: 1fr; gap: 2rem; }
+		.certificate { transform: none; box-shadow: 6px 6px 0 var(--line); }
+		.proof .head, .how .head { flex-direction: column; align-items: flex-start; gap: 0.8rem; }
 	}
-	@media (max-width: 720px) {
-		body { overflow-y: auto; }
-		.frame { height: auto; min-height: 100dvh; }
-		header { margin-bottom: 1rem; }
-		main { padding: 3rem 0 3.5rem; }
-		h1 { margin-bottom: 1.6rem; }
-		.sub { font-size: 1rem; line-height: 1.8; }
-		.cta-row { margin-top: 2.75rem; gap: 1rem; }
-		.cta, .soon { width: 100%; justify-content: center; padding: 1rem 1.4rem; }
-		.cta-note { margin-top: 1.4rem; }
-		footer { margin-top: 1.5rem; padding-top: 1.5rem; gap: 0.9rem 1.4rem; padding-bottom: 0.5rem; }
+	@media (max-width: 600px) {
+		.tiles, .stages { grid-template-columns: 1fr; }
+		.cta { width: 100%; justify-content: center; padding: 0.95rem 1.4rem; }
+		.criteria .shot { display: none; }
+		footer .wrap { flex-direction: column; gap: 0.7rem; }
 	}
 	@media (prefers-reduced-motion: reduce) {
-		header, h1, .sub, .proof-line, .ledger, .cta-row, .cta-note, footer { animation: none; }
-		.soon::before { animation: none; }
+		.hero-copy > *, .term.boot { animation: none; }
+		.lamp.pulse, .term .cursor.blink { animation: none; }
+		.cta, .cta:hover, .cta:active { transform: none; }
 	}
 `;
 
-const IMPORT_MAP = `{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }`;
-
-const SCENE_JS = `
-import * as THREE from 'three';
-
-const canvas = document.getElementById('scene');
-const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-let renderer = null;
-try {
-	if (canvas.clientWidth > 0) {
-		renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: true });
-	}
-} catch (e) { /* no WebGL: the page stands on its own */ }
-
-if (renderer) {
-	renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-	const scene = new THREE.Scene();
-	scene.fog = new THREE.Fog(0x15171c, 13, 30);
-	const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
-	camera.position.set(0, 0.4, 11);
-
-	scene.add(new THREE.AmbientLight(0x2f343d, 1.6));
-	const key = new THREE.DirectionalLight(0xffffff, 2.2);
-	key.position.set(5, 7, 6);
-	scene.add(key);
-	const rim = new THREE.PointLight(0x3fb950, 24, 26);
-	rim.position.set(-5, -2, 3);
-	scene.add(rim);
-	// flares up while the terminal is typing
-	const typeLight = new THREE.PointLight(0x56d364, 0, 14);
-	typeLight.position.set(0, 0.4, 2.2);
-	scene.add(typeLight);
-
-	// ---------------------------------------------------------------
-	// The terminal screen: a 2D canvas re-drawn every frame and used
-	// as a texture. A factory run types itself out on loop.
-	// ---------------------------------------------------------------
-	const TW = 1024, TH = 800;
-	const tcv = document.createElement('canvas');
-	tcv.width = TW; tcv.height = TH;
-	const tctx = tcv.getContext('2d');
-	const tex = new THREE.CanvasTexture(tcv);
-	tex.colorSpace = THREE.SRGBColorSpace;
-	tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-
-	const INK = '#e8eaee', GREEN = '#3fb950', BRIGHT = '#56d364';
-	const DIM = 'rgba(232, 234, 238, 0.45)';
-	// [text, color, ms-per-char, ms-pause-before-line]
-	const SCRIPT = [
-		['$ turbodiff build "session expiry"', BRIGHT, 34, 500],
-		['', INK, 0, 120],
-		['\\u203a planning against your code\\u2026', DIM, 10, 420],
-		['\\u2713 plan approved \\u2014 4 files, 2 criteria', BRIGHT, 12, 300],
-		['', INK, 0, 160],
-		['\\u203a generating in sandbox\\u2026', DIM, 10, 300],
-		['+ const s = await unseal(token)', GREEN, 16, 180],
-		['+ if (s.exp < now()) return null', GREEN, 16, 90],
-		['', INK, 0, 200],
-		['\\u203a review: 1 finding \\u2192 auto-fixed', DIM, 10, 500],
-		['\\u203a verifying\\u2026 app launched, screenshots', DIM, 10, 420],
-		['\\u2713 2/2 criteria met', BRIGHT, 12, 420],
-		['\\u2713 PR ready to merge', BRIGHT, 12, 200],
+// The boot: a CSS drop on the card, then one interval that types the factory
+// run into the <pre>. [text, class, ms-per-char, hold-after-ms]. Reduced
+// motion skips straight to the held frame.
+const BOOT_JS = `
+(function () {
+	var pre = document.getElementById('term-body');
+	var card = document.getElementById('term');
+	if (!pre || !card) return;
+	var SCRIPT = [
+		['$ turbodiff build "session expiry"', 'ln', 34, 500],
+		['\\u203a planning against your code\\u2026', 'ln dim', 10, 360],
+		['\\u2713 plan approved \\u2014 4 files, 2 criteria', 'ln', 12, 260],
+		['+ if (s.exp < now()) return null', 'ln go', 16, 220],
+		['\\u203a review: 1 finding \\u2192 auto-fixed', 'ln dim', 10, 360],
+		['\\u2713 verifying\\u2026 app launched, screenshots', 'ln dim', 10, 340],
+		['\\u2713 2/2 criteria met', 'ln', 12, 360],
+		['\\u2713 PR ready to merge', 'ln', 12, 200]
 	];
-
-	let li = 0, ci = 0, nextAt = 0, phase = 'type', phaseAt = 0, wipe = 0, lastTypeAt = -1e9;
-
-	const step = function (t) {
-		if (phase === 'type') {
-			while (phase === 'type' && t >= nextAt) {
-				const line = SCRIPT[li];
-				if (ci < line[0].length) {
-					ci++;
-					lastTypeAt = t;
-					nextAt = t + line[2] * (0.6 + Math.random() * 0.9);
-				} else if (li + 1 < SCRIPT.length) {
-					li++; ci = 0;
-					nextAt = t + SCRIPT[li][3];
-				} else {
-					phase = 'hold'; phaseAt = t + 3200;
-				}
-			}
-		} else if (phase === 'hold') {
-			if (t >= phaseAt) { phase = 'wipe'; phaseAt = t; }
-		} else {
-			wipe = (t - phaseAt) / 650;
-			if (wipe >= 1) { phase = 'type'; li = 0; ci = 0; wipe = 0; nextAt = t + 500; }
-		}
-	};
-
-	const CHROME = 66, PADX = 46, LINE0 = 132, LH = 46;
-	const dot = function (x, fill, stroke) {
-		tctx.beginPath();
-		tctx.arc(x, CHROME / 2, 9, 0, Math.PI * 2);
-		if (fill) { tctx.fillStyle = fill; tctx.fill(); }
-		if (stroke) { tctx.strokeStyle = stroke; tctx.lineWidth = 2; tctx.stroke(); }
-	};
-
-	const draw = function (t) {
-		tctx.fillStyle = '#0d0f12';
-		tctx.fillRect(0, 0, TW, TH);
-		// chrome bar
-		tctx.fillStyle = '#171a1f';
-		tctx.fillRect(0, 0, TW, CHROME);
-		dot(38, GREEN, null);
-		dot(78, null, 'rgba(232, 234, 238, 0.7)');
-		dot(118, null, 'rgba(63, 185, 80, 0.55)');
-		tctx.font = '400 23px "IBM Plex Mono", ui-monospace, monospace';
-		tctx.fillStyle = DIM;
-		tctx.fillText('turbodiff@edge \\u2014 factory run', 156, CHROME / 2 + 8);
-		tctx.fillStyle = 'rgba(63, 185, 80, 0.3)';
-		tctx.fillRect(0, CHROME, TW, 2);
-
-		// body text (slides up and fades during the wipe)
-		const off = wipe * wipe * TH * 0.75;
-		tctx.save();
-		tctx.globalAlpha = 1 - wipe;
-		tctx.font = '400 30px "IBM Plex Mono", ui-monospace, monospace';
-		for (let i = 0; i <= li; i++) {
-			const line = SCRIPT[i];
-			const shown = i < li ? line[0] : line[0].slice(0, ci);
-			tctx.fillStyle = line[1];
-			tctx.fillText(shown, PADX, LINE0 + i * LH - off);
-			if (i === li && phase === 'type' && (reduced || t % 1000 < 620)) {
-				tctx.fillStyle = BRIGHT;
-				tctx.fillRect(PADX + tctx.measureText(shown).width + 8, LINE0 + i * LH - off - 27, 16, 34);
-			}
-		}
-		// held frame keeps a blinking cursor on a fresh prompt line
-		if (phase === 'hold' && t % 1000 < 620) {
-			tctx.fillStyle = BRIGHT;
-			tctx.fillText('$', PADX, LINE0 + (li + 2) * LH - off);
-			tctx.fillRect(PADX + 30, LINE0 + (li + 2) * LH - off - 27, 16, 34);
-		}
-		tctx.restore();
-
-		// CRT scanlines
-		tctx.fillStyle = 'rgba(0, 0, 0, 0.16)';
-		for (let y = CHROME; y < TH; y += 4) tctx.fillRect(0, y, TW, 1);
-		// glass sheen sweeping slowly across the face
-		const sx = (reduced ? 0.3 : (t * 0.00006) % 1.6 - 0.3) * TW;
-		const sheen = tctx.createLinearGradient(sx, 0, sx + TW * 0.55, TH);
-		sheen.addColorStop(0, 'rgba(255, 255, 255, 0)');
-		sheen.addColorStop(0.5, 'rgba(255, 255, 255, 0.05)');
-		sheen.addColorStop(1, 'rgba(255, 255, 255, 0)');
-		tctx.fillStyle = sheen;
-		tctx.fillRect(0, 0, TW, TH);
-		tex.needsUpdate = true;
-	};
-
-	// ---------------------------------------------------------------
-	// The slab the screen lives on, plus its surroundings.
-	// ---------------------------------------------------------------
-	const group = new THREE.Group();
-	scene.add(group);
-
-	// glossy black body
-	const body = new THREE.Mesh(
-		new THREE.BoxGeometry(5.6, 4.4, 0.26),
-		new THREE.MeshPhysicalMaterial({
-			color: 0x101318, metalness: 0.7, roughness: 0.22,
-			clearcoat: 1, clearcoatRoughness: 0.1, fog: false,
-		}),
-	);
-	group.add(body);
-	// green edge light around the slab
-	const edges = new THREE.LineSegments(
-		new THREE.EdgesGeometry(body.geometry),
-		new THREE.LineBasicMaterial({ color: 0x3fb950, transparent: true, opacity: 0.55, fog: false }),
-	);
-	group.add(edges);
-	// the screen face (unlit so the text stays crisp)
-	const screen = new THREE.Mesh(
-		new THREE.PlaneGeometry(5.25, 4.1),
-		new THREE.MeshBasicMaterial({ map: tex, fog: false }),
-	);
-	screen.position.z = 0.135;
-	group.add(screen);
-
-	// soft green glow halo behind the slab
-	const glowCv = document.createElement('canvas');
-	glowCv.width = glowCv.height = 256;
-	const gctx = glowCv.getContext('2d');
-	const grad = gctx.createRadialGradient(128, 128, 10, 128, 128, 128);
-	grad.addColorStop(0, 'rgba(63, 185, 80, 0.5)');
-	grad.addColorStop(1, 'rgba(63, 185, 80, 0)');
-	gctx.fillStyle = grad;
-	gctx.fillRect(0, 0, 256, 256);
-	const glow = new THREE.Sprite(new THREE.SpriteMaterial({
-		map: new THREE.CanvasTexture(glowCv),
-		blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.5,
-	}));
-	glow.scale.set(11, 9, 1);
-	glow.position.z = -1.5;
-	group.add(glow);
-
-	// ghost terminals layered behind for depth
-	const ghost = function (x, y, z, ry, opacity) {
-		const g = new THREE.Group();
-		const face = new THREE.Mesh(
-			new THREE.PlaneGeometry(5.6, 4.4),
-			new THREE.MeshBasicMaterial({ color: 0x14161b, transparent: true, opacity: opacity }),
-		);
-		const frame = new THREE.LineSegments(
-			new THREE.EdgesGeometry(face.geometry),
-			new THREE.LineBasicMaterial({ color: 0x3fb950, transparent: true, opacity: opacity * 0.7 }),
-		);
-		g.add(face); g.add(frame);
-		g.position.set(x, y, z);
-		g.rotation.y = ry;
-		scene.add(g);
-		return g;
-	};
-	ghost(-2.6, 0.9, -3.2, 0.22, 0.5);
-	ghost(2.4, -0.6, -4.6, -0.28, 0.32);
-
-	// wireframe floor scrolling toward the viewer
-	const grid = new THREE.GridHelper(34, 34, 0x3fb950, 0x1c2b26);
-	grid.material.transparent = true;
-	grid.material.opacity = 0.4;
-	grid.position.y = -3.6;
-	scene.add(grid);
-
-	// drifting green motes
-	const COUNT = 160;
-	const pos = new Float32Array(COUNT * 3);
-	for (let i = 0; i < COUNT; i++) {
-		pos[i * 3] = (Math.random() - 0.5) * 22;
-		pos[i * 3 + 1] = (Math.random() - 0.5) * 12;
-		pos[i * 3 + 2] = -7 + Math.random() * 9;
+	function esc(s) {
+		return s.replace(/[&<>]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]; });
 	}
-	const dust = new THREE.BufferGeometry();
-	dust.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-	scene.add(new THREE.Points(dust, new THREE.PointsMaterial({
-		color: 0x3fb950, size: 0.035, transparent: true, opacity: 0.5,
-		blending: THREE.AdditiveBlending, depthWrite: false,
-	})));
-
-	const BASE_RY = -0.3, BASE_RX = 0.04;
-	group.rotation.y = BASE_RY;
-	group.rotation.x = BASE_RX;
-	group.position.y = 0.35;
-
-	const fit = function () {
-		const w = canvas.clientWidth, h = canvas.clientHeight;
-		if (w === 0 || h === 0) return;
-		renderer.setSize(w, h, false);
-		camera.aspect = w / h;
-		camera.updateProjectionMatrix();
-	};
-	fit();
-	addEventListener('resize', fit);
-
-	let mx = 0, my = 0;
-	addEventListener('pointermove', function (e) {
-		mx = (e.clientX / innerWidth - 0.5) * 2;
-		my = (e.clientY / innerHeight - 0.5) * 2;
-	});
-
+	function render(li, ci, done) {
+		var html = '';
+		for (var i = 0; i < SCRIPT.length; i++) {
+			if (i > li) break;
+			var line = SCRIPT[i];
+			var shown = i < li ? line[0] : line[0].slice(0, ci);
+			var cursor = i === li && !done ? '<span class="cursor"></span>' : '';
+			html += '<span class="' + line[1] + '">' + esc(shown) + cursor + '</span>';
+		}
+		if (done) html += '<span class="ln">$ <span class="cursor blink"></span></span>';
+		pre.innerHTML = html;
+	}
+	var reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 	if (reduced) {
-		// no typing loop: show the finished session, statically
-		li = SCRIPT.length - 1;
-		ci = SCRIPT[li][0].length;
-		phase = 'hold'; phaseAt = Infinity;
+		render(SCRIPT.length - 1, SCRIPT[SCRIPT.length - 1][0].length, true);
+		return;
 	}
-
-	const tick = function (t) {
-		const time = t * 0.001;
-		if (!reduced) step(t);
-		draw(t);
-
-		const sway = reduced ? 0 : Math.sin(time * 0.35) * 0.05;
-		const bob = reduced ? 0 : Math.sin(time * 0.6) * 0.09;
-		group.rotation.y += ((BASE_RY + sway + mx * 0.16) - group.rotation.y) * 0.04;
-		group.rotation.x += ((BASE_RX + my * 0.08) - group.rotation.x) * 0.04;
-		group.position.y = 0.35 + bob;
-		glow.material.opacity = 0.42 + 0.1 * Math.sin(time * 1.1);
-		typeLight.intensity = Math.max(0, 10 - (t - lastTypeAt) * 0.05);
-		if (!reduced) grid.position.z = (time * 0.9) % 1;
-		renderer.render(scene, camera);
-		requestAnimationFrame(tick);
-	};
-	requestAnimationFrame(tick);
-}
+	card.className += ' boot';
+	// Wall-clock driven so a throttled tab catches up in a burst instead of
+	// typing in slow motion; every due character is processed per tick.
+	var li = 0, ci = 0, nextAt = 400, start = performance.now();
+	render(0, 0, false);
+	var timer = setInterval(function () {
+		var t = performance.now() - start;
+		var changed = false;
+		while (t >= nextAt) {
+			var line = SCRIPT[li];
+			if (ci < line[0].length) {
+				ci++;
+				nextAt += line[2];
+			} else if (li + 1 < SCRIPT.length) {
+				nextAt += line[3];
+				li++; ci = 0;
+			} else {
+				clearInterval(timer);
+				render(li, ci, true);
+				return;
+			}
+			changed = true;
+		}
+		if (changed) render(li, ci, false);
+	}, 33);
+})();
 `;
 
 function StarIcon() {
@@ -481,6 +376,43 @@ function StarIcon() {
     </svg>
   );
 }
+
+// The four lights. Copy is engineer-native: PR, checks, plan, acceptance
+// criteria, screenshot proof, receipts — never work orders, units, or shifts.
+const STAGES = [
+  {
+    n: '01',
+    label: 'Plan',
+    lamp: 'go',
+    body: 'Agents read your real repo, not a summary, and write a plan with files, acceptance criteria and risks.',
+    who: 'you approve →',
+    you: true,
+  },
+  {
+    n: '02',
+    label: 'Build',
+    lamp: 'hold',
+    body: 'A sandbox on the edge checks out a branch, implements the plan, runs your checks, and opens the PR.',
+    who: 'agents work',
+    you: false,
+  },
+  {
+    n: '03',
+    label: 'Verify',
+    lamp: 'off',
+    body: 'A reviewer agent reads the diff and fixes what it finds. Then the app is launched and every criterion gets a screenshot.',
+    who: 'proof attached',
+    you: false,
+  },
+  {
+    n: '04',
+    label: 'Ship',
+    lamp: 'off',
+    body: 'You read the receipts and merge. The feature earns a certificate with its serial, checks, and screenshots.',
+    who: 'you merge →',
+    you: true,
+  },
+] as const;
 
 function Landing() {
   return (
@@ -496,81 +428,226 @@ function Landing() {
         <link rel="icon" type="image/png" href="/logo-small.png" />
         <link rel="manifest" href="/manifest.webmanifest" />
         <link rel="apple-touch-icon" href="/logo.png" />
-        <meta name="theme-color" content="#3fb950" />
+        <meta name="theme-color" content="#ffc72c" />
         <link href="/fonts/fonts.css" rel="stylesheet" />
         <style dangerouslySetInnerHTML={{ __html: CSS }} />
       </head>
       <body>
-        <canvas id="scene" aria-hidden="true"></canvas>
-        <div class="vignette" aria-hidden="true"></div>
-        <div class="grain" aria-hidden="true"></div>
-
-        <div class="frame">
-          <header>
+        <header>
+          <div class="wrap">
             <a class="brand" href="/">
-              <img src="/logo-small.png" alt="" width="30" height="30" />
-              <span class="wordmark">
-                turbo<b>diff</b>
+              <span class="mark" aria-hidden="true">
+                TD
               </span>
+              <span class="wordmark">turbodiff</span>
             </a>
             <nav class="nav">
+              <a href="#how">how it works</a>
+              <a href="#proof">proof</a>
               <a href={REPO_URL}>github &rarr;</a>
+              <a class="signin" href="/auth/login">
+                sign in
+              </a>
             </nav>
-          </header>
+          </div>
+        </header>
 
-          <main>
-            <div class="hero">
-              <h1>
-                Requirements in. <em>Working</em> features out.
-              </h1>
-              <p class="sub">
-                Describe a feature and agents take it from there &mdash; planning against your real
-                code, building in a sandbox, reviewing, fixing, and attaching screenshot proof for
-                every acceptance criterion. You approve the plan and merge the PR. It's how
-                Turbodiff builds itself.
-              </p>
-              <p class="proof-line">Anyone can generate code. We ship proof.</p>
-              <div class="ledger" aria-label="factory ledger">
-                <div class="stat">
-                  <b>63%</b>
-                  <span>commits written by agents</span>
+        <main>
+          <section class="hero">
+            <div class="wrap">
+              <div class="hero-copy">
+                <span class="tag">the software factory that builds itself</span>
+                <h1>
+                  Requirements in.
+                  <br />
+                  Working features out.
+                </h1>
+                <p class="sub">
+                  Describe a feature. Agents plan against your real code, build, review, fix, and
+                  attach screenshot proof for every acceptance criterion. You approve the plan and
+                  merge the PR. It's how Turbodiff builds itself.
+                </p>
+                <div class="cta-row">
+                  <a class="cta" href={REPO_URL}>
+                    <StarIcon />
+                    Star on GitHub
+                  </a>
+                  <span class="soon">
+                    <span class="lamp go pulse" aria-hidden="true"></span>
+                    coming soon
+                  </span>
                 </div>
-                <div class="stat">
-                  <b>4 min</b>
-                  <span>human time / feature</span>
-                </div>
-                <div class="stat">
-                  <b>PR #58</b>
-                  <span>last merge &middot; checks passed</span>
-                </div>
+                <span class="cta-note">
+                  Anyone can generate code. We ship proof. &middot; open source &middot;
+                  FSL-licensed
+                </span>
               </div>
-              <div class="cta-row">
-                <a class="cta" href={REPO_URL}>
-                  <StarIcon />
-                  Star on GitHub
-                </a>
-                <span class="soon">coming soon</span>
+
+              <div class="term" id="term" aria-hidden="true">
+                <div class="chrome">
+                  <span class="dot g"></span>
+                  <span class="dot y"></span>
+                  <span class="dot r"></span>
+                  <span>turbodiff@edge &mdash; factory run</span>
+                </div>
+                <pre id="term-body">
+                  <span class="ln">$ turbodiff build "session expiry"</span>
+                  <span class="ln dim">&rsaquo; planning against your code&hellip;</span>
+                  <span class="ln">&#10003; plan approved &mdash; 4 files, 2 criteria</span>
+                  <span class="ln go">+ if (s.exp &lt; now()) return null</span>
+                  <span class="ln dim">&rsaquo; review: 1 finding &rarr; auto-fixed</span>
+                  <span class="ln dim">&#10003; verifying&hellip; app launched, screenshots</span>
+                  <span class="ln">&#10003; 2/2 criteria met</span>
+                  <span class="ln">&#10003; PR ready to merge</span>
+                  <span class="ln">$ </span>
+                </pre>
               </div>
-              <span class="cta-note">
-                open source &middot; FSL-licensed &middot; every PR ships with receipts
-              </span>
             </div>
-          </main>
+          </section>
 
-          <footer>
+          <section class="proof" id="proof">
+            <div class="wrap">
+              <div class="head">
+                <h2>
+                  Anyone can generate code.
+                  <br />
+                  We ship proof.
+                </h2>
+                <p class="lede">
+                  Turbodiff's own commit history is the pitch. Every merged feature carries its
+                  plan, its checks, and a screenshot per acceptance criterion.
+                </p>
+              </div>
+              <div class="tiles" aria-label="factory ledger">
+                <div class="card tile">
+                  <span class="label">commits written by agents</span>
+                  <b class="hot">63%</b>
+                  <span class="sub-line">of the commits on main</span>
+                </div>
+                <div class="card tile">
+                  <span class="label">human time per feature</span>
+                  <b>4 min</b>
+                  <span class="sub-line">read the plan, review the proof, merge</span>
+                </div>
+                <div class="card tile">
+                  <span class="label go">
+                    <span class="lamp go" aria-hidden="true"></span>
+                    last merge
+                  </span>
+                  <b>PR #58</b>
+                  <span class="sub-line">checks passed &middot; receipts attached</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="how" id="how">
+            <div class="wrap">
+              <div class="head">
+                <div>
+                  <span class="tag flat">how it works</span>
+                  <h2>Four lights. One PR.</h2>
+                </div>
+                <p class="lede">
+                  Every task on the board shows where it is at a glance. The same four stages run on
+                  every feature, and you step in twice: to approve the plan, and to merge.
+                </p>
+              </div>
+              <div class="stages">
+                {STAGES.map((s) => (
+                  <div key={s.n} class={s.lamp === 'hold' ? 'card stage live' : 'card stage'}>
+                    <div class="top">
+                      <span class={s.lamp === 'hold' ? 'placard hot' : 'placard'}>
+                        <span class={`lamp ${s.lamp}`} aria-hidden="true"></span>
+                        {s.label}
+                      </span>
+                      <span class="n">{s.n}</span>
+                    </div>
+                    <p>{s.body}</p>
+                    <span class={s.you ? 'who you' : 'who'}>{s.who}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+
+          <section class="cert">
+            <div class="wrap">
+              <div class="cert-copy">
+                <span class="tag flat">proof of build</span>
+                <h2>Every merged feature earns a certificate.</h2>
+                <p>
+                  Serial, plan, diff, checks, and a screenshot for each acceptance criterion, sealed
+                  at merge time. Share the link instead of explaining what shipped.
+                </p>
+                <a class="ghost" href={REPO_URL}>
+                  See how it's built &rarr;
+                </a>
+              </div>
+              <div class="card certificate" aria-label="example proof of build">
+                <div class="top">
+                  <div>
+                    <div class="meta">proof of build &middot; TD-0130</div>
+                    <h3>Fix PNG previews in the chat rail</h3>
+                    <div class="sha">Ngineer101/turbodiff &middot; merged 3f63d45</div>
+                  </div>
+                  <span class="seal">shipped</span>
+                </div>
+                <ul class="criteria">
+                  <li class="meta">acceptance criteria</li>
+                  <li>
+                    <span class="ok">&#10003;</span>
+                    PNG attachments render inline at their natural size
+                    <span class="shot" aria-hidden="true"></span>
+                  </li>
+                  <li>
+                    <span class="ok">&#10003;</span>
+                    Broken images show the filename, never a blank box
+                    <span class="shot" aria-hidden="true"></span>
+                  </li>
+                  <li>
+                    <span class="ok">&#10003;</span>
+                    Mobile rail does not overflow with a wide image
+                    <span class="shot" aria-hidden="true"></span>
+                  </li>
+                </ul>
+                <div class="ledger">
+                  <div>
+                    <span>checks</span>
+                    <em class="go">14 / 14</em>
+                  </div>
+                  <div>
+                    <span>diff</span>
+                    <em>+212 &minus;48 &middot; 6 files</em>
+                  </div>
+                  <div>
+                    <span>review</span>
+                    <em>1 finding, fixed</em>
+                  </div>
+                  <div>
+                    <span>human time</span>
+                    <em class="hot">4 min</em>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </main>
+
+        <footer>
+          <div class="wrap">
             <span>
-              open source &mdash; <a href={REPO_URL}>Ngineer101/turbodiff</a>
+              open source &mdash; <a href={REPO_URL}>Ngineer101/turbodiff</a> &middot; FSL-licensed
             </span>
             <span>fully built &amp; hosted on Cloudflare</span>
             <span>self-host it &mdash; your keys, your gateway</span>
-            <span>
-              <a href="/auth/login">sign in</a>
-            </span>
-          </footer>
-        </div>
+            <a class="signin" href="/auth/login">
+              sign in &rarr;
+            </a>
+          </div>
+        </footer>
 
-        <script type="importmap" dangerouslySetInnerHTML={{ __html: IMPORT_MAP }} />
-        <script type="module" dangerouslySetInnerHTML={{ __html: SCENE_JS }} />
+        <script dangerouslySetInnerHTML={{ __html: BOOT_JS }} />
       </body>
     </html>
   );
