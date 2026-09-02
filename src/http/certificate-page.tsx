@@ -106,7 +106,7 @@ const CSS = `
 	.thumbs { display: flex; gap: 0.6rem; }
 	.thumb {
 		flex: 1; min-width: 0; aspect-ratio: 16 / 10; border: 1px solid rgba(36,42,50,0.5);
-		border-radius: 3px; position: relative; overflow: hidden; background: #1b1e24;
+		border-radius: 3px; position: relative; overflow: hidden; background: var(--floor);
 	}
 	.thumb img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; }
 	.thumb figcaption {

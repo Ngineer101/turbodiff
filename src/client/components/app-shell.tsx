@@ -120,7 +120,8 @@ function GithubRecoveryBanner({ me }: { me: ApiMe }) {
 
   return (
     <div className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-line-2/70 bg-surface/60 px-4 py-3 text-[0.85rem] text-ink-dim">
-      <Lamp tone={me.github_status === 'syncing' ? 'go' : 'hold'} />
+      {/* Every state here needs a human or is still moving — never green. */}
+      <Lamp tone="hold" pulse={me.github_status === 'syncing'} />
       {message}
       {action}
     </div>
