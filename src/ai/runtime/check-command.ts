@@ -73,3 +73,31 @@ export function checkCommandUnrunnable(command: string, output: string): Error {
       `check that it is installed and correctly configured: ${output.slice(-300)}`,
   );
 }
+
+// The note a run attaches to its pull request (or native change request)
+// when the check command already failed on the base branch and therefore did
+// not gate the change: what was skipped, why, and the tail of the baseline
+// run so the repo owner can fix the command (or the base) for future runs.
+export interface CheckBaselineNote {
+  markdown: string; // GitHub PR body (collapsible)
+  plain: string; // native change-request summary
+}
+
+export function checkBaselineNote(
+  command: string,
+  base: string,
+  output: string,
+): CheckBaselineNote {
+  const tail = output.trim().slice(-1_200);
+  const why =
+    `\`${command}\` already fails in a clean checkout of \`${base}\`, so this change ` +
+    'could not be gated on it — CI is the arbiter here. Fix the check command ' +
+    '(or the base branch) so future runs are checked.';
+  return {
+    markdown:
+      `<details><summary>Check command not applied: <code>${command}</code> fails on ` +
+      `<code>${base}</code></summary>\n\n${why}\n\nLast lines of that run:\n\n` +
+      `\`\`\`\n${tail}\n\`\`\`\n\n</details>`,
+    plain: `**Check command not applied.** ${why}\n\n\`\`\`\n${tail}\n\`\`\``,
+  };
+}

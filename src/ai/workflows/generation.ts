@@ -43,7 +43,11 @@ import {
 } from '../../integrations/github/app.ts';
 import { UNTRUSTED_CONTENT_RULES } from '../../domain/prompt-security.ts';
 import { installDependencies, NPM_CACHE_ENV } from '../runtime/sandbox-deps.ts';
-import { checkCommandUnrunnable, runCheckCommand } from '../runtime/check-command.ts';
+import {
+  checkBaselineNote,
+  checkCommandUnrunnable,
+  runCheckCommand,
+} from '../runtime/check-command.ts';
 import { mintUserToken } from '../../services/user-tokens.ts';
 import { openNativeChangeRequest } from '../../services/change-requests.ts';
 import { notifyFeatureLive } from '../../services/live-updates.ts';
@@ -116,17 +120,24 @@ function branchName(feature: FeatureRow): string {
   return `turbodiff/feat-${feature.id}-${slug}`;
 }
 
-function generationPrompt(ctx: RunContext): string {
+// `checkGated`: the repo check command passed on the base, so it will gate
+// this run. When it already fails there, the agent is told not to chase those
+// failures — nothing it does can turn a red baseline green.
+function generationPrompt(ctx: RunContext, checkGated: boolean): string {
   const trivial = ctx.tier === 'trivial';
   // Trivial runs keep the tight no-checks budget; standard runs with a check
   // command are told to verify their own work — the harness re-runs the check
   // afterwards either way, and the repair loop catches what slips through.
   const checkRule =
-    !trivial && ctx.checkCommand
-      ? `- Dependencies are already installed. Before finishing, run \`${ctx.checkCommand}\`
+    ctx.checkCommand && !checkGated
+      ? `- The repository check command (\`${ctx.checkCommand}\`) already fails on the base
+  branch, so it does not gate this change. Do NOT try to fix those pre-existing
+  failures; implement the feature and verify your own changes by reading them.`
+      : !trivial && ctx.checkCommand
+        ? `- Dependencies are already installed. Before finishing, run \`${ctx.checkCommand}\`
   and fix any failures your changes caused. Failures that clearly pre-date this
   feature are not yours to fix — note them in Implementation notes instead.`
-      : `- Do NOT run dependency installs, builds, or test suites unless the change itself
+        : `- Do NOT run dependency installs, builds, or test suites unless the change itself
   requires it — the harness runs the repository's check command after you finish,
   and a separate verification phase checks the acceptance criteria empirically.`;
   return `You are an automated implementation agent working in a fresh checkout of ${ctx.owner}/${ctx.name}.
@@ -356,6 +367,70 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
         );
       }
 
+      // A failing check command is a business outcome, not an infra error —
+      // returned, never thrown, so the step is never retried for it. The
+      // tail is sized for the repair prompt to see the actual errors;
+      // features.error gets a shorter slice below.
+      //
+      // runCheckCommand puts the checkout's node_modules/.bin on PATH (so
+      // `vp check` resolves here exactly as it does for the agent) and
+      // tells a check that could not be executed at all apart from one
+      // that ran and failed. The former is a misconfiguration — feeding
+      // "command not found" to the repair loop just burns agent rounds on
+      // a problem no code change can fix, and then records the run as
+      // checks_failed against work that was never checked. Fail the run
+      // loudly instead, naming the install failure when there was one.
+      const runCheck = (name: string) =>
+        step.do(
+          name,
+          { retries: { limit: 1, delay: '1 minute' }, timeout: '15 minutes' },
+          async (): Promise<{ ok: boolean; output: string }> => {
+            await updateFeature(featureId, { runStartedAt: 'now' });
+            const auth = resolveRunnerAuth(undefined, ctx.runnerModel);
+            const scrub = (s: string) => redactSecrets(s, Object.values(auth.vars));
+            const res = await runCheckCommand(
+              sandboxFor(ctx),
+              WORK,
+              ctx.checkCommand!,
+              scrub,
+              CHECK_TIMEOUT_MS,
+            );
+            if (res.notExecutable) {
+              const cause = installFailure
+                ? ` (dependency install failed first: ${installFailure.slice(-300)})`
+                : '';
+              throw new NonRetryableError(
+                checkCommandUnrunnable(ctx.checkCommand!, res.output).message + cause,
+              );
+            }
+            return { ok: res.ok, output: res.output.slice(-6_000) };
+          },
+        );
+
+      // Baseline: run the check on the untouched checkout before the agent
+      // spends anything. A check that is already red on the base branch can't
+      // gate this change (live finding: a lint that only passes after a
+      // gitignored types file is generated reported 103 errors on a clean
+      // clone, every one blamed on the agent — repair rounds burned and the
+      // work was discarded). Known-red baseline → the agent is told, the
+      // post-run check and repair loop are skipped, and the PR carries the
+      // baseline output so the repo owner can fix the command.
+      let baselineFailure: string | null = null;
+      if (ctx.checkCommand) {
+        const baseline = await runCheck('baseline check command');
+        if (!baseline.ok) {
+          baselineFailure = baseline.output.slice(-2_000);
+          console.warn(
+            `turbodiff: check command already fails on ${ctx.base} for ${label} — not gating`,
+          );
+        }
+        // Drop whatever the check wrote (build output, caches) so the agent
+        // starts from the pristine checkout; ignored paths like node_modules stay.
+        await step.do('reset working copy after baseline', QUICK, async () => {
+          await sandboxFor(ctx).exec(`git -C ${WORK} checkout -- . && git -C ${WORK} clean -fd`);
+        });
+      }
+
       // THE paid step. retries.limit 1 = at most two agent runs per
       // instance, ever. Memoization means success is never re-bought.
       const agentRan = await step.do(
@@ -373,7 +448,10 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
           const scrub = (s: string) => redactSecrets(s, Object.values(auth.vars));
           const sandbox = sandboxFor(ctx);
           await mountSkills(sandbox, WORK, ctx.skills);
-          await sandbox.writeFile(specFile(featureId), generationPrompt(ctx));
+          await sandbox.writeFile(
+            specFile(featureId),
+            generationPrompt(ctx, baselineFailure === null),
+          );
           // stream-json (requires --verbose headless) captures every turn,
           // not just the final result — persisted below so a sandbox run can
           // be compared against a local session turn by turn.
@@ -455,47 +533,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
 
       let totalUsage = agentRan.usage;
 
-      if (ctx.checkCommand) {
-        // A failing check command is a business outcome, not an infra error —
-        // returned, never thrown, so the step is never retried for it. The
-        // tail is sized for the repair prompt to see the actual errors;
-        // features.error gets a shorter slice below.
-        //
-        // runCheckCommand puts the checkout's node_modules/.bin on PATH (so
-        // `vp check` resolves here exactly as it does for the agent) and
-        // tells a check that could not be executed at all apart from one
-        // that ran and failed. The former is a misconfiguration — feeding
-        // "command not found" to the repair loop just burns agent rounds on
-        // a problem no code change can fix, and then records the run as
-        // checks_failed against work that was never checked. Fail the run
-        // loudly instead, naming the install failure when there was one.
-        const runCheck = (name: string) =>
-          step.do(
-            name,
-            { retries: { limit: 1, delay: '1 minute' }, timeout: '15 minutes' },
-            async (): Promise<{ ok: boolean; output: string }> => {
-              await updateFeature(featureId, { runStartedAt: 'now' });
-              const auth = resolveRunnerAuth(undefined, ctx.runnerModel);
-              const scrub = (s: string) => redactSecrets(s, Object.values(auth.vars));
-              const res = await runCheckCommand(
-                sandboxFor(ctx),
-                WORK,
-                ctx.checkCommand!,
-                scrub,
-                CHECK_TIMEOUT_MS,
-              );
-              if (res.notExecutable) {
-                const cause = installFailure
-                  ? ` (dependency install failed first: ${installFailure.slice(-300)})`
-                  : '';
-                throw new NonRetryableError(
-                  checkCommandUnrunnable(ctx.checkCommand!, res.output).message + cause,
-                );
-              }
-              return { ok: res.ok, output: res.output.slice(-6_000) };
-            },
-          );
-
+      if (ctx.checkCommand && !baselineFailure) {
         let checks = await runCheck('run check command');
         let sessionId = agentRan.sessionId;
         for (let round = 1; !checks.ok && round <= REPAIR_ROUNDS; round++) {
@@ -619,6 +657,10 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
           .readFile(specFile(featureId))
           .then((f) => f.content.split('## Implementation notes')[1]?.trim())
           .catch(() => undefined);
+        const checkNote =
+          baselineFailure !== null && ctx.checkCommand
+            ? checkBaselineNote(ctx.checkCommand, ctx.base, baselineFailure)
+            : null;
         if (ctx.remoteSource.provider === 'artifacts') {
           // Native change request instead of a GitHub PR
           // (docs/artifacts-provider.md): the CR service computes the diff,
@@ -635,8 +677,10 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
             openedBy: 'factory',
             summary:
               (summary ?? `${ctx.title} — generated change; see the diff.`) +
-              (notes ? `\n\n**Implementation notes**\n\n${notes}` : ''),
-            checkOutcome: ctx.checkCommand ? 'passed' : undefined,
+              (notes ? `\n\n**Implementation notes**\n\n${notes}` : '') +
+              (checkNote ? `\n\n${checkNote.plain}` : ''),
+            // A baseline-red check was not applied, so it records no verdict.
+            checkOutcome: ctx.checkCommand && !checkNote ? 'passed' : undefined,
           });
           await updateFeature(featureId, {
             status: 'pr_opened',
@@ -667,6 +711,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
                   (notes
                     ? `\n\n<details><summary>Implementation notes</summary>\n\n${notes}\n\n</details>`
                     : '') +
+                  (checkNote ? `\n\n${checkNote.markdown}` : '') +
                   `\n\n---\n_turbodiff factory · feature #${featureId}_`,
               }),
             })
@@ -738,7 +783,13 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
       );
 
       console.log(`turbodiff: generation pr_opened for ${label} (PR #${prNumber})`);
-      await settleLifecycle(true, 'change_published');
+      await settleLifecycle(
+        true,
+        'change_published',
+        baselineFailure !== null
+          ? 'check command not applied: fails on the base branch'
+          : undefined,
+      );
       return 'pr_opened';
     } catch (err) {
       // Terminal failure (a step exhausted its retries, or a
