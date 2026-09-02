@@ -246,7 +246,7 @@ function QuickAdd({
   );
   const add = useMutation({
     mutationFn: (vars: { title: string; installationId: number; repoIds: number[] }) =>
-      api.post('/api/todos', {
+      api.post<{ ok: boolean; todo_id: number }>('/api/todos', {
         installation_id: vars.installationId,
         title: vars.title,
         repository_ids: vars.repoIds,
@@ -254,12 +254,13 @@ function QuickAdd({
     // The card appears (and the input clears, in submit) the moment Enter is
     // pressed — with its target repos already attached so it matches the
     // filter; the refetch below swaps in the server row.
-    onMutate: (vars) =>
-      applyOptimistic<ApiBoard>(queryClient, ['board'], (prev) => ({
+    onMutate: async (vars) => {
+      const tempId = optimisticId();
+      const optimistic = await applyOptimistic<ApiBoard>(queryClient, ['board'], (prev) => ({
         ...prev,
         todos: [
           {
-            id: optimisticId(),
+            id: tempId,
             installation_id: vars.installationId,
             title: vars.title,
             notes: null,
@@ -270,7 +271,22 @@ function QuickAdd({
           },
           ...prev.todos,
         ],
-      })),
+      }));
+      return { ...optimistic, tempId };
+    },
+    // Rewrite the temp id to the server id in place, so the card's key is
+    // already stable when the onSettled refetch lands (a key change would
+    // remount TodoCard and replay its mount animation).
+    onSuccess: (res, _vars, ctx) => {
+      queryClient.setQueryData<ApiBoard>(['board'], (prev) =>
+        prev
+          ? {
+              ...prev,
+              todos: prev.todos.map((t) => (t.id === ctx.tempId ? { ...t, id: res.todo_id } : t)),
+            }
+          : prev,
+      );
+    },
     onError: (err, _vars, ctx) => {
       ctx?.rollback();
       onApiError(err);
