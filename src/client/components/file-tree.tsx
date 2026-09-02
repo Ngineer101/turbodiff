@@ -62,7 +62,7 @@ interface FileStatusDotClasses {
 }
 
 export const FILE_STATUS_DOT: FileStatusDotClasses = {
-  added: 'bg-accent-bright',
+  added: 'bg-go-bright',
   removed: 'bg-danger',
   modified: 'bg-warn',
   renamed: 'bg-mute',

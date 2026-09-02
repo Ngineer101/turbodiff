@@ -753,9 +753,15 @@ function TaskCard({ task }: { task: ApiPlan }) {
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['board'] }),
   });
+  // The card an agent is on right now gets the yellow edge and shadow — the
+  // one place per column the working colour is allowed to be loud.
+  const live = state.tone === 'running';
   return (
     <Card
-      className="animate-rise p-3 transition-colors hover:border-accent/30"
+      className={cn(
+        'animate-rise p-3 transition-[border-color,box-shadow] hover:border-accent/50',
+        live && 'border-accent shadow-sticker-live',
+      )}
       // Tab-reachable so the card keys (Enter/e) work without j/k.
       tabIndex={0}
       data-board-card
@@ -797,7 +803,7 @@ function TaskCard({ task }: { task: ApiPlan }) {
       <Link
         to="/tasks/$taskId"
         params={{ taskId: String(task.id) }}
-        className="mt-2 block min-w-0 text-[0.85rem] font-medium break-words hover:text-accent-bright"
+        className="mt-2 block min-w-0 text-[0.85rem] font-medium break-words hover:text-accent"
       >
         {task.title}
       </Link>

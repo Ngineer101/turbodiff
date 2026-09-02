@@ -1,33 +1,53 @@
 @import 'tailwindcss';
 
-/* Turbodiff's identity as Tailwind v4 theme tokens: dark paper — grainy
-   slate-charcoal sheets, high-contrast ink, phosphor-green accents.
+/* Turbodiff's identity as Tailwind v4 theme tokens: "Signage" — a warm
+   graphite ground, bone text, and one working colour (chrome yellow) wherever
+   the app is busy or asks for a click. Phosphor green survives only as GO:
+   success, never an action. Depth is hard-offset sticker shadows, no blur.
    IBM Plex Sans for reading text, IBM Plex Mono for code, identifiers, and
-   terminal chrome (both loaded in the shell). */
+   terminal chrome (both loaded in the shell). The Paper file is the source of
+   truth for these values: https://app.paper.design/file/01M1H1H5D09QPHCSFA3X0727EN */
 @theme {
   --font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
-  /* Console blue-black ground (the Control Room direction): every neutral
-     leans toward blue so lamps and phosphor read like light on glass, not
-     stickers on gray. */
-  --color-bg: #0f1318;
-  --color-surface: #141a21;
-  --color-surface-2: #182029;
-  --color-raised: #1e2833;
-  --color-line: #233140;
-  --color-line-2: #344a61;
-  --color-ink: #e2e9f0;
-  --color-ink-dim: #bcc8d4;
-  --color-mute: #8595a4;
-  --color-accent: #3fb950;
-  --color-accent-bright: #56d364;
-  --color-accent-ink: #04140a;
-  --color-danger: #f85149;
-  --color-warn: #d29922;
-  /* Control-room amber: the "working / attention" lamp hue. Brighter than
-     --color-warn so a lit lamp reads across the room; warn stays for text. */
-  --color-hold: #e3b341;
+  /* Warm graphite ground: every neutral leans warm so yellow reads as paint
+     on a dark shop sign, not a warning on a console. */
+  --color-bg: #131210;
+  --color-surface: #1c1a17;
+  --color-surface-2: #181613;
+  --color-raised: #24211d;
+  --color-line: #2a2722;
+  --color-line-2: #3a362f;
+  --color-ink: #ece6da;
+  --color-ink-dim: #c9c2b6;
+  --color-mute: #9b948a;
+  /* Chrome yellow is the working colour: buttons, links, live lamps,
+     stickers. accent-bright is the hover on a yellow fill. */
+  --color-accent: #ffc72c;
+  --color-accent-bright: #ffd45c;
+  --color-accent-ink: #131210;
+  /* Phosphor, kept for success only: the GO lamp, merged pills, checks
+     passed, diff additions. Nothing clickable is green. */
+  --color-go: #3fb950;
+  --color-go-bright: #56d364;
+  --color-danger: #ff6b57;
+  /* Warn is a darker yellow so it reads as text; hold is the lamp hue and is
+     the accent on purpose — the app is yellow where it is busy. */
+  --color-warn: #d9a521;
+  --color-hold: #ffc72c;
+  /* Sticker shadows: hard offsets, no blur. --shadow-sticker* sit under dark
+     surfaces; --shadow-edge* sit under yellow fills (bone offset). */
+  --color-shadow: var(--color-line);
+  --color-shadow-live: var(--color-accent);
+  --color-sticker-edge: var(--color-ink);
+  --shadow-sticker: 3px 3px 0 var(--color-shadow);
+  --shadow-sticker-lg: 4px 4px 0 var(--color-shadow);
+  --shadow-sticker-live: 3px 3px 0 var(--color-shadow-live);
+  --shadow-edge: 3px 3px 0 var(--color-sticker-edge);
+  --shadow-edge-lg: 4px 4px 0 var(--color-sticker-edge);
+  --shadow-edge-sm: 1px 1px 0 var(--color-sticker-edge);
+  --shadow-edge-xs: 2px 2px 0 var(--color-sticker-edge);
 
   /* Syntax-highlight hues (rendered markdown only). The UI chrome stays
      phosphor-green; code gets a real multi-hue palette so tokens are
@@ -172,12 +192,13 @@
 
 /* --- B+A identity: Control Room signals + Job Ticket artifacts --- */
 
-/* Rubber-stamp status word (Job Ticket): rotated, double-bordered mono, with
-   a worn-ink noise mask so it reads as stamped rather than printed. Color
-   comes from the caller (text + border share currentColor). */
+/* Status sticker (Job Ticket): a tilted mono word. Outlined by default, with
+   a worn-ink noise mask so it reads as stamped rather than printed; colour
+   comes from the caller (text + border share currentColor). `.stamp-seal` is
+   the filled yellow sticker reserved for the sealed outcome. */
 .stamp {
   display: inline-block;
-  transform: rotate(-8deg);
+  transform: rotate(-6deg);
   font-family: var(--font-mono);
   font-weight: 700;
   letter-spacing: 0.16em;
@@ -188,11 +209,20 @@
   mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='40'%3E%3Cfilter id='r'%3E%3CfeTurbulence baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.5 0.5'/%3E%3C/filter%3E%3Crect width='120' height='40' filter='url(%23r)'/%3E%3C/svg%3E");
   mask-size: cover;
 }
+.stamp-seal {
+  border: 0;
+  padding: 2px 0.7em;
+  background: var(--color-accent);
+  color: var(--color-accent-ink);
+  box-shadow: var(--shadow-edge-xs);
+  opacity: 1;
+  mask-image: none;
+}
 
 /* Indicator lamp glow (Control Room). The dot itself is sized/tinted by the
    Lamp component; these carry the tone-matched glow. */
 .lamp-glow-go {
-  box-shadow: 0 0 9px 2px color-mix(in srgb, var(--color-accent-bright) 45%, transparent);
+  box-shadow: 0 0 9px 2px color-mix(in srgb, var(--color-go-bright) 45%, transparent);
 }
 .lamp-glow-hold {
   box-shadow: 0 0 9px 2px color-mix(in srgb, var(--color-hold) 40%, transparent);
@@ -214,32 +244,32 @@
   height: 4px;
   background: repeating-linear-gradient(
     -45deg,
-    rgba(4, 20, 10, 0.65),
-    rgba(4, 20, 10, 0.65) 4px,
+    rgba(19, 18, 16, 0.65),
+    rgba(19, 18, 16, 0.65) 4px,
     var(--color-hold) 4px,
     var(--color-hold) 8px
   );
 }
 
-/* The merge ceremony: the stamp slams down (oversized and light, then a
+/* The merge ceremony: the sticker slams down (oversized and light, then a
    hard settle into the .stamp resting pose) and the certificate seal pops
-   in once the stamp has landed. Applied only when the merge happens while
+   in once the sticker has landed. Applied only when the merge happens while
    the user is watching — see the cockpit's justMerged transition guard. */
 @keyframes stamp-slam {
   0% {
     opacity: 0;
-    transform: rotate(-16deg) scale(2.4);
+    transform: rotate(-14deg) scale(2.4);
   }
   55% {
     opacity: 1;
-    transform: rotate(-7deg) scale(0.92);
+    transform: rotate(-5deg) scale(0.92);
   }
   75% {
-    transform: rotate(-8.5deg) scale(1.06);
+    transform: rotate(-6.5deg) scale(1.06);
   }
   100% {
-    opacity: 0.85;
-    transform: rotate(-8deg) scale(1);
+    opacity: 1;
+    transform: rotate(-6deg) scale(1);
   }
 }
 .stamp-ceremony {
@@ -503,7 +533,7 @@
 .markdown-body .hljs-selector-class,
 .markdown-body .hljs-selector-id,
 .markdown-body .hljs-addition {
-  color: var(--color-accent-bright);
+  color: var(--color-go-bright);
 }
 
 .markdown-body .hljs-deletion {

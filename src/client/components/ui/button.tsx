@@ -4,15 +4,20 @@ import { Loader2 } from 'lucide-react';
 import { cn } from '../../lib/utils.ts';
 
 export const buttonVariants = cva(
-  'inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-md font-medium whitespace-nowrap transition-[color,background-color,border-color,transform] active:scale-[0.97] disabled:pointer-events-none disabled:opacity-50',
+  'inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-md font-medium whitespace-nowrap transition-[color,background-color,border-color,transform,box-shadow] duration-100 ease-out disabled:pointer-events-none disabled:opacity-50',
   {
     variants: {
       variant: {
-        default: 'border border-accent-bright/40 bg-accent text-accent-ink hover:bg-accent-bright',
+        // The yellow sticker: lifts into a bigger shadow on hover and presses
+        // into a smaller one on click (translate, not scale, so the offset
+        // shadow reads as depth).
+        default:
+          'bg-accent font-semibold text-accent-ink shadow-edge hover:-translate-x-px hover:-translate-y-px hover:bg-accent-bright hover:shadow-edge-lg active:translate-x-0.5 active:translate-y-0.5 active:shadow-edge-sm',
         secondary:
-          'border border-line-2 bg-transparent text-ink hover:border-accent/40 hover:bg-raised',
-        danger: 'border border-danger/40 bg-transparent text-danger hover:bg-danger/10',
-        ghost: 'text-mute hover:bg-raised hover:text-ink',
+          'border border-line-2 bg-transparent text-ink hover:border-accent hover:bg-raised active:scale-[0.97]',
+        danger:
+          'border border-danger/40 bg-transparent text-danger hover:bg-danger/10 active:scale-[0.97]',
+        ghost: 'text-mute hover:bg-raised hover:text-ink active:scale-[0.97]',
       },
       // Mobile floors: every button reaches a comfortable thumb target on
       // touch widths without changing the compact desktop density.

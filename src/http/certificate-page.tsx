@@ -7,15 +7,15 @@ import { parseUtc } from '../shared/time.ts';
 
 const CSS = `
 	:root {
-		--floor: #15171c;
-		--paper: #ece7da;
-		--ink: #242a32;
-		--ink-soft: #5c6470;
+		--floor: #131210;
+		--paper: #ece6da;
+		--ink: #1e1a16;
+		--ink-soft: #6b6156;
+		--accent: #ffc72c;
 		--green-ink: #1f7a33;
 		--green-bright: #2f9e44;
 		--red-ink: #b8362c;
 		--mono: "IBM Plex Mono", ui-monospace, monospace;
-		--serif: "Instrument Serif", Georgia, serif;
 	}
 	* { box-sizing: border-box; margin: 0; }
 	body {
@@ -39,10 +39,7 @@ const CSS = `
 			radial-gradient(120% 90% at 30% 0%, rgba(255,255,255,0.5), transparent 60%),
 			var(--paper);
 		border-radius: 6px;
-		box-shadow:
-			0 1px 0 rgba(255,255,255,0.06),
-			0 30px 80px rgba(0,0,0,0.55),
-			0 6px 18px rgba(0,0,0,0.4);
+		box-shadow: 8px 8px 0 var(--accent);
 	}
 	.cert::after {
 		content: ""; position: absolute; inset: 0; border-radius: 6px; pointer-events: none;
@@ -74,8 +71,8 @@ const CSS = `
 	}
 	.feature { margin-top: 1.5rem; }
 	.feature h1 {
-		font-family: var(--serif); font-weight: 400;
-		font-size: clamp(1.7rem, 3.4vw, 2.5rem); line-height: 1.08; letter-spacing: -0.01em;
+		font-weight: 700;
+		font-size: clamp(1.6rem, 3.2vw, 2.3rem); line-height: 1.1; letter-spacing: -0.03em;
 	}
 	.feature .meta {
 		margin-top: 0.55rem; font-family: var(--mono); font-size: 0.76rem;
@@ -123,7 +120,7 @@ const CSS = `
 		display: flex; justify-content: space-between; align-items: baseline; gap: 1rem;
 		font-family: var(--mono); font-size: 0.72rem; color: var(--ink-soft); letter-spacing: 0.05em;
 	}
-	.cert-foot .tagline { font-family: var(--serif); font-style: italic; font-size: 1.02rem; color: var(--ink); letter-spacing: 0; }
+	.cert-foot .tagline { font-weight: 700; font-size: 0.95rem; color: var(--ink); letter-spacing: -0.01em; }
 	.cert-foot a { color: var(--green-ink); text-decoration: none; font-weight: 600; }
 	.stub {
 		position: relative;
@@ -148,7 +145,7 @@ const CSS = `
 		text-transform: uppercase; color: var(--ink-soft);
 	}
 	.gauges { margin-top: 1.1rem; display: grid; gap: 0.85rem; }
-	.gauge { font-family: var(--mono); border-left: 3px solid var(--green-ink); padding-left: 0.7rem; }
+	.gauge { font-family: var(--mono); border-left: 3px solid var(--accent); padding-left: 0.7rem; }
 	.gauge b { display: block; font-size: 1.25rem; font-weight: 600; letter-spacing: 0.02em; }
 	.gauge span { font-size: 0.6rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-soft); }
 	.stamp-zone { margin-top: auto; padding-top: 1.4rem; display: grid; place-items: center; }
@@ -168,12 +165,12 @@ const CSS = `
 	.stamp .sub { font-size: 0.58rem; letter-spacing: 0.3em; margin-top: 0.25rem; }
 	.stamp .date { font-size: 0.66rem; letter-spacing: 0.14em; margin-top: 0.35rem; border-top: 1px solid var(--sink); padding-top: 0.3rem; }
 	.stub .sig { margin-top: 1.3rem; font-family: var(--mono); font-size: 0.6rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-soft); }
-	.stub .sig .line { font-family: var(--serif); font-style: italic; font-size: 1.05rem; color: var(--ink); text-transform: none; letter-spacing: 0; border-bottom: 1px solid var(--ink); padding-bottom: 0.15rem; margin-bottom: 0.3rem; }
+	.stub .sig .line { font-weight: 600; font-size: 0.95rem; color: var(--ink); text-transform: none; letter-spacing: -0.01em; border-bottom: 1px solid var(--ink); padding-bottom: 0.15rem; margin-bottom: 0.3rem; }
 	.colophon {
 		margin-top: 1.1rem; text-align: center;
-		font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.08em; color: #8b919c;
+		font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.08em; color: #9b948a;
 	}
-	.colophon a { color: #56d364; text-decoration: none; }
+	.colophon a { color: var(--accent); text-decoration: none; }
 	.colophon a:hover { text-decoration: underline; }
 	@media (max-width: 860px) {
 		.cert { grid-template-columns: 1fr; }
@@ -227,12 +224,7 @@ function Certificate({ data }: { data: CertificateData }) {
           </>
         ) : null}
         <link rel="icon" type="image/png" href="/logo-small.png" />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
-          rel="stylesheet"
-        />
+        <link href="/fonts/fonts.css" rel="stylesheet" />
         <style dangerouslySetInnerHTML={{ __html: CSS }} />
       </head>
       <body>

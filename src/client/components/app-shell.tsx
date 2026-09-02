@@ -165,8 +165,8 @@ function SidebarNav({ collapsed }: { collapsed: boolean }) {
               'flex items-center border-l-2 font-mono text-[11px] tracking-[0.14em] uppercase transition-colors',
               collapsed ? 'justify-center px-0 py-2' : 'gap-2.5 px-3 py-[7px]',
               active
-                ? 'border-accent-bright bg-surface text-ink'
-                : 'border-transparent text-mute hover:bg-surface/60 hover:text-ink-dim',
+                ? 'border-accent bg-accent/8 text-accent'
+                : 'border-transparent text-mute hover:bg-raised/60 hover:text-ink',
             )}
           >
             <Icon className="size-3.5" aria-hidden />
@@ -200,8 +200,8 @@ function BottomTabs() {
               aria-label={label}
               aria-current={active ? 'page' : undefined}
               className={cn(
-                'flex min-w-0 flex-1 flex-col items-center gap-1.5 py-2.5 font-mono text-[9px] tracking-[0.08em] uppercase transition-colors active:scale-95',
-                active ? 'text-accent-bright' : 'text-mute',
+                'flex min-w-0 flex-1 flex-col items-center gap-1.5 border-t-2 py-2.5 font-mono text-[9px] tracking-[0.08em] uppercase transition-colors active:scale-95',
+                active ? 'border-accent text-accent' : 'border-transparent text-mute',
               )}
             >
               <Icon className="size-3.5" aria-hidden />

@@ -78,7 +78,7 @@ function onApiError<T>(err: T) {
 // Criterion verdicts in the proof ledger: mono glyphs, not emoji — the
 // ledger is a document, and its marks should typeset like one.
 function VerdictMark({ verdict }: { verdict: string | null }) {
-  if (verdict === 'pass') return <span className="font-mono text-accent-bright">✓</span>;
+  if (verdict === 'pass') return <span className="font-mono text-go-bright">✓</span>;
   if (verdict === 'fail') return <span className="font-mono text-danger">✗</span>;
   if (verdict === 'skip') return <span className="font-mono text-mute">—</span>;
   return <span className="font-mono text-mute">○</span>;
@@ -242,7 +242,7 @@ function GoNoGoBoard({ data }: { data: ApiFeatureDetail }) {
           <div
             className={cn(
               'font-mono text-[10.5px] font-semibold tracking-[0.1em]',
-              s.tone === 'go' && 'text-accent-bright',
+              s.tone === 'go' && 'text-go-bright',
               s.tone === 'hold' && 'text-hold',
               s.tone === 'abort' && 'text-danger',
               s.tone === 'off' && 'text-mute',
@@ -291,7 +291,7 @@ function LifecycleHistory({
                       className={cn(
                         'mt-1.5 size-2 shrink-0 rounded-full',
                         stage.status === 'completed'
-                          ? 'bg-accent-bright'
+                          ? 'bg-go-bright'
                           : stage.status === 'failed'
                             ? 'bg-danger'
                             : stage.status === 'running'
@@ -620,9 +620,7 @@ const FileSection = memo(function FileSection({
           </span>
         ) : null}
         <span className="ml-auto shrink-0 tabular-nums">
-          {file.additions > 0 ? (
-            <span className="text-accent-bright">+{file.additions}</span>
-          ) : null}{' '}
+          {file.additions > 0 ? <span className="text-go-bright">+{file.additions}</span> : null}{' '}
           {file.deletions > 0 ? <span className="text-danger">−{file.deletions}</span> : null}
         </span>
       </button>
@@ -914,7 +912,7 @@ export default function FeaturePage() {
               <span>·</span>
               <span>
                 {data.pr.changed_files} files{' '}
-                <span className="text-accent-bright">+{data.pr.additions}</span>{' '}
+                <span className="text-go-bright">+{data.pr.additions}</span>{' '}
                 <span className="text-danger">−{data.pr.deletions}</span>
               </span>
             </p>
@@ -1216,7 +1214,7 @@ export default function FeaturePage() {
                 Files
               </span>
               <span className="text-xs text-mute tabular-nums">
-                {data.files.length} · <span className="text-accent-bright">+{totalAdditions}</span>{' '}
+                {data.files.length} · <span className="text-go-bright">+{totalAdditions}</span>{' '}
                 <span className="text-danger">−{totalDeletions}</span>
               </span>
             </div>

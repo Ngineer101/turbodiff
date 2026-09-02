@@ -7,12 +7,13 @@ import { cn } from '../lib/utils.ts';
 //   - Job Ticket (Serial, Stamp, Ledger, CertStrip) renders OUTCOMES — things
 //     finished and proven.
 // Every element also carries its meaning as text, so nothing depends on
-// color or glow alone.
+// color or glow alone. Colour rule: yellow (accent/hold) is live or asks for a
+// click; green (go) is success only.
 
 export type LampTone = 'go' | 'hold' | 'off' | 'abort';
 
 const LAMP_DOT = {
-  go: 'bg-accent-bright lamp-glow-go',
+  go: 'bg-go-bright lamp-glow-go',
   hold: 'bg-hold lamp-glow-hold',
   abort: 'bg-danger lamp-glow-abort',
   off: 'bg-line-2',
@@ -84,8 +85,9 @@ export function Serial({ n, className }: { n: number; className?: string }) {
   );
 }
 
-// Stamp: an outcome, stamped on the work. Reserved for terminal states —
-// never for anything still moving (that's what lamps are for).
+// Stamp: an outcome, stuck on the work. `ok` is the filled yellow sticker
+// (the sealed outcome); warn and red stay outlined. Reserved for terminal
+// states — never for anything still moving (that's what lamps are for).
 export function Stamp({
   children,
   tone = 'ok',
@@ -99,7 +101,7 @@ export function Stamp({
     <span
       className={cn(
         'stamp text-[11px]',
-        tone === 'ok' && 'text-accent-bright',
+        tone === 'ok' && 'stamp-seal',
         tone === 'warn' && 'text-hold',
         tone === 'red' && 'text-danger',
         className,
@@ -132,7 +134,7 @@ export function Ledger({
             className={cn(
               'truncate',
               it.tone === 'hold' && 'text-hold',
-              it.tone === 'go' && 'text-accent-bright',
+              it.tone === 'go' && 'text-go-bright',
             )}
           >
             {it.value}
@@ -214,7 +216,7 @@ export function TelemetryStrip({
       <span
         className={cn(
           'flex items-center gap-2 font-semibold tracking-[0.14em] uppercase',
-          live ? 'text-accent-bright' : 'text-mute',
+          live ? 'text-go-bright' : 'text-mute',
         )}
       >
         <Lamp tone={live ? 'go' : 'off'} pulse={live} />
@@ -255,7 +257,7 @@ export function CertStrip({
         aria-hidden
         className={cn(
           'grid size-5 shrink-0 place-items-center rounded-full border text-[10px]',
-          sealed ? 'border-accent-bright text-accent-bright' : 'border-line-2 text-mute',
+          sealed ? 'border-accent text-accent' : 'border-line-2 text-mute',
           ceremony && sealed && 'seal-ceremony',
         )}
       >

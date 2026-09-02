@@ -117,7 +117,7 @@ function shell(preload: string[], assets: ReturnType<typeof clientAssets>): stri
 		<link rel="icon" type="image/png" href="/logo-small.png" />
 		<link rel="manifest" href="/manifest.webmanifest" />
 		<link rel="apple-touch-icon" href="/logo.png" />
-		<meta name="theme-color" content="#3fb950" />
+		<meta name="theme-color" content="#ffc72c" />
 ${assets.scripts.map((path) => `\t\t<link rel="modulepreload" href="${path}" />`).join('\n')}
 		<link rel="preload" href="/fonts/ibm-plex-sans-normal-400-latin.woff2" as="font" type="font/woff2" crossorigin />
 		<link rel="preload" href="/fonts/ibm-plex-mono-normal-400-latin.woff2" as="font" type="font/woff2" crossorigin />
@@ -125,7 +125,7 @@ ${preload.map((path) => `\t\t<link rel="preload" href="${path}" as="fetch" />`).
 		<link rel="stylesheet" href="/fonts/fonts.css" />
 ${assets.styles.map((path) => `\t\t<link rel="stylesheet" href="${path}" />`).join('\n')}
 		<style>
-			html { background: #0f1318; }
+			html { background: #131210; }
 			/* Static splash inside #root, painted before app.js runs; React's
 			   first render (the router's pending Splash, visually identical)
 			   replaces it, so PWA launches don't flash an empty page. */
@@ -137,12 +137,12 @@ ${assets.styles.map((path) => `\t\t<link rel="stylesheet" href="${path}" />`).jo
 				align-items: center;
 				justify-content: center;
 				gap: 1rem;
-				background: #0f1318;
-				color: #8595a4;
+				background: #131210;
+				color: #9b948a;
 				font-family: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
 			}
 			#splash img { border-radius: 8px; }
-			#splash .cursor { color: #56d364; animation: splash-blink 1.1s step-end infinite; }
+			#splash .cursor { color: #ffc72c; animation: splash-blink 1.1s step-end infinite; }
 			@keyframes splash-blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
 			@media (prefers-reduced-motion: reduce) { #splash .cursor { animation: none; } }
 		</style>
