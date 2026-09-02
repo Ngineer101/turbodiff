@@ -11,6 +11,19 @@ import { failLifecycleReview } from '../../services/lifecycle.ts';
 // isolate; this subscriber registers in every isolate and sees only that
 // isolate's turns — exactly the per-review attribution we want.
 
+// The settlement's error is the only record of why a review died — the
+// review row keeps it so the failure is diagnosable from the product.
+export function settlementReason(event: {
+  outcome: 'completed' | 'failed' | 'aborted';
+  error?: { name?: string; message: string; type?: string; details?: string };
+}): string {
+  if (event.outcome === 'completed') return 'agent run ended without posting a review';
+  const error = event.error;
+  if (!error) return `agent run ${event.outcome}`;
+  const head = [error.type ?? error.name, error.message].filter(Boolean).join(': ');
+  return `${event.outcome}: ${head}${error.details ? ` — ${error.details}` : ''}`.slice(0, 1_000);
+}
+
 export function registerReviewMetering(): void {
   observe((event) => {
     if (event.instanceId === undefined) return;
@@ -18,7 +31,7 @@ export function registerReviewMetering(): void {
     // (agent error, abort, or a run that ended without posting), flip it to
     // failed so it doesn't sit "running" until the stall cutoff.
     if (event.type === 'submission_settled') {
-      void failLifecycleReview(event.instanceId).catch((err) =>
+      void failLifecycleReview(event.instanceId, settlementReason(event)).catch((err) =>
         console.error('turbodiff: marking review failed errored', err),
       );
       return;

@@ -172,7 +172,7 @@ import { checkMergeability, dispatchConflictResolution } from '../services/merge
 import { mergePullRequest } from '../services/auto-merge.ts';
 import { enqueueFactoryMessage, enqueueFactoryMessages } from '../services/factory-queue.ts';
 import { DEFAULT_MODEL } from '../domain/personas.ts';
-import { scheduleChangeReview } from '../services/lifecycle.ts';
+import { resumeFailedStage, scheduleChangeReview } from '../services/lifecycle.ts';
 import type { LifecycleDecision } from '../domain/lifecycle-contract.ts';
 import {
   ADOPTABLE_PROCESS_PROFILE_KEYS,
@@ -1735,6 +1735,28 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     await updateFeature(feature.id, { error: 'retry queued' });
     await enqueueFactoryMessage({ kind: 'generate', featureId: feature.id });
     return c.json({ ok: true });
+  });
+
+  // A delivery run parked by a stage failure waits on a human — this is the
+  // human: re-run the failed stage as a fresh attempt on the same run.
+  app.post('/factory/features/:id/lifecycle/:runId/resume', async (c) => {
+    const id = Number(c.req.param('id'));
+    const runId = Number(c.req.param('runId'));
+    const feature = Number.isInteger(id) ? await getFeature(id) : null;
+    const repo = feature ? await getRepoById(feature.repository_id) : null;
+    if (!feature || !repo || !c.get('user').installationIds.includes(repo.installation_id)) {
+      return c.json({ error: 'unknown feature' }, 404);
+    }
+    const run = (await listFactoryRunsForFeature(feature.id)).find((r) => r.id === runId);
+    if (!run) return c.json({ error: 'unknown run' }, 404);
+    const result = await resumeFailedStage(run.id, c.get('user').session.login, enqueueFactory);
+    if (result.kind === 'rejected') return c.json({ error: result.reason }, 409);
+    return c.json({
+      ok: true,
+      stage: result.stage,
+      attempt: result.attempt,
+      stage_run_id: result.stageRunId,
+    });
   });
 
   // Context-file upload for planning (pdf/images). Stored in the ARTIFACTS

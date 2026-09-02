@@ -20,6 +20,7 @@ import {
   featureQuery,
   FIX_TERMINAL,
   GENERATION_STOPPED,
+  retryQueued,
 } from '../lib/queries.ts';
 import { cn } from '../lib/utils.ts';
 import { AgentRunLog } from '../components/agent-run-log.tsx';
@@ -119,10 +120,18 @@ function stationsFor(data: ApiFeatureDetail): Station[] {
   const merged = data.pr?.state === 'merged';
   const conflict = data.pr?.mergeable_state === 'dirty';
 
+  // No GitHub review yet is "polling" only while the lifecycle's review
+  // stage is still live — a failed stage is a failure, not a wait.
+  const lastReviewStage = data.lifecycle_runs
+    .at(-1)
+    ?.stages.filter((stage) => stage.stage === 'review')
+    .at(-1);
   const build: Station = { label: 'Build', verdict: 'GO', tone: 'go' };
   const review: Station =
     data.reviews.length === 0
-      ? { label: 'Review', verdict: 'POLLING', tone: 'hold', pulse: true }
+      ? lastReviewStage?.status === 'failed'
+        ? { label: 'Review', verdict: 'FAILED', tone: 'abort' }
+        : { label: 'Review', verdict: 'POLLING', tone: 'hold', pulse: true }
       : blocking
         ? { label: 'Review', verdict: 'NO-GO', tone: 'abort' }
         : { label: 'Review', verdict: 'GO', tone: 'go' };
@@ -247,7 +256,16 @@ function GoNoGoBoard({ data }: { data: ApiFeatureDetail }) {
   );
 }
 
-function LifecycleHistory({ runs }: { runs: ApiFeatureDetail['lifecycle_runs'] }) {
+function LifecycleHistory({
+  runs,
+  onResume,
+  resuming,
+}: {
+  runs: ApiFeatureDetail['lifecycle_runs'];
+  // Re-run the failed stage of a run parked on a human decision.
+  onResume: (runId: number) => void;
+  resuming: boolean;
+}) {
   if (runs.length === 0) return null;
   return (
     <>
@@ -296,6 +314,18 @@ function LifecycleHistory({ runs }: { runs: ApiFeatureDetail['lifecycle_runs'] }
                   </li>
                 ))}
               </ol>
+              {run.status === 'awaiting_human' && run.stages.at(-1)?.status === 'failed' ? (
+                <div className="mt-3">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => onResume(run.id)}
+                    loading={resuming}
+                  >
+                    Retry {sentence(run.stages.at(-1)?.stage ?? 'stage')}
+                  </Button>
+                </div>
+              ) : null}
               {run.handoff_reason ? (
                 <p className="mt-3 text-xs text-mute">Handoff: {run.handoff_reason}</p>
               ) : null}
@@ -729,6 +759,15 @@ export default function FeaturePage() {
     },
     onError: onApiError,
   });
+  const resumeStage = useMutation({
+    mutationFn: (runId: number) =>
+      api.post(`/api/factory/features/${id}/lifecycle/${runId}/resume`),
+    onSuccess: () => {
+      toast.success('Stage retried — it runs again on the same delivery');
+      refresh();
+    },
+    onError: onApiError,
+  });
   const rereview = useMutation({
     mutationFn: () => api.post(`/api/factory/features/${id}/review`),
     onSuccess: () => {
@@ -793,10 +832,21 @@ export default function FeaturePage() {
               <Muted>Generation stopped without a pull request.</Muted>
             </p>
             {data.feature.error ? (
-              <p className="mt-2 text-[0.85rem] text-danger">{data.feature.error}</p>
+              <p
+                className={cn(
+                  'mt-2 text-[0.85rem]',
+                  retryQueued(data.feature.error) ? 'text-mute' : 'text-danger',
+                )}
+              >
+                {data.feature.error}
+              </p>
             ) : null}
             <div className="mt-4">
-              <Button onClick={() => retryGeneration.mutate()} loading={retryGeneration.isPending}>
+              <Button
+                onClick={() => retryGeneration.mutate()}
+                loading={retryGeneration.isPending}
+                disabled={retryQueued(data.feature.error)}
+              >
                 Retry generation
               </Button>
             </div>
@@ -1091,7 +1141,11 @@ export default function FeaturePage() {
         </div>
       ) : null}
 
-      <LifecycleHistory runs={data.lifecycle_runs} />
+      <LifecycleHistory
+        runs={data.lifecycle_runs}
+        onResume={(runId) => resumeStage.mutate(runId)}
+        resuming={resumeStage.isPending}
+      />
       <AgentRunLog runs={data.runs} />
 
       {/* Review workspace: an always-visible file tree beside the diff, so the

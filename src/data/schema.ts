@@ -651,6 +651,9 @@ export const reviews = appSchema.table(
       { onDelete: 'set null' },
     ),
     verdict: text(),
+    // Why a failed row failed: the dispatch error or the agent's settlement
+    // error. Null on completed rows.
+    error: text(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .default(sql`CURRENT_TIMESTAMP`)
       .notNull(),

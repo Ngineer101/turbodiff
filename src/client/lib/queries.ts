@@ -51,6 +51,14 @@ const RUNNING_PLAN_STATUSES = new Set(['analyzing', 'refining']);
 // user retries.
 export const GENERATION_STOPPED = new Set(['failed', 'checks_failed', 'no_changes']);
 
+// A stopped feature whose retry is already on the queue: the retry routes
+// stamp features.error with this before the workflow flips the status to
+// 'generating', so the stopped state is momentary — keep polling it, and
+// don't offer (or colour as an error) another retry.
+export function retryQueued(error: string | null | undefined): boolean {
+  return error === 'retry queued' || /^retry scheduled in /.test(error ?? '');
+}
+
 export function taskIsLive(p: ApiPlan): boolean {
   if (RUNNING_PLAN_STATUSES.has(p.status)) return true;
   if (p.repos.some((r) => r.verification?.status === 'running')) return true;
@@ -58,7 +66,11 @@ export function taskIsLive(p: ApiPlan): boolean {
   // flight unless it stopped.
   return (
     p.status === 'approved' &&
-    p.repos.some((r) => !r.pr_number && !GENERATION_STOPPED.has(r.feature_status ?? ''))
+    p.repos.some(
+      (r) =>
+        !r.pr_number &&
+        (!GENERATION_STOPPED.has(r.feature_status ?? '') || retryQueued(r.feature_error)),
+    )
   );
 }
 
@@ -109,7 +121,9 @@ export const featureQuery = (id: number) =>
       if (!d) return false;
       // Poll while generation is in flight (no PR yet, not stopped) or a
       // verification run is live.
-      if (!d.pr && !GENERATION_STOPPED.has(d.feature.status)) return LIVE_POLL_MS;
+      if (!d.pr && (!GENERATION_STOPPED.has(d.feature.status) || retryQueued(d.feature.error))) {
+        return LIVE_POLL_MS;
+      }
       if (d.verification?.status === 'running') return LIVE_POLL_MS;
       // Poll while a comment batch's fix run hasn't resolved yet.
       const fixInFlight = d.comments.some(

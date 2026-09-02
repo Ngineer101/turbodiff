@@ -26,6 +26,7 @@ export interface ApiReview {
   risk_tier: string | null;
   findings_count: number | null;
   state: ReviewState;
+  error: string | null; // why a failed review failed
   review_url: string | null;
   total_tokens: number;
   cost_usd: number;

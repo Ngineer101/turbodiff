@@ -1,0 +1,1 @@
+ALTER TABLE "app"."reviews" ADD COLUMN "error" text;

@@ -72,6 +72,7 @@ export function serializeReview(r: ReviewActivityRow): ApiReview {
     risk_tier: r.risk_tier,
     findings_count: r.findings_count,
     state: reviewState(r),
+    error: r.error,
     review_url: r.review_url,
     total_tokens: totalTokens(r),
     cost_usd: r.cost_usd,

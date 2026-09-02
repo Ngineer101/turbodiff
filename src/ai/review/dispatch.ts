@@ -82,7 +82,10 @@ export async function dispatchReviewAgent(
       `turbodiff: dispatch failed for ${instanceId} (${agent.slug} on ${repo.owner}/${repo.name}#${prNumber}):`,
       error,
     );
-    await markReviewFailed(instanceId);
+    await markReviewFailed(
+      instanceId,
+      `dispatch failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 1_000),
+    );
     return false;
   }
   return true;
