@@ -51,8 +51,8 @@
   --shadow-edge-xs: 2px 2px 0 var(--color-sticker-edge);
 
   /* Syntax-highlight hues (rendered markdown only). The UI chrome stays
-     phosphor-green; code gets a real multi-hue palette so tokens are
-     distinguishable — tuned for the dark-paper background. */
+     bone and yellow; code gets a real multi-hue palette so tokens are
+     distinguishable — tuned for the warm graphite ground. */
   --color-code-keyword: #ff7b72;
   --color-code-fn: #d2a8ff;
   --color-code-string: #a5d6ff;
@@ -76,7 +76,7 @@
     @apply bg-bg font-sans text-sm text-ink antialiased;
   }
   /* Paper tooth: a fixed fractal-noise layer over everything. It's what
-     separates "dark paper" from "flat dark gray" — clearly visible grain,
+     separates a painted sign from flat dark gray — clearly visible grain,
      but neutral so it never fights the text. */
   body::after {
     content: '';
