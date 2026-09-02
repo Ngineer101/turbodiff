@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vite-plus/test';
 import type { ExecOptions, ExecResult } from '@cloudflare/sandbox';
-import { type CheckSandbox, checkCommandUnrunnable, runCheckCommand } from './check-command.ts';
+import {
+  type CheckSandbox,
+  checkBaselineNote,
+  checkCommandUnrunnable,
+  runCheckCommand,
+} from './check-command.ts';
 
 // Minimal fake sandbox: records the exec invocation and returns a canned
 // result, enough to exercise runCheckCommand without a real container. Only
@@ -82,5 +87,17 @@ describe('checkCommandUnrunnable', () => {
     const err = checkCommandUnrunnable('vp check', 'vp: command not found');
     expect(err.message).toContain('`vp check`');
     expect(err.message).toContain('command not found');
+  });
+});
+
+describe('checkBaselineNote', () => {
+  it('names the command and base, and carries the tail of the baseline output', () => {
+    const note = checkBaselineNote('vp lint', 'main', `${'x'.repeat(2_000)}\nFound 103 errors`);
+
+    expect(note.markdown).toContain('<code>vp lint</code> fails on <code>main</code>');
+    expect(note.markdown).toContain('Found 103 errors');
+    expect(note.markdown).not.toContain('x'.repeat(1_500));
+    expect(note.plain).toMatch(/^\*\*Check command not applied\.\*\*/);
+    expect(note.plain).toContain('Found 103 errors');
   });
 });
