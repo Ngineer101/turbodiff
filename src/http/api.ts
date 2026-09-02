@@ -119,7 +119,7 @@ import {
 } from '../services/connections.ts';
 import { notifyInstallationsLive } from '../services/live-updates.ts';
 import { transcriptKey } from '../ai/runtime/agent-runs.ts';
-import { isRunnerModel } from '../shared/runner-models.ts';
+import { getModelCatalog } from '../data/models.ts';
 import { computeNextRunAt } from '../domain/automation-schedule.ts';
 import {
   githubTokenForUser,
@@ -171,7 +171,6 @@ import { testMcpEndpoint } from '../integrations/mcp/client.ts';
 import { checkMergeability, dispatchConflictResolution } from '../services/merge-conflicts.ts';
 import { mergePullRequest } from '../services/auto-merge.ts';
 import { enqueueFactoryMessage, enqueueFactoryMessages } from '../services/factory-queue.ts';
-import { DEFAULT_MODEL } from '../domain/personas.ts';
 import { resumeFailedStage, scheduleChangeReview } from '../services/lifecycle.ts';
 import type { LifecycleDecision } from '../domain/lifecycle-contract.ts';
 import {
@@ -204,6 +203,7 @@ import type {
   ApiInvitation,
   ApiMe,
   ApiMember,
+  ApiModels,
   ApiOrgMembers,
   ApiPlanQuestion,
   ApiReviewsPage,
@@ -801,8 +801,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     // Per-task model for the sandboxed runs; unset rides as NULL (= default),
     // so the picker's default choice doesn't pin future default changes.
     const model = body?.model?.trim() ?? '';
-    if (model && !isRunnerModel(model)) {
-      return c.json({ error: 'unknown model' }, 400);
+    if (model) {
+      const catalog = await getModelCatalog();
+      if (!catalog.runner.options.some((o) => o.id === model)) {
+        return c.json({ error: 'unknown model' }, 400);
+      }
     }
     const rawAtts = Array.isArray(body?.attachments) ? body.attachments : [];
     const attachments = rawAtts
@@ -853,7 +856,10 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (!plan) return c.json({ error: 'unknown task' }, 404);
     const body = await c.req.json<{ model?: string }>().catch(() => null);
     const model = body?.model?.trim() ?? '';
-    if (!isRunnerModel(model)) return c.json({ error: 'unknown model' }, 400);
+    const catalog = await getModelCatalog();
+    if (!catalog.runner.options.some((o) => o.id === model)) {
+      return c.json({ error: 'unknown model' }, 400);
+    }
     await setTaskRunnerModel(plan.id, model);
     return c.json({ ok: true });
   });
@@ -2148,6 +2154,19 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
 
   // --- Agents: list, create, edit, delete + MCP connections ---
 
+  // The model catalog for both pickers (runner + reviewer). Deployment-wide —
+  // no tenant scoping; the router already requires an authenticated user.
+  app.get('/models', async (c) => {
+    const catalog = await getModelCatalog();
+    return c.json<ApiModels>({
+      runner: { options: catalog.runner.options, default_model: catalog.runner.defaultModel },
+      reviewer: {
+        options: catalog.reviewer.options,
+        default_model: catalog.reviewer.defaultModel,
+      },
+    });
+  });
+
   // Agents are generic, not per-organization: every installation carries the
   // same set of rows (UNIQUE(installation_id, slug)), and writes fan out by
   // slug, so the list dedupes to one entry per slug and any repo in any
@@ -2192,8 +2211,13 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     }
     const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
-    const values = readAgentPayload(body);
-    let error = validateAgent(values, true);
+    const catalog = await getModelCatalog();
+    const values = readAgentPayload(body, catalog.reviewer.defaultModel);
+    let error = validateAgent(
+      values,
+      true,
+      catalog.reviewer.options.map((o) => o.id),
+    );
     if (!error) {
       const existing = await Promise.all(
         installationIds.map((id) => getAgentBySlug(id, values.slug)),
@@ -2208,6 +2232,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.get('/agents/:id', async (c) => {
     const agent = await authorizedAgent(c);
     if (!agent) return c.json({ error: 'unknown agent' }, 404);
+    const catalog = await getModelCatalog();
     return c.json<ApiAgentDetail>({
       agent: {
         id: agent.id,
@@ -2219,7 +2244,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         instructions: agent.instructions,
         installation_id: agent.installation_id,
       },
-      default_model: DEFAULT_MODEL,
+      default_model: catalog.reviewer.defaultModel,
     });
   });
 
@@ -2235,8 +2260,14 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (deniedCapability) return deniedCapability;
     const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
-    const values = { ...readAgentPayload(body), slug: agent.slug };
-    const error = validateAgent(values, false);
+    const catalog = await getModelCatalog();
+    const values = { ...readAgentPayload(body, catalog.reviewer.defaultModel), slug: agent.slug };
+    const error = validateAgent(
+      values,
+      false,
+      catalog.reviewer.options.map((o) => o.id),
+      agent.model,
+    );
     if (error) return c.json({ error }, 400);
     // Fan out by slug so the edit applies everywhere; custom agents that
     // predate the generic model gain their missing per-installation copies.

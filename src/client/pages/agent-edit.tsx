@@ -4,7 +4,7 @@ import { Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { api, ApiError } from '../lib/api.ts';
-import { agentQuery } from '../lib/queries.ts';
+import { agentQuery, modelsQuery } from '../lib/queries.ts';
 import { AgentForm, type AgentFormValues } from '../components/agent-form.tsx';
 import { ConfirmButton } from '../components/confirm-button.tsx';
 
@@ -18,6 +18,7 @@ export function AgentEditPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { data } = useSuspenseQuery(agentQuery(id));
+  const { data: models } = useSuspenseQuery(modelsQuery);
   const [error, setError] = useState<string | null>(null);
 
   const save = useMutation({
@@ -51,6 +52,7 @@ export function AgentEditPage() {
         model: data.agent.model,
       }}
       slugEditable={false}
+      models={models.reviewer.options}
       defaultModel={data.default_model}
       error={error}
       busy={save.isPending}

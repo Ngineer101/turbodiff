@@ -7,8 +7,9 @@ import { testDatabase } from '../test/database-fixture.ts';
 import { Hono } from 'hono';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import type { AuthedUser } from '../services/auth.ts';
-import type { ApiBoard, ApiUsage } from '../shared/api-types.ts';
+import type { ApiBoard, ApiModels, ApiUsage } from '../shared/api-types.ts';
 import { isJsonObject, isString, parseJson } from '../shared/json.ts';
+import { RUNNER_MODELS } from '../shared/runner-models.ts';
 import { createApiRoutes, type ApiRouteDependencies } from './api.ts';
 import {
   ensureBuiltinAgents,
@@ -92,6 +93,7 @@ beforeEach(async () => {
     'todos',
     'repo_agents',
     'agents',
+    'models',
     'member',
     'invitation',
     'organization',
@@ -297,6 +299,76 @@ describe('API constraint validation', () => {
       expect(await response.json()).toMatchObject({ error: expect.stringContaining('slug') });
     },
   );
+
+  it('rejects a well-formed reviewer model that is not in the catalog', async () => {
+    const response = await authenticatedApi().request('https://turbodiff.test/api/agents', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        slug: 'strict-reviewer',
+        name: 'Strict',
+        instructions: 'Review carefully',
+        model: 'cloudflare/anthropic/not-a-real-model',
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: expect.stringContaining('model') });
+  });
+
+  it('accepts a reviewer model backed by an enabled catalog row', async () => {
+    await testDatabase()
+      .prepare(
+        `INSERT INTO models (model_id, provider, label, for_runner, for_reviewer)
+         VALUES ('claude-x', 'anthropic', 'Claude X', false, true)`,
+      )
+      .run();
+    const response = await authenticatedApi().request('https://turbodiff.test/api/agents', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        slug: 'catalog-reviewer',
+        name: 'Catalog',
+        instructions: 'Review carefully',
+        model: 'cloudflare/anthropic/claude-x',
+      }),
+    });
+    expect(response.status).toBe(200);
+  });
+
+  it('serves the constant fallbacks from /api/models while the catalog is empty', async () => {
+    const response = await authenticatedApi().request('https://turbodiff.test/api/models');
+    expect(response.status).toBe(200);
+    // SAFETY: /api/models' 200 body is the ApiModels contract this test
+    // exercises; the assertions below fail on any drift in that shape.
+    const catalog = (await response.json()) as ApiModels;
+    expect(catalog.runner.options).toEqual([...RUNNER_MODELS]);
+    expect(catalog.runner.default_model).toBe('claude-fable-5');
+    expect(catalog.reviewer.default_model).toBe('cloudflare/anthropic/claude-sonnet-5');
+  });
+
+  it('validates the task runner model against the active list', async () => {
+    await testDatabase()
+      .prepare(
+        `INSERT INTO plans (id, repository_id, title, requirements, status)
+         VALUES (702, 101, 'Model swap', 'requirements', 'approved')`,
+      )
+      .run();
+    const app = authenticatedApi();
+    const rejected = await app.request('https://turbodiff.test/api/tasks/702/model', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'not-a-runner-model' }),
+    });
+    expect(rejected.status).toBe(400);
+    expect(await rejected.json()).toEqual({ error: 'unknown model' });
+
+    const accepted = await app.request('https://turbodiff.test/api/tasks/702/model', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'claude-opus-5' }),
+    });
+    expect(accepted.status).toBe(200);
+  });
 
   it('rejects line zero before inserting a cockpit comment', async () => {
     const feature = await testDatabase()

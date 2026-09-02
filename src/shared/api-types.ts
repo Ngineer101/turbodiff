@@ -345,6 +345,18 @@ export interface ApiAgentsList {
   agents: ApiAgentSummary[];
 }
 
+export interface ApiModelOption {
+  id: string;
+  label: string;
+}
+
+// GET /api/models — the model catalog for both pickers. Runner ids are bare
+// Anthropic ids; reviewer ids are gateway-prefixed (cloudflare/<provider>/<id>).
+export interface ApiModels {
+  runner: { options: ApiModelOption[]; default_model: string };
+  reviewer: { options: ApiModelOption[]; default_model: string };
+}
+
 export interface ApiAgentDetail {
   agent: ApiAgentSummary & { instructions: string; installation_id: number };
   default_model: string;

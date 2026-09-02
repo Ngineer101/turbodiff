@@ -13,6 +13,7 @@ import type {
   ApiFeatureDiff,
   ApiIntegrations,
   ApiMe,
+  ApiModels,
   ApiOrgMembers,
   ApiPlan,
   ApiRepoCode,
@@ -169,6 +170,12 @@ export const agentRunLogQuery = (id: number) =>
     queryFn: () => api.get<{ log: string }>(`/api/factory/runs/${id}/log`),
     staleTime: Infinity,
   });
+
+export const modelsQuery = queryOptions({
+  queryKey: ['models'],
+  queryFn: () => api.get<ApiModels>('/api/models'),
+  staleTime: 5 * 60_000, // operator SQL edits are rare; no need to poll
+});
 
 export const agentsQuery = queryOptions({
   queryKey: ['agents'],

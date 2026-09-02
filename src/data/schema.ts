@@ -407,6 +407,42 @@ export const skills = appSchema.table(
   ],
 );
 
+// Deployment-wide model catalog: drives the runner-model pickers (bare ids →
+// ANTHROPIC_MODEL) and the reviewer-agent model dropdown (gateway ids derived
+// as cloudflare/<provider>/<model_id>). Rows are managed by operators via SQL;
+// when the table is empty the code constants in src/shared/runner-models.ts and
+// src/domain/personas.ts take over.
+export const models = appSchema.table(
+  'models',
+  {
+    id: bigint({ mode: 'number' })
+      .primaryKey()
+      .generatedByDefaultAsIdentity({ maxValue: '9007199254740991' }),
+    modelId: text('model_id').notNull(), // bare provider id, e.g. claude-fable-5
+    provider: text().default('anthropic').notNull(),
+    label: text().notNull(),
+    forRunner: boolean('for_runner').default(true).notNull(),
+    forReviewer: boolean('for_reviewer').default(true).notNull(),
+    runnerDefault: boolean('runner_default').default(false).notNull(),
+    reviewerDefault: boolean('reviewer_default').default(false).notNull(),
+    enabled: boolean().default(true).notNull(),
+    sortOrder: integer('sort_order').default(0).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+  },
+  (table) => [
+    unique('models_provider_model_unique').on(table.provider, table.modelId),
+    // At most one default row per surface — guards operator SQL edits.
+    uniqueIndex('models_runner_default_unique')
+      .on(table.runnerDefault)
+      .where(sql`runner_default`),
+    uniqueIndex('models_reviewer_default_unique')
+      .on(table.reviewerDefault)
+      .where(sql`reviewer_default`),
+  ],
+);
+
 export const connections = appSchema.table(
   'connections',
   {
