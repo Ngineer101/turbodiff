@@ -1,9 +1,10 @@
 import { Link } from '@tanstack/react-router';
 import { ArrowLeft, Check } from 'lucide-react';
 import { useState, type FormEvent, type ReactNode } from 'react';
+import type { ApiModelOption } from '../../shared/api-types.ts';
 import { EntityFormLayout, FormSection } from './entity-form.tsx';
 import { Button } from './ui/button.tsx';
-import { Field, Input, Textarea } from './ui/input.tsx';
+import { Field, Input, Select, Textarea } from './ui/input.tsx';
 
 export interface AgentFormValues {
   name: string;
@@ -19,6 +20,7 @@ export function AgentForm({
   mode,
   initial,
   slugEditable,
+  models,
   defaultModel,
   error,
   busy,
@@ -29,6 +31,8 @@ export function AgentForm({
   mode: 'new' | 'edit';
   initial: AgentFormValues;
   slugEditable: boolean;
+  // Reviewer options from the catalog (GET /api/models).
+  models: ApiModelOption[];
   defaultModel: string;
   error: string | null;
   busy: boolean;
@@ -40,6 +44,13 @@ export function AgentForm({
 }) {
   const [values, setValues] = useState(initial);
   const set = (patch: Partial<AgentFormValues>) => setValues((v) => ({ ...v, ...patch }));
+
+  // An agent whose stored model predates the catalog still shows (and can
+  // re-save) its value; the server allows re-saving it unchanged.
+  const modelOptions =
+    initial.model && !models.some((m) => m.id === initial.model)
+      ? [{ id: initial.model, label: `${initial.model} (not in catalog)` }, ...models]
+      : models;
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -105,17 +116,19 @@ export function AgentForm({
             required
           />
         </Field>
-        <Field
-          label="Model"
-          className="mt-0"
-          hint={`any AI Gateway model id; default ${defaultModel}`}
-        >
-          <Input
+        <Field label="Model" className="mt-0" hint={`default ${defaultModel}`}>
+          <Select
             value={values.model}
             onChange={(e) => set({ model: e.target.value })}
             required
             className="font-mono"
-          />
+          >
+            {modelOptions.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+          </Select>
         </Field>
       </FormSection>
 

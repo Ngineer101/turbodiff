@@ -21,7 +21,7 @@ import {
   type TaskRepoStatusRow,
   type VerificationRow,
 } from '../data/db.ts';
-import { DEFAULT_MODEL, RESERVED_AGENT_SLUGS } from '../domain/personas.ts';
+import { RESERVED_AGENT_SLUGS } from '../domain/personas.ts';
 import { certificateUrl } from '../services/certificates.ts';
 import { capabilityDenied, orgForInstallationWithHeal } from '../services/access-control.ts';
 import { userCanPushToRepo, type AuthedUser, type userIsGithubOrgAdmin } from '../services/auth.ts';
@@ -299,8 +299,6 @@ export function serializeTask(
 }
 
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-// Gateway-only model ids: cloudflare/<provider>/<model>.
-const MODEL_RE = /^cloudflare\/[\w.-]+\/[\w.:-]+$/;
 
 export interface AgentFormValues {
   name: string;
@@ -310,7 +308,7 @@ export interface AgentFormValues {
   model: string;
 }
 
-export function readAgentPayload(body: JsonObject): AgentFormValues {
+export function readAgentPayload(body: JsonObject, defaultModel: string): AgentFormValues {
   const get = (k: string) => {
     const v = body[k];
     return isString(v) ? v.trim() : '';
@@ -320,18 +318,25 @@ export function readAgentPayload(body: JsonObject): AgentFormValues {
     slug: get('slug').toLowerCase(),
     description: get('description'),
     instructions: get('instructions'),
-    model: get('model') || DEFAULT_MODEL,
+    model: get('model') || defaultModel,
   };
 }
 
-export function validateAgent(v: AgentFormValues, checkSlug: boolean): string | null {
+export function validateAgent(
+  v: AgentFormValues,
+  checkSlug: boolean,
+  allowedModels: readonly string[],
+  currentModel?: string,
+): string | null {
   if (!v.name) return 'name is required';
   if (checkSlug && (v.slug.length < 2 || v.slug.length > 31 || !SLUG_RE.test(v.slug)))
     return 'slug must be 2-31 chars: lowercase letters and digits separated by single dashes';
   if (checkSlug && RESERVED_AGENT_SLUGS.has(v.slug)) return `"${v.slug}" is a reserved word`;
   if (!v.instructions) return 'instructions are required';
-  if (!MODEL_RE.test(v.model))
-    return 'model must be an AI Gateway id like cloudflare/anthropic/claude-sonnet-5';
+  // currentModel lets an agent whose stored model predates the catalog be
+  // re-saved unchanged; any other out-of-catalog value fails.
+  if (!allowedModels.includes(v.model) && v.model !== currentModel)
+    return 'model must be one of the configured models';
   return null;
 }
 

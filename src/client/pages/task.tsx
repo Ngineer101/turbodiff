@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
 import {
   Archive,
@@ -18,7 +18,13 @@ import { useDictation } from '../lib/dictation.ts';
 import { ago } from '../lib/format.ts';
 import { applyOptimistic } from '../lib/optimistic.ts';
 import { pushSupported, subscribeToPush } from '../lib/push.ts';
-import { GENERATION_STOPPED, meQuery, retryQueued, taskQuery } from '../lib/queries.ts';
+import {
+  GENERATION_STOPPED,
+  meQuery,
+  modelsQuery,
+  retryQueued,
+  taskQuery,
+} from '../lib/queries.ts';
 import { taskColumn, taskStages, taskState } from '../lib/task-state.ts';
 import { cn } from '../lib/utils.ts';
 import { AgentRunLog } from '../components/agent-run-log.tsx';
@@ -102,6 +108,14 @@ export function TaskPage() {
   const navigate = useNavigate();
   const { data: task } = useSuspenseQuery(taskQuery(id));
   const { data: me } = useSuspenseQuery(meQuery);
+  // Catalog options with the static constants as the not-yet-loaded fallback.
+  // A stored model outside the list (legacy or since-disabled) is prepended so
+  // the select keeps rendering it instead of coercing to the first option.
+  const { data: models } = useQuery(modelsQuery);
+  const catalogOptions = models?.runner.options ?? RUNNER_MODELS;
+  const modelOptions = catalogOptions.some((m) => m.id === task.model)
+    ? catalogOptions
+    : [{ id: task.model, label: task.model }, ...catalogOptions];
   const state = taskState(task);
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['task', id] });
@@ -526,7 +540,7 @@ export function TaskPage() {
               disabled={setModel.isPending}
               className="w-full text-xs"
             >
-              {RUNNER_MODELS.map((m) => (
+              {modelOptions.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.label}
                 </option>

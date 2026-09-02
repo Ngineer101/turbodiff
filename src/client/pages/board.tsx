@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import {
   Archive,
@@ -23,7 +23,7 @@ import { api, ApiError } from '../lib/api.ts';
 import { useDictation } from '../lib/dictation.ts';
 import { ago, fmtUsd } from '../lib/format.ts';
 import { applyOptimistic, optimisticId, optimisticNow } from '../lib/optimistic.ts';
-import { boardQuery } from '../lib/queries.ts';
+import { boardQuery, modelsQuery } from '../lib/queries.ts';
 import { nextIndex, noOverlayOpen, onListboxKeyDown } from '../lib/shortcuts.ts';
 import { taskColumn, taskStages, taskState } from '../lib/task-state.ts';
 import { useIsDesktop } from '../lib/use-is-desktop.ts';
@@ -372,7 +372,14 @@ function StartDialog({
   const dictation = useDictation((text) =>
     setRequirements((prev) => (prev.trim() ? `${prev}\n\n${text}` : text)),
   );
-  const [model, setModel] = useState<string>(DEFAULT_RUNNER_MODEL);
+  // Catalog options with the static constants as the not-yet-loaded fallback,
+  // so the dialog never blocks on the fetch. An untouched picker keeps model
+  // as '' — the server treats unset as NULL (= default), so the preselected
+  // default doesn't pin future default changes.
+  const { data: models } = useQuery(modelsQuery);
+  const runnerOptions = models?.runner.options ?? RUNNER_MODELS;
+  const runnerDefault = models?.runner.default_model ?? DEFAULT_RUNNER_MODEL;
+  const [model, setModel] = useState<string>('');
   const [files, setFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const start = useMutation({
@@ -453,8 +460,12 @@ function StartDialog({
             />
           </Field>
           <Field label="Model">
-            <Select value={model} onChange={(e) => setModel(e.target.value)} aria-label="Model">
-              {RUNNER_MODELS.map((m) => (
+            <Select
+              value={model || runnerDefault}
+              onChange={(e) => setModel(e.target.value)}
+              aria-label="Model"
+            >
+              {runnerOptions.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.label}
                 </option>
