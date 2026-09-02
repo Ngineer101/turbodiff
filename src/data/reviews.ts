@@ -48,6 +48,7 @@ export interface ReviewActivityRow {
   findings_count: number | null; // null until post_review completes the row
   stage_run_id: number | null;
   verdict: string | null;
+  error: string | null; // why a failed row failed
   repo_owner: string | null; // null if the repo was since removed
   repo_name: string | null;
 }
@@ -193,9 +194,15 @@ export async function dashboardStats(installationIds: number[]): Promise<Dashboa
 // that never posted). No-op when the row is already completed.
 export async function markReviewFailed(
   agentInstanceId: string,
+  // Why: the dispatch error or the agent's settlement error. Persisted so a
+  // failed review is diagnosable from its row (live finding: every review
+  // had died within seconds with zero tokens and nothing on record to say
+  // why — the reason only ever reached the Worker log).
+  error: string | null = null,
 ): Promise<{ stage_run_id: number | null } | null> {
   return queryOne<{ stage_run_id: number | null }>(sql`
-    UPDATE app.reviews SET status = 'failed', completed_at = CURRENT_TIMESTAMP
+    UPDATE app.reviews SET status = 'failed', completed_at = CURRENT_TIMESTAMP,
+      error = COALESCE(${error}::text, error)
     WHERE id = (
       SELECT id FROM app.reviews
       WHERE agent_instance_id = ${agentInstanceId} AND status = 'running'
@@ -210,6 +217,8 @@ export interface ReviewStageProgress {
   completed: number;
   failed: number;
   blocking: boolean;
+  // Recorded reasons of the failed reviews, oldest first.
+  errors: string[];
 }
 
 export async function reviewStageProgress(stageRunId: number): Promise<ReviewStageProgress> {
@@ -218,10 +227,14 @@ export async function reviewStageProgress(stageRunId: number): Promise<ReviewSta
       COUNT(*) FILTER (WHERE status = 'running') AS running,
       COUNT(*) FILTER (WHERE status = 'completed') AS completed,
       COUNT(*) FILTER (WHERE status = 'failed') AS failed,
-      COALESCE(BOOL_OR(verdict = 'request_changes'), FALSE) AS blocking
+      COALESCE(BOOL_OR(verdict = 'request_changes'), FALSE) AS blocking,
+      COALESCE(
+        ARRAY_REMOVE(ARRAY_AGG(error ORDER BY id) FILTER (WHERE status = 'failed'), NULL),
+        '{}'
+      ) AS errors
     FROM app.reviews WHERE stage_run_id = ${stageRunId}
   `);
-  return row ?? { running: 0, completed: 0, failed: 0, blocking: false };
+  return row ?? { running: 0, completed: 0, failed: 0, blocking: false, errors: [] };
 }
 
 // True when this agent's review of this PR is running and young enough to

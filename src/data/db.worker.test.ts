@@ -38,6 +38,7 @@ import {
   setChatSessionId,
   tryRecordAutomationRun,
   tryRecordFixAttempt,
+  markReviewFailed,
   tryRecordReview,
   updatePlan,
   upsertInstallation,
@@ -324,6 +325,18 @@ describe('cockpit chat messages', () => {
 });
 
 describe('review dispatch invariants', () => {
+  it('records why a review failed', async () => {
+    const id = await tryRecordReview(101, 1001, 12, 'opened', 'review', 'review--acme--api--12');
+    await expect(
+      markReviewFailed('review--acme--api--12', 'dispatch failed: boom'),
+    ).resolves.toMatchObject({ stage_run_id: null });
+    const row = await testDatabase()
+      .prepare(`SELECT status, error FROM reviews WHERE id = ?1`)
+      .bind(id)
+      .first<{ status: string; error: string | null }>();
+    expect(row).toEqual({ status: 'failed', error: 'dispatch failed: boom' });
+  });
+
   it('admits exactly one concurrent claim for the same agent instance', async () => {
     const results = await Promise.all(
       Array.from({ length: 8 }, () =>

@@ -57,6 +57,13 @@
       "when": 1788108555286,
       "tag": "0007_lifecycle-repair",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1788344402439,
+      "tag": "0008_review-error",
+      "breakpoints": true
     }
   ]
 }

@@ -32,6 +32,8 @@ import type { ReviewDispatcher } from '../services/change-review.ts';
 import {
   completeLifecycleReview,
   completeLifecycleStage,
+  failLifecycleReview,
+  resumeFailedStage,
   runLifecycleStage,
   scheduleFeatureDelivery,
 } from '../services/lifecycle.ts';
@@ -480,6 +482,106 @@ describe('composable feature delivery', () => {
       { attempt: 2, status: 'failed', error: 'generation run was killed — retry' },
       { attempt: 3, status: 'queued' },
     ]);
+  });
+
+  it('surfaces why a review stage failed and lets a human retry it on the same run', async () => {
+    await seedRepo();
+    await ensureBuiltinAgents(1001);
+    const featureId = await createFeature(101, 'Reviewed delivery', 'Ship it', ['It works']);
+    const change = await upsertChange({
+      repositoryId: 101,
+      providerKey: 'github:43',
+      number: 43,
+      origin: 'factory',
+      title: 'Reviewed delivery',
+      externalUrl: 'https://github.com/acme/api/pull/43',
+      sourceBranch: 'turbodiff/feature-43',
+      targetBranch: 'main',
+      status: 'open',
+      sourceHead: 'e'.repeat(40),
+      targetHead: 'f'.repeat(40),
+      draft: false,
+      capabilities: ['read_change', 'publish_review', 'write_head', 'publish_check', 'merge'],
+    });
+    await updateFeature(featureId, { status: 'pr_opened', prNumber: 43, changeId: change.id });
+    const created = await createFactoryRunWithStage({
+      repositoryId: 101,
+      changeId: change.id,
+      profileKey: 'full_delivery',
+      startStage: 'review',
+      stopAfterStage: 'merge',
+      policySnapshot: { key: 'full_delivery' },
+      trigger: 'test',
+      eventKind: 'human.resume_requested',
+      decision: { kind: 'schedule', stage: 'review' },
+      idempotencyKey: `review-delivery:${featureId}`,
+      stageInput: { featureId },
+    });
+    const queued: FactoryMessage[] = [];
+    const enqueue = async (message: FactoryMessage) => void queued.push(message);
+    const dispatch: ReviewDispatcher = async (agent, repo, prNumber, _url, trigger, options) => {
+      await tryRecordReview(
+        repo.id,
+        repo.installation_id,
+        prNumber,
+        trigger,
+        agent.slug,
+        `${agent.slug}--${repo.owner}--${repo.name}--${prNumber}`,
+        options?.riskTier ?? null,
+        options?.stageRunId ?? null,
+      );
+      return true;
+    };
+    const command: RunStageCommand = {
+      kind: 'run_stage',
+      factoryRunId: created.run.id,
+      stageRunId: created.stageRun!.id,
+      stage: 'review',
+      idempotencyKey: created.stageRun!.idempotency_key,
+      changeId: change.id,
+    };
+    await runLifecycleStage(command, dispatch, { computeRisk: async () => 'full', enqueue });
+
+    // The agent dies before posting: the settlement reason lands on the
+    // review row and on the stage the lifecycle panel shows.
+    await failLifecycleReview('review--acme--api--43', 'failed: AiError: model not found', enqueue);
+    await expect(getStageRun(created.stageRun!.id)).resolves.toMatchObject({
+      status: 'failed',
+      error: 'all review dispatches failed: failed: AiError: model not found',
+      output: { completed: 0, failed: 1, errors: ['failed: AiError: model not found'] },
+    });
+    await expect(getFactoryRun(created.run.id)).resolves.toMatchObject({
+      status: 'awaiting_human',
+    });
+
+    // A human retries the stage: a fresh attempt on the same run, so verify
+    // and merge still follow it.
+    queued.length = 0;
+    await expect(resumeFailedStage(created.run.id, 'nico', enqueue)).resolves.toMatchObject({
+      kind: 'scheduled',
+      stage: 'review',
+      attempt: 2,
+    });
+    await expect(getFactoryRun(created.run.id)).resolves.toMatchObject({
+      status: 'active',
+      handoff_reason: null,
+    });
+    expect(stageCommands(queued)).toMatchObject([
+      {
+        stage: 'review',
+        factoryRunId: created.run.id,
+        idempotencyKey: `${created.run.id}:review:2`,
+        changeId: change.id,
+      },
+    ]);
+    await expect(listStageRuns(created.run.id)).resolves.toMatchObject([
+      { stage: 'review', attempt: 1, status: 'failed' },
+      { stage: 'review', attempt: 2, status: 'queued', input: { featureId } },
+    ]);
+    // Only a parked run can be retried.
+    await expect(resumeFailedStage(created.run.id, 'nico', enqueue)).resolves.toMatchObject({
+      kind: 'rejected',
+    });
   });
 
   it('hands verified delivery to the merge executor and completes the run', async () => {

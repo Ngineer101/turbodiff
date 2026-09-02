@@ -390,6 +390,16 @@ async function coordinateStageOutcome(
   }
 }
 
+// What a settled review stage records: the dispatch tallies, plus the failed
+// reviews' reasons when there were any.
+type ReviewStageOutput = {
+  running: number;
+  completed: number;
+  failed: number;
+  blocking: boolean;
+  errors?: string[];
+};
+
 async function settleReviewStage(
   stageRunId: number,
   enqueue: typeof enqueueFactoryMessage,
@@ -398,12 +408,13 @@ async function settleReviewStage(
   if (!stageRun || stageRun.stage !== 'review' || stageRun.status !== 'running') return;
   const progress = await reviewStageProgress(stageRunId);
   if (progress.running > 0) return;
-  const output: JsonValue = {
+  const output: ReviewStageOutput = {
     running: progress.running,
     completed: progress.completed,
     failed: progress.failed,
     blocking: progress.blocking,
   };
+  if (progress.errors.length > 0) output.errors = progress.errors;
   const command: RunStageCommand = {
     kind: 'run_stage',
     factoryRunId: stageRun.factory_run_id,
@@ -413,7 +424,10 @@ async function settleReviewStage(
   };
   if (stageRun.change_id !== null) command.changeId = stageRun.change_id;
   if (progress.completed === 0) {
-    await finishStageRun(stageRun.id, 'failed', output, 'all review dispatches failed');
+    // The first recorded reason rides on the stage error — that's what the
+    // lifecycle panel shows.
+    const why = progress.errors[0] ? `: ${progress.errors[0]}` : '';
+    await finishStageRun(stageRun.id, 'failed', output, `all review dispatches failed${why}`);
     await coordinateStageOutcome(command, false, enqueue);
     return;
   }
@@ -436,10 +450,84 @@ export async function completeLifecycleReview(
 
 export async function failLifecycleReview(
   agentInstanceId: string,
+  reason: string | null = null,
   enqueue: typeof enqueueFactoryMessage = enqueueFactoryMessage,
 ): Promise<void> {
-  const failed = await markReviewFailed(agentInstanceId);
+  const failed = await markReviewFailed(agentInstanceId, reason);
   if (failed?.stage_run_id) await settleReviewStage(failed.stage_run_id, enqueue);
+}
+
+export type ResumeStageResult =
+  | { kind: 'scheduled'; stageRunId: number; stage: LifecycleStage; attempt: number }
+  | { kind: 'rejected'; reason: string };
+
+// A run parked by a stage failure ("stage failure requires retry policy
+// evaluation") has no automatic retry policy yet — a human is the policy.
+// Re-run the failed stage as a fresh attempt on the same run, so the rest of
+// the delivery (verify, merge) continues from there once it passes.
+export async function resumeFailedStage(
+  runId: number,
+  actor: string | null,
+  enqueue: typeof enqueueFactoryMessage = enqueueFactoryMessage,
+): Promise<ResumeStageResult> {
+  const run = await getFactoryRun(runId);
+  if (!run) return { kind: 'rejected', reason: 'unknown run' };
+  if (run.status !== 'awaiting_human') {
+    return {
+      kind: 'rejected',
+      reason: `run is ${run.status.replaceAll('_', ' ')}, not waiting on a human`,
+    };
+  }
+  const latest = (await listStageRuns(run.id)).at(-1);
+  if (!latest || latest.status !== 'failed') {
+    return { kind: 'rejected', reason: 'the latest stage did not fail' };
+  }
+  const repo = await getRepoById(run.repository_id);
+  if (!repo) return { kind: 'rejected', reason: 'repository missing' };
+  const changeId = latest.change_id ?? run.change_id;
+  const change = changeId ? await getChange(changeId) : null;
+  const featureId = featureIdFromInput(latest.input);
+  const feature = featureId ? await getFeature(featureId) : null;
+  const acceptanceContract = change ? await latestAcceptanceContractForChange(change.id) : null;
+  const decision = decideLifecycle(run.profile_key, {
+    event: 'human.resume_requested',
+    origin: change?.origin ?? (feature ? 'factory' : 'imported'),
+    startStage: latest.stage,
+    stopAfterStage: run.stop_after_stage,
+    capabilities: change?.capabilities,
+    facts: {
+      repositoryEnabled: repo.enabled,
+      runStatus: run.status,
+      acceptanceContractPresent: acceptanceContract !== null || feature?.acceptance != null,
+    },
+  });
+  if (decision.kind !== 'schedule') {
+    return {
+      kind: 'rejected',
+      reason: decision.kind === 'complete' ? 'run is complete' : decision.reason,
+    };
+  }
+  const next = await recordLifecycleDecision(
+    run.id,
+    changeId ?? null,
+    'human.resume_requested',
+    { stageRunId: latest.id, actor },
+    decision,
+    `resume:${run.id}:${latest.id}`,
+    latest.input ?? undefined,
+  );
+  if (!next) return { kind: 'rejected', reason: 'this stage was already retried' };
+  await resumeFactoryRun(run.id);
+  await enqueue(
+    commandFor(
+      run.id,
+      next.id,
+      next.stage,
+      next.change_id ?? changeId ?? null,
+      next.idempotency_key,
+    ),
+  );
+  return { kind: 'scheduled', stageRunId: next.id, stage: next.stage, attempt: next.attempt };
 }
 
 export async function completeLifecycleRepair(

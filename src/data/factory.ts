@@ -1060,7 +1060,8 @@ export async function tryRecordReview(
 ): Promise<number | null> {
   return withTransaction(async (transaction) => {
     await transaction.execute(sql`
-        UPDATE app.reviews SET status = 'failed', completed_at = CURRENT_TIMESTAMP
+        UPDATE app.reviews SET status = 'failed', completed_at = CURRENT_TIMESTAMP,
+          error = COALESCE(error, 'stalled: no completion before a replacement was admitted')
         WHERE agent_instance_id = ${agentInstanceId} AND status = 'running'
           AND created_at < ${minutesAgo(STALL_AFTER_MINUTES)}
       `);
