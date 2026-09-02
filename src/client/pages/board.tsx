@@ -246,7 +246,10 @@ function QuickAdd({
   );
   const add = useMutation({
     mutationFn: (vars: { title: string; installationId: number; repoIds: number[] }) =>
-      api.post<{ ok: boolean; todo_id: number }>('/api/todos', {
+      api.post<
+        { ok: boolean; todo_id: number },
+        { installation_id: number; title: string; repository_ids: number[] }
+      >('/api/todos', {
         installation_id: vars.installationId,
         title: vars.title,
         repository_ids: vars.repoIds,
