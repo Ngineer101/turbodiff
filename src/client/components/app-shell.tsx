@@ -127,16 +127,18 @@ function GithubRecoveryBanner({ me }: { me: ApiMe }) {
   );
 }
 
+// The tilted TD sticker beside a bold wordmark — the same mark the landing
+// page and the manifest icon use, so the app reads as one thing.
 function Logo() {
   return (
-    <Link
-      to="/"
-      className="flex items-baseline gap-0.5 font-mono text-base font-semibold tracking-wide text-ink"
-    >
-      turbodiff
-      <span className="animate-cursor text-accent-bright" aria-hidden>
-        _
+    <Link to="/" className="flex items-center gap-2.5 text-base font-bold tracking-tight text-ink">
+      <span
+        aria-hidden
+        className="flex size-7 -rotate-6 items-center justify-center rounded-md bg-accent text-[11px] font-bold tracking-tight text-accent-ink shadow-edge-xs"
+      >
+        TD
       </span>
+      turbodiff
     </Link>
   );
 }

@@ -44,6 +44,7 @@
   --shadow-sticker: 3px 3px 0 var(--color-shadow);
   --shadow-sticker-lg: 4px 4px 0 var(--color-shadow);
   --shadow-sticker-live: 3px 3px 0 var(--color-shadow-live);
+  --shadow-sticker-xl: 8px 8px 0 var(--color-shadow);
   --shadow-edge: 3px 3px 0 var(--color-sticker-edge);
   --shadow-edge-lg: 4px 4px 0 var(--color-sticker-edge);
   --shadow-edge-sm: 1px 1px 0 var(--color-sticker-edge);

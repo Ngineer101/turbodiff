@@ -19,7 +19,7 @@ export function PopoverContent({
         sideOffset={sideOffset}
         collisionPadding={12}
         className={cn(
-          'z-50 w-72 rounded-lg border border-line-2 bg-surface p-2 shadow-2xl shadow-black/60 outline-none',
+          'z-50 w-72 rounded-lg border border-line-2 bg-surface p-2 shadow-sticker-lg outline-none',
           'data-[state=open]:animate-rise',
           className,
         )}

@@ -295,7 +295,7 @@ function LifecycleHistory({
                           : stage.status === 'failed'
                             ? 'bg-danger'
                             : stage.status === 'running'
-                              ? 'bg-warn animate-pulse'
+                              ? 'bg-hold lamp-glow-hold animate-pulse-dot'
                               : 'bg-line-2',
                       )}
                     />
@@ -1047,7 +1047,7 @@ export default function FeaturePage() {
         <div>
           <SectionHeading>Demo</SectionHeading>
           <video
-            className="w-full max-w-3xl rounded-xl bg-black border border-line-2 shadow-2xl shadow-black/60"
+            className="w-full max-w-3xl rounded-lg border border-line-2 bg-black shadow-sticker-lg"
             controls
             autoPlay
             muted
@@ -1093,7 +1093,7 @@ export default function FeaturePage() {
                             <img
                               src={crit.screenshot_url}
                               alt=""
-                              className="max-h-40 rounded-xl bg-black border border-line-2 shadow-2xl shadow-black/60"
+                              className="max-h-40 rounded-lg border border-line-2 bg-black shadow-sticker-lg"
                             />
                           </div>
                         ) : null}

@@ -58,8 +58,8 @@ export function EntityCard({
   return (
     <div
       className={cn(
-        'flex h-full items-start gap-3 rounded-xl border border-line bg-surface/60 p-4',
-        interactive && 'transition-colors hover:border-accent/30 hover:bg-surface',
+        'flex h-full items-start gap-3 rounded-lg border border-line-2 bg-surface p-4 shadow-sticker',
+        interactive && 'transition-colors hover:border-accent/50',
         className,
       )}
     >

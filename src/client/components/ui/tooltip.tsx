@@ -29,7 +29,7 @@ export function Tooltip({
       <span
         role="tooltip"
         className={cn(
-          'pointer-events-none absolute z-50 whitespace-nowrap rounded-md border border-line-2 bg-raised px-2 py-1 font-mono text-[10.5px] text-ink-dim opacity-0 shadow-lg shadow-black/50 transition-opacity duration-100',
+          'pointer-events-none absolute z-50 whitespace-nowrap rounded-md border border-line-2 bg-raised px-2 py-1 font-mono text-[10.5px] text-ink-dim opacity-0 shadow-sticker transition-opacity duration-100',
           'group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none',
           pos,
         )}
