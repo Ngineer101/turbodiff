@@ -18,7 +18,7 @@ import { useDictation } from '../lib/dictation.ts';
 import { ago } from '../lib/format.ts';
 import { applyOptimistic } from '../lib/optimistic.ts';
 import { pushSupported, subscribeToPush } from '../lib/push.ts';
-import { GENERATION_STOPPED, meQuery, taskQuery } from '../lib/queries.ts';
+import { GENERATION_STOPPED, meQuery, retryQueued, taskQuery } from '../lib/queries.ts';
 import { taskColumn, taskStages, taskState } from '../lib/task-state.ts';
 import { cn } from '../lib/utils.ts';
 import { AgentRunLog } from '../components/agent-run-log.tsx';
@@ -440,7 +440,14 @@ export function TaskPage() {
                         <Pill tone={tone}>{label}</Pill>
                       </div>
                       {stopped && r.feature_error ? (
-                        <p className="mt-2 text-[0.85rem] text-danger">{r.feature_error}</p>
+                        <p
+                          className={cn(
+                            'mt-2 text-[0.85rem]',
+                            retryQueued(r.feature_error) ? 'text-mute' : 'text-danger',
+                          )}
+                        >
+                          {r.feature_error}
+                        </p>
                       ) : null}
                       <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                         {stopped && featureId !== null ? (
@@ -448,6 +455,7 @@ export function TaskPage() {
                             size="sm"
                             onClick={() => retry.mutate(featureId)}
                             loading={retry.isPending && retry.variables === r.feature_id}
+                            disabled={retryQueued(r.feature_error)}
                           >
                             Retry generation
                           </Button>

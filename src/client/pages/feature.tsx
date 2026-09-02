@@ -20,6 +20,7 @@ import {
   featureQuery,
   FIX_TERMINAL,
   GENERATION_STOPPED,
+  retryQueued,
 } from '../lib/queries.ts';
 import { cn } from '../lib/utils.ts';
 import { AgentRunLog } from '../components/agent-run-log.tsx';
@@ -831,10 +832,21 @@ export default function FeaturePage() {
               <Muted>Generation stopped without a pull request.</Muted>
             </p>
             {data.feature.error ? (
-              <p className="mt-2 text-[0.85rem] text-danger">{data.feature.error}</p>
+              <p
+                className={cn(
+                  'mt-2 text-[0.85rem]',
+                  retryQueued(data.feature.error) ? 'text-mute' : 'text-danger',
+                )}
+              >
+                {data.feature.error}
+              </p>
             ) : null}
             <div className="mt-4">
-              <Button onClick={() => retryGeneration.mutate()} loading={retryGeneration.isPending}>
+              <Button
+                onClick={() => retryGeneration.mutate()}
+                loading={retryGeneration.isPending}
+                disabled={retryQueued(data.feature.error)}
+              >
                 Retry generation
               </Button>
             </div>
