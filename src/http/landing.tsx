@@ -358,7 +358,7 @@ function Landing() {
                     <StarIcon />
                     Star on GitHub
                   </a>
-                  <a class="read" href="/blog/why-i-built-this">
+                  <a class="read" href="/blog/software-factory">
                     read: why I built this &rarr;
                   </a>
                 </div>

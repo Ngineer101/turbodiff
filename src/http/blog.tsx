@@ -10,7 +10,7 @@
 // registry alone. Posts are code (src/http/posts/*), not a CMS: they ship
 // with the Worker and are reviewed like any other change.
 import type { JSX } from 'hono/jsx/jsx-runtime';
-import { whyIBuiltThis } from './posts/why-i-built-this.tsx';
+import { softwareFactory } from './posts/software-factory.tsx';
 import { SHELL_CSS, REPO_URL, SITE_URL, SiteFooter, SiteHeader } from './site-shell.tsx';
 
 export interface Author {
@@ -18,6 +18,8 @@ export interface Author {
   role: string;
   handle: string;
   url: string;
+  // Optional profile on X; rendered on the author card when set.
+  x?: string;
   // Square source image, at least 96px; rendered at 48px and 64px.
   image: string;
   bio: string;
@@ -44,7 +46,7 @@ export interface Post {
   sections: Section[];
 }
 
-const POSTS: readonly Post[] = [whyIBuiltThis];
+const POSTS: readonly Post[] = [softwareFactory];
 
 const WORDS_PER_MINUTE = 220;
 
@@ -55,7 +57,7 @@ const CSS = `
 		padding: 4rem 0 6rem;
 	}
 	.rail {
-		position: sticky; top: 2rem; padding-top: 12.25rem;
+		position: sticky; top: 2rem;
 		display: flex; flex-direction: column; gap: 0.9rem;
 		font-family: var(--mono); font-size: 0.75rem; line-height: 1.35;
 	}
@@ -63,6 +65,7 @@ const CSS = `
 	.toc { list-style: none; padding: 0 0 0 0.9rem; border-left: 1px solid var(--line); display: flex; flex-direction: column; gap: 0.6rem; }
 	.toc a { color: var(--mute); transition: color 0.15s; }
 	.toc a:hover { color: var(--ink); }
+	.toc a.active { color: var(--accent); }
 	.share { display: flex; flex-direction: column; gap: 0.6rem; }
 	.share a { color: var(--ink-dim); transition: color 0.15s; }
 	.share a:hover { color: var(--accent); }
@@ -150,6 +153,34 @@ const CSS = `
 	}
 `;
 
+// Marks the table-of-contents entry for the section the reader is in: the
+// last h2 whose top has passed the sticky rail's offset. Runs on scroll,
+// throttled to one frame; the first section is active before any scroll.
+const TOC_JS = `
+(function () {
+  var links = Array.prototype.slice.call(document.querySelectorAll('.toc a[href^="#"]'));
+  var heads = links.map(function (a) { return document.getElementById(a.getAttribute('href').slice(1)); });
+  if (!heads.length || heads.some(function (h) { return !h; })) return;
+  var current = -1, queued = false;
+  function update() {
+    queued = false;
+    var line = 120, next = 0;
+    for (var i = 0; i < heads.length; i++) {
+      if (heads[i].getBoundingClientRect().top <= line) next = i;
+    }
+    if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) next = heads.length - 1;
+    if (next === current) return;
+    if (current >= 0) links[current].classList.remove('active');
+    links[next].classList.add('active');
+    current = next;
+  }
+  function onScroll() { if (!queued) { queued = true; requestAnimationFrame(update); } }
+  addEventListener('scroll', onScroll, { passive: true });
+  addEventListener('resize', onScroll);
+  update();
+})();
+`;
+
 function wordCount(html: string): number {
   const text = html
     .replace(/<[^>]*>/g, ' ')
@@ -182,7 +213,11 @@ function structuredData(post: Post, url: string, image: string): string {
       datePublished: post.published,
       dateModified: post.updated ?? post.published,
       keywords: post.tags.join(', '),
-      author: { '@type': 'Person', name: post.author.name, url: post.author.url },
+      author: {
+        '@type': 'Person',
+        name: post.author.name,
+        url: post.author.url,
+      },
       publisher: {
         '@type': 'Organization',
         name: 'Turbodiff',
@@ -195,7 +230,12 @@ function structuredData(post: Post, url: string, image: string): string {
       '@type': 'BreadcrumbList',
       itemListElement: [
         { '@type': 'ListItem', position: 1, name: 'Turbodiff', item: SITE_URL },
-        { '@type': 'ListItem', position: 2, name: 'Blog', item: `${SITE_URL}/blog` },
+        {
+          '@type': 'ListItem',
+          position: 2,
+          name: 'Blog',
+          item: `${SITE_URL}/blog`,
+        },
         { '@type': 'ListItem', position: 3, name: post.title, item: url },
       ],
     },
@@ -332,8 +372,14 @@ function PostPage({ post, bodyHtml }: { post: Post; bodyHtml: string }) {
                     <b>{post.author.name}</b>
                     <p>{post.author.bio}</p>
                     <span class="links">
-                      <a href={post.author.url}>github &rarr;</a>
-                      <a href={REPO_URL}>turbodiff on github &rarr;</a>
+                      <a href={post.author.url} target="_blank" rel="noopener">
+                        github &rarr;
+                      </a>
+                      {post.author.x ? (
+                        <a href={post.author.x} target="_blank" rel="noopener">
+                          x &rarr;
+                        </a>
+                      ) : null}
                     </span>
                   </div>
                 </address>
@@ -343,19 +389,23 @@ function PostPage({ post, bodyHtml }: { post: Post; bodyHtml: string }) {
             <aside class="rail share">
               <span class="rail-label">share</span>
               <div class="share">
-                <a href={`https://x.com/intent/post?text=${shareText}&url=${shareUrl}`}>
+                <a
+                  href={`https://x.com/intent/post?text=${shareText}&url=${shareUrl}`}
+                  target="_blank"
+                  rel="noopener"
+                >
                   post on x &rarr;
                 </a>
-                <a href={`https://news.ycombinator.com/submitlink?u=${shareUrl}&t=${shareText}`}>
-                  hacker news &rarr;
+                <a href={REPO_URL} target="_blank" rel="noopener">
+                  star on github &rarr;
                 </a>
-                <a href={REPO_URL}>star on github &rarr;</a>
               </div>
             </aside>
           </div>
         </main>
 
         <SiteFooter />
+        <script dangerouslySetInnerHTML={{ __html: TOC_JS }} />
       </body>
     </html>
   );
