@@ -236,7 +236,7 @@ export const softwareFactory: Post = {
           <p>
             Today I still see people connecting alerts, Slack messages, tickets, emails, and PRs by
             hand. My bet is that much of this work will be automated in the next few years. Better
-            models alone will not get us there. But with good integrations and verifications,
+            models alone will not get us there. But with good integrations and verification,
             automations get easier and more reliable.
           </p>
           <p>
