@@ -1,4 +1,11 @@
-import { Code2, Compass, LayoutDashboard, List, type LucideIcon } from 'lucide-react';
+import {
+  Code2,
+  Compass,
+  LayoutDashboard,
+  List,
+  MessageSquare,
+  type LucideIcon,
+} from 'lucide-react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { navShortcuts, noOverlayOpen } from '../lib/shortcuts.ts';
 import { useIsDesktop } from '../lib/use-is-desktop.ts';
@@ -28,6 +35,14 @@ const CODE_ROWS: ShortcutRow[] = [
 
 const LIST_ROWS: ShortcutRow[] = [
   { keys: ['↑', '↓', 'Home', 'End'], label: 'Move through pickers and filters' },
+];
+
+const CHAT_ROWS: ShortcutRow[] = [
+  { keys: ['⌘J'], label: 'Show / hide the agent chat' },
+  { keys: ['c'], label: 'Write to the agent' },
+  { keys: ['Enter'], label: 'Send (⇧Enter for a new line)' },
+  { keys: ['↑'], label: 'Recall your last message (empty box)' },
+  { keys: ['Esc'], label: 'Leave the message box' },
 ];
 
 // Each shortcut group is a self-contained card: a labelled header over a
@@ -97,6 +112,7 @@ export function ShortcutHelp({
     { title: 'Navigation', icon: Compass, rows: navRows },
     { title: 'Board', icon: LayoutDashboard, rows: BOARD_ROWS },
     { title: 'Code browser', icon: Code2, rows: CODE_ROWS },
+    { title: 'Cockpit chat', icon: MessageSquare, rows: CHAT_ROWS },
     { title: 'Lists', icon: List, rows: LIST_ROWS },
   ];
   return (

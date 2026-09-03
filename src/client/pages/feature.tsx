@@ -2,7 +2,18 @@ import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from '@tansta
 import { useParams } from '@tanstack/react-router';
 import type { DiffLineAnnotation, SelectedLineRange } from '@pierre/diffs/react';
 import { ChevronDown, ChevronRight, MessageSquare } from 'lucide-react';
-import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  lazy,
+  memo,
+  Suspense,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import type {
   ApiCockpitComment,
@@ -22,9 +33,10 @@ import {
   GENERATION_STOPPED,
   retryQueued,
 } from '../lib/queries.ts';
+import { RAIL_OPEN_KEY, RAIL_WIDTH_KEY, railRestWidth } from '../lib/chat-rail.ts';
+import { RailSlotContext } from '../lib/rail-slot.ts';
 import { cn } from '../lib/utils.ts';
 import { AgentRunLog } from '../components/agent-run-log.tsx';
-import { ChatPanel } from '../components/chat-panel.tsx';
 import { ConfirmButton } from '../components/confirm-button.tsx';
 import type { CockpitCommentMeta } from '../components/cockpit-patch-diff.tsx';
 import { CertStrip, Lamp, Serial, Stamp, type LampTone } from '../components/identity.tsx';
@@ -63,6 +75,28 @@ const CockpitDiffWorkspace = lazy(() =>
     default: module.CockpitDiffWorkspace,
   })),
 );
+// The agent chat rail is its own chunk (the route stays within its
+// performance budget); while it loads, RailPlaceholder holds its width.
+const ChatRail = lazy(() =>
+  import('../components/chat-rail.tsx').then((module) => ({ default: module.ChatRail })),
+);
+
+// Reserve the rail's resting width from the saved preference so the page
+// doesn't reflow when the real rail mounts. Below lg the rail is a sheet
+// and reserves nothing.
+function RailPlaceholder() {
+  const width = railRestWidth(
+    localStorage.getItem(RAIL_OPEN_KEY),
+    localStorage.getItem(RAIL_WIDTH_KEY),
+  );
+  return (
+    <aside
+      aria-hidden
+      style={{ width }}
+      className="sticky top-0 hidden h-dvh shrink-0 border-l border-line bg-surface/50 lg:block"
+    />
+  );
+}
 
 type Selection = {
   file: string;
@@ -646,9 +680,11 @@ export default function FeaturePage() {
     ...featureDiffQuery(id, summary.diff_version),
     enabled: summary.pr !== null,
   });
-  // Read here too (deduped with ChatPanel's own read) so the layout knows
-  // whether to reserve the chat rail — a terminal PR with no history skips it.
+  // Read here too (deduped with ChatRail's own read) so the page knows
+  // whether to mount the chat rail — a terminal PR with no history skips it.
   const chat = useQuery(chatQuery(id));
+  // The shell's right-rail slot; the chat portals into it (see chat-rail.tsx).
+  const railSlot = useContext(RailSlotContext);
   const data = useMemo<ApiFeatureDetail>(
     () => ({
       ...summary,
@@ -950,79 +986,93 @@ export default function FeaturePage() {
           proposed={data.feature.proposed_criteria}
         />
       ) : null}
-      {/* Control row: the go/no-go pipeline and its actions beside the agent
-          chat — two matched-height panels that use the full width. Merge is the
-          primary CTA, a guarded control that reads as armed only when green. */}
-      <div className={cn('grid gap-4', showChat && 'lg:grid-cols-2 lg:items-stretch')}>
-        <Panel className="flex min-w-0 flex-col">
-          <BlockLabel className="mb-3">Pipeline</BlockLabel>
-          <GoNoGoBoard data={data} />
-          {prState === 'open' || pendingCount > 0 || batchRunning ? (
-            <div className="mt-4 flex flex-col gap-2 border-t border-line/60 pt-4 sm:flex-row sm:flex-wrap sm:items-center lg:mt-auto">
-              {prState === 'open' ? (
-                <ConfirmButton
-                  className="guarded relative w-full font-mono text-[11px] font-bold tracking-[0.18em] uppercase sm:w-auto"
-                  title="Merge pull request?"
-                  description={
-                    data.provider === 'artifacts'
-                      ? `This merges CR #${data.cr_number ?? data.feature.pr_number} into ${data.repo} on turbodiff.`
-                      : `This merges PR #${data.feature.pr_number} into ${data.repo} on GitHub.`
-                  }
-                  confirmLabel="Merge"
-                  onConfirm={() => merge.mutate()}
-                  busy={merge.isPending}
-                >
-                  Merge
-                </ConfirmButton>
-              ) : null}
-              {prState === 'open' && data.provider === 'artifacts' ? (
-                <Button
-                  variant="secondary"
-                  className="w-full sm:w-auto"
-                  loading={rereview.isPending}
-                  onClick={() => rereview.mutate()}
-                >
-                  {data.reviews.length > 0 || data.checks.some((ch) => ch.name === 'review')
-                    ? 'Re-run review'
-                    : 'Run review'}
-                </Button>
-              ) : null}
-              {prState === 'open' ? (
-                <ConfirmButton
-                  className="w-full sm:w-auto"
-                  variant="danger"
-                  title="Abandon this pull request?"
-                  description={`This closes PR #${data.feature.pr_number} on ${data.repo} without merging and deletes its branch. This cannot be undone.`}
-                  confirmLabel="Abandon"
-                  onConfirm={() => abandon.mutate()}
-                  busy={abandon.isPending}
-                >
-                  Abandon
-                </ConfirmButton>
-              ) : null}
-              {pendingCount > 0 || batchRunning ? (
-                <Button
-                  variant="secondary"
-                  className="w-full sm:ml-auto sm:w-auto"
-                  onClick={() => submitBatch.mutate()}
-                  disabled={pendingCount === 0 || batchRunning}
-                  loading={submitBatch.isPending}
-                >
-                  {batchRunning
-                    ? 'Fix in progress…'
-                    : `Submit ${pendingCount} comment${pendingCount === 1 ? '' : 's'}`}
-                </Button>
-              ) : null}
-            </div>
-          ) : null}
-        </Panel>
-
-        {showChat ? (
-          <Panel className="flex min-w-0 flex-col lg:max-h-[26rem] lg:min-h-0">
-            <ChatPanel featureId={data.feature.id} canWrite={prState === 'open'} />
-          </Panel>
+      {/* Control row: the go/no-go pipeline and its actions. Merge is the
+          primary CTA, a guarded control that reads as armed only when green.
+          The agent chat lives in the shell's right rail (below), not here. */}
+      <Panel className="flex min-w-0 flex-col">
+        <BlockLabel className="mb-3">Pipeline</BlockLabel>
+        <GoNoGoBoard data={data} />
+        {prState === 'open' || pendingCount > 0 || batchRunning ? (
+          <div className="mt-4 flex flex-col gap-2 border-t border-line/60 pt-4 sm:flex-row sm:flex-wrap sm:items-center lg:mt-auto">
+            {prState === 'open' ? (
+              <ConfirmButton
+                className="guarded relative w-full font-mono text-[11px] font-bold tracking-[0.18em] uppercase sm:w-auto"
+                title="Merge pull request?"
+                description={
+                  data.provider === 'artifacts'
+                    ? `This merges CR #${data.cr_number ?? data.feature.pr_number} into ${data.repo} on turbodiff.`
+                    : `This merges PR #${data.feature.pr_number} into ${data.repo} on GitHub.`
+                }
+                confirmLabel="Merge"
+                onConfirm={() => merge.mutate()}
+                busy={merge.isPending}
+              >
+                Merge
+              </ConfirmButton>
+            ) : null}
+            {prState === 'open' && data.provider === 'artifacts' ? (
+              <Button
+                variant="secondary"
+                className="w-full sm:w-auto"
+                loading={rereview.isPending}
+                onClick={() => rereview.mutate()}
+              >
+                {data.reviews.length > 0 || data.checks.some((ch) => ch.name === 'review')
+                  ? 'Re-run review'
+                  : 'Run review'}
+              </Button>
+            ) : null}
+            {prState === 'open' ? (
+              <ConfirmButton
+                className="w-full sm:w-auto"
+                variant="danger"
+                title="Abandon this pull request?"
+                description={`This closes PR #${data.feature.pr_number} on ${data.repo} without merging and deletes its branch. This cannot be undone.`}
+                confirmLabel="Abandon"
+                onConfirm={() => abandon.mutate()}
+                busy={abandon.isPending}
+              >
+                Abandon
+              </ConfirmButton>
+            ) : null}
+            {pendingCount > 0 || batchRunning ? (
+              <Button
+                variant="secondary"
+                className="w-full sm:ml-auto sm:w-auto"
+                onClick={() => submitBatch.mutate()}
+                disabled={pendingCount === 0 || batchRunning}
+                loading={submitBatch.isPending}
+              >
+                {batchRunning
+                  ? 'Fix in progress…'
+                  : `Submit ${pendingCount} comment${pendingCount === 1 ? '' : 's'}`}
+              </Button>
+            ) : null}
+          </div>
         ) : null}
-      </div>
+      </Panel>
+
+      {/* Full-height agent chat beside the page — it rides in the shell's
+          rail slot so it scrolls independently of the diff. */}
+      {showChat && railSlot
+        ? createPortal(
+            <Suspense fallback={<RailPlaceholder />}>
+              <ChatRail
+                featureId={data.feature.id}
+                canWrite={prState === 'open'}
+                prState={prState}
+                prNumber={data.feature.pr_number}
+                repo={data.repo}
+                provider={data.provider}
+                activeFile={activeFile}
+                checksFailing={data.checks.some(
+                  (check) => check.status === 'failed' || check.status === 'error',
+                )}
+              />
+            </Suspense>,
+            railSlot,
+          )
+        : null}
 
       {/* The paper the work earns: sealed once the PR merges. */}
       {data.certificate_url ? (

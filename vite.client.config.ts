@@ -5,7 +5,9 @@ import { defineConfig, type Plugin } from 'vite-plus';
 
 const PERFORMANCE_BUDGETS = {
   entry: 275_000,
-  css: 64_000,
+  // Raised from 64_000 for the cockpit chat rail (chat-rail.tsx): a whole
+  // new surface's utilities, ~2 KB raw.
+  css: 70_000,
   featureRoute: 40_000,
   cockpitDiff: 525_000,
   codeRoute: 30_000,
