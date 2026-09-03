@@ -200,6 +200,13 @@ function TargetPicker({
   );
 }
 
+// Quick-add mutations carry this key so TodoCard can ask React Query "is an
+// add in flight right now?" (queryClient.isMutating). v5 keeps a mutation
+// pending until its callbacks — including onSettled's awaited invalidate and
+// refetch — complete, so the pending window spans exactly the renders where
+// the new card's identity can change (optimistic temp id → server id).
+const TODO_ADD_MUTATION = ['todo-add'];
+
 function QuickAdd({
   board,
   activeRepoId,
@@ -254,6 +261,7 @@ function QuickAdd({
         title: vars.title,
         repository_ids: vars.repoIds,
       }),
+    mutationKey: TODO_ADD_MUTATION,
     // The card appears (and the input clears, in submit) the moment Enter is
     // pressed — with its target repos already attached so it matches the
     // filter; the refetch below swaps in the server row.
@@ -277,9 +285,11 @@ function QuickAdd({
       }));
       return { ...optimistic, tempId };
     },
-    // Rewrite the temp id to the server id in place, so the card's key is
-    // already stable when the onSettled refetch lands (a key change would
-    // remount TodoCard and replay its mount animation).
+    // The server id replaces the temp id so card actions (delete, start, repo
+    // edits) hit the real row before the refetch lands. NOTE: this remounts
+    // the card — the key IS the id — which is what used to replay the mount
+    // animation as a visible flash; TodoCard now skips the animation while
+    // this mutation is pending.
     onSuccess: (res, _vars, ctx) => {
       queryClient.setQueryData<ApiBoard>(['board'], (prev) =>
         prev
@@ -674,6 +684,14 @@ function RepoChips({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
 function TodoCard({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
   const queryClient = useQueryClient();
   const [starting, setStarting] = useState(false);
+  // Decided once at mount, for the card's lifetime: a server-id row mounting
+  // while a quick-add is in flight is that add's own row materializing (the
+  // temp-id → server-id swap remounts the card), and its optimistic twin
+  // already rose — replaying the animation is the "new card flashes" bug.
+  // Optimistic rows (negative id) always rise.
+  const [animate] = useState(
+    () => todo.id < 0 || queryClient.isMutating({ mutationKey: TODO_ADD_MUTATION }) === 0,
+  );
   const remove = useMutation({
     mutationFn: () => api.delete(`/api/todos/${todo.id}`),
     // The card leaves the board on confirm, not after the round-trip.
@@ -690,7 +708,7 @@ function TodoCard({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
   });
   return (
     <Card
-      className="animate-rise p-3"
+      className={cn('p-3', animate && 'animate-rise')}
       // Tab-reachable so the card keys (Enter/s/d) work without j/k.
       tabIndex={0}
       data-board-card

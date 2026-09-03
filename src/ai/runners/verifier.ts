@@ -70,6 +70,16 @@ const AGENT_TIMEOUT_MS = 20 * 60_000;
 // below halts for their decision instead.
 const HUMAN_FIX_TRIGGERS = new Set(['cockpit_comment', 'chat']);
 
+// The premortem is an independent adversarial pass gating the would-pass
+// outcome. Independence is the point: the acceptance criteria descend from
+// the implementation plan, so grading them can only confirm the plan's own
+// causal theory, never test it. A fresh agent process that has seen neither
+// the diff, the author's reasoning, nor the criteria must form its own theory
+// of the reported behavior and try to make it survive the branch.
+const PREMORTEM_TIMEOUT_MS = 10 * 60_000;
+const PREMORTEM_CRITERION =
+  'Premortem: an independent adversarial pass found no mechanism by which the reported behavior survives this change';
+
 function verifyPrompt(feature: FeatureRow, repo: RepositoryRow, criteria: string[]): string {
   const OUT_DIR = outDir(feature.id);
   const SHOTS_DIR = shotsDir(feature.id);
@@ -154,7 +164,35 @@ Check every acceptance criterion below against reality — the actual tree and
 (where possible) the actually running app. Do not infer from the diff what you
 can observe directly.
 
+## Original request
+The acceptance criteria were derived from this request, but the request itself
+is the ground truth. If every criterion passes yet the behavior it describes is
+observably still wrong, the criteria missed the point: mark the closest
+criterion "fail" and cite what you observed.
+
+### ${feature.title}
+
+${feature.spec}
+
 ${runtime}
+
+## Defects need differential evidence
+When the request reports a defect (a bug, glitch, or wrong behavior), a
+screenshot of the happy path is not evidence of a fix. Work out the
+user-visible steps that exhibited the defect, perform those exact steps
+against the running app, and observe that the defect is absent. If the defect
+is timing-dependent (a race with a background refresh, a socket push, a slow
+response), do not rely on getting lucky: widen the window deliberately — e.g.
+delay the relevant network response with puppeteer request interception — so
+the check is deterministic.
+
+## Transient visual behavior
+Screenshots cannot verify animations, flashes, flicker, or anything lasting a
+frame. Instrument the page instead: an \`animationstart\` listener counting how
+often a given animation fires, or a MutationObserver watching whether an
+element is removed and re-added, then assert on the counts. If a criterion
+describes transient behavior you genuinely cannot observe here, verdict
+"skip" with the reason — never "pass" by inference from the code.
 
 ## Output (write these files, creating ${OUT_DIR} first)
 1. ${OUT_DIR}/results.json — a JSON array, one entry per criterion, in order:
@@ -169,6 +207,78 @@ ${UNTRUSTED_CONTENT_RULES}
 ## Acceptance criteria
 ${criteria.map((c, i) => `${i}. ${c}`).join('\n')}
 `;
+}
+
+function premortemPrompt(feature: FeatureRow, repo: RepositoryRow): string {
+  const OUT_DIR = outDir(feature.id);
+  return `You are an adversarial pre-mortem agent for ${repo.owner}/${repo.name}. You are in a checkout of a pull-request branch that claims to resolve the work item below. You have deliberately NOT been shown the diff, the author's reasoning, or the acceptance criteria: form your own theory. You may read anything and run the app, but do NOT modify tracked files, commit, or push.
+
+Assume this message arrives tomorrow: "it's STILL happening." Your job is to
+find the mechanism that survives — the code path, race, timing window,
+environment difference, or overlooked writer of shared state that would
+reproduce the reported behavior even with this branch merged.
+
+## Work item
+### ${feature.title}
+
+${feature.spec}
+
+## Method
+1. From the description alone, list the distinct mechanisms that could produce
+   the behavior. Find at least two candidates — the first plausible mechanism
+   is where the original author most likely stopped looking.
+2. Where shared state is involved (a client cache, a store, a database row, an
+   event stream), enumerate EVERY code path that writes or invalidates it —
+   grep for them; do not stop at the ones near the obvious fix — and consider
+   each firing at the worst possible moment.
+3. Check each mechanism against the actual code on this branch and conclude:
+   fixed here, still possible, or undecidable in this sandbox. Cite file paths.
+
+## Output (write this file, creating ${OUT_DIR} first if needed)
+${OUT_DIR}/premortem.json:
+{"surviving_mechanism": "<one paragraph: the concrete mechanism and the files involved — or null if none survives>", "ruled_out": ["<mechanism>: <why it cannot survive this branch>", ...]}
+
+A null surviving_mechanism next to an empty ruled_out list is a failed
+premortem — show your search either way.
+
+${UNTRUSTED_CONTENT_RULES}
+`;
+}
+
+type PremortemOutcome = { mechanism: string | null; ruledOut: string[] };
+
+async function runPremortem(
+  sandbox: Sandbox,
+  auth: RunnerAuth,
+  feature: FeatureRow,
+  repo: RepositoryRow,
+  workDir: string,
+  scrub: (s: string) => string,
+): Promise<PremortemOutcome> {
+  const OUT = outDir(feature.id);
+  await sandbox.writeFile(`${OUT}/premortem-task.md`, premortemPrompt(feature, repo));
+  const run = await sandbox.exec(
+    `claude -p --dangerously-skip-permissions --output-format json < ${OUT}/premortem-task.md`,
+    { cwd: workDir, timeout: PREMORTEM_TIMEOUT_MS, env: runnerEnvironment(auth, NPM_CACHE_ENV) },
+  );
+  const text = claudeCliResultText(run.stdout);
+  // Rides the 'verify' run kind — the premortem is part of this verification,
+  // and agent_runs_kind_check is a closed list.
+  await persistAgentLog(
+    'verify',
+    scrub(`[premortem]\n${text}\n${run.stderr}`.trim()),
+    run.success,
+    {
+      featureId: feature.id,
+    },
+  );
+  if (!run.success) throw new Error(`premortem agent exited ${run.exitCode}`);
+  const parsed = parseJson((await sandbox.readFile(`${OUT}/premortem.json`)).content);
+  if (!isJsonObject(parsed)) throw new Error('premortem.json is not an object');
+  const mechanism = isString(parsed.surviving_mechanism) ? parsed.surviving_mechanism.trim() : '';
+  const ruledOut = isJsonArray(parsed.ruled_out) ? parsed.ruled_out.filter(isString) : [];
+  if (!mechanism && ruledOut.length === 0) throw new Error('premortem recorded no search');
+  return { mechanism: mechanism || null, ruledOut };
 }
 
 export async function runVerification(featureId: number): Promise<void> {
@@ -267,8 +377,35 @@ async function verify(
       );
     }
 
-    const results = await readResults(sandbox, OUT, criteria.length);
+    let results = await readResults(sandbox, OUT, criteria.length);
     const summary = await readText(sandbox, `${OUT}/summary.md`);
+
+    // Premortem gates only the would-pass outcome — a failing verification is
+    // already headed to the fix loop, so the extra run would add cost without
+    // changing the route. Its verdict joins the criteria/results pair, which
+    // carries it through the report, the CR check, auto-merge gating, and the
+    // fix loop (a surviving mechanism becomes the finding the fixer receives)
+    // without further plumbing. Best-effort: an errored premortem is logged
+    // and verification stands on the criteria alone.
+    if (results.every((r) => r.verdict !== 'fail')) {
+      try {
+        const premortem = await runPremortem(sandbox, auth, feature, repo, WORK, scrub);
+        criteria = [...criteria, PREMORTEM_CRITERION];
+        results = [
+          ...results,
+          {
+            index: criteria.length - 1,
+            verdict: premortem.mechanism ? 'fail' : 'pass',
+            note: premortem.mechanism
+              ? `Surviving mechanism: ${premortem.mechanism}`.slice(0, 2_000)
+              : `Ruled out — ${premortem.ruledOut.join('; ')}`.slice(0, 2_000),
+          },
+        ];
+      } catch (err) {
+        console.warn('turbodiff: premortem pass errored (verification stands on criteria):', err);
+      }
+    }
+
     const shots = await uploadScreenshots(sandbox, feature.id, results);
     const demo = repo.demo_videos ? await uploadDemo(sandbox, feature.id) : undefined;
 
