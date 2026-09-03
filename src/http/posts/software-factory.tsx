@@ -45,7 +45,7 @@ export const softwareFactory: Post = {
   slug: 'software-factory',
   category: 'why I built this',
   title: 'Every software company will (eventually) run a software factory',
-  dek: 'No, software factories will not replace coding agents or deployment pipelines. I imagine a future where they co-exist; connected in a loop that turns signals into verified changes. That is what I am building towards with Turbodiff.',
+  dek: "No, software factories will not replace coding agents or deployment pipelines. I imagine a future where they co-exist; connected in a loop that turns signals into verified changes. That's what I'm building towards with Turbodiff.",
   published: '2026-09-02',
   author: {
     name: 'Nico Botha',
@@ -74,7 +74,7 @@ export const softwareFactory: Post = {
             To me, that is already a loop with clear inputs and outputs. The problem is that people
             are responsible for moving information between these tools: an alert becomes a Slack
             message, then a ticket, then a branch, then a PR. And while there is some value in
-            having human judgement in the process, I do not think copying context from one tool to
+            having human judgement in the process, I don't think copying context from one tool to
             the next is a good use of anyone's time.
           </p>
           <p>
@@ -124,7 +124,8 @@ export const softwareFactory: Post = {
         <>
           <p>
             Error rates are a natural starting point because the manual loop is easy to see there.
-            But the same approach will work for other things I can measure and change in code:
+            But the same approach will work for other things that can be measured and changed in
+            code:
           </p>
           <ul>
             <li>
