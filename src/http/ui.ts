@@ -4,6 +4,7 @@ import { deleteCookie } from 'hono/cookie';
 import { withAuth } from '../integrations/auth/better-auth.ts';
 import { isJsonArray, isJsonObject, isString, parseJson } from '../shared/json.ts';
 import { renderAuthPage } from './auth-page.tsx';
+import { findPost, renderPost } from './blog.tsx';
 import { renderLanding } from './landing.tsx';
 
 // Signed-in HTTP UI: a TanStack Router SPA (src/client, built into public/app by
@@ -306,6 +307,13 @@ export function createUiRoutes() {
   app.get('/', async (c) => {
     if (!(await hasSession(c))) return c.html(renderLanding());
     return c.html(await shellForPath(c, '/'));
+  });
+
+  // Public long-form pages (src/http/blog.tsx). Posts are code, so an unknown
+  // slug is a plain 404 rather than a lookup.
+  app.get('/blog/:slug', (c) => {
+    const post = findPost(c.req.param('slug'));
+    return post ? c.html(renderPost(post)) : c.notFound();
   });
 
   // Every SPA route the client router owns. Unauthenticated hits start OAuth,

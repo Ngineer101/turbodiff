@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "turbodiff",
-  "compatibility_date": "2026-08-18",
+  "compatibility_date": "2026-08-08",
   "assets": {
     "binding": "ASSETS",
   },
@@ -77,6 +77,7 @@
     // this deployment's app server key to every fork's users, whose pushes
     // would then be signed by a mismatched private key and rejected.
   },
+  "dev": { "enable_containers": false },
   // Fixer/codegen sandbox (docs/software-factory-design.md): each fix run
   // executes Claude Code inside an isolated container. Local dev needs Docker.
   "containers": [
