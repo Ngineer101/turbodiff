@@ -271,3 +271,14 @@ export async function capabilityDenied(
   if (orgRoles[role].authorize(request).success) return null;
   return `'${action}' capability required for this organization`;
 }
+
+// The organization an invitation belongs to, as the accept-invite page
+// reports it: its display name and the GitHub installation behind it (where
+// the recipient is sent next). Null for an unknown organization id.
+export async function organizationSummary(
+  organizationId: string,
+): Promise<{ name: string; installationId: number } | null> {
+  return queryOne<{ name: string; installationId: number }>(sql`
+    SELECT name, "installationId" FROM auth."organization" WHERE id = ${organizationId}
+  `);
+}

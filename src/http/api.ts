@@ -130,7 +130,7 @@ import {
 import { APIError } from 'better-auth';
 import { withAuth } from '../integrations/auth/better-auth.ts';
 import { certificateUrl } from '../services/certificates.ts';
-import { memberRole } from '../services/access-control.ts';
+import { memberRole, organizationSummary } from '../services/access-control.ts';
 import {
   CR_BOT_AUTHOR,
   getCrDiffPatch,
@@ -201,6 +201,8 @@ import type {
   ApiFeatureDiff,
   ApiIntegrations,
   ApiInvitation,
+  ApiInvitationAccepted,
+  ApiInvitationPreview,
   ApiMe,
   ApiMember,
   ApiModels,
@@ -2953,6 +2955,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   // src/services/access-control.ts for why the 'member'/'invitation' resources keep
   // better-auth's own action vocabulary instead of app-specific verbs.
 
+  // better-auth stores roles as free text; the API vocabulary is closed.
+  function apiRole(role: string): ApiRole {
+    return role === 'owner' || role === 'admin' ? role : 'member';
+  }
+
   function orgApiErrorResponse<T>(c: Context<ApiEnv>, err: T): Response {
     if (!(err instanceof APIError)) throw err;
     const body = err.body;
@@ -2982,8 +2989,6 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       listPendingInvitations(resolved.orgId),
       memberRole(resolved.orgId, c.get('user').session.userId),
     ]);
-    const asRole = (role: string): ApiRole =>
-      role === 'owner' || role === 'admin' ? role : 'member';
     return c.json<ApiOrgMembers>({
       org_id: resolved.orgId,
       members: members.map(
@@ -2991,7 +2996,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
           id: m.id,
           login: m.login,
           email: m.email,
-          role: asRole(m.role),
+          role: apiRole(m.role),
           joined_at: m.created_at,
         }),
       ),
@@ -2999,7 +3004,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         (i): ApiInvitation => ({
           id: i.id,
           email: i.email,
-          role: asRole(i.role),
+          role: apiRole(i.role),
           status: i.status,
           expires_at: i.expires_at,
         }),
@@ -3037,6 +3042,52 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         role: invitation.role as ApiRole,
         status: invitation.status,
         expires_at: invitation.expiresAt ? new Date(invitation.expiresAt).toISOString() : null,
+      });
+    } catch (err) {
+      return orgApiErrorResponse(c, err);
+    }
+  });
+
+  // Invitation-email landing (/accept-invite): the recipient reads the
+  // invitation they were sent, then accepts it. Both run better-auth's own
+  // endpoints on the caller's real session, so its recipient check
+  // (invitation email = session email), expiry, and membership limit apply
+  // unchanged — no installation gate here, because the recipient has no
+  // installation access yet; the email match is the whole authorization.
+  app.get('/invitations/:id', async (c) => {
+    try {
+      const invitation = await withAuth((instance) =>
+        instance.api.getInvitation({
+          headers: c.req.raw.headers,
+          query: { id: c.req.param('id') },
+        }),
+      );
+      const org = await organizationSummary(invitation.organizationId);
+      return c.json<ApiInvitationPreview>({
+        id: invitation.id,
+        email: invitation.email,
+        role: apiRole(invitation.role),
+        org_name: org?.name ?? invitation.organizationName,
+        installation_id: org?.installationId ?? null,
+        expires_at: invitation.expiresAt ? new Date(invitation.expiresAt).toISOString() : null,
+      });
+    } catch (err) {
+      return orgApiErrorResponse(c, err);
+    }
+  });
+
+  app.post('/invitations/:id/accept', async (c) => {
+    try {
+      const accepted = await withAuth((instance) =>
+        instance.api.acceptInvitation({
+          headers: c.req.raw.headers,
+          body: { invitationId: c.req.param('id') },
+        }),
+      );
+      const org = await organizationSummary(accepted.invitation.organizationId);
+      return c.json<ApiInvitationAccepted>({
+        org_name: org?.name ?? '',
+        installation_id: org?.installationId ?? null,
       });
     } catch (err) {
       return orgApiErrorResponse(c, err);
