@@ -66,6 +66,7 @@
      hair below full size — soft on the eyes vs. a hard pop. */
   --animate-overlay-in: overlay-in 0.2s ease-out;
   --animate-dialog-in: dialog-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-sheet-in: sheet-in 0.28s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @layer base {
@@ -552,4 +553,14 @@
 
 .markdown-body .hljs-strong {
   font-weight: 700;
+}
+
+/* Bottom sheet (SheetContent): slides up from the viewport floor. */
+@keyframes sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
 }

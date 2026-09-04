@@ -19,6 +19,7 @@ import { lazy, Suspense, useState, type ReactNode } from 'react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import type { ApiMe } from '../../shared/api-types.ts';
 import { codeRoute } from '../lib/layout.ts';
+import { RailSlotContext } from '../lib/rail-slot.ts';
 import { navShortcuts, noOverlayOpen } from '../lib/shortcuts.ts';
 import { useIsDesktop } from '../lib/use-is-desktop.ts';
 import { useLiveRefresh } from '../lib/use-live-refresh.ts';
@@ -128,17 +129,12 @@ function GithubRecoveryBanner({ me }: { me: ApiMe }) {
   );
 }
 
-// The tilted TD sticker beside a bold wordmark — the same mark the landing
-// page and the manifest icon use, so the app reads as one thing.
+// The logo mark beside a bold wordmark — the same image the login page,
+// splash, and manifest icon use, so the app reads as one thing.
 function Logo() {
   return (
     <Link to="/" className="flex items-center gap-2.5 text-base font-bold tracking-tight text-ink">
-      <span
-        aria-hidden
-        className="flex size-7 -rotate-6 items-center justify-center rounded-md bg-accent text-[11px] font-bold tracking-tight text-accent-ink shadow-edge-xs"
-      >
-        TD
-      </span>
+      <img src="/logo-small.png" alt="" width={28} height={28} className="size-7 rounded-md" />
       turbodiff
     </Link>
   );
@@ -365,119 +361,131 @@ export function AppShell({ me, children }: { me: ApiMe; children: ReactNode }) {
   const wide = pathname.startsWith('/factory/features/') || pathname.startsWith('/tasks/');
   // The board's three lanes need more room than the reading-width default.
   const board = pathname === '/';
+  // Right-rail slot: a page that wants a full-height rail beside main (the
+  // cockpit's agent chat) portals into this element, so the shell keeps
+  // owning the sidebar · main · rail row.
+  const [railSlot, setRailSlot] = useState<HTMLElement | null>(null);
   return (
-    <div className="min-h-dvh md:flex">
-      <aside
-        data-state={sidebarOpen ? 'expanded' : 'collapsed'}
-        className={cn(
-          'sticky top-0 hidden h-dvh shrink-0 flex-col justify-between border-r border-line bg-surface/50 transition-[width] duration-200 md:flex',
-          sidebarOpen ? 'w-52 p-4' : 'w-12 items-center p-2',
-        )}
-      >
-        <div className="space-y-6">
-          <div
-            className={cn('flex items-center', sidebarOpen ? 'justify-between' : 'justify-center')}
-          >
-            {sidebarOpen ? <Logo /> : null}
-            <button
-              type="button"
-              onClick={toggleSidebar}
-              title={sidebarOpen ? 'Collapse sidebar (⌘B)' : 'Expand sidebar (⌘B)'}
-              aria-label={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
-              aria-expanded={sidebarOpen}
-              className="cursor-pointer rounded-md p-1 text-mute transition-colors hover:bg-raised/60 hover:text-ink"
-            >
-              {sidebarOpen ? (
-                <PanelLeftClose className="size-3.5" aria-hidden />
-              ) : (
-                <PanelLeftOpen className="size-3.5" aria-hidden />
-              )}
-            </button>
-          </div>
-          <div className="space-y-3">
-            <button
-              type="button"
-              onClick={() => setPaletteOpen(true)}
-              title={sidebarOpen ? undefined : 'Jump to… (⌘K)'}
-              aria-label={sidebarOpen ? undefined : 'Jump to…'}
-              className={cn(
-                'flex cursor-pointer items-center rounded-md font-mono text-[11px] text-mute transition-colors',
-                sidebarOpen
-                  ? 'w-full gap-2 border border-line-2/70 bg-bg/60 px-2.5 py-1.5 hover:border-line-2 hover:text-ink'
-                  : 'p-1.5 hover:bg-raised/60 hover:text-ink',
-              )}
-            >
-              <Search className="size-3" aria-hidden />
-              <span className={cn(!sidebarOpen && 'hidden')}>Jump to&hellip;</span>
-              <Kbd className={cn('ml-auto', !sidebarOpen && 'hidden')}>⌘K</Kbd>
-            </button>
-            <SidebarNav collapsed={!sidebarOpen} />
-          </div>
-        </div>
-        <div className={cn('space-y-0.5', !sidebarOpen && 'flex flex-col items-center')}>
-          <button
-            type="button"
-            onClick={() => setHelpOpen(true)}
-            title={sidebarOpen ? undefined : 'Shortcuts (?)'}
-            aria-label={sidebarOpen ? undefined : 'Shortcuts'}
-            className={cn(
-              'flex cursor-pointer items-center rounded-md font-mono text-[11px] text-mute transition-colors hover:bg-raised/60 hover:text-ink',
-              sidebarOpen ? 'w-full gap-2 px-2 py-1' : 'p-1.5',
-            )}
-          >
-            <Keyboard className="size-3.5 shrink-0" aria-hidden />
-            <span className={cn(!sidebarOpen && 'hidden')}>Shortcuts</span>
-            <Kbd className={cn('ml-auto', !sidebarOpen && 'hidden')}>?</Kbd>
-          </button>
-          <AccountMenu me={me} collapsed={!sidebarOpen} fullWidth />
-        </div>
-      </aside>
-
-      <div className="sticky top-0 z-40 flex items-center justify-between border-b border-line/60 bg-bg/95 px-4 py-2.5 backdrop-blur md:hidden">
-        <Logo />
-        <AccountMenu me={me} side="bottom" />
-      </div>
-
-      <main className="min-w-0 flex-1">
-        {/* Width snaps in the same frame the new page commits (pathname above
-            is the resolved location) — animating it would visibly reflow the
-            outgoing page. */}
-        <div
+    <RailSlotContext value={railSlot}>
+      <div className="min-h-dvh md:flex">
+        <aside
+          data-state={sidebarOpen ? 'expanded' : 'collapsed'}
           className={cn(
-            'mx-auto px-4 py-5 pb-28 sm:py-8 md:px-8 md:pb-8',
-            code
-              ? // Code browser: no width cap; at lg the container pins to the
-                // viewport height and stops scrolling — the page's tree/editor
-                // panes scroll internally instead.
-                'max-w-none lg:flex lg:h-dvh lg:min-h-0 lg:flex-col lg:overflow-hidden lg:px-6 lg:pt-4 lg:pb-4'
-              : wide
-                ? 'max-w-[96rem]'
-                : board
-                  ? 'max-w-7xl'
-                  : 'max-w-4xl',
+            'sticky top-0 hidden h-dvh shrink-0 flex-col justify-between border-r border-line bg-surface/50 transition-[width] duration-200 md:flex',
+            sidebarOpen ? 'w-52 p-4' : 'w-12 items-center p-2',
           )}
         >
-          <GithubRecoveryBanner me={me} />
-          {children}
-        </div>
-      </main>
+          <div className="space-y-6">
+            <div
+              className={cn(
+                'flex items-center',
+                sidebarOpen ? 'justify-between' : 'justify-center',
+              )}
+            >
+              {sidebarOpen ? <Logo /> : null}
+              <button
+                type="button"
+                onClick={toggleSidebar}
+                title={sidebarOpen ? 'Collapse sidebar (⌘B)' : 'Expand sidebar (⌘B)'}
+                aria-label={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+                aria-expanded={sidebarOpen}
+                className="cursor-pointer rounded-md p-1 text-mute transition-colors hover:bg-raised/60 hover:text-ink"
+              >
+                {sidebarOpen ? (
+                  <PanelLeftClose className="size-3.5" aria-hidden />
+                ) : (
+                  <PanelLeftOpen className="size-3.5" aria-hidden />
+                )}
+              </button>
+            </div>
+            <div className="space-y-3">
+              <button
+                type="button"
+                onClick={() => setPaletteOpen(true)}
+                title={sidebarOpen ? undefined : 'Jump to… (⌘K)'}
+                aria-label={sidebarOpen ? undefined : 'Jump to…'}
+                className={cn(
+                  'flex cursor-pointer items-center rounded-md font-mono text-[11px] text-mute transition-colors',
+                  sidebarOpen
+                    ? 'w-full gap-2 border border-line-2/70 bg-bg/60 px-2.5 py-1.5 hover:border-line-2 hover:text-ink'
+                    : 'p-1.5 hover:bg-raised/60 hover:text-ink',
+                )}
+              >
+                <Search className="size-3" aria-hidden />
+                <span className={cn(!sidebarOpen && 'hidden')}>Jump to&hellip;</span>
+                <Kbd className={cn('ml-auto', !sidebarOpen && 'hidden')}>⌘K</Kbd>
+              </button>
+              <SidebarNav collapsed={!sidebarOpen} />
+            </div>
+          </div>
+          <div className={cn('space-y-0.5', !sidebarOpen && 'flex flex-col items-center')}>
+            <button
+              type="button"
+              onClick={() => setHelpOpen(true)}
+              title={sidebarOpen ? undefined : 'Shortcuts (?)'}
+              aria-label={sidebarOpen ? undefined : 'Shortcuts'}
+              className={cn(
+                'flex cursor-pointer items-center rounded-md font-mono text-[11px] text-mute transition-colors hover:bg-raised/60 hover:text-ink',
+                sidebarOpen ? 'w-full gap-2 px-2 py-1' : 'p-1.5',
+              )}
+            >
+              <Keyboard className="size-3.5 shrink-0" aria-hidden />
+              <span className={cn(!sidebarOpen && 'hidden')}>Shortcuts</span>
+              <Kbd className={cn('ml-auto', !sidebarOpen && 'hidden')}>?</Kbd>
+            </button>
+            <AccountMenu me={me} collapsed={!sidebarOpen} fullWidth />
+          </div>
+        </aside>
 
-      <BottomTabs />
-      {helpOpen ? (
-        <Suspense fallback={null}>
-          <ShortcutHelp
-            nav={SIDEBAR_NAV}
-            open={helpOpen}
-            onOpenChange={setHelpOpen}
-            onToggle={() => setHelpOpen((prev) => !prev)}
-          />
-        </Suspense>
-      ) : null}
-      {paletteOpen ? (
-        <Suspense fallback={null}>
-          <CommandPalette nav={SIDEBAR_NAV} open={paletteOpen} onOpenChange={setPaletteOpen} />
-        </Suspense>
-      ) : null}
-    </div>
+        <div className="sticky top-0 z-40 flex items-center justify-between border-b border-line/60 bg-bg/95 px-4 py-2.5 backdrop-blur md:hidden">
+          <Logo />
+          <AccountMenu me={me} side="bottom" />
+        </div>
+
+        <main className="min-w-0 flex-1">
+          {/* Width snaps in the same frame the new page commits (pathname above
+            is the resolved location) — animating it would visibly reflow the
+            outgoing page. */}
+          <div
+            className={cn(
+              'mx-auto px-4 py-5 pb-28 sm:py-8 md:px-8 md:pb-8',
+              code
+                ? // Code browser: no width cap; at lg the container pins to the
+                  // viewport height and stops scrolling — the page's tree/editor
+                  // panes scroll internally instead.
+                  'max-w-none lg:flex lg:h-dvh lg:min-h-0 lg:flex-col lg:overflow-hidden lg:px-6 lg:pt-4 lg:pb-4'
+                : wide
+                  ? 'max-w-[96rem]'
+                  : board
+                    ? 'max-w-7xl'
+                    : 'max-w-4xl',
+            )}
+          >
+            <GithubRecoveryBanner me={me} />
+            {children}
+          </div>
+        </main>
+        {/* `contents` so whatever a page portals here becomes a flex child of
+          the row itself, sized and stuck like the left sidebar. */}
+        <div ref={setRailSlot} className="contents" />
+
+        <BottomTabs />
+        {helpOpen ? (
+          <Suspense fallback={null}>
+            <ShortcutHelp
+              nav={SIDEBAR_NAV}
+              open={helpOpen}
+              onOpenChange={setHelpOpen}
+              onToggle={() => setHelpOpen((prev) => !prev)}
+            />
+          </Suspense>
+        ) : null}
+        {paletteOpen ? (
+          <Suspense fallback={null}>
+            <CommandPalette nav={SIDEBAR_NAV} open={paletteOpen} onOpenChange={setPaletteOpen} />
+          </Suspense>
+        ) : null}
+      </div>
+    </RailSlotContext>
   );
 }

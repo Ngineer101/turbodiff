@@ -1,5 +1,6 @@
 import { QueryClient, queryOptions } from '@tanstack/react-query';
 import { api } from './api.ts';
+import { CHAT_TURN_PENDING } from './chat-rail.ts';
 import type {
   ApiAgentDetail,
   ApiAgentsList,
@@ -148,10 +149,7 @@ export const featureDiffQuery = (id: number, version: string | null) =>
     gcTime: 30 * 60_000,
   });
 
-// A user chat message in one of these states has a turn in flight — the
-// panel polls and the input stays disabled until the reply lands.
-export const CHAT_TURN_PENDING = new Set(['queued', 'running']);
-
+// While a user turn is in flight the rail polls until the reply lands.
 export const chatQuery = (featureId: number) =>
   queryOptions({
     queryKey: ['chat', featureId],

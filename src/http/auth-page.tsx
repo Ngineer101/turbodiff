@@ -32,14 +32,7 @@ const CSS = `
 	}
 	header { display: flex; justify-content: center; }
 	.brand { display: flex; align-items: center; gap: 0.75rem; text-decoration: none; }
-	.mark {
-		display: inline-flex; align-items: center; justify-content: center;
-		width: 30px; height: 30px; border-radius: 6px;
-		background: var(--accent); color: var(--accent-ink);
-		font-weight: 700; font-size: 12px; letter-spacing: -0.02em;
-		box-shadow: 2px 2px 0 var(--ink);
-		transform: rotate(-6deg);
-	}
+	.mark { display: block; width: 30px; height: 30px; border-radius: 6px; }
 	.wordmark { font-weight: 700; font-size: 1.2rem; letter-spacing: -0.02em; color: var(--ink); }
 	main { flex: 1; display: flex; align-items: center; justify-content: center; }
 	.panel {
@@ -198,9 +191,7 @@ function AuthPage({ next, notice }: { next?: string; notice?: string }) {
       <body>
         <header>
           <a class="brand" href="/">
-            <span class="mark" aria-hidden="true">
-              TD
-            </span>
+            <img class="mark" src="/logo-small.png" alt="" width="30" height="30" />
             <span class="wordmark">turbodiff</span>
           </a>
         </header>
