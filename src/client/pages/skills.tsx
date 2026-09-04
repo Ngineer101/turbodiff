@@ -1,6 +1,6 @@
 import { useSuspenseQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { Plus } from 'lucide-react';
+import { Plus, Search } from 'lucide-react';
 import { skillsQuery } from '../lib/queries.ts';
 import { EntityCard, EntityGrid, EntityListHeader } from '../components/entity-list.tsx';
 import { EmptyState } from '../components/section.tsx';
@@ -27,18 +27,26 @@ export function SkillsPage() {
           </>
         }
         action={
-          <Link
-            to="/skills/new"
-            className={buttonVariants({ variant: 'default', size: 'default' })}
-          >
-            <Plus className="size-4" aria-hidden /> New skill
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            <Link
+              to="/skills/browse"
+              className={buttonVariants({ variant: 'secondary', size: 'default' })}
+            >
+              <Search className="size-4" aria-hidden /> Browse skills.sh
+            </Link>
+            <Link
+              to="/skills/new"
+              className={buttonVariants({ variant: 'default', size: 'default' })}
+            >
+              <Plus className="size-4" aria-hidden /> New skill
+            </Link>
+          </div>
         }
       />
 
       {data.skills.length === 0 ? (
         <div className="mt-6">
-          <EmptyState>No skills yet — create one to get started.</EmptyState>
+          <EmptyState>No skills yet — create one, or import one from skills.sh.</EmptyState>
         </div>
       ) : (
         <EntityGrid>
@@ -54,7 +62,13 @@ export function SkillsPage() {
                 slug={s.slug}
                 name={s.name}
                 interactive
-                chips={<Pill>{s.slug}</Pill>}
+                chips={
+                  <>
+                    <Pill>{s.slug}</Pill>
+                    {s.source === 'skills.sh' ? <Pill tone="on">skills.sh</Pill> : null}
+                    {s.source === 'github' ? <Pill>imported</Pill> : null}
+                  </>
+                }
                 description={s.description ?? undefined}
               />
             </Link>

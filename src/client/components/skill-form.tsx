@@ -23,6 +23,7 @@ export function SkillForm({
   onSubmit,
   onCancel,
   footerAction,
+  provenance,
 }: {
   mode: 'new' | 'edit';
   initial: SkillFormValues;
@@ -33,6 +34,8 @@ export function SkillForm({
   onCancel: () => void;
   // Optional trailing action (e.g. Delete on edit), pushed to the far right.
   footerAction?: ReactNode;
+  // Import-provenance block on imported skills (edit page only).
+  provenance?: ReactNode;
 }) {
   const [values, setValues] = useState(initial);
   const set = (patch: Partial<SkillFormValues>) => setValues((v) => ({ ...v, ...patch }));
@@ -88,6 +91,8 @@ export function SkillForm({
           />
         </Field>
       </FormSection>
+
+      {provenance ? <FormSection label="Provenance">{provenance}</FormSection> : null}
 
       <FormSection label="Instructions">
         <Field

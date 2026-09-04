@@ -39,6 +39,7 @@ import {
   queryClient,
   repoCodeQuery,
   settingsQuery,
+  skillCatalogQuery,
   skillQuery,
   skillsQuery,
   taskQuery,
@@ -224,6 +225,13 @@ const skillsRoute = createRoute({
   component: lazyRouteComponent(() => import('./pages/skills.tsx'), 'SkillsPage'),
 });
 
+const skillBrowseRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: '/skills/browse',
+  loader: () => queryClient.ensureQueryData(skillCatalogQuery('', 'trending')),
+  component: lazyRouteComponent(() => import('./pages/skill-browse.tsx'), 'SkillBrowsePage'),
+});
+
 const skillNewRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/skills/new',
@@ -304,6 +312,7 @@ const routeTree = rootRoute.addChildren([
     agentNewRoute,
     agentEditRoute,
     skillsRoute,
+    skillBrowseRoute,
     skillNewRoute,
     skillEditRoute,
     settingsRoute,

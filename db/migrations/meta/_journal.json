@@ -71,6 +71,13 @@
       "when": 1788381222679,
       "tag": "0009_model-catalog",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1788533792504,
+      "tag": "0010_skill-imports",
+      "breakpoints": true
     }
   ]
 }

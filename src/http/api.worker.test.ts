@@ -8,9 +8,10 @@ import { Hono } from 'hono';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import type { AuthedUser } from '../services/auth.ts';
 import type { ApiBoard, ApiModels, ApiUsage } from '../shared/api-types.ts';
-import { isJsonObject, isString, parseJson } from '../shared/json.ts';
+import { isJsonObject, isString, parseJson, type JsonObject } from '../shared/json.ts';
 import { RUNNER_MODELS } from '../shared/runner-models.ts';
 import { createApiRoutes, type ApiRouteDependencies } from './api.ts';
+import type { SkillsShClient } from '../integrations/skills-sh/client.ts';
 import {
   ensureBuiltinAgents,
   getFactoryRun,
@@ -93,6 +94,8 @@ beforeEach(async () => {
     'todos',
     'repo_agents',
     'agents',
+    'repo_skills',
+    'skills',
     'models',
     'member',
     'invitation',
@@ -991,6 +994,184 @@ describe('organization member management', () => {
       role: string;
     }>();
     expect(row?.role).toBe('member');
+  });
+});
+
+describe('skills catalog & import', () => {
+  const catalogEntry = {
+    source: 'acme/skills',
+    slug: 'pdf-forms',
+    name: 'PDF Forms',
+    description: 'Fill PDF forms',
+    installs: 7,
+  };
+
+  // Fake catalog client: configured by default, every method overridable.
+  function fakeSkillsSh(overrides: Partial<SkillsShClient> = {}): SkillsShClient {
+    return {
+      configured: () => true,
+      search: async () => [catalogEntry],
+      leaderboard: async () => [catalogEntry],
+      detail: async () => ({
+        ...catalogEntry,
+        hash: 'a'.repeat(64),
+        files: [
+          {
+            path: 'SKILL.md',
+            contents: '---\nname: pdf-forms\ndescription: Fill PDF forms\n---\n\nUse pdftk.',
+          },
+          { path: 'references/notes.md', contents: 'field naming notes' },
+        ],
+      }),
+      audit: async () => [{ auditor: 'claude', verdict: 'pass' }],
+      ...overrides,
+    };
+  }
+
+  function skillsApp(skillsSh: SkillsShClient, orgAdmin = async () => true) {
+    return apiApp({
+      authenticate: async () => acmeUser,
+      canPushToRepo: async () => true,
+      orgAdmin,
+      skillsSh,
+    });
+  }
+
+  function postJson(app: Hono, path: string, body: JsonObject) {
+    return app.request(`https://turbodiff.test${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it('reports an unconfigured catalog instead of erroring', async () => {
+    const app = skillsApp(fakeSkillsSh({ configured: () => false }));
+    const response = await app.request('https://turbodiff.test/api/skills/catalog');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ configured: false, skills: [] });
+  });
+
+  it('proxies a catalog search through the server-side client', async () => {
+    const search = vi.fn(async () => [catalogEntry]);
+    const app = skillsApp(fakeSkillsSh({ search }));
+    const response = await app.request('https://turbodiff.test/api/skills/catalog?q=review');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ configured: true, skills: [catalogEntry] });
+    expect(search).toHaveBeenCalledWith('review', 30);
+  });
+
+  it('imports a catalog skill with provenance and file paths', async () => {
+    const app = skillsApp(fakeSkillsSh());
+
+    const preview = await postJson(app, '/api/skills/import/preview', {
+      reference: 'acme/skills/pdf-forms',
+    });
+    expect(preview.status).toBe(200);
+    expect(await preview.json()).toMatchObject({
+      name: 'pdf-forms',
+      suggested_slug: 'pdf-forms',
+      slug_taken: false,
+      instructions: 'Use pdftk.',
+      files: [{ path: 'references/notes.md' }],
+      source: 'skills.sh',
+      source_ref: 'acme/skills/pdf-forms',
+      installs: 7,
+      audit: [{ auditor: 'claude', verdict: 'pass' }],
+    });
+
+    const imported = await postJson(app, '/api/skills/import', {
+      reference: 'https://skills.sh/acme/skills/pdf-forms',
+    });
+    expect(imported.status).toBe(200);
+    // SAFETY: the 200 body is the route's {ok, id} contract this test exercises.
+    const created = (await imported.json()) as { ok: boolean; id: number };
+    expect(created.ok).toBe(true);
+
+    const list = await app.request('https://turbodiff.test/api/skills');
+    expect(await list.json()).toMatchObject({
+      skills: [{ slug: 'pdf-forms', source: 'skills.sh' }],
+    });
+
+    const detail = await app.request(`https://turbodiff.test/api/skills/${created.id}`);
+    expect(detail.status).toBe(200);
+    expect(await detail.json()).toMatchObject({
+      skill: {
+        slug: 'pdf-forms',
+        source: 'skills.sh',
+        source_ref: 'acme/skills/pdf-forms',
+        source_hash: 'a'.repeat(64),
+        imported_at: expect.any(String),
+        files: [{ path: 'references/notes.md' }],
+      },
+    });
+    const row = await testDatabase()
+      .prepare(`SELECT files FROM skills WHERE id = ?1`)
+      .bind(created.id)
+      .first<{ files: { path: string; contents: string }[] }>();
+    expect(row?.files).toEqual([{ path: 'references/notes.md', contents: 'field naming notes' }]);
+  });
+
+  it('rejects a colliding slug without creating rows, then accepts an override slug', async () => {
+    const app = skillsApp(fakeSkillsSh());
+    const custom = await postJson(app, '/api/skills', {
+      name: 'Mine',
+      slug: 'pdf-forms',
+      instructions: 'hand-written',
+    });
+    expect(custom.status).toBe(200);
+
+    const collision = await postJson(app, '/api/skills/import', {
+      reference: 'acme/skills/pdf-forms',
+    });
+    expect(collision.status).toBe(400);
+    expect(await collision.json()).toMatchObject({
+      error: expect.stringContaining('already exists'),
+    });
+    const count = await testDatabase()
+      .prepare(`SELECT COUNT(*) AS n FROM skills`)
+      .first<{ n: number }>();
+    expect(count?.n).toBe(1);
+
+    const overridden = await postJson(app, '/api/skills/import', {
+      reference: 'acme/skills/pdf-forms',
+      slug: 'pdf-forms-upstream',
+    });
+    expect(overridden.status).toBe(200);
+    const imported = await testDatabase()
+      .prepare(`SELECT source FROM skills WHERE slug = 'pdf-forms-upstream'`)
+      .first<{ source: string }>();
+    expect(imported?.source).toBe('skills.sh');
+  });
+
+  it('gates import on the settings capability', async () => {
+    const app = skillsApp(fakeSkillsSh(), async () => false);
+    const response = await postJson(app, '/api/skills/import', {
+      reference: 'acme/skills/pdf-forms',
+    });
+    expect(response.status).toBe(403);
+  });
+
+  it('rejects an unparseable import reference', async () => {
+    const app = skillsApp(fakeSkillsSh());
+    const response = await postJson(app, '/api/skills/import/preview', {
+      reference: 'not a reference',
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it('still accepts a plain custom-skill payload with null provenance', async () => {
+    const app = skillsApp(fakeSkillsSh({ configured: () => false }));
+    const create = await postJson(app, '/api/skills', {
+      name: 'Custom',
+      slug: 'custom-skill',
+      instructions: 'do the thing',
+    });
+    expect(create.status).toBe(200);
+    const row = await testDatabase()
+      .prepare(`SELECT source, files FROM skills WHERE slug = 'custom-skill'`)
+      .first<{ source: string | null; files: unknown }>();
+    expect(row).toEqual({ source: null, files: [] });
   });
 });
 

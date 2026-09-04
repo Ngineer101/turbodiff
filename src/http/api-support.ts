@@ -300,6 +300,15 @@ export function serializeTask(
 
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+// Shared slug contract (matches the agents/skills DB check constraints).
+// Null when valid; the ready-to-return error message otherwise.
+export function validateSlug(slug: string): string | null {
+  if (slug.length < 2 || slug.length > 31 || !SLUG_RE.test(slug)) {
+    return 'slug must be 2-31 chars: lowercase letters and digits separated by single dashes';
+  }
+  return null;
+}
+
 export interface AgentFormValues {
   name: string;
   slug: string;
@@ -329,8 +338,10 @@ export function validateAgent(
   currentModel?: string,
 ): string | null {
   if (!v.name) return 'name is required';
-  if (checkSlug && (v.slug.length < 2 || v.slug.length > 31 || !SLUG_RE.test(v.slug)))
-    return 'slug must be 2-31 chars: lowercase letters and digits separated by single dashes';
+  if (checkSlug) {
+    const slugError = validateSlug(v.slug);
+    if (slugError) return slugError;
+  }
   if (checkSlug && RESERVED_AGENT_SLUGS.has(v.slug)) return `"${v.slug}" is a reserved word`;
   if (!v.instructions) return 'instructions are required';
   // currentModel lets an agent whose stored model predates the catalog be
@@ -362,8 +373,10 @@ export function readSkillPayload(body: JsonObject): SkillFormValues {
 
 export function validateSkill(v: SkillFormValues, checkSlug: boolean): string | null {
   if (!v.name) return 'name is required';
-  if (checkSlug && (v.slug.length < 2 || v.slug.length > 31 || !SLUG_RE.test(v.slug)))
-    return 'slug must be 2-31 chars: lowercase letters and digits separated by single dashes';
+  if (checkSlug) {
+    const slugError = validateSlug(v.slug);
+    if (slugError) return slugError;
+  }
   if (!v.instructions) return 'instructions are required';
   return null;
 }

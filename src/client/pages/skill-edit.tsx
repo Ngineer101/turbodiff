@@ -7,6 +7,7 @@ import { api, ApiError } from '../lib/api.ts';
 import { skillQuery } from '../lib/queries.ts';
 import { SkillForm, type SkillFormValues } from '../components/skill-form.tsx';
 import { ConfirmButton } from '../components/confirm-button.tsx';
+import { Pill } from '../components/ui/pill.tsx';
 
 function onApiError<T>(err: T) {
   toast.error(err instanceof ApiError ? err.message : 'request failed');
@@ -40,6 +41,33 @@ export function SkillEditPage() {
     onError: onApiError,
   });
 
+  const skill = data.skill;
+  const provenance =
+    skill.source !== null ? (
+      <div className="space-y-2 text-xs text-mute">
+        <p className="flex flex-wrap items-center gap-2">
+          <Pill tone="on">{skill.source}</Pill>
+          {skill.source_ref ? <span className="font-mono break-all">{skill.source_ref}</span> : null}
+          {skill.source_hash ? (
+            <span className="font-mono">{skill.source_hash.slice(0, 12)}</span>
+          ) : null}
+          {skill.imported_at ? (
+            <span>imported {new Date(skill.imported_at).toLocaleDateString()}</span>
+          ) : null}
+        </p>
+        {skill.files.length > 0 ? (
+          <ul className="rounded-lg border border-line bg-surface-2 px-3 py-2 font-mono text-[11px] leading-relaxed text-ink-dim">
+            {skill.files.map((f) => (
+              <li key={f.path} className="truncate">
+                {f.path}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        <p>Imported copy — edits here don't sync upstream.</p>
+      </div>
+    ) : undefined;
+
   return (
     <SkillForm
       mode="edit"
@@ -50,6 +78,7 @@ export function SkillEditPage() {
         instructions: data.skill.instructions,
       }}
       slugEditable={false}
+      provenance={provenance}
       error={error}
       busy={save.isPending}
       onSubmit={(values) => save.mutate(values)}

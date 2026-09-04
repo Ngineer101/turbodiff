@@ -367,6 +367,8 @@ export interface ApiSkillSummary {
   slug: string;
   name: string;
   description: string | null;
+  // Import provenance: 'skills.sh' | 'github' | null for hand-written skills.
+  source: string | null;
 }
 
 export interface ApiSkillsList {
@@ -374,7 +376,50 @@ export interface ApiSkillsList {
 }
 
 export interface ApiSkillDetail {
-  skill: ApiSkillSummary & { instructions: string; installation_id: number };
+  skill: ApiSkillSummary & {
+    instructions: string;
+    installation_id: number;
+    source_ref: string | null;
+    source_hash: string | null;
+    imported_at: string | null;
+    // Extra file paths only — the edit page never needs contents.
+    files: { path: string }[];
+  };
+}
+
+// GET /api/skills/catalog — the server-side skills.sh proxy. configured is
+// false (with an empty list) when no SKILLS_SH_API_TOKEN secret is set.
+export interface ApiSkillCatalogEntry {
+  source: string; // "owner/repo"
+  slug: string;
+  name: string;
+  description: string | null;
+  installs: number | null;
+}
+
+export interface ApiSkillCatalog {
+  configured: boolean;
+  skills: ApiSkillCatalogEntry[];
+}
+
+export interface ApiSkillAuditVerdict {
+  auditor: string;
+  verdict: string;
+}
+
+// POST /api/skills/import/preview — the mandatory look-before-import view.
+export interface ApiSkillImportPreview {
+  name: string;
+  suggested_slug: string;
+  slug_taken: boolean;
+  description: string | null;
+  instructions: string; // SKILL.md body, rendered client-side with <Markdown>
+  files: { path: string }[];
+  source: 'skills.sh' | 'github';
+  source_ref: string; // "owner/repo/slug" or the GitHub folder URL
+  hash: string | null;
+  installs: number | null;
+  audit: ApiSkillAuditVerdict[] | null; // null = no audit yet / unavailable
 }
 
 export interface ApiConnectionTest {
