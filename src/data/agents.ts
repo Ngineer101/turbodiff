@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { isString } from '../shared/json.ts';
 import { BUILTIN_PERSONAS, DEFAULT_AGENT_SLUG, DEFAULT_MODEL } from '../domain/personas.ts';
 import { execute, queryOne, queryRows, withDatabase } from './database.ts';
 import type { RepositoryRow } from './repositories.ts';
@@ -170,40 +171,77 @@ export interface SkillRow {
   name: string;
   description: string | null;
   instructions: string;
+  // Extra files beyond SKILL.md for imported multi-file skills.
+  files: { path: string; contents: string }[];
+  // Import provenance; all null for hand-written skills.
+  source: string | null;
+  source_ref: string | null;
+  source_hash: string | null;
+  imported_at: string | null;
   created_at: string;
+}
+
+// pg parses jsonb columns into JS values; keep a guard for any driver
+// configuration that hands the column back as text instead.
+function withParsedFiles(row: SkillRow): SkillRow {
+  if (isString(row.files)) {
+    // SAFETY: the files column is written only by createSkill from a
+    // SkillFile[] value, so its JSON text parses back to that same shape.
+    return { ...row, files: JSON.parse(row.files) as SkillRow['files'] };
+  }
+  return row;
 }
 
 export async function listSkills(installationIds: number[]): Promise<SkillRow[]> {
   if (installationIds.length === 0) return [];
-  return queryRows<SkillRow>(sql`
+  const rows = await queryRows<SkillRow>(sql`
     SELECT * FROM app.skills
     WHERE installation_id = ANY(${bigintArray(installationIds)})
     ORDER BY name
   `);
+  return rows.map(withParsedFiles);
 }
 
 export async function getSkillById(id: number): Promise<SkillRow | null> {
-  return queryOne<SkillRow>(sql`SELECT * FROM app.skills WHERE id = ${id}`);
+  const row = await queryOne<SkillRow>(sql`SELECT * FROM app.skills WHERE id = ${id}`);
+  return row && withParsedFiles(row);
 }
 
 export async function getSkillBySlug(
   installationId: number,
   slug: string,
 ): Promise<SkillRow | null> {
-  return queryOne<SkillRow>(sql`
+  const row = await queryOne<SkillRow>(sql`
     SELECT * FROM app.skills WHERE installation_id = ${installationId} AND slug = ${slug}
   `);
+  return row && withParsedFiles(row);
 }
 
 export async function createSkill(
   installationId: number,
-  fields: { slug: string; name: string; description: string; instructions: string },
+  fields: {
+    slug: string;
+    name: string;
+    description: string;
+    instructions: string;
+    // Import-only fields; hand-written skills omit them all.
+    files?: { path: string; contents: string }[];
+    source?: string | null;
+    source_ref?: string | null;
+    source_hash?: string | null;
+    imported_at?: boolean;
+  },
 ): Promise<void> {
   await execute(sql`
-    INSERT INTO app.skills (installation_id, slug, name, description, instructions)
+    INSERT INTO app.skills
+      (installation_id, slug, name, description, instructions,
+       files, source, source_ref, source_hash, imported_at)
     VALUES (
       ${installationId}, ${fields.slug}, ${fields.name},
-      ${fields.description}, ${fields.instructions}
+      ${fields.description}, ${fields.instructions},
+      ${JSON.stringify(fields.files ?? [])}::jsonb,
+      ${fields.source ?? null}, ${fields.source_ref ?? null}, ${fields.source_hash ?? null},
+      ${fields.imported_at ? sql`CURRENT_TIMESTAMP` : null}
     )
   `);
 }
@@ -267,10 +305,11 @@ export async function setRepoSkillEnabled(
 }
 
 export async function listEnabledSkillsForRepo(repositoryId: number): Promise<SkillRow[]> {
-  return queryRows<SkillRow>(sql`
+  const rows = await queryRows<SkillRow>(sql`
     SELECT s.* FROM app.skills s
     JOIN app.repo_skills rs ON rs.skill_id = s.id
     WHERE rs.repository_id = ${repositoryId} AND rs.enabled
     ORDER BY s.name
   `);
+  return rows.map(withParsedFiles);
 }

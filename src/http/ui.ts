@@ -74,6 +74,7 @@ function routeAsset(path: string): string | null {
   if (path === '/integrations') return 'src/client/pages/integrations.tsx';
   if (path === '/agents') return 'src/client/pages/agents.tsx';
   if (path === '/skills') return 'src/client/pages/skills.tsx';
+  if (path === '/skills/browse') return 'src/client/pages/skill-browse.tsx';
   if (path === '/automations') return 'src/client/pages/automations.tsx';
   if (path === '/settings') return 'src/client/pages/settings.tsx';
   if (path === '/onboarding') return 'src/client/pages/onboarding.tsx';
@@ -171,6 +172,8 @@ async function shellForPath(c: Context, path: string): Promise<string> {
   else if (path === '/integrations') preload.push('/api/integrations');
   else if (path === '/agents') preload.push('/api/agents');
   else if (path === '/skills') preload.push('/api/skills');
+  // Exact query string the browse route's loader fetches first.
+  else if (path === '/skills/browse') preload.push('/api/skills/catalog?q=&sort=trending');
   else if (path === '/automations') preload.push('/api/automations');
   else if (/^\/tasks\/\d+$/.test(path)) preload.push(`/api${path}`);
   else if (/^\/factory\/features\/\d+$/.test(path)) preload.push(`/api${path}`);

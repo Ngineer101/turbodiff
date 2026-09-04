@@ -20,7 +20,6 @@ import {
   updateFeature,
   upsertChange,
   type FeatureRow,
-  type SkillRow,
 } from '../../data/db.ts';
 import { resolveRunnerAuth, runnerEnvironment } from '../runtime/runner-auth.ts';
 import { generationSandbox } from '../runtime/sandbox.ts';
@@ -216,7 +215,6 @@ type RunContext = {
   coauthorId: number | null;
   acceptance: boolean;
   tier: 'trivial' | 'standard';
-  skills: SkillRow[];
   // The approved spec mentions .github/workflows — the push token may carry
   // the App's workflows permission (see sandboxGitToken).
   workflows: boolean;
@@ -289,7 +287,6 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
             };
             base = info.default_branch;
           }
-          const skills = await listEnabledSkillsForRepo(repo.id);
           await updateFeature(featureId, { status: 'generating', runStartedAt: 'now' });
           return {
             featureId,
@@ -309,7 +306,6 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
             coauthorId: feature.coauthor_id,
             acceptance: feature.acceptance !== null,
             tier: feature.tier === 'trivial' ? 'trivial' : 'standard',
-            skills,
             workflows: authorizesWorkflowFiles(feature.spec),
             remoteSource: remoteSourceOf(repo),
           };
@@ -447,7 +443,11 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
           // one — only the runner credential can appear in this step's output.
           const scrub = (s: string) => redactSecrets(s, Object.values(auth.vars));
           const sandbox = sandboxFor(ctx);
-          await mountSkills(sandbox, WORK, ctx.skills);
+          // Skills are fetched inside the step that mounts them (like the
+          // other run paths), never returned from a step: engine-persisted
+          // step state is capped at 1 MiB, and a repo's enabled skills — up
+          // to 1 MiB of files each — can exceed that on their own.
+          await mountSkills(sandbox, WORK, await listEnabledSkillsForRepo(ctx.repositoryId));
           await sandbox.writeFile(
             specFile(featureId),
             generationPrompt(ctx, baselineFailure === null),

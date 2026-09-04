@@ -10,6 +10,9 @@ declare namespace Cloudflare {
     RESEND_API_KEY: string;
     REVIEW_SECRET: string;
     SESSION_SECRET: string;
+    // Optional secret: when absent/empty, /api/skills/catalog reports
+    // unconfigured and only GitHub-direct skill import works.
+    SKILLS_SH_API_TOKEN: string;
     VAPID_PRIVATE_KEY: string;
     // Public by design (browsers receive it from /api/me), but kept out of
     // wrangler.jsonc so forks don't inherit this deployment's key.

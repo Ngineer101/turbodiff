@@ -1,10 +1,14 @@
 // Pure rendering of persisted skills into an agent-runtime file format.
 
+import type { SkillFile } from './skill-import.ts';
+
 export interface SkillDefinition {
   slug: string;
   name: string;
   description: string | null;
   instructions: string;
+  // Extra files beyond SKILL.md, present on imported multi-file skills.
+  files?: SkillFile[] | null;
 }
 
 // Renders a skill as a native Claude Code SKILL.md so `claude -p` auto-

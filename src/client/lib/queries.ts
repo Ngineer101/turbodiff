@@ -1,4 +1,4 @@
-import { QueryClient, queryOptions } from '@tanstack/react-query';
+import { keepPreviousData, QueryClient, queryOptions } from '@tanstack/react-query';
 import { api } from './api.ts';
 import { CHAT_TURN_PENDING } from './chat-rail.ts';
 import type {
@@ -22,6 +22,7 @@ import type {
   ApiRepoFile,
   ApiRepoTree,
   ApiSettings,
+  ApiSkillCatalog,
   ApiSkillDetail,
   ApiSkillsList,
   ApiTaskDetail,
@@ -191,6 +192,19 @@ export const skillsQuery = queryOptions({
   queryKey: ['skills'],
   queryFn: () => api.get<ApiSkillsList>('/api/skills'),
 });
+
+// Server-side skills.sh proxy for the browse page. keepPreviousData keeps
+// the current results on screen while a debounced search term refetches.
+export const skillCatalogQuery = (q: string, sort: string) =>
+  queryOptions({
+    queryKey: ['skill-catalog', q, sort],
+    queryFn: () =>
+      api.get<ApiSkillCatalog>(
+        `/api/skills/catalog?q=${encodeURIComponent(q)}&sort=${encodeURIComponent(sort)}`,
+      ),
+    staleTime: 60_000,
+    placeholderData: keepPreviousData,
+  });
 
 export const skillQuery = (id: number) =>
   queryOptions({
