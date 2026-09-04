@@ -399,6 +399,20 @@ export const skills = appSchema.table(
     name: text().notNull(),
     description: text(),
     instructions: text().notNull(),
+    // Extra files beyond SKILL.md for imported multi-file skills:
+    // [{path, contents}]. Hand-written skills keep the empty default.
+    files: jsonb()
+      .$type<JsonValue>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    // Import provenance; all null for hand-written skills. source is
+    // 'skills.sh' or 'github'; sourceRef is "<owner>/<repo>/<slug>" or the
+    // GitHub folder URL; sourceHash is skills.sh's snapshot sha-256 (null
+    // for GitHub imports).
+    source: text(),
+    sourceRef: text('source_ref'),
+    sourceHash: text('source_hash'),
+    importedAt: timestamp('imported_at', { withTimezone: true, mode: 'string' }),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .default(sql`CURRENT_TIMESTAMP`)
       .notNull(),
