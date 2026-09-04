@@ -15,6 +15,13 @@ export function noreplyEmail(user: GitIdentity): string {
   return `${user.id}+${user.login}@users.noreply.github.com`;
 }
 
+// The placeholder better-auth stores for a GitHub sign-in that carried no
+// email (see mapProfileToUser in better-auth.ts). Nobody can receive mail
+// there, so an invitation addressed to a real inbox never matches it.
+export function isNoreplyEmail(email: string): boolean {
+  return email.toLowerCase().endsWith('@users.noreply.github.com');
+}
+
 // Env vars for `git commit`. Empty when no human instructed the run — git
 // then falls back to the repo-config bot identity for the author too.
 export function gitAuthorEnv(user: GitIdentity | null | undefined) {

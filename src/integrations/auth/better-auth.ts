@@ -3,7 +3,10 @@ import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { mcp } from 'better-auth/plugins';
 import { organization } from 'better-auth/plugins/organization';
+import { eq, or, sql } from 'drizzle-orm';
 import { withDatabase, type Database } from '../../data/database.ts';
+import { isNoreplyEmail } from '../../domain/attribution.ts';
+import { isNumber, isString } from '../../shared/json.ts';
 import {
   account,
   invitation,
@@ -50,9 +53,14 @@ import { orgAc, orgRoles } from './organization-access.ts';
 //     that carries githubId — that combination only occurs on the
 //     overrideUserInfoOnSignIn profile sync, which would otherwise rewrite a
 //     linked user's email to the GitHub address on every GitHub sign-in and
-//     silently change their password-login identifier. (Trade-off: GitHub
-//     email changes no longer propagate to GitHub-only users either;
-//     nothing keys on email, so that drift is cosmetic.)
+//     silently change their password-login identifier. One exception: a row
+//     still holding the noreply placeholder (a GitHub sign-in from before
+//     the App had the Email addresses permission) adopts the real address
+//     the sync now carries — organization invitations match on email
+//     (better-auth's accept-invitation compares invitation.email to the
+//     session user's), so the placeholder would keep every invite
+//     unacceptable. A placeholder can only belong to a GitHub sign-in, never
+//     a password identifier, so nothing a user typed is rewritten.
 //   - The github "account" row is the single store for the user's OAuth
 //     access/refresh token pair, encrypted at rest (encryptOAuthTokens).
 //     auth.api.getAccessToken refreshes it near expiry and persists the
@@ -92,6 +100,26 @@ const SESSION_DAYS = 30;
 // Inference must own the instance type: betterAuth is deeply generic over its
 // options, and annotating with ReturnType<typeof betterAuth> collapses that
 // to Auth<BetterAuthOptions>, which the concrete instance doesn't satisfy.
+// Whether a GitHub profile sync may replace the stored email: the row still
+// holds the noreply placeholder, the sync carries a real address, and no
+// other user owns that address already (email is unique — adopting a taken
+// one would fail the whole sign-in instead of just the sync).
+async function adoptsSyncedEmail(
+  database: Database,
+  data: { githubId?: unknown; email?: unknown },
+): Promise<boolean> {
+  if (!isNumber(data.githubId) || !isString(data.email) || isNoreplyEmail(data.email)) return false;
+  const rows = await database
+    .select({ githubId: user.githubId, email: user.email })
+    .from(user)
+    .where(
+      or(eq(user.githubId, data.githubId), eq(sql`lower(${user.email})`, data.email.toLowerCase())),
+    );
+  const own = rows.find((row) => row.githubId === data.githubId);
+  const taken = rows.some((row) => row.githubId !== data.githubId);
+  return own !== undefined && isNoreplyEmail(own.email) && !taken;
+}
+
 function createAuth(database: Database) {
   return betterAuth({
     baseURL: env.PUBLIC_BASE_URL,
@@ -141,12 +169,15 @@ function createAuth(database: Database) {
         update: {
           // See design notes: a provider-profile sync (the only update that
           // carries githubId) must never rewrite the email a password user
-          // signs in with. Merging undefined removes the fields — the
-          // adapter drops undefined columns from the UPDATE.
-          before: async (user) =>
-            'githubId' in user
-              ? { data: { ...user, email: undefined, emailVerified: undefined } }
-              : { data: user },
+          // signs in with — unless the row still holds the noreply
+          // placeholder, which the real GitHub address replaces. Merging
+          // undefined removes the fields — the adapter drops undefined
+          // columns from the UPDATE.
+          before: async (data) => {
+            if (!('githubId' in data)) return { data };
+            if (await adoptsSyncedEmail(database, data)) return { data };
+            return { data: { ...data, email: undefined, emailVerified: undefined } };
+          },
         },
       },
     },

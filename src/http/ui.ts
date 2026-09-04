@@ -210,13 +210,21 @@ export function createUiRoutes() {
     const query = new URL(c.req.url).searchParams;
     const oauthAuthorize = query.has('client_id') && query.has('redirect_uri');
     const renewSession = query.get('expired') === '1';
-    const next = oauthAuthorize ? `/api/auth/mcp/authorize?${query.toString()}` : '/';
+    // Plain in-app continuation (the /accept-invite link from an invitation
+    // email): path-only so the redirect can't leave the app, same idiom as
+    // /auth/login/github.
+    const requested = query.get('next') ?? '';
+    const requestedNext =
+      requested.startsWith('/') && !requested.startsWith('//') ? requested : null;
+    const next = oauthAuthorize
+      ? `/api/auth/mcp/authorize?${query.toString()}`
+      : (requestedNext ?? '/');
     // An API 401 can arrive while a cookie-cached shell session still exists.
     // Do not redirect that recovery request back to the dashboard.
     if (!renewSession && (await hasSession(c))) return c.redirect(next);
     return c.html(
       renderAuthPage(
-        oauthAuthorize ? next : undefined,
+        oauthAuthorize || requestedNext ? next : undefined,
         renewSession
           ? 'Your Turbodiff session needs to be renewed. Sign in to continue.'
           : undefined,
@@ -307,6 +315,17 @@ export function createUiRoutes() {
   app.get('/', async (c) => {
     if (!(await hasSession(c))) return c.html(renderLanding());
     return c.html(await shellForPath(c, '/'));
+  });
+
+  // Invitation-email landing page. The recipient usually arrives signed out
+  // (or signed in as the wrong account), so sign-in must come back here with
+  // the invitation id intact rather than landing on the dashboard.
+  app.get('/accept-invite', async (c) => {
+    const url = new URL(c.req.url);
+    if (!(await hasSession(c))) {
+      return c.redirect(`/auth/login?next=${encodeURIComponent(url.pathname + url.search)}`);
+    }
+    return c.html(await shellForPath(c, url.pathname));
   });
 
   // Public long-form pages (src/http/blog.tsx). Posts are code, so an unknown
