@@ -534,6 +534,20 @@ export async function capableInstallationIds(
   return checked.filter((id): id is number => id !== null);
 }
 
+// The per-slug lists (agents, skills) show one copy per slug and the edit
+// page mutates through that copy's id. Stable-partition the rows so copies
+// from capable installations come first: the dedupe then picks an editable
+// copy whenever one exists, and the post-save refetch reads the updated row.
+export function preferCapableCopies<Row extends { installation_id: number }>(
+  rows: Row[],
+  capable: ReadonlySet<number>,
+): Row[] {
+  return [
+    ...rows.filter((row) => capable.has(row.installation_id)),
+    ...rows.filter((row) => !capable.has(row.installation_id)),
+  ];
+}
+
 // HTTP mapping for the capability gate: null means allowed, a ready-to-return
 // 403 otherwise — the same null-means-allowed contract as requireRepoPush.
 export async function requireCapability(

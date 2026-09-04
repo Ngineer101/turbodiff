@@ -298,6 +298,7 @@ import {
   authorizedRepo,
   authorizedSkill,
   capableInstallationIds,
+  preferCapableCopies,
   requireCapability,
   currentMonth,
   groupByRepoPr,
@@ -2189,10 +2190,16 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         ),
       ).then(() => undefined),
     );
+    // One entry per slug. The copy chosen stands in for the edit page, whose
+    // PUT/DELETE then fan out through the caller's capable installations — so
+    // prefer a copy from one of those, or an owner of org A editing a shared
+    // agent lands on org B's copy (where they are a plain member) and reads
+    // stale data back after a save that skipped it.
+    const capable = new Set(await capableInstallationIds(c, installationIds, orgAdmin));
     const seen = new Set<string>();
     return c.json<ApiAgentsList>({
       github_app_slug: env.GITHUB_APP_SLUG,
-      agents: agents
+      agents: preferCapableCopies(agents, capable)
         .filter((a) => (seen.has(a.slug) ? false : (seen.add(a.slug), true)))
         .map((a) => ({
           id: a.id,
@@ -2254,13 +2261,16 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.put('/agents/:id', async (c) => {
     const agent = await authorizedAgent(c);
     if (!agent) return c.json({ error: 'unknown agent' }, 404);
-    const deniedCapability = await requireCapability(
-      c,
-      agent.installation_id,
-      'settings',
-      orgAdmin,
-    );
-    if (deniedCapability) return deniedCapability;
+    // Agents are generic across installations, so the gate is the same as on
+    // create: the edit lands wherever the caller holds 'settings', and only a
+    // caller who holds it nowhere is refused. Gating on the clicked copy's
+    // installation alone denied owners of one org for being plain members of
+    // another (the list picks an arbitrary copy per slug).
+    const { installationIds } = c.get('user');
+    const capableIds = await capableInstallationIds(c, installationIds, orgAdmin);
+    if (capableIds.length === 0) {
+      return c.json({ error: "'settings' capability required for this action" }, 403);
+    }
     const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
     const catalog = await getModelCatalog();
@@ -2272,15 +2282,14 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       agent.model,
     );
     if (error) return c.json({ error }, 400);
-    // Fan out by slug so the edit applies everywhere; custom agents that
+    // Fan out by slug across the capable installations; custom agents that
     // predate the generic model gain their missing per-installation copies.
-    const { installationIds } = c.get('user');
-    const siblings = (await listAgents(installationIds)).filter((a) => a.slug === agent.slug);
+    const siblings = (await listAgents(capableIds)).filter((a) => a.slug === agent.slug);
     await Promise.all(siblings.map((s) => updateAgent(s.id, values)));
     if (!agent.is_builtin) {
       const covered = new Set(siblings.map((s) => s.installation_id));
       await Promise.all(
-        installationIds.filter((id) => !covered.has(id)).map((id) => createAgent(id, values)),
+        capableIds.filter((id) => !covered.has(id)).map((id) => createAgent(id, values)),
       );
     }
     return c.json({ ok: true });
@@ -2289,16 +2298,15 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.delete('/agents/:id', async (c) => {
     const agent = await authorizedAgent(c);
     if (!agent) return c.json({ error: 'unknown agent' }, 404);
-    const deniedCapability = await requireCapability(
-      c,
-      agent.installation_id,
-      'settings',
-      orgAdmin,
-    );
-    if (deniedCapability) return deniedCapability;
+    // Same capable-set gate as PUT above.
+    const capableIds = await capableInstallationIds(c, c.get('user').installationIds, orgAdmin);
+    if (capableIds.length === 0) {
+      return c.json({ error: "'settings' capability required for this action" }, 403);
+    }
     if (agent.is_builtin) return c.json({ error: 'built-in agents cannot be deleted' }, 403);
-    // Fan out by slug: deleting a generic agent removes every installation's copy.
-    const siblings = (await listAgents(c.get('user').installationIds)).filter(
+    // Fan out by slug: deleting a generic agent removes every capable
+    // installation's copy.
+    const siblings = (await listAgents(capableIds)).filter(
       (a) => a.slug === agent.slug && !a.is_builtin,
     );
     await Promise.all(siblings.map((s) => deleteAgent(s.id)));
@@ -2312,9 +2320,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.get('/skills', async (c) => {
     const { installationIds } = c.get('user');
     const skills = await listSkills(installationIds);
+    // Same capable-copy preference as GET /agents.
+    const capable = new Set(await capableInstallationIds(c, installationIds, orgAdmin));
     const seen = new Set<string>();
     return c.json<ApiSkillsList>({
-      skills: skills
+      skills: preferCapableCopies(skills, capable)
         .filter((s) => (seen.has(s.slug) ? false : (seen.add(s.slug), true)))
         .map((s) => ({
           id: s.id,
@@ -2365,13 +2375,12 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.put('/skills/:id', async (c) => {
     const skill = await authorizedSkill(c);
     if (!skill) return c.json({ error: 'unknown skill' }, 404);
-    const deniedCapability = await requireCapability(
-      c,
-      skill.installation_id,
-      'settings',
-      orgAdmin,
-    );
-    if (deniedCapability) return deniedCapability;
+    // Capable-set gate, as on PUT /agents/:id.
+    const { installationIds } = c.get('user');
+    const capableIds = await capableInstallationIds(c, installationIds, orgAdmin);
+    if (capableIds.length === 0) {
+      return c.json({ error: "'settings' capability required for this action" }, 403);
+    }
     const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
     const values = readSkillPayload(body);
@@ -2380,14 +2389,13 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     // The slug is immutable after creation; the fan-out below always keys off
     // the existing slug regardless of what the request body sent.
     values.slug = skill.slug;
-    // Fan out by slug so the edit applies everywhere; skills that predate a
+    // Fan out by slug across the capable installations; skills that predate a
     // caller's installation gain their missing per-installation copies.
-    const { installationIds } = c.get('user');
-    const siblings = (await listSkills(installationIds)).filter((s) => s.slug === skill.slug);
+    const siblings = (await listSkills(capableIds)).filter((s) => s.slug === skill.slug);
     await Promise.all(siblings.map((s) => updateSkill(s.id, values)));
     const covered = new Set(siblings.map((s) => s.installation_id));
     await Promise.all(
-      installationIds.filter((id) => !covered.has(id)).map((id) => createSkill(id, values)),
+      capableIds.filter((id) => !covered.has(id)).map((id) => createSkill(id, values)),
     );
     return c.json({ ok: true });
   });
@@ -2395,17 +2403,14 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.delete('/skills/:id', async (c) => {
     const skill = await authorizedSkill(c);
     if (!skill) return c.json({ error: 'unknown skill' }, 404);
-    const deniedCapability = await requireCapability(
-      c,
-      skill.installation_id,
-      'settings',
-      orgAdmin,
-    );
-    if (deniedCapability) return deniedCapability;
-    // Fan out by slug: deleting a generic skill removes every installation's copy.
-    const siblings = (await listSkills(c.get('user').installationIds)).filter(
-      (s) => s.slug === skill.slug,
-    );
+    // Capable-set gate, as on DELETE /agents/:id.
+    const capableIds = await capableInstallationIds(c, c.get('user').installationIds, orgAdmin);
+    if (capableIds.length === 0) {
+      return c.json({ error: "'settings' capability required for this action" }, 403);
+    }
+    // Fan out by slug: deleting a generic skill removes every capable
+    // installation's copy.
+    const siblings = (await listSkills(capableIds)).filter((s) => s.slug === skill.slug);
     await Promise.all(siblings.map((s) => deleteSkill(s.id)));
     return c.json({ ok: true });
   });

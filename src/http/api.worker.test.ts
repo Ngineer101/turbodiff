@@ -872,6 +872,80 @@ describe('organization member management', () => {
     expect(agentDenied.status).toBe(403);
   });
 
+  // Agents are generic across installations. An owner of one org must be able
+  // to edit a shared agent even when the list handed the edit page another
+  // org's copy, where they are a plain member — the edit lands on the copies
+  // they hold 'settings' for and leaves the rest alone.
+  it('edits a shared agent through the installations where the caller holds settings', async () => {
+    await seedOrg('member');
+    await seedCoOwner();
+    await testDatabase()
+      .prepare(
+        `INSERT INTO "organization" (id, name, slug, "installationId", "createdAt")
+				 VALUES ('org2', 'other', 'other', 2002, '2026-01-01T00:00:00.000Z')`,
+      )
+      .run();
+    await testDatabase()
+      .prepare(
+        `INSERT INTO "member" (id, "organizationId", "userId", role, "createdAt")
+				 VALUES ('m3', 'org2', 'u1', 'owner', '2026-01-01T00:00:00.000Z')`,
+      )
+      .run();
+    await ensureBuiltinAgents(1001);
+    await ensureBuiltinAgents(2002);
+    // orgAdmin false: no GitHub-derived elevation, only the seeded rows count.
+    const app = apiApp({
+      authenticate: async () => ({ ...acmeUser, installationIds: [1001, 2002] }),
+      canPushToRepo: async () => true,
+      orgAdmin: async () => false,
+    });
+    const copyFor = (installationId: number) =>
+      testDatabase()
+        .prepare(`SELECT id, name FROM agents WHERE installation_id = ?1 AND slug = 'review'`)
+        .bind(installationId)
+        .first<{ id: number; name: string }>();
+    const memberCopy = await copyFor(1001);
+    const ownerCopy = await copyFor(2002);
+
+    // The list hands the edit page the copy the caller can actually edit.
+    const list = await app.request('https://turbodiff.test/api/agents');
+    expect(list.status).toBe(200);
+    expect(await list.json()).toMatchObject({
+      agents: expect.arrayContaining([
+        expect.objectContaining({ slug: 'review', id: Number(ownerCopy?.id) }),
+      ]),
+    });
+
+    // Editing through the member-only copy still succeeds and lands on the
+    // owner installation's copy only.
+    const response = await app.request(`https://turbodiff.test/api/agents/${memberCopy?.id}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Renamed', instructions: 'Review carefully' }),
+    });
+    expect(response.status).toBe(200);
+    expect((await copyFor(2002))?.name).toBe('Renamed');
+    expect((await copyFor(1001))?.name).toBe(memberCopy?.name);
+  });
+
+  it('refuses an agent edit only when the caller holds settings nowhere', async () => {
+    await seedOrg('member');
+    await seedCoOwner();
+    await ensureBuiltinAgents(1001);
+    const copy = await testDatabase()
+      .prepare(`SELECT id FROM agents WHERE installation_id = 1001 AND slug = 'review'`)
+      .first<{ id: number }>();
+    const response = await authenticatedApi(
+      async () => true,
+      async () => false,
+    ).request(`https://turbodiff.test/api/agents/${copy?.id}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Renamed', instructions: 'Review carefully' }),
+    });
+    expect(response.status).toBe(403);
+  });
+
   it('lets an owner mutate repo posture once both settings capability and push permission are present', async () => {
     await seedOrg('owner');
     const response = await authenticatedApi(async () => true).request(
