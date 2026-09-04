@@ -30,6 +30,7 @@ import type { JsonObject } from '../shared/json.ts';
 import { createWebhookRoutes, type WebhookRouteDependencies } from './webhooks.ts';
 import type { ReviewDispatcher } from '../services/change-review.ts';
 import {
+  completeLifecycleRepair,
   completeLifecycleReview,
   completeLifecycleStage,
   failLifecycleReview,
@@ -84,15 +85,21 @@ async function postWebhook(app: Hono, event: string, payload: JsonObject): Promi
 }
 
 async function seedRepo(
-  opts: { autoFix?: boolean; reviewIntake?: 'factory_only' | 'on_demand' | 'all_changes' } = {},
+  opts: {
+    autoFix?: boolean;
+    reviewIntake?: 'factory_only' | 'on_demand' | 'all_changes';
+    processProfile?: 'review_and_repair';
+    pushDebounceMinutes?: number;
+  } = {},
 ): Promise<void> {
   const reviewIntake = opts.reviewIntake ?? 'factory_only';
   const processProfile =
-    reviewIntake === 'all_changes'
+    opts.processProfile ??
+    (reviewIntake === 'all_changes'
       ? 'automatic_review'
       : reviewIntake === 'on_demand'
         ? 'review_on_demand'
-        : 'legacy_factory';
+        : 'legacy_factory');
   await testDatabase().batch([
     testDatabase().prepare(
       `INSERT INTO installations (id, account_login, account_id, account_type)
@@ -101,10 +108,11 @@ async function seedRepo(
     testDatabase()
       .prepare(
         `INSERT INTO repositories
-          (id, installation_id, owner, name, review_on_push, auto_fix, review_intake, process_profile)
-       VALUES (101, 1001, 'acme', 'api', TRUE, ?1, ?2, ?3)`,
+          (id, installation_id, owner, name, review_on_push, auto_fix, review_intake,
+           process_profile, review_push_debounce_minutes)
+       VALUES (101, 1001, 'acme', 'api', TRUE, ?1, ?2, ?3, ?4)`,
       )
-      .bind(opts.autoFix ?? false, reviewIntake, processProfile),
+      .bind(opts.autoFix ?? false, reviewIntake, processProfile, opts.pushDebounceMinutes ?? 10),
   ]);
 }
 
@@ -832,6 +840,7 @@ describe('factory PR webhook decisions', () => {
       'https://github.com/acme/api/pull/42#pullrequestreview-1',
       0,
       'approve',
+      [],
       lifecycleEnqueue,
     );
     await expect(getStageRun(commands[0].stageRunId)).resolves.toMatchObject({
@@ -868,6 +877,366 @@ describe('factory PR webhook decisions', () => {
     });
     expect(await abandonedResponse.json()).toMatchObject({ ignored: 'already abandoned' });
     expect((await getFeature(featureId))?.status).toBe('abandoned');
+  });
+});
+
+describe('push re-reviews', () => {
+  const headA = 'a'.repeat(40);
+  const headB = 'b'.repeat(40);
+  const headC = 'c'.repeat(40);
+  const instance = (slug: string) => `${slug}--acme--api--77`;
+
+  // Every built-in persona reviews this repo (only the default one is on
+  // unless a repo opts the others in), so the selection rules have a fleet
+  // to choose from.
+  async function seedReviewedRepo(opts: Parameters<typeof seedRepo>[0] = {}): Promise<void> {
+    await seedRepo({ reviewIntake: 'all_changes', ...opts });
+    await ensureBuiltinAgents(1001);
+    await testDatabase()
+      .prepare(
+        `INSERT INTO repo_agents (repository_id, installation_id, agent_id, enabled)
+         SELECT 101, 1001, id, TRUE FROM agents WHERE installation_id = 1001`,
+      )
+      .run();
+  }
+
+  // A same-repo branch (not a fork), so the change is writable and a
+  // blocking review can schedule a repair.
+  function pullRequest(action: 'opened' | 'synchronize', sha: string): JsonObject {
+    return {
+      action,
+      number: 77,
+      pull_request: {
+        draft: false,
+        html_url: 'https://github.com/acme/api/pull/77',
+        title: 'Human contribution',
+        user: { login: 'contributor', type: 'User' },
+        head: { ref: 'contribution', sha, repo: { full_name: 'acme/api' } },
+        base: { ref: 'main', sha: 'e'.repeat(40) },
+      },
+      repository: { id: 101, full_name: 'acme/api' },
+    };
+  }
+
+  // The queue as the tests see it: every command with the delivery options
+  // it was sent with, so a push's delay is asserted rather than waited for.
+  function harness() {
+    const queued: { message: FactoryMessage; options?: { delaySeconds?: number } }[] = [];
+    const enqueue = async (message: FactoryMessage, options?: { delaySeconds?: number }) => {
+      queued.push(options ? { message, options } : { message });
+    };
+    const calls: { slug: string; trigger: string; headSha?: string; delta?: unknown }[] = [];
+    const dispatch: ReviewDispatcher = async (agent, repo, prNumber, _url, trigger, options) => {
+      const call: (typeof calls)[number] = { slug: agent.slug, trigger };
+      if (options?.headSha) call.headSha = options.headSha;
+      if (options?.delta) call.delta = options.delta;
+      calls.push(call);
+      await tryRecordReview(
+        repo.id,
+        repo.installation_id,
+        prNumber,
+        trigger,
+        agent.slug,
+        `${agent.slug}--${repo.owner}--${repo.name}--${prNumber}`,
+        options?.riskTier ?? null,
+        options?.stageRunId ?? null,
+        options?.headSha ?? null,
+      );
+      return true;
+    };
+    const app = webhookApp({ enqueueLifecycle: enqueue });
+    const commands = () => stageCommands(queued.map((entry) => entry.message));
+    const lastCommand = () => {
+      const command = commands().at(-1);
+      if (!command) throw new Error('no stage command was enqueued');
+      return command;
+    };
+    return { queued, enqueue, calls, dispatch, app, commands, lastCommand };
+  }
+
+  // Opens the PR at head A and lets every built-in agent conclude, so the
+  // pushes that follow have priors to reconcile against.
+  async function reviewedOpening(
+    h: ReturnType<typeof harness>,
+    verdicts: Record<string, { verdict: 'approve' | 'request_changes'; paths: string[] }>,
+  ): Promise<void> {
+    await postWebhook(h.app, 'pull_request', pullRequest('opened', headA));
+    await runLifecycleStage(h.lastCommand(), h.dispatch, {
+      computeRisk: async () => 'full',
+      enqueue: h.enqueue,
+    });
+    for (const call of h.calls) {
+      const outcome = verdicts[call.slug] ?? { verdict: 'approve', paths: [] };
+      await completeLifecycleReview(
+        instance(call.slug),
+        null,
+        outcome.paths.length,
+        outcome.verdict,
+        outcome.paths,
+        h.enqueue,
+      );
+    }
+    h.calls.length = 0;
+  }
+
+  it('delays a push review by the repository window and records the scheduled head', async () => {
+    await seedReviewedRepo();
+    const h = harness();
+    await postWebhook(h.app, 'pull_request', pullRequest('opened', headA));
+    expect(h.queued.at(-1)).toEqual({ message: h.lastCommand() });
+
+    const response = await postWebhook(h.app, 'pull_request', pullRequest('synchronize', headB));
+    expect(response.status).toBe(200);
+    expect(h.queued.at(-1)).toEqual({
+      message: h.lastCommand(),
+      options: { delaySeconds: 600 },
+    });
+    await expect(getStageRun(h.lastCommand().stageRunId)).resolves.toMatchObject({
+      trigger: 'synchronize',
+      input: { scheduledHead: headB },
+    });
+  });
+
+  it('reviews a push immediately when the window is zero', async () => {
+    await seedReviewedRepo({ pushDebounceMinutes: 0 });
+    const h = harness();
+    await postWebhook(h.app, 'pull_request', pullRequest('opened', headA));
+    await postWebhook(h.app, 'pull_request', pullRequest('synchronize', headB));
+    expect(h.queued.at(-1)).toEqual({ message: h.lastCommand() });
+  });
+
+  it('cancels a delayed push review that a newer push superseded', async () => {
+    await seedReviewedRepo();
+    const h = harness();
+    await postWebhook(h.app, 'pull_request', pullRequest('opened', headA));
+    await postWebhook(h.app, 'pull_request', pullRequest('synchronize', headB));
+    const pushB = h.lastCommand();
+    await postWebhook(h.app, 'pull_request', pullRequest('synchronize', headC));
+    const pushC = h.lastCommand();
+
+    // B's command lands after C was pushed: nothing to review, nothing to retry.
+    await runLifecycleStage(pushB, h.dispatch, {
+      computeRisk: async () => 'full',
+      enqueue: h.enqueue,
+    });
+    expect(h.calls).toEqual([]);
+    await expect(getStageRun(pushB.stageRunId)).resolves.toMatchObject({
+      status: 'cancelled',
+      error: 'superseded by a newer push',
+      output: { kind: 'superseded', scheduledHead: headB, currentHead: headC },
+    });
+    await expect(getFactoryRun(pushB.factoryRunId)).resolves.toMatchObject({
+      status: 'cancelled',
+      handoff_reason: 'superseded by a newer push',
+    });
+    const cancelled = await testDatabase()
+      .prepare(
+        `SELECT COUNT(*) AS n FROM lifecycle_events WHERE factory_run_id = ?1 AND kind = 'run.cancelled'`,
+      )
+      .bind(pushB.factoryRunId)
+      .first<{ n: number }>();
+    expect(cancelled?.n).toBe(1);
+    await expect(resumeFailedStage(pushB.factoryRunId, 'nico', h.enqueue)).resolves.toMatchObject({
+      kind: 'rejected',
+    });
+
+    // C's command reviews the live head; with no completed review to diff
+    // from, the whole change is tiered as on opening.
+    const computeDelta = vi.fn(async () => null);
+    await runLifecycleStage(pushC, h.dispatch, {
+      computeRisk: async () => 'full',
+      computeDelta,
+      enqueue: h.enqueue,
+    });
+    expect(computeDelta).not.toHaveBeenCalled();
+    expect(h.calls.map((call) => call.headSha)).toEqual(h.calls.map(() => headC));
+    expect(h.calls.length).toBeGreaterThan(1);
+    await expect(getStageRun(pushC.stageRunId)).resolves.toMatchObject({ status: 'running' });
+  });
+
+  it('settles a force-push back to an already reviewed head without dispatching', async () => {
+    await seedReviewedRepo();
+    const h = harness();
+    await reviewedOpening(h, {});
+    await postWebhook(h.app, 'pull_request', pullRequest('synchronize', headB));
+    const pushB = h.lastCommand();
+    await postWebhook(h.app, 'pull_request', pullRequest('synchronize', headA));
+    const backToA = h.lastCommand();
+
+    await runLifecycleStage(pushB, h.dispatch, { enqueue: h.enqueue });
+    await expect(getFactoryRun(pushB.factoryRunId)).resolves.toMatchObject({ status: 'cancelled' });
+    await runLifecycleStage(backToA, h.dispatch, { enqueue: h.enqueue });
+    expect(h.calls).toEqual([]);
+    await expect(getStageRun(backToA.stageRunId)).resolves.toMatchObject({
+      status: 'completed',
+      output: { kind: 'nothing_to_do', reason: 'head already reviewed', headSha: headA },
+    });
+    await expect(getFactoryRun(backToA.factoryRunId)).resolves.toMatchObject({
+      status: 'handed_off',
+      handoff_reason: 'requested stop boundary reached',
+    });
+  });
+
+  it('re-runs only the agents the pushed delta concerns', async () => {
+    await seedReviewedRepo();
+    const h = harness();
+    await reviewedOpening(h, {
+      review: { verdict: 'approve', paths: ['src/a.ts'] },
+      a11y: { verdict: 'request_changes', paths: ['src/dialog.tsx'] },
+    });
+    await postWebhook(h.app, 'pull_request', pullRequest('synchronize', headB));
+    const pushB = h.lastCommand();
+
+    const computeDelta = vi.fn(async (_inst: number, _o: string, _r: string, since: string) => ({
+      sinceHead: since,
+      files: [{ filename: 'src/b.ts', additions: 3, deletions: 0 }],
+      tier: 'trivial' as const,
+    }));
+    await runLifecycleStage(pushB, h.dispatch, {
+      computeRisk: async () => 'full',
+      computeDelta,
+      enqueue: h.enqueue,
+    });
+    expect(computeDelta).toHaveBeenCalledWith(1001, 'acme', 'api', headA, headB);
+    // The blocker re-judges its block; the approvers' files are untouched.
+    expect(h.calls).toEqual([
+      {
+        slug: 'a11y',
+        trigger: 'synchronize',
+        headSha: headB,
+        delta: { sinceHead: headA, files: ['src/b.ts'] },
+      },
+    ]);
+    const stageRun = await getStageRun(pushB.stageRunId);
+    expect(stageRun).toMatchObject({
+      status: 'running',
+      output: { kind: 'dispatched', tier: 'trivial', agents: ['a11y'], sinceHead: headA },
+    });
+    expect(stageRun?.output).toMatchObject({
+      skipped: expect.arrayContaining([
+        { slug: 'review', reason: 'approved earlier and the push does not touch its findings' },
+      ]),
+    });
+
+    await completeLifecycleReview(instance('a11y'), null, 0, 'approve', [], h.enqueue);
+    await expect(getStageRun(pushB.stageRunId)).resolves.toMatchObject({ status: 'completed' });
+    await expect(getFactoryRun(pushB.factoryRunId)).resolves.toMatchObject({
+      status: 'handed_off',
+    });
+  });
+
+  it('re-runs an approver whose flagged file the push touches', async () => {
+    await seedReviewedRepo();
+    const h = harness();
+    await reviewedOpening(h, { review: { verdict: 'approve', paths: ['src/a.ts'] } });
+    await postWebhook(h.app, 'pull_request', pullRequest('synchronize', headB));
+    await runLifecycleStage(h.lastCommand(), h.dispatch, {
+      computeRisk: async () => 'full',
+      computeDelta: async () => ({
+        sinceHead: headA,
+        files: [{ filename: 'src/a.ts', additions: 1, deletions: 1 }],
+        tier: 'trivial',
+      }),
+      enqueue: h.enqueue,
+    });
+    expect(h.calls.map((call) => call.slug)).toEqual(['review']);
+  });
+
+  it('settles a push no agent needs to see as a clean review', async () => {
+    await seedReviewedRepo({ processProfile: 'review_and_repair' });
+    const h = harness();
+    await reviewedOpening(h, { review: { verdict: 'approve', paths: ['src/a.ts'] } });
+    await postWebhook(h.app, 'pull_request', pullRequest('synchronize', headB));
+    const pushB = h.lastCommand();
+    await runLifecycleStage(pushB, h.dispatch, {
+      computeRisk: async () => 'full',
+      computeDelta: async () => ({
+        sinceHead: headA,
+        files: [{ filename: 'docs/notes.md', additions: 2, deletions: 0 }],
+        tier: 'trivial',
+      }),
+      enqueue: h.enqueue,
+    });
+    expect(h.calls).toEqual([]);
+    await expect(getStageRun(pushB.stageRunId)).resolves.toMatchObject({
+      status: 'completed',
+      output: { kind: 'nothing_to_do', reason: 'no agent needs to re-review this push' },
+    });
+    // No standing block, so review-and-repair has nothing left to do — and
+    // nothing here reaches merge.
+    await expect(getFactoryRun(pushB.factoryRunId)).resolves.toMatchObject({
+      status: 'completed',
+    });
+    await expect(listStageRuns(pushB.factoryRunId)).resolves.toMatchObject([
+      { stage: 'review', status: 'completed' },
+    ]);
+  });
+
+  it('tiers the whole change again when the delta cannot be trusted', async () => {
+    await seedReviewedRepo();
+    const h = harness();
+    await reviewedOpening(h, {});
+    await postWebhook(h.app, 'pull_request', pullRequest('synchronize', headB));
+    await runLifecycleStage(h.lastCommand(), h.dispatch, {
+      computeRisk: async () => 'lite',
+      computeDelta: async () => null,
+      enqueue: h.enqueue,
+    });
+    expect(h.calls.map((call) => call.slug).sort()).toEqual(['review', 'security']);
+    expect(h.calls.every((call) => call.headSha === headB && call.delta === undefined)).toBe(true);
+  });
+
+  it('never mistakes the post-repair re-review for a stale push', async () => {
+    await seedReviewedRepo({ processProfile: 'review_and_repair' });
+    const h = harness();
+    await reviewedOpening(h, {});
+    await postWebhook(h.app, 'pull_request', pullRequest('synchronize', headB));
+    const pushB = h.lastCommand();
+    await runLifecycleStage(pushB, h.dispatch, {
+      computeRisk: async () => 'full',
+      computeDelta: async () => null,
+      enqueue: h.enqueue,
+    });
+    for (const call of h.calls) {
+      await completeLifecycleReview(
+        instance(call.slug),
+        null,
+        1,
+        call.slug === 'review' ? 'request_changes' : 'approve',
+        ['src/a.ts'],
+        h.enqueue,
+      );
+    }
+    const repair = h.commands().find((command) => command.stage === 'repair');
+    if (!repair) throw new Error('repair stage was not scheduled');
+    await runLifecycleStage(repair, h.dispatch, { enqueue: h.enqueue });
+    // The repair pushed a new head; the coordinator schedules attempt 2 of
+    // the review on the same run, which inherits the push's stage input.
+    await completeLifecycleRepair(repair.stageRunId, true, { kind: 'fixed' }, h.enqueue);
+    await postWebhook(h.app, 'pull_request', pullRequest('synchronize', headC));
+    const attempt2 = h
+      .commands()
+      .find(
+        (command) =>
+          command.factoryRunId === pushB.factoryRunId &&
+          command.stage === 'review' &&
+          command.stageRunId !== pushB.stageRunId,
+      );
+    if (!attempt2) throw new Error('review attempt 2 was not scheduled');
+    await expect(getStageRun(attempt2.stageRunId)).resolves.toMatchObject({
+      attempt: 2,
+      trigger: 'stage.completed',
+      input: { scheduledHead: headB },
+    });
+
+    h.calls.length = 0;
+    await runLifecycleStage(attempt2, h.dispatch, {
+      computeRisk: async () => 'full',
+      computeDelta: async () => null,
+      enqueue: h.enqueue,
+    });
+    expect(h.calls.length).toBeGreaterThan(0);
+    await expect(getStageRun(attempt2.stageRunId)).resolves.toMatchObject({ status: 'running' });
   });
 });
 

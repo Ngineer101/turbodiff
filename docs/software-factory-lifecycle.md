@@ -79,7 +79,8 @@ Run statuses are:
   reached successfully.
 - `completed`: the selected lifecycle completed inside Turbodiff.
 - `failed`: an unrecoverable stage failure exhausted policy.
-- `cancelled`: an authorized actor stopped the run.
+- `cancelled`: the run's remaining work became moot (a push review superseded
+  by a newer push) or an authorized actor stopped it.
 
 ### Stage run
 
@@ -139,6 +140,33 @@ Required normalized events:
 A stage command includes `factoryRunId`, `stageRunId`, `stage`, `changeId` when
 applicable, and `idempotencyKey`. Consumers reject a command whose stage run is
 not in a claimable state.
+
+### Push re-reviews
+
+A `change.updated` event (a push to an open change) schedules its review stage
+like any other, but the command is enqueued with a per-repository delay
+(`review_push_debounce_minutes`, default 10) and the stage run's input records
+the head it was scheduled for. The coordinator's `debounceActive` fact stays
+false: debouncing is done by deferring the command, never by ignoring the
+event, so a burst of pushes always reviews its last head exactly once. When the
+delayed command runs, the review stage (service layer, `decideLifecycle` is
+unchanged) first checks the head:
+
+- head moved on: the newer push has its own command, so this stage run and its
+  factory run settle as `cancelled` ("superseded by a newer push");
+- head already has a completed review (a force-push back): the stage completes
+  with nothing to do and the run settles as a clean review;
+- otherwise the change is diffed from the last reviewed head (GitHub compare)
+  and that delta, not the whole change, picks the risk tier. Agents that
+  requested changes always re-run; agents that approved re-run only when the
+  delta is `full` or touches a file their findings anchored to; agents with no
+  verdict yet run if the delta's tier includes them. Each review row records
+  `head_sha` and `finding_paths` to make this possible. When no agent needs to
+  look again the stage completes with no blocking findings — every standing
+  block re-runs by rule, so an empty selection means none exists.
+
+`cancelled` is written only by this supersede path today; a human-initiated
+cancel would reuse the same run event (`run.cancelled`).
 
 ## Coordinator decisions
 

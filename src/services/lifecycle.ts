@@ -1,5 +1,7 @@
 import {
   attachFactoryRunChange,
+  cancelFactoryRun,
+  cancelStageRun,
   claimStageRun,
   completeReview,
   createAcceptanceContract,
@@ -11,6 +13,7 @@ import {
   getFactoryRun,
   getRepoById,
   getStageRun,
+  headHasCompletedReview,
   latestAcceptanceContractForChange,
   listCrChecks,
   listStageRuns,
@@ -30,16 +33,31 @@ import type {
   LifecycleStage,
   RunStageCommand,
 } from '../domain/lifecycle-contract.ts';
-import { isJsonObject, isNumber, parseJson, type JsonValue } from '../shared/json.ts';
+import {
+  isJsonObject,
+  isNumber,
+  isString,
+  parseJson,
+  type JsonObject,
+  type JsonValue,
+} from '../shared/json.ts';
 import { parseUtc } from '../shared/time.ts';
 import type { GenerateQueueMessage, VerifyQueueMessage } from '../shared/factory-messages.ts';
 import { installationToken } from '../integrations/github/app.ts';
 import { githubJson, githubPaginate } from '../integrations/github/client.ts';
-import { dispatchChangeReviews, type ReviewDispatcher } from './change-review.ts';
+import {
+  dispatchChangeReviews,
+  type PushReviewContext,
+  type ReviewDispatcher,
+} from './change-review.ts';
 import { mergePullRequest } from './auto-merge.ts';
 import { enqueueFactoryMessage } from './factory-queue.ts';
 import { checkMergeability } from './merge-conflicts.ts';
-import { computeRiskTier } from './review-policy.ts';
+import { computePushDelta, computeRiskTier } from './review-policy.ts';
+
+// Cloudflare Queues cap message delay at 12 hours; the repo setting's CHECK
+// mirrors it, this is the belt to that brace.
+const MAX_QUEUE_DELAY_SECONDS = 12 * 3600;
 
 export type NativeReviewDispatcher = (
   changeRequestId: number,
@@ -98,17 +116,20 @@ export async function scheduleChangeReview(input: {
       : input.trigger === 'synchronize'
         ? 'change.updated'
         : 'change.opened';
+  const isPush = input.trigger === 'synchronize';
   const context = reviewContext(event, change.origin, change.capabilities, {
     draft: change.draft,
     repositoryEnabled: repo.enabled,
-    headChanged: input.trigger === 'synchronize',
+    headChanged: isPush,
+    // Pushes are debounced by delaying the stage command (below) rather than
+    // by ignoring the event, so a burst of pushes reviews the last head once.
     debounceActive: false,
     intakeMatches: true,
   });
   const decision = decideLifecycle(repo.process_profile, context);
   const profile = processProfile(repo.process_profile);
   const stopAfterStage = repo.process_profile === 'review_and_repair' ? 'merge' : 'review';
-  const created = await createFactoryRunWithStage({
+  const runInput: Parameters<typeof createFactoryRunWithStage>[0] = {
     repositoryId: repo.id,
     changeId: change.id,
     profileKey: repo.process_profile,
@@ -118,14 +139,24 @@ export async function scheduleChangeReview(input: {
     trigger: input.trigger,
     actor: input.actor,
     eventKind: event,
-    eventPayload: { trigger: input.trigger },
+    eventPayload: { trigger: input.trigger, headSha: change.source_head },
     decision,
     idempotencyKey: input.idempotencyKey,
-  });
+  };
+  // The stage remembers the head it was scheduled for: when its delayed
+  // command lands after another push, it sees the head moved on and stands
+  // down (runLifecycleStage) — the newer push has its own command.
+  if (isPush && change.source_head) runInput.stageInput = { scheduledHead: change.source_head };
+  const created = await createFactoryRunWithStage(runInput);
 
   if (created.stageRun) {
     const enqueue = input.enqueue ?? enqueueFactoryMessage;
-    await enqueue(commandFor(created.run.id, created.stageRun.id, 'review', change.id));
+    const command = commandFor(created.run.id, created.stageRun.id, 'review', change.id);
+    const delaySeconds = isPush
+      ? Math.min(repo.review_push_debounce_minutes * 60, MAX_QUEUE_DELAY_SECONDS)
+      : 0;
+    if (delaySeconds > 0) await enqueue(command, { delaySeconds });
+    else await enqueue(command);
   }
   return {
     runId: created.run.id,
@@ -282,7 +313,13 @@ export async function scheduleFeatureDelivery(
 
 function stageResultOutput(result: Awaited<ReturnType<typeof dispatchChangeReviews>>): JsonValue {
   if (result.kind === 'dispatched') {
-    return { kind: result.kind, tier: result.tier, agents: result.agents };
+    const output: JsonObject = { kind: result.kind, tier: result.tier, agents: result.agents };
+    if (result.sinceHead) output.sinceHead = result.sinceHead;
+    if (result.skipped.length > 0) output.skipped = result.skipped;
+    return output;
+  }
+  if (result.kind === 'nothing_to_do') {
+    return { kind: result.kind, reason: result.reason, tier: result.tier, skipped: result.skipped };
   }
   return { kind: result.kind, reason: result.reason };
 }
@@ -291,6 +328,13 @@ function featureIdFromInput(input: JsonValue | null): number | null {
   if (!isJsonObject(input)) return null;
   const featureId = input.featureId;
   return isNumber(featureId) && Number.isSafeInteger(featureId) ? featureId : null;
+}
+
+// The head a push-triggered review stage was scheduled for (scheduleChangeReview).
+function scheduledHeadFromInput(input: JsonValue | null): string | null {
+  if (!isJsonObject(input)) return null;
+  const head = input.scheduledHead;
+  return isString(head) && head.length > 0 ? head : null;
 }
 
 async function assertGithubMergeReady(
@@ -442,9 +486,18 @@ export async function completeLifecycleReview(
   reviewUrl: string | null,
   findingsCount: number,
   verdict: 'approve' | 'comment' | 'request_changes',
+  // Files the findings anchored to — what a later push is checked against
+  // before this agent is asked to look again.
+  findingPaths: string[] = [],
   enqueue: typeof enqueueFactoryMessage = enqueueFactoryMessage,
 ): Promise<void> {
-  const completed = await completeReview(agentInstanceId, reviewUrl, findingsCount, verdict);
+  const completed = await completeReview(
+    agentInstanceId,
+    reviewUrl,
+    findingsCount,
+    verdict,
+    findingPaths,
+  );
   if (completed?.stage_run_id) await settleReviewStage(completed.stage_run_id, enqueue);
 }
 
@@ -572,6 +625,7 @@ export async function runLifecycleStage(
   dependencies: {
     enqueue?: typeof enqueueFactoryMessage;
     computeRisk?: typeof computeRiskTier;
+    computeDelta?: typeof computePushDelta;
     dispatchNativeReview?: NativeReviewDispatcher;
     mergeGithub?: (repoId: number, changeNumber: number) => Promise<void>;
     mergeNative?: (changeRequestId: number, actor: string) => Promise<void>;
@@ -716,6 +770,34 @@ export async function runLifecycleStage(
   }
 
   try {
+    // A push review runs after its debounce delay, on the head it was
+    // scheduled for. Only the stage the push itself scheduled carries that
+    // head: a later attempt on the same run (the re-review after a repair)
+    // inherits the input but not the 'synchronize' trigger, and must run.
+    const scheduledHead =
+      stageRun.trigger === 'synchronize' ? scheduledHeadFromInput(stageRun.input) : null;
+    if (scheduledHead && change.source_head && scheduledHead !== change.source_head) {
+      // A newer push arrived while this one waited; it has its own command.
+      const reason = 'superseded by a newer push';
+      await cancelStageRun(
+        stageRun.id,
+        { kind: 'superseded', scheduledHead, currentHead: change.source_head },
+        reason,
+      );
+      await cancelFactoryRun(run.id, reason, `${command.idempotencyKey}:run.cancelled`);
+      return;
+    }
+    if (scheduledHead && (await headHasCompletedReview(repo.id, change.number, scheduledHead))) {
+      // A force-push back to a commit that was already reviewed.
+      await finishStageRun(stageRun.id, 'completed', {
+        kind: 'nothing_to_do',
+        reason: 'head already reviewed',
+        headSha: scheduledHead,
+      });
+      await coordinateStageOutcome(command, true, enqueue, { blockingFindings: false });
+      return;
+    }
+
     if (repo.provider === 'artifacts') {
       const cr = await getChangeRequestByChangeId(change.id);
       if (!cr || !dependencies.dispatchNativeReview) {
@@ -741,18 +823,31 @@ export async function runLifecycleStage(
       return;
     }
 
+    let push: PushReviewContext | undefined;
+    if (scheduledHead) {
+      push = {
+        headSha: scheduledHead,
+        computeDelta: dependencies.computeDelta ?? computePushDelta,
+      };
+    }
     const result = await dispatchChangeReviews(
       change,
       repo,
       run.trigger,
       dispatchReview,
       dependencies.computeRisk ?? computeRiskTier,
-      run.trigger === 'synchronize',
+      push,
       stageRun.id,
     );
-    const success = result.kind === 'dispatched';
-    if (success) {
+    if (result.kind === 'dispatched') {
       await recordStageRunOutput(stageRun.id, stageResultOutput(result));
+    } else if (result.kind === 'nothing_to_do') {
+      // Every blocker re-runs by policy, so an empty selection means no agent
+      // holds a block: the stage is clean. Settled here, not by
+      // settleReviewStage — that only fires from a review row, and this
+      // stage has none.
+      await finishStageRun(stageRun.id, 'completed', stageResultOutput(result));
+      await coordinateStageOutcome(command, true, enqueue, { blockingFindings: false });
     } else {
       await finishStageRun(stageRun.id, 'failed', stageResultOutput(result), result.reason);
       await coordinateStageOutcome(command, false, enqueue);

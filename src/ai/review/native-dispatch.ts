@@ -56,13 +56,15 @@ export async function dispatchNativeCrReviews(
   // post_review must not read as forever-polling in the cockpit.
   await upsertCrCheck(cr.id, 'review', 'running', `${agents.length} agent(s) dispatched`);
   let dispatched = 0;
+  const options: Parameters<typeof dispatchReviewAgent>[5] = {
+    riskTier: tier,
+    modelOverride,
+    changeRequest: { id: cr.id, number: cr.number },
+    stageRunId,
+  };
+  if (cr.source_head) options.headSha = cr.source_head;
   for (const agent of agents) {
-    const ok = await dispatchReviewAgent(agent, repo, cr.number, cockpitUrl, 'cr_opened', {
-      riskTier: tier,
-      modelOverride,
-      changeRequest: { id: cr.id, number: cr.number },
-      stageRunId,
-    });
+    const ok = await dispatchReviewAgent(agent, repo, cr.number, cockpitUrl, 'cr_opened', options);
     if (ok) dispatched += 1;
   }
   if (dispatched === 0) {

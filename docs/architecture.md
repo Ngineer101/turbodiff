@@ -50,8 +50,11 @@ application services <---- AI orchestration
 
 The GitHub webhook route verifies the signature and parses JSON in
 `src/http/webhooks.ts`. `src/services/github-webhooks.ts` decides what the
-event means, and `src/ai/review/dispatch.ts` admits and dispatches the durable
-reviewer.
+event means and schedules a review stage through `src/services/lifecycle.ts`;
+when the stage command runs, `src/services/change-review.ts` applies the
+dispatch policy (risk tier, push delta, agent selection from
+`src/domain/review-selection.ts`) and `src/ai/review/dispatch.ts` admits and
+dispatches the durable reviewer.
 
 Connection rows and compare-and-set refresh claims live in
 `src/data/connections.ts`. Credential decryption and OAuth refresh policy live

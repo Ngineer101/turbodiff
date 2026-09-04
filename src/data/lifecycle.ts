@@ -221,6 +221,49 @@ export async function finishStageRun(
   `);
 }
 
+// A claimed stage whose work was overtaken before it ran (a push review
+// superseded by a newer push). Distinct from 'failed': nothing went wrong and
+// nothing is left to retry.
+export async function cancelStageRun(
+  id: number,
+  output: JsonValue | undefined,
+  reason: string,
+): Promise<void> {
+  await execute(sql`
+    UPDATE app.stage_runs SET status = 'cancelled',
+      output = ${output === undefined ? null : JSON.stringify(output)}::jsonb,
+      error = ${reason}, completed_at = CURRENT_TIMESTAMP
+    WHERE id = ${id} AND status = 'running'
+  `);
+}
+
+// Ends a run whose remaining work is moot, recording why as a lifecycle
+// event so the cancellation is auditable and idempotent on its key. Terminal
+// runs are left alone; the coordinator already treats 'cancelled' as final.
+export async function cancelFactoryRun(
+  runId: number,
+  reason: string,
+  idempotencyKey: string,
+): Promise<void> {
+  await withTransaction(async () => {
+    await execute(sql`
+      INSERT INTO app.lifecycle_events (
+        idempotency_key, factory_run_id, change_id, kind, payload, decision
+      )
+      SELECT ${idempotencyKey}, id, change_id, 'run.cancelled',
+        ${JSON.stringify({ reason })}::jsonb,
+        ${JSON.stringify({ kind: 'ignore', reason })}::jsonb
+      FROM app.factory_runs WHERE id = ${runId}
+      ON CONFLICT (idempotency_key) DO NOTHING
+    `);
+    await execute(sql`
+      UPDATE app.factory_runs SET status = 'cancelled', handoff_reason = ${reason},
+        updated_at = CURRENT_TIMESTAMP, completed_at = CURRENT_TIMESTAMP
+      WHERE id = ${runId} AND status IN ('active', 'awaiting_human')
+    `);
+  });
+}
+
 export async function recordStageRunOutput(id: number, output: JsonValue): Promise<void> {
   await execute(sql`
     UPDATE app.stage_runs SET output = ${JSON.stringify(output)}::jsonb

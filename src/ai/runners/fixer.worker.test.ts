@@ -191,6 +191,7 @@ describe('coordinator-owned repair', () => {
       'https://github.com/acme/api/pull/42#review',
       1,
       'request_changes',
+      ['src/api.ts'],
       enqueue,
     );
 
