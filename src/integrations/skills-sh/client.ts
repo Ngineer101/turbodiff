@@ -1,10 +1,16 @@
 import { isJsonArray, isJsonObject, isNumber, isString, type JsonValue } from '../../shared/json.ts';
 
-// skills.sh catalog adapter (https://www.skills.sh/docs/api). All egress to
-// skills.sh happens through this Worker-side client — the browser only ever
-// sees the normalized shapes below, and the bearer token never leaves the
-// server. The token is optional: an unconfigured client reports so and the
-// routes fall back to GitHub-direct import.
+// skills.sh catalog adapter. Endpoints, params, and response shapes below
+// follow https://www.skills.sh/docs/api (verified against the published docs
+// 2026-09-04): list endpoints wrap results as { data: [...] }, the
+// leaderboard view is selected with ?view=, skill detail serves
+// { hash, files: [{ path, contents }] | null }, and the audit endpoint
+// returns { audits: [{ provider, status, ... }] } or 404 until the first
+// audit exists. All egress to skills.sh happens through this Worker-side
+// client — the browser only ever sees the normalized shapes below, and the
+// bearer token (a Vercel OIDC token, per the docs) never leaves the server.
+// The token is optional: an unconfigured client reports so and the routes
+// fall back to GitHub-direct import.
 
 const API = 'https://skills.sh/api/v1';
 
@@ -73,7 +79,8 @@ function catalogSkill(value: JsonValue): CatalogSkill | null {
 }
 
 function catalogSkills(value: JsonValue): CatalogSkill[] {
-  const list = isJsonArray(value) ? value : isJsonObject(value) && isJsonArray(value.skills) ? value.skills : [];
+  // The documented list envelope is { data: [...] }; tolerate a bare array.
+  const list = isJsonObject(value) && isJsonArray(value.data) ? value.data : isJsonArray(value) ? value : [];
   return list.map(catalogSkill).filter((s): s is CatalogSkill => s !== null);
 }
 
@@ -124,7 +131,7 @@ export function createSkillsShClient(token: string | undefined): SkillsShClient 
     },
 
     async leaderboard(sort) {
-      const payload = await requestJson(`/skills?sort=${encodeURIComponent(sort)}`);
+      const payload = await requestJson(`/skills?view=${encodeURIComponent(sort)}`);
       return catalogSkills(payload);
     },
 
@@ -159,8 +166,9 @@ export function createSkillsShClient(token: string | undefined): SkillsShClient 
       const verdicts: AuditVerdict[] = [];
       for (const entry of list) {
         if (!isJsonObject(entry)) continue;
-        const auditor = isString(entry.auditor) ? entry.auditor : isString(entry.model) ? entry.model : null;
-        const verdict = isString(entry.verdict) ? entry.verdict : isString(entry.status) ? entry.status : null;
+        // Documented audit rows carry { provider, status: "pass" | "warn" | "fail" }.
+        const auditor = isString(entry.provider) ? entry.provider : isString(entry.auditor) ? entry.auditor : null;
+        const verdict = isString(entry.status) ? entry.status : isString(entry.verdict) ? entry.verdict : null;
         if (auditor && verdict) verdicts.push({ auditor, verdict });
       }
       return verdicts;

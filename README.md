@@ -265,6 +265,10 @@ GitHub App and deploy:
    npx wrangler secret put TOKEN_ENCRYPTION_KEY     # openssl rand -hex 32
    # Only if you use org member invites (Settings > Members on an org installation):
    npx wrangler secret put RESEND_API_KEY           # from resend.com; pair with RESEND_FROM_ADDRESS var
+   # Only for the skills.sh catalog browser on the Skills page (a Vercel OIDC
+   # token, see https://www.skills.sh/docs/api); without it the catalog shows
+   # as unconfigured and importing by GitHub URL still works:
+   npx wrangler secret put SKILLS_SH_API_TOKEN
    # Only for Web Push notifications (see below):
    npx wrangler secret put VAPID_PUBLIC_KEY
    npx wrangler secret put VAPID_PRIVATE_KEY

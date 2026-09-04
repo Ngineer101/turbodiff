@@ -17,20 +17,28 @@ describe('skills.sh catalog client', () => {
   });
 
   it('sends the bearer token to the skills.sh origin and normalizes entries', async () => {
+    // Documented search envelope: { data: [...], query, searchType, count, durationMs }.
     const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
       async () =>
         Response.json({
-          skills: [
+          data: [
             {
+              id: 'skl_1',
               source: 'anthropics/skills',
               slug: 'pdf-forms',
               name: 'PDF Forms',
               description: 'Fill forms',
               installs: 42,
-              unknown_field: true,
+              sourceType: 'github',
+              installUrl: null,
+              url: 'https://skills.sh/anthropics/skills/pdf-forms',
             },
             { slug: 'missing-source' },
           ],
+          query: 'pdf',
+          searchType: 'fuzzy',
+          count: 2,
+          durationMs: 3,
         }),
     );
     vi.stubGlobal('fetch', fetchMock);
@@ -51,6 +59,23 @@ describe('skills.sh catalog client', () => {
     expect(new Headers(init?.headers).get('authorization')).toBe('Bearer secret');
   });
 
+  it('requests the leaderboard with the documented view param', async () => {
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async () =>
+        Response.json({
+          data: [{ id: 'skl_1', source: 'a/b', slug: 'c', name: 'C', installs: 7 }],
+          pagination: { page: 0, perPage: 100, total: 1, hasMore: false },
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const client = createSkillsShClient('secret');
+
+    await expect(client.leaderboard('trending')).resolves.toEqual([
+      { source: 'a/b', slug: 'c', name: 'C', description: null, installs: 7 },
+    ]);
+    expect(fetchMock.mock.calls[0][0]).toBe('https://skills.sh/api/v1/skills?view=trending');
+  });
+
   it('maps a non-2xx response to a SkillsShApiError with a truncated body', async () => {
     vi.stubGlobal(
       'fetch',
@@ -67,12 +92,15 @@ describe('skills.sh catalog client', () => {
   });
 
   it('returns null files/hash tolerantly on detail and null on a 404 audit', async () => {
+    // Documented detail shape: top-level { id, source, slug, installs, hash,
+    // files } with no name (the normalizer falls back to the slug) and
+    // files: null when no snapshot exists.
     vi.stubGlobal(
       'fetch',
       vi
         .fn()
         .mockResolvedValueOnce(
-          Response.json({ source: 'a/b', slug: 'c', name: 'C', files: null }),
+          Response.json({ id: 'skl_1', source: 'a/b', slug: 'c', installs: 9, hash: null, files: null }),
         )
         .mockResolvedValueOnce(new Response('not found', { status: 404 })),
     );
@@ -81,23 +109,33 @@ describe('skills.sh catalog client', () => {
     await expect(client.detail('a/b', 'c')).resolves.toEqual({
       source: 'a/b',
       slug: 'c',
-      name: 'C',
+      name: 'c',
       description: null,
-      installs: null,
+      installs: 9,
       hash: null,
       files: null,
     });
     await expect(client.audit('a/b', 'c')).resolves.toBeNull();
   });
 
-  it('normalizes audit verdict rows', async () => {
+  it('normalizes documented audit rows', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
         Response.json({
+          id: 'skl_1',
+          source: 'a/b',
+          slug: 'c',
           audits: [
-            { auditor: 'claude', verdict: 'pass', extra: 1 },
-            { verdict: 'orphaned' },
+            {
+              provider: 'agent-trust-hub',
+              slug: 'c',
+              status: 'pass',
+              summary: 'No issues found.',
+              auditedAt: '2026-09-01T00:00:00Z',
+              riskLevel: 'NONE',
+            },
+            { summary: 'missing provider and status' },
           ],
         }),
       ),
@@ -105,7 +143,7 @@ describe('skills.sh catalog client', () => {
     const client = createSkillsShClient('secret');
 
     await expect(client.audit('a/b', 'c')).resolves.toEqual([
-      { auditor: 'claude', verdict: 'pass' },
+      { auditor: 'agent-trust-hub', verdict: 'pass' },
     ]);
   });
 });
