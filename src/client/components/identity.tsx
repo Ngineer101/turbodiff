@@ -86,15 +86,16 @@ export function Serial({ n, className }: { n: number; className?: string }) {
 }
 
 // Stamp: an outcome, stuck on the work. `ok` is the filled yellow sticker
-// (the sealed outcome); warn and red stay outlined. Reserved for terminal
-// states — never for anything still moving (that's what lamps are for).
+// (the sealed outcome); go (a third party's pass, e.g. a skill audit), warn
+// and red stay outlined. Reserved for terminal states — never for anything
+// still moving (that's what lamps are for).
 export function Stamp({
   children,
   tone = 'ok',
   className,
 }: {
   children: ReactNode;
-  tone?: 'ok' | 'warn' | 'red';
+  tone?: 'ok' | 'go' | 'warn' | 'red';
   className?: string;
 }) {
   return (
@@ -102,6 +103,7 @@ export function Stamp({
       className={cn(
         'stamp text-[11px]',
         tone === 'ok' && 'stamp-seal',
+        tone === 'go' && 'text-go-bright',
         tone === 'warn' && 'text-hold',
         tone === 'red' && 'text-danger',
         className,

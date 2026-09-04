@@ -56,9 +56,7 @@ export function parseSkillMarkdown(markdown: string): ParsedSkillMarkdown {
       const inner = raw.slice(1, -1);
       // Double-quoted YAML scalars escape backslashes and quotes; single
       // quotes double themselves.
-      return raw.startsWith('"')
-        ? inner.replace(/\\(["\\])/g, '$1')
-        : inner.replace(/''/g, "'");
+      return raw.startsWith('"') ? inner.replace(/\\(["\\])/g, '$1') : inner.replace(/''/g, "'");
     }
     return raw;
   };
@@ -147,5 +145,28 @@ export function parseSkillReference(reference: string): SkillReference | null {
   if (parts.length === 3 && parts.every((p) => p.length > 0)) {
     return { kind: 'catalog', source: `${parts[0]}/${parts[1]}`, slug: parts[2] };
   }
+  return null;
+}
+
+// Audit verdicts from skills.sh are free-form strings per auditor, so the
+// classification is loose: anything reading as a pass/fail keyword counts,
+// everything else is unknown (shown but untoned).
+export type AuditOutcome = 'pass' | 'fail' | null;
+
+export function classifyAuditVerdict(verdict: string): AuditOutcome {
+  const v = verdict.toLowerCase();
+  if (/fail|unsafe|danger|malicious|reject/.test(v)) return 'fail';
+  if (/pass|safe|ok|clean|approved/.test(v)) return 'pass';
+  return null;
+}
+
+// The single outcome the import dialog stamps on the skill: `fail` when any
+// auditor failed it, `pass` only when every auditor passed it, and null when
+// there is no audit or the verdicts are unclassifiable.
+export function overallAuditOutcome(audits: { verdict: string }[] | null): AuditOutcome {
+  if (audits === null || audits.length === 0) return null;
+  const outcomes = audits.map((a) => classifyAuditVerdict(a.verdict));
+  if (outcomes.includes('fail')) return 'fail';
+  if (outcomes.every((o) => o === 'pass')) return 'pass';
   return null;
 }

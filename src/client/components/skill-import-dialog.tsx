@@ -4,18 +4,21 @@ import { Download, ShieldAlert } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import type { ApiSkillImportPreview } from '../../shared/api-types.ts';
+import { classifyAuditVerdict, overallAuditOutcome } from '../../domain/skill-import.ts';
 import { api, ApiError } from '../lib/api.ts';
+import { cn } from '../lib/utils.ts';
+import { Stamp } from './identity.tsx';
 import { Markdown } from './markdown.tsx';
 import { Button } from './ui/button.tsx';
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog.tsx';
 import { Field, Input } from './ui/input.tsx';
 import { Pill } from './ui/pill.tsx';
 
-// Verdict → pill tone: audits are free-form strings, so classify loosely.
+// Per-auditor pill tone; the dialog's stamp carries the overall outcome.
 function auditTone(verdict: string): 'on' | 'red' | null {
-  const v = verdict.toLowerCase();
-  if (/pass|safe|ok|clean|approved/.test(v)) return 'on';
-  if (/fail|unsafe|danger|malicious|reject/.test(v)) return 'red';
+  const outcome = classifyAuditVerdict(verdict);
+  if (outcome === 'pass') return 'on';
+  if (outcome === 'fail') return 'red';
   return null;
 }
 
@@ -36,6 +39,9 @@ export function SkillImportDialog({
   const [slug, setSlug] = useState(preview.suggested_slug);
   const [slugEditable, setSlugEditable] = useState(preview.slug_taken);
   const [error, setError] = useState<string | null>(null);
+  // An audit verdict is an outcome, so it gets a stamp (outlined: it's a
+  // third party's finding, not our seal). Unknown/mixed verdicts get none.
+  const auditOutcome = overallAuditOutcome(preview.audit);
 
   const importSkill = useMutation({
     mutationFn: () =>
@@ -63,7 +69,20 @@ export function SkillImportDialog({
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[85dvh] max-w-lg overflow-y-auto">
-        <DialogTitle className="flex flex-wrap items-center gap-2 pr-8 text-base font-medium">
+        {auditOutcome !== null ? (
+          <Stamp
+            tone={auditOutcome === 'pass' ? 'go' : 'red'}
+            className="absolute top-3.5 right-12 uppercase"
+          >
+            audit · {auditOutcome}
+          </Stamp>
+        ) : null}
+        <DialogTitle
+          className={cn(
+            'flex flex-wrap items-center gap-2 text-base font-medium',
+            auditOutcome === null ? 'pr-8' : 'pr-36',
+          )}
+        >
           {preview.name} <Pill>{preview.source_ref}</Pill>
         </DialogTitle>
 
@@ -90,8 +109,8 @@ export function SkillImportDialog({
         <p className="mt-3 flex items-start gap-2.5 rounded-xl border border-line/70 bg-surface/50 px-3.5 py-3 text-xs leading-relaxed text-mute">
           <ShieldAlert className="mt-0.5 size-3.5 shrink-0 text-mute/70" aria-hidden />
           <span>
-            This skill's instructions and files run with full repo write access during runs —
-            review them before importing.
+            This skill's instructions and files run with full repo write access during runs — review
+            them before importing.
           </span>
         </p>
 
@@ -130,6 +149,8 @@ export function SkillImportDialog({
                 onChange={(e) => setSlug(e.target.value)}
                 maxLength={31}
                 className="font-mono"
+                // The slug is the only thing left to fix — land the cursor in it.
+                autoFocus
               />
             </Field>
           ) : (

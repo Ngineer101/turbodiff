@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vite-plus/test';
 // Co-located with the pure skill-import policies.
 import {
+  classifyAuditVerdict,
   deriveSkillSlug,
+  overallAuditOutcome,
   parseSkillMarkdown,
   parseSkillReference,
   sanitizeSkillFiles,
@@ -171,5 +173,39 @@ describe('parseSkillReference', () => {
     'https://github.com/owner/repo/blob/main/SKILL.md',
   ])('returns null for an unparseable reference: %s', (reference) => {
     expect(parseSkillReference(reference)).toBeNull();
+  });
+});
+
+describe('classifyAuditVerdict', () => {
+  it.each(['pass', 'PASSED', 'safe', 'Looks clean', 'approved'])('reads %s as a pass', (v) => {
+    expect(classifyAuditVerdict(v)).toBe('pass');
+  });
+
+  it.each(['fail', 'unsafe', 'malicious', 'rejected'])('reads %s as a fail', (v) => {
+    expect(classifyAuditVerdict(v)).toBe('fail');
+  });
+
+  it('fails over passes when a verdict mentions both', () => {
+    expect(classifyAuditVerdict('not safe — fails the prompt-injection check')).toBe('fail');
+  });
+
+  it('leaves unfamiliar wording unclassified', () => {
+    expect(classifyAuditVerdict('pending')).toBeNull();
+  });
+});
+
+describe('overallAuditOutcome', () => {
+  it('passes only when every auditor passed', () => {
+    expect(overallAuditOutcome([{ verdict: 'pass' }, { verdict: 'clean' }])).toBe('pass');
+  });
+
+  it('fails when any auditor failed, whatever the others said', () => {
+    expect(overallAuditOutcome([{ verdict: 'pass' }, { verdict: 'unsafe' }])).toBe('fail');
+  });
+
+  it('is unknown with no audit, an empty audit, or an unclassifiable verdict', () => {
+    expect(overallAuditOutcome(null)).toBeNull();
+    expect(overallAuditOutcome([])).toBeNull();
+    expect(overallAuditOutcome([{ verdict: 'pass' }, { verdict: 'pending' }])).toBeNull();
   });
 });
