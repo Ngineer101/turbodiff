@@ -2540,8 +2540,15 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       const skills = q ? await skillsSh.search(q, 30) : await skillsSh.leaderboard(sort);
       return c.json<ApiSkillCatalog>({ configured: true, skills });
     } catch (err) {
+      // Degrade rather than 502: this query feeds the browse route's loader,
+      // and a rejected loader would error-page the whole page — taking the
+      // GitHub-direct import form (which doesn't need skills.sh) down with it.
       if (err instanceof SkillsShApiError) {
-        return c.json({ error: 'skills.sh catalog request failed' }, 502);
+        return c.json<ApiSkillCatalog>({
+          configured: true,
+          skills: [],
+          error: 'skills.sh catalog request failed',
+        });
       }
       throw err;
     }

@@ -400,6 +400,10 @@ export interface ApiSkillCatalogEntry {
 export interface ApiSkillCatalog {
   configured: boolean;
   skills: ApiSkillCatalogEntry[];
+  // Set when the configured skills.sh client failed (outage, bad token, rate
+  // limit). Still a 200 so the browse page renders its GitHub-direct import
+  // form instead of an error page.
+  error?: string;
 }
 
 export interface ApiSkillAuditVerdict {

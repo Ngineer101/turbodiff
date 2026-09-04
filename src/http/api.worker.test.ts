@@ -11,7 +11,7 @@ import type { ApiBoard, ApiModels, ApiUsage } from '../shared/api-types.ts';
 import { isJsonObject, isString, parseJson, type JsonObject } from '../shared/json.ts';
 import { RUNNER_MODELS } from '../shared/runner-models.ts';
 import { createApiRoutes, type ApiRouteDependencies } from './api.ts';
-import type { SkillsShClient } from '../integrations/skills-sh/client.ts';
+import { SkillsShApiError, type SkillsShClient } from '../integrations/skills-sh/client.ts';
 import {
   ensureBuiltinAgents,
   getFactoryRun,
@@ -1059,6 +1059,23 @@ describe('skills catalog & import', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ configured: true, skills: [catalogEntry] });
     expect(search).toHaveBeenCalledWith('review', 30);
+  });
+
+  it('degrades a failing configured catalog to a 200 instead of a 502', async () => {
+    const app = skillsApp(
+      fakeSkillsSh({
+        leaderboard: async () => {
+          throw new SkillsShApiError(401, 'skills.sh request failed (401)');
+        },
+      }),
+    );
+    const response = await app.request('https://turbodiff.test/api/skills/catalog');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      configured: true,
+      skills: [],
+      error: 'skills.sh catalog request failed',
+    });
   });
 
   it('imports a catalog skill with provenance and file paths', async () => {

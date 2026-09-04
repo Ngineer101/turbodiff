@@ -130,7 +130,14 @@ export function SkillBrowsePage() {
             ) : null}
           </div>
 
-          {data.skills.length === 0 ? (
+          {data.error ? (
+            <div className="mt-6">
+              <EmptyState>
+                The skills.sh catalog is unavailable right now — importing from a URL below still
+                works.
+              </EmptyState>
+            </div>
+          ) : data.skills.length === 0 ? (
             <div className="mt-6">
               <EmptyState>
                 {debouncedQuery
