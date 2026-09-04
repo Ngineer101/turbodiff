@@ -32,7 +32,11 @@ import { CR_BOT_AUTHOR, maybeAutoMergeCr } from '../../services/change-requests.
 import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
 import { certificateUrl } from '../../services/certificates.ts';
 import { cockpitFeatureUrl } from '../../services/urls.ts';
-import { formatUnmetCriteriaFindings, type CriterionResult } from '../../domain/verification.ts';
+import {
+  formatUnmetCriteriaFindings,
+  PREMORTEM_CRITERION,
+  type CriterionResult,
+} from '../../domain/verification.ts';
 import { parseUtc } from '../../shared/time.ts';
 import { signArtifactKey } from '../../integrations/security/crypto.ts';
 import { resolveRunnerAuth, runnerEnvironment, type RunnerAuth } from '../runtime/runner-auth.ts';
@@ -77,8 +81,6 @@ const HUMAN_FIX_TRIGGERS = new Set(['cockpit_comment', 'chat']);
 // the diff, the author's reasoning, nor the criteria must form its own theory
 // of the reported behavior and try to make it survive the branch.
 const PREMORTEM_TIMEOUT_MS = 10 * 60_000;
-const PREMORTEM_CRITERION =
-  'Premortem: an independent adversarial pass found no mechanism by which the reported behavior survives this change';
 
 function verifyPrompt(feature: FeatureRow, repo: RepositoryRow, criteria: string[]): string {
   const OUT_DIR = outDir(feature.id);

@@ -7,7 +7,14 @@ import { testDatabase } from '../test/database-fixture.ts';
 import { Hono } from 'hono';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import type { AuthedUser } from '../services/auth.ts';
-import type { ApiBoard, ApiModels, ApiSettings, ApiUsage } from '../shared/api-types.ts';
+import { PREMORTEM_CRITERION } from '../domain/verification.ts';
+import type {
+  ApiBoard,
+  ApiFeatureDetail,
+  ApiModels,
+  ApiSettings,
+  ApiUsage,
+} from '../shared/api-types.ts';
 import { isJsonObject, isString, parseJson, type JsonObject } from '../shared/json.ts';
 import { RUNNER_MODELS } from '../shared/runner-models.ts';
 import { createApiRoutes, type ApiRouteDependencies } from './api.ts';
@@ -642,6 +649,50 @@ describe('verification stall display', () => {
       .prepare('SELECT status FROM verifications WHERE id = 801')
       .first<{ status: string }>();
     expect(row?.status).toBe('running');
+  });
+
+  it('shows the premortem row the verifier appended beyond the stored criteria', async () => {
+    // Feature 502 has one human criterion; its failed verification carries a
+    // second result at index 1 — the run-time premortem. The cockpit must
+    // list it (and its failure), not paint 1/1 proven under a failed verdict.
+    // An artifacts-hosted repo keeps the route off GitHub; a PR number is
+    // needed because criteria are only graded once a change exists.
+    await testDatabase().batch([
+      testDatabase().prepare(
+        `INSERT INTO installations (id, account_login, account_id, account_type, provider)
+         VALUES (3003, 'acme-artifacts', 3003, 'Organization', 'artifacts')`,
+      ),
+      testDatabase().prepare(
+        `INSERT INTO repositories (id, installation_id, owner, name, provider, artifacts_repo, default_branch)
+         VALUES (303, 3003, 'acme', 'hosted', 'artifacts', 'acme--hosted', 'main')`,
+      ),
+      testDatabase().prepare(
+        `INSERT INTO features (id, repository_id, title, spec, status, pr_number, acceptance)
+         VALUES (502, 303, 'Ship it', 'spec', 'pr_opened', 1, '["GET /a returns 200"]'::jsonb)`,
+      ),
+      testDatabase().prepare(
+        `INSERT INTO verifications (id, feature_id, status, results)
+         VALUES (802, 502, 'failed',
+           '[{"index":0,"verdict":"pass","note":"ok"},
+             {"index":1,"verdict":"fail","note":"Surviving mechanism: X"}]'::jsonb)`,
+      ),
+    ]);
+    const app = apiApp({
+      authenticate: async () => ({ ...acmeUser, installationIds: [1001, 3003] }),
+      canPushToRepo: async () => true,
+      orgAdmin: async () => true,
+    });
+    const response = await app.request('https://turbodiff.test/api/factory/features/502');
+    expect(response.status).toBe(200);
+    // SAFETY: the 200 body is the ApiFeatureDetail contract under test; the
+    // assertions below fail on any drift in the criteria/verification shape.
+    const detail = (await response.json()) as ApiFeatureDetail;
+    expect(detail.criteria.map((c) => [c.text, c.verdict])).toEqual([
+      ['GET /a returns 200', 'pass'],
+      [PREMORTEM_CRITERION, 'fail'],
+    ]);
+    expect(detail.criteria[1]?.note).toBe('Surviving mechanism: X');
+    expect(detail.verification).toEqual({ status: 'failed', total: 2, failed: 1 });
   });
 
   it("reports a completed 'passed' row as 'passed' regardless of age", async () => {

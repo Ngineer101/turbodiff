@@ -324,9 +324,9 @@ function LifecycleHistory({
                     <span
                       className={cn(
                         'mt-1.5 size-2 shrink-0 rounded-full',
-                        stage.status === 'completed'
+                        stage.status === 'completed' && stage.verdict !== 'failed'
                           ? 'bg-go-bright'
-                          : stage.status === 'failed'
+                          : stage.status === 'failed' || stage.verdict === 'failed'
                             ? 'bg-danger'
                             : stage.status === 'running'
                               ? 'bg-hold lamp-glow-hold animate-pulse-dot'
@@ -340,7 +340,10 @@ function LifecycleHistory({
                           attempt {stage.attempt}
                         </span>
                       ) : null}
-                      <span className="ml-2 text-xs text-mute">{sentence(stage.status)}</span>
+                      <span className="ml-2 text-xs text-mute">
+                        {sentence(stage.status)}
+                        {stage.verdict === 'failed' ? ' · verification failed' : ''}
+                      </span>
                       {stage.error ? (
                         <span className="mt-0.5 block text-xs text-danger">{stage.error}</span>
                       ) : null}
