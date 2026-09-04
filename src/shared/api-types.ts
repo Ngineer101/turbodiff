@@ -243,6 +243,9 @@ export interface ApiLifecycleRun {
     stage: string;
     attempt: number;
     status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+    // Verify stages: the verification's own status ('passed' | 'failed' |
+    // 'error'); a completed stage with a failed verdict is not green.
+    verdict: string | null;
     error: string | null;
     started_at: string | null;
     completed_at: string | null;

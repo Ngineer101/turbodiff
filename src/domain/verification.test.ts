@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vite-plus/test';
-import { formatUnmetCriteriaFindings, verificationSkipReason } from './verification.ts';
+import {
+  formatUnmetCriteriaFindings,
+  gradedCriteria,
+  PREMORTEM_CRITERION,
+  verificationSkipReason,
+} from './verification.ts';
 
 describe('verificationSkipReason', () => {
   // D1-format timestamps ('YYYY-MM-DD HH:MM:SS', UTC) so the helper's
@@ -46,5 +51,54 @@ describe('formatUnmetCriteriaFindings', () => {
 
   it('returns an empty string when everything passed', () => {
     expect(formatUnmetCriteriaFindings(['a'], [{ index: 0, verdict: 'pass', note: '' }])).toBe('');
+  });
+});
+
+describe('gradedCriteria', () => {
+  const acceptance = ['GET /a returns 200', 'POST /b validates its body'];
+
+  it('pairs stored criteria with their results by index and keeps ungraded rows', () => {
+    const rows = gradedCriteria(acceptance, [{ index: 1, verdict: 'pass', note: 'ok' }]);
+    expect(rows).toEqual([
+      { text: acceptance[0], result: null },
+      { text: acceptance[1], result: { index: 1, verdict: 'pass', note: 'ok' } },
+    ]);
+  });
+
+  it('re-derives the premortem row the verifier appended beyond the stored criteria', () => {
+    const premortem = { index: 2, verdict: 'fail', note: 'Surviving mechanism: …' } as const;
+    const rows = gradedCriteria(acceptance, [
+      { index: 0, verdict: 'pass', note: 'ok' },
+      { index: 1, verdict: 'pass', note: 'ok' },
+      premortem,
+    ]);
+    expect(rows).toHaveLength(3);
+    expect(rows[2]).toEqual({ text: PREMORTEM_CRITERION, result: premortem });
+  });
+
+  it('labels any further appended rows generically instead of as the premortem', () => {
+    const rows = gradedCriteria(
+      ['only'],
+      [
+        { index: 2, verdict: 'pass', note: 'extra' },
+        { index: 1, verdict: 'pass', note: 'premortem' },
+      ],
+    );
+    expect(rows.map((r) => r.text)).toEqual(['only', PREMORTEM_CRITERION, 'Verification check #3']);
+  });
+});
+
+describe('formatUnmetCriteriaFindings', () => {
+  it('names the premortem when it is the failing row', () => {
+    const findings = formatUnmetCriteriaFindings(
+      ['stored criterion'],
+      [
+        { index: 0, verdict: 'pass', note: 'ok' },
+        { index: 1, verdict: 'fail', note: 'Surviving mechanism: X' },
+      ],
+    );
+    expect(findings).toContain(`not met: ${PREMORTEM_CRITERION}`);
+    expect(findings).toContain('Evidence: Surviving mechanism: X');
+    expect(findings).not.toContain('undefined');
   });
 });

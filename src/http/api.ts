@@ -3,7 +3,11 @@ import { env } from 'cloudflare:workers';
 import { Hono, type Context } from 'hono';
 import { factoryUnsupportedReason } from '../integrations/git/provider.ts';
 import { parseUtc } from '../shared/time.ts';
-import { formatUnmetCriteriaFindings, type CriterionResult } from '../domain/verification.ts';
+import {
+  formatUnmetCriteriaFindings,
+  gradedCriteria,
+  type CriterionResult,
+} from '../domain/verification.ts';
 import {
   agentUsageForMonth,
   automationUsageForMonth,
@@ -510,6 +514,14 @@ export interface ApiRouteDependencies {
   enqueueFactory?: typeof enqueueFactoryMessage;
   // Injectable for tests (no outbound fetch in the worker pool).
   skillsSh?: SkillsShClient;
+}
+
+// A verify stage completes whenever the verification ran (its pass/fail is a
+// coordinator fact, not a stage failure), so the stage row alone reads green
+// for a failed verdict. Surface the recorded verdict for the cockpit.
+function stageVerdict(output: JsonValue | null): string | null {
+  if (!isJsonObject(output) || output.kind !== 'verification_completed') return null;
+  return isString(output.status) ? output.status : null;
 }
 
 export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
@@ -1528,6 +1540,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
             stage: stage.stage,
             attempt: stage.attempt,
             status: stage.status,
+            verdict: stageVerdict(stage.output),
             error: stage.error,
             started_at: stage.started_at,
             completed_at: stage.completed_at,
@@ -1653,23 +1666,25 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         caption: demo.caption ?? null,
       };
     }
-    const criteria = feature.acceptance ?? [];
-    const results = verification?.results ?? [];
+    // gradedCriteria re-derives the run-time premortem row the verifier
+    // appends beyond the stored criteria — zipping by index alone dropped the
+    // one failing row and painted N/N proven under a failed verdict.
     base.criteria = await Promise.all(
-      criteria.map(async (text, i) => {
-        const r = results.find((x) => x.index === i);
-        let screenshotUrl: string | null = null;
-        if (r?.screenshot) {
-          const key = `verify/${feature.id}/${r.screenshot.replace(/[^\w.-]/g, '')}`;
-          screenshotUrl = `/artifacts/${key}?sig=${await signArtifactKey(key)}`;
-        }
-        return {
-          text,
-          verdict: r?.verdict ?? null,
-          note: r?.note ?? null,
-          screenshot_url: screenshotUrl,
-        };
-      }),
+      gradedCriteria(feature.acceptance ?? [], verification?.results ?? []).map(
+        async ({ text, result: r }) => {
+          let screenshotUrl: string | null = null;
+          if (r?.screenshot) {
+            const key = `verify/${feature.id}/${r.screenshot.replace(/[^\w.-]/g, '')}`;
+            screenshotUrl = `/artifacts/${key}?sig=${await signArtifactKey(key)}`;
+          }
+          return {
+            text,
+            verdict: r?.verdict ?? null,
+            note: r?.note ?? null,
+            screenshot_url: screenshotUrl,
+          };
+        },
+      ),
     );
     base.verification = verificationSummary(
       verification?.status ?? null,
