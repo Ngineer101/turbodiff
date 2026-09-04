@@ -7,7 +7,6 @@ import {
   ExternalLink,
   MessageSquare,
   PanelRightClose,
-  PanelRightOpen,
   RotateCcw,
   X,
 } from 'lucide-react';
@@ -856,16 +855,6 @@ function CollapsedRail({
       data-state="collapsed"
       className="sticky top-0 flex h-dvh w-12 shrink-0 flex-col items-center gap-3 border-l border-line bg-surface/50 p-2"
     >
-      <button
-        type="button"
-        onClick={onExpand}
-        title="Expand agent chat (⌘J)"
-        aria-label="Expand agent chat"
-        aria-expanded={false}
-        className="cursor-pointer rounded-md p-1 text-mute transition-colors hover:bg-raised/60 hover:text-ink"
-      >
-        <PanelRightOpen className="size-3.5" aria-hidden />
-      </button>
       <Tooltip label={label} side="left">
         <button
           type="button"

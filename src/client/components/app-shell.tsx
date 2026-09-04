@@ -129,17 +129,12 @@ function GithubRecoveryBanner({ me }: { me: ApiMe }) {
   );
 }
 
-// The tilted TD sticker beside a bold wordmark — the same mark the landing
-// page and the manifest icon use, so the app reads as one thing.
+// The logo mark beside a bold wordmark — the same image the login page,
+// splash, and manifest icon use, so the app reads as one thing.
 function Logo() {
   return (
     <Link to="/" className="flex items-center gap-2.5 text-base font-bold tracking-tight text-ink">
-      <span
-        aria-hidden
-        className="flex size-7 -rotate-6 items-center justify-center rounded-md bg-accent text-[11px] font-bold tracking-tight text-accent-ink shadow-edge-xs"
-      >
-        TD
-      </span>
+      <img src="/logo-small.png" alt="" width={28} height={28} className="size-7 rounded-md" />
       turbodiff
     </Link>
   );
