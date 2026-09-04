@@ -123,8 +123,10 @@ the CR's source branch, with reports and the attempt-cap handoff landing as
 CR comments and an immediate refresh + re-review after each fix push.
 Still GitHub-only (intakes reject with a clear error): automations and the
 operator PR-URL `/internal/fix` endpoint. Native reviews record `reviews`
-rows (usage/dashboard parity) but the webhook path's push-debounce
-heuristics don't apply to them yet.
+rows (usage/dashboard parity) and native pushes share the webhook path's
+trailing debounce and superseded-push cancellation (`scheduleChangeReview`);
+the delta-based tiering and agent selection are still GitHub-only — a native
+push re-tiers from the CR's own file summary and runs every agent in tier.
 Multi-installation orgs (GitHub org that also hosts Artifacts projects under
 one cockpit org) remain deferred.
 

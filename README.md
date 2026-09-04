@@ -50,7 +50,11 @@ changes through on-demand or automatic repository intake):
 - One durable agent instance per PR (`owner--repo--number`), so re-reviews
   continue the same conversation and reconcile against earlier findings.
 - Risk tiering sizes the effort: trivial changes get one generalist agent,
-  large or sensitive changes the full agent fleet.
+  large or sensitive changes the full agent fleet. A push to a reviewed PR is
+  tiered on what changed since the last review, waits out a per-repo quiet
+  window (a newer push supersedes it), and re-runs only the agents it
+  concerns: those that requested changes, and approvers whose flagged files
+  it touches.
 - Optional blocking mode: a P1 finding posts `REQUEST_CHANGES`, a clean review
   approves.
 - Custom review agents (personas) per installation, with optional remote
@@ -342,8 +346,8 @@ vp run deploy
    (capped per installation per day via `REVIEW_DAILY_LIMIT`); recent reviews
    and costs are on `/usage`.
 4. Configure per-repo behavior on `/settings`: the factory toggle, re-review
-   on push, blocking reviews, auto-fix, auto-merge, demo videos, and the
-   sandbox check command.
+   on push (with its quiet window in minutes), blocking reviews, auto-fix,
+   auto-merge, demo videos, and the sandbox check command.
 
 Operator endpoints (Bearer `REVIEW_SECRET`) mirror the UI for automation:
 `POST /review` (manual re-review), `POST /internal/generate`,

@@ -48,6 +48,6 @@ package.json script names, which is why dev/build/deploy exist only as tasks).
 
 ## Conventions
 
-- Reviews are tracked in PostgreSQL: dispatched rows insert as `running`; `post_review` flips them to `completed`. A row still `running` after ~20 min renders as `stalled` on `/reviews`.
+- Reviews are tracked in PostgreSQL: dispatched rows insert as `running` with the `head_sha` under review; `post_review` flips them to `completed` and records the `finding_paths` its findings anchored to (both feed the push re-review policy in `src/domain/review-selection.ts`). A row still `running` after ~20 min renders as `stalled` on `/reviews`.
 - The reviewer model is set in `src/ai/agents/pr-reviewer.ts` (`thinkingLevel: 'off'` — see the comment there before changing it).
 - No provider API keys live in the Worker: model calls go through the `env.AI` binding into the named AI Gateway (`AI_GATEWAY_ID` in wrangler.jsonc).

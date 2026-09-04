@@ -94,6 +94,7 @@ import {
   setRepoDemoVideos,
   setRepoEnabled,
   setRepoReviewOnPush,
+  setRepoReviewPushDebounceMinutes,
   setRepoReviewIntake,
   setRepoProcessProfile,
   setRepoSkillEnabled,
@@ -2915,6 +2916,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
             provider: r.provider,
             enabled: r.enabled,
             review_on_push: r.review_on_push,
+            review_push_debounce_minutes: r.review_push_debounce_minutes,
             review_intake: r.review_intake,
             process_profile: r.process_profile,
             blocking_reviews: r.blocking_reviews,
@@ -3089,6 +3091,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   // check_command is shell that later runs in the fix sandbox — so beyond
   // installation membership this demands verified push permission, the same
   // bar as the merge these toggles can automate.
+  // The queue delays a push review by at most 12 hours (the repositories
+  // CHECK constraint mirrors this bound).
+  const MAX_PUSH_DEBOUNCE_MINUTES = 720;
+  const isValidPushDebounceMinutes = (minutes: number): boolean =>
+    Number.isInteger(minutes) && minutes >= 0 && minutes <= MAX_PUSH_DEBOUNCE_MINUTES;
   app.patch('/repos/:id', async (c) => {
     const repo = await authorizedRepo(c);
     if (!repo) return c.json({ error: 'unknown repository' }, 404);
@@ -3106,6 +3113,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       .json<{
         enabled?: boolean;
         review_on_push?: boolean;
+        review_push_debounce_minutes?: number;
         review_intake?: 'factory_only' | 'on_demand' | 'all_changes';
         process_profile?: AdoptableProcessProfileKey;
         blocking_reviews?: boolean;
@@ -3137,8 +3145,25 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         400,
       );
     }
+    if (
+      body.review_push_debounce_minutes !== undefined &&
+      !(
+        isNumber(body.review_push_debounce_minutes) &&
+        isValidPushDebounceMinutes(body.review_push_debounce_minutes)
+      )
+    ) {
+      return c.json(
+        {
+          error: `review_push_debounce_minutes must be an integer between 0 and ${MAX_PUSH_DEBOUNCE_MINUTES}`,
+        },
+        400,
+      );
+    }
     if (isBoolean(body.enabled)) await setRepoEnabled(repo.id, body.enabled);
     if (isBoolean(body.review_on_push)) await setRepoReviewOnPush(repo.id, body.review_on_push);
+    if (isNumber(body.review_push_debounce_minutes)) {
+      await setRepoReviewPushDebounceMinutes(repo.id, body.review_push_debounce_minutes);
+    }
     if (body.review_intake) await setRepoReviewIntake(repo.id, body.review_intake);
     if (body.process_profile) await setRepoProcessProfile(repo.id, body.process_profile);
     if (isBoolean(body.blocking_reviews))

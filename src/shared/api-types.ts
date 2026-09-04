@@ -390,6 +390,9 @@ export interface ApiRepoSettings {
   provider: string; // 'github' | 'artifacts'
   enabled: boolean;
   review_on_push: boolean;
+  // Trailing window (minutes) a push waits before its re-review runs; a newer
+  // push in the window supersedes it. 0 reviews immediately.
+  review_push_debounce_minutes: number;
   review_intake: 'factory_only' | 'on_demand' | 'all_changes';
   process_profile: ApiProcessProfile;
   blocking_reviews: boolean;

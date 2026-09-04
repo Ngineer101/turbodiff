@@ -40,6 +40,10 @@ import {
   tryRecordFixAttempt,
   markReviewFailed,
   tryRecordReview,
+  completeReview,
+  headHasCompletedReview,
+  lastReviewedHead,
+  latestCompletedReviewsByAgent,
   updatePlan,
   upsertInstallation,
   upsertPushSubscription,
@@ -351,6 +355,39 @@ describe('review dispatch invariants', () => {
       )
       .first<{ count: number }>();
     expect(count?.count).toBe(1);
+  });
+
+  it('remembers each agent’s last verdict, the head it judged, and its findings’ files', async () => {
+    const headA = 'a'.repeat(40);
+    const headB = 'b'.repeat(40);
+    const record = (slug: string, trigger: string, head: string | null) =>
+      tryRecordReview(101, 1001, 13, trigger, slug, `${slug}--acme--api--13`, 'full', null, head);
+
+    await record('review', 'opened', headA);
+    await completeReview('review--acme--api--13', null, 1, 'approve', ['src/a.ts']);
+    // A failed dispatch concluded nothing and must not count as a prior.
+    await record('security', 'opened', headA);
+    await markReviewFailed('security--acme--api--13', 'boom');
+    // A row from before heads were tracked still carries its verdict.
+    await tryRecordReview(101, 1001, 13, 'opened', 'a11y', 'a11y--acme--api--13');
+    await completeReview('a11y--acme--api--13', null, 2, 'request_changes', ['src/x.ts']);
+    // The newest completed row per agent wins.
+    await record('review', 'synchronize', headB);
+    await completeReview('review--acme--api--13', null, 0, 'approve', []);
+
+    await expect(latestCompletedReviewsByAgent(101, 13)).resolves.toEqual([
+      {
+        agent_slug: 'a11y',
+        verdict: 'request_changes',
+        head_sha: null,
+        finding_paths: ['src/x.ts'],
+      },
+      { agent_slug: 'review', verdict: 'approve', head_sha: headB, finding_paths: [] },
+    ]);
+    await expect(lastReviewedHead(101, 13)).resolves.toBe(headB);
+    await expect(lastReviewedHead(101, 14)).resolves.toBeNull();
+    await expect(headHasCompletedReview(101, 13, headA)).resolves.toBe(true);
+    await expect(headHasCompletedReview(101, 13, 'c'.repeat(40))).resolves.toBe(false);
   });
 
   it('fails a stale running claim before admitting its replacement', async () => {

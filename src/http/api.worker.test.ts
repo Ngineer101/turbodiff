@@ -7,8 +7,8 @@ import { testDatabase } from '../test/database-fixture.ts';
 import { Hono } from 'hono';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import type { AuthedUser } from '../services/auth.ts';
-import type { ApiBoard, ApiModels, ApiUsage } from '../shared/api-types.ts';
-import { isJsonObject, isString, parseJson } from '../shared/json.ts';
+import type { ApiBoard, ApiModels, ApiSettings, ApiUsage } from '../shared/api-types.ts';
+import { isJsonObject, isString, parseJson, type JsonObject } from '../shared/json.ts';
 import { RUNNER_MODELS } from '../shared/runner-models.ts';
 import { createApiRoutes, type ApiRouteDependencies } from './api.ts';
 import {
@@ -188,6 +188,35 @@ describe('API authentication and CSRF', () => {
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({ error: 'cross-origin request rejected' });
     expect(authenticate).not.toHaveBeenCalled();
+  });
+});
+
+describe('push re-review window', () => {
+  it('round-trips the debounce minutes and rejects values outside 0..720', async () => {
+    const app = authenticatedApi();
+    const patch = (body: JsonObject) =>
+      app.request('https://turbodiff.test/api/repos/101', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    for (const invalid of [-1, 721, 1.5, '15']) {
+      const rejected = await patch({ review_push_debounce_minutes: invalid });
+      expect(rejected.status).toBe(400);
+      expect(await rejected.json()).toEqual({
+        error: 'review_push_debounce_minutes must be an integer between 0 and 720',
+      });
+    }
+    await expect(getRepoById(101)).resolves.toMatchObject({ review_push_debounce_minutes: 10 });
+
+    const saved = await patch({ review_push_debounce_minutes: 30 });
+    expect(saved.status).toBe(200);
+    await expect(getRepoById(101)).resolves.toMatchObject({ review_push_debounce_minutes: 30 });
+    const settings = await app.request('https://turbodiff.test/api/settings');
+    const body = await settings.json<ApiSettings>();
+    expect(body.installations.flatMap((inst) => inst.repos)).toContainEqual(
+      expect.objectContaining({ id: 101, review_push_debounce_minutes: 30 }),
+    );
   });
 });
 
