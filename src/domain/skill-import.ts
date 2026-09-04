@@ -84,14 +84,17 @@ export function deriveSkillSlug(raw: string): string {
 
 // Drops the root SKILL.md (its body becomes `instructions` and it is
 // re-rendered at mount time), drops invalid paths, and enforces the size
-// budget. Over-budget imports fail loudly rather than silently truncating.
+// budget. SKILL.md still counts against the byte limits before it is
+// dropped — its body travels with the skill row everywhere the files do.
+// Over-budget imports fail loudly rather than silently truncating.
 export function sanitizeSkillFiles(files: { path: string; contents: string }[]): SkillFile[] {
-  const kept = files.filter((f) => f.path !== 'SKILL.md' && validSkillFilePath(f.path));
+  const valid = files.filter((f) => validSkillFilePath(f.path));
+  const kept = valid.filter((f) => f.path !== 'SKILL.md');
   if (kept.length > MAX_FILES) {
     throw new Error(`skill has too many files (${kept.length}; the limit is ${MAX_FILES})`);
   }
   let total = 0;
-  for (const file of kept) {
+  for (const file of valid) {
     const bytes = new TextEncoder().encode(file.contents).length;
     if (bytes > MAX_FILE_BYTES) {
       throw new Error(`skill file "${file.path}" is too large (the limit is 256 KiB per file)`);

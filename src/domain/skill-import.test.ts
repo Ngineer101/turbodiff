@@ -97,6 +97,23 @@ describe('sanitizeSkillFiles', () => {
     ).toThrow('too large');
   });
 
+  it('applies the per-file limit to SKILL.md even though it is dropped', () => {
+    expect(() =>
+      sanitizeSkillFiles([{ path: 'SKILL.md', contents: 'x'.repeat(256 * 1024 + 1) }]),
+    ).toThrow('too large');
+  });
+
+  it('counts SKILL.md against the total budget', () => {
+    const files = [
+      { path: 'SKILL.md', contents: 'x'.repeat(250 * 1024) },
+      ...Array.from({ length: 4 }, (_, i) => ({
+        path: `f${i}.md`,
+        contents: 'x'.repeat(250 * 1024),
+      })),
+    ];
+    expect(() => sanitizeSkillFiles(files)).toThrow('1 MiB');
+  });
+
   it('throws when the total budget is exceeded', () => {
     const files = Array.from({ length: 5 }, (_, i) => ({
       path: `f${i}.md`,
