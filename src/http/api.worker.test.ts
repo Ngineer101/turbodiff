@@ -1179,6 +1179,43 @@ describe('skills catalog & import', () => {
     expect(await response.json()).toEqual({ configured: false, skills: [] });
   });
 
+  it('degrades the catalog on a non-HTTP failure instead of erroring the browse page', async () => {
+    // fetch rejecting (DNS, reset, TLS) surfaces as a TypeError, not a
+    // SkillsShApiError — the browse loader must still get a 200 so the
+    // GitHub-direct import form stays reachable.
+    const app = skillsApp(
+      fakeSkillsSh({
+        leaderboard: async () => {
+          throw new TypeError('fetch failed');
+        },
+      }),
+    );
+    const response = await app.request('https://turbodiff.test/api/skills/catalog');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      configured: true,
+      skills: [],
+      error: 'skills.sh catalog request failed',
+    });
+  });
+
+  it('answers 502 with the upstream message when a preview fetch rejects', async () => {
+    const app = skillsApp(
+      fakeSkillsSh({
+        detail: async () => {
+          throw new TypeError('fetch failed');
+        },
+      }),
+    );
+    const response = await postJson(app, '/api/skills/import/preview', {
+      reference: 'acme/skills/pdf-forms',
+    });
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      error: 'skill source request failed: fetch failed',
+    });
+  });
+
   it('proxies a catalog search through the server-side client', async () => {
     const search = vi.fn(async () => [catalogEntry]);
     const app = skillsApp(fakeSkillsSh({ search }));

@@ -2550,14 +2550,15 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       // Degrade rather than 502: this query feeds the browse route's loader,
       // and a rejected loader would error-page the whole page — taking the
       // GitHub-direct import form (which doesn't need skills.sh) down with it.
-      if (err instanceof SkillsShApiError) {
-        return c.json<ApiSkillCatalog>({
-          configured: true,
-          skills: [],
-          error: 'skills.sh catalog request failed',
-        });
-      }
-      throw err;
+      // Every failure mode counts, not only HTTP errors: a rejected fetch
+      // (DNS, reset, TLS) or a non-JSON 2xx body from a CDN error page throws
+      // TypeError/SyntaxError and must degrade the same way.
+      console.error('turbodiff: skills.sh catalog request failed:', err);
+      return c.json<ApiSkillCatalog>({
+        configured: true,
+        skills: [],
+        error: 'skills.sh catalog request failed',
+      });
     }
   });
 
@@ -2605,8 +2606,12 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       });
     } catch (err) {
       if (err instanceof SkillImportError) return c.json({ error: err.message }, 400);
+      // Anything else escaping the resolver is an upstream failure (skills.sh
+      // or GitHub HTTP errors, rejected fetches, unparseable bodies): answer
+      // 502 with the message so the dialog can show it, not an opaque 500.
       if (err instanceof SkillsShApiError) return c.json({ error: err.message }, 502);
-      throw err;
+      const detail = err instanceof Error ? err.message : String(err);
+      return c.json({ error: `skill source request failed: ${detail}`.slice(0, 500) }, 502);
     }
   });
 
@@ -2638,8 +2643,12 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       );
     } catch (err) {
       if (err instanceof SkillImportError) return c.json({ error: err.message }, 400);
+      // Anything else escaping the resolver is an upstream failure (skills.sh
+      // or GitHub HTTP errors, rejected fetches, unparseable bodies): answer
+      // 502 with the message so the dialog can show it, not an opaque 500.
       if (err instanceof SkillsShApiError) return c.json({ error: err.message }, 502);
-      throw err;
+      const detail = err instanceof Error ? err.message : String(err);
+      return c.json({ error: `skill source request failed: ${detail}`.slice(0, 500) }, 502);
     }
     const override = body && isString(body.slug) ? body.slug.trim().toLowerCase() : '';
     const slug = override || resolved.suggested_slug;
