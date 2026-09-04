@@ -94,6 +94,7 @@ import {
   setRepoDemoVideos,
   setRepoEnabled,
   setRepoReviewOnPush,
+  setRepoReviewPushDebounceMinutes,
   setRepoReviewIntake,
   setRepoProcessProfile,
   setRepoSkillEnabled,
@@ -130,7 +131,7 @@ import {
 import { APIError } from 'better-auth';
 import { withAuth } from '../integrations/auth/better-auth.ts';
 import { certificateUrl } from '../services/certificates.ts';
-import { memberRole } from '../services/access-control.ts';
+import { inviterLabel, memberRole, organizationSummary } from '../services/access-control.ts';
 import {
   CR_BOT_AUTHOR,
   getCrDiffPatch,
@@ -220,6 +221,8 @@ import type {
   ApiFeatureDiff,
   ApiIntegrations,
   ApiInvitation,
+  ApiInvitationAccepted,
+  ApiInvitationPreview,
   ApiMe,
   ApiMember,
   ApiModels,
@@ -447,7 +450,9 @@ async function resolveSkillImport(
     }
     const skillMd = detail.files.find((f) => f.path === 'SKILL.md');
     if (!skillMd) {
-      throw new SkillImportError('the skills.sh snapshot has no SKILL.md; import it via its GitHub URL instead');
+      throw new SkillImportError(
+        'the skills.sh snapshot has no SKILL.md; import it via its GitHub URL instead',
+      );
     }
     const parsed = parseSkillMarkdown(skillMd.contents);
     return {
@@ -469,7 +474,9 @@ async function resolveSkillImport(
     folder = await fetchGithubSkillFolder(await installationToken(installationId), reference);
   } catch (err) {
     if (err instanceof GitHubApiError && err.status === 404) {
-      throw new SkillImportError('the GitHub folder was not found (check the URL, branch, and path)');
+      throw new SkillImportError(
+        'the GitHub folder was not found (check the URL, branch, and path)',
+      );
     }
     throw err;
   }
@@ -2566,7 +2573,10 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const reference = importReference(body);
     if (!reference) {
       return c.json(
-        { error: 'unrecognized reference — use owner/repo/skill, a skills.sh URL, or a GitHub folder URL' },
+        {
+          error:
+            'unrecognized reference — use owner/repo/skill, a skills.sh URL, or a GitHub folder URL',
+        },
         400,
       );
     }
@@ -2611,7 +2621,10 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const reference = importReference(body);
     if (!reference) {
       return c.json(
-        { error: 'unrecognized reference — use owner/repo/skill, a skills.sh URL, or a GitHub folder URL' },
+        {
+          error:
+            'unrecognized reference — use owner/repo/skill, a skills.sh URL, or a GitHub folder URL',
+        },
         400,
       );
     }
@@ -3247,6 +3260,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
             provider: r.provider,
             enabled: r.enabled,
             review_on_push: r.review_on_push,
+            review_push_debounce_minutes: r.review_push_debounce_minutes,
             review_intake: r.review_intake,
             process_profile: r.process_profile,
             blocking_reviews: r.blocking_reviews,
@@ -3285,6 +3299,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   // src/services/access-control.ts for why the 'member'/'invitation' resources keep
   // better-auth's own action vocabulary instead of app-specific verbs.
 
+  // better-auth stores roles as free text; the API vocabulary is closed.
+  function apiRole(role: string): ApiRole {
+    return role === 'owner' || role === 'admin' ? role : 'member';
+  }
+
   function orgApiErrorResponse<T>(c: Context<ApiEnv>, err: T): Response {
     if (!(err instanceof APIError)) throw err;
     const body = err.body;
@@ -3314,8 +3333,6 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       listPendingInvitations(resolved.orgId),
       memberRole(resolved.orgId, c.get('user').session.userId),
     ]);
-    const asRole = (role: string): ApiRole =>
-      role === 'owner' || role === 'admin' ? role : 'member';
     return c.json<ApiOrgMembers>({
       org_id: resolved.orgId,
       members: members.map(
@@ -3323,7 +3340,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
           id: m.id,
           login: m.login,
           email: m.email,
-          role: asRole(m.role),
+          role: apiRole(m.role),
           joined_at: m.created_at,
         }),
       ),
@@ -3331,7 +3348,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         (i): ApiInvitation => ({
           id: i.id,
           email: i.email,
-          role: asRole(i.role),
+          role: apiRole(i.role),
           status: i.status,
           expires_at: i.expires_at,
         }),
@@ -3369,6 +3386,56 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         role: invitation.role as ApiRole,
         status: invitation.status,
         expires_at: invitation.expiresAt ? new Date(invitation.expiresAt).toISOString() : null,
+      });
+    } catch (err) {
+      return orgApiErrorResponse(c, err);
+    }
+  });
+
+  // Invitation-email landing (/accept-invite): the recipient reads the
+  // invitation they were sent, then accepts it. Both run better-auth's own
+  // endpoints on the caller's real session, so its recipient check
+  // (invitation email = session email), expiry, and membership limit apply
+  // unchanged — no installation gate here, because the recipient has no
+  // installation access yet; the email match is the whole authorization.
+  app.get('/invitations/:id', async (c) => {
+    try {
+      const invitation = await withAuth((instance) =>
+        instance.api.getInvitation({
+          headers: c.req.raw.headers,
+          query: { id: c.req.param('id') },
+        }),
+      );
+      const [org, invitedBy] = await Promise.all([
+        organizationSummary(invitation.organizationId),
+        inviterLabel(invitation.inviterId),
+      ]);
+      return c.json<ApiInvitationPreview>({
+        id: invitation.id,
+        email: invitation.email,
+        role: apiRole(invitation.role),
+        org_name: org?.name ?? invitation.organizationName,
+        installation_id: org?.installationId ?? null,
+        invited_by: invitedBy,
+        expires_at: invitation.expiresAt ? new Date(invitation.expiresAt).toISOString() : null,
+      });
+    } catch (err) {
+      return orgApiErrorResponse(c, err);
+    }
+  });
+
+  app.post('/invitations/:id/accept', async (c) => {
+    try {
+      const accepted = await withAuth((instance) =>
+        instance.api.acceptInvitation({
+          headers: c.req.raw.headers,
+          body: { invitationId: c.req.param('id') },
+        }),
+      );
+      const org = await organizationSummary(accepted.invitation.organizationId);
+      return c.json<ApiInvitationAccepted>({
+        org_name: org?.name ?? '',
+        installation_id: org?.installationId ?? null,
       });
     } catch (err) {
       return orgApiErrorResponse(c, err);
@@ -3421,6 +3488,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   // check_command is shell that later runs in the fix sandbox — so beyond
   // installation membership this demands verified push permission, the same
   // bar as the merge these toggles can automate.
+  // The queue delays a push review by at most 12 hours (the repositories
+  // CHECK constraint mirrors this bound).
+  const MAX_PUSH_DEBOUNCE_MINUTES = 720;
+  const isValidPushDebounceMinutes = (minutes: number): boolean =>
+    Number.isInteger(minutes) && minutes >= 0 && minutes <= MAX_PUSH_DEBOUNCE_MINUTES;
   app.patch('/repos/:id', async (c) => {
     const repo = await authorizedRepo(c);
     if (!repo) return c.json({ error: 'unknown repository' }, 404);
@@ -3438,6 +3510,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       .json<{
         enabled?: boolean;
         review_on_push?: boolean;
+        review_push_debounce_minutes?: number;
         review_intake?: 'factory_only' | 'on_demand' | 'all_changes';
         process_profile?: AdoptableProcessProfileKey;
         blocking_reviews?: boolean;
@@ -3469,8 +3542,25 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         400,
       );
     }
+    if (
+      body.review_push_debounce_minutes !== undefined &&
+      !(
+        isNumber(body.review_push_debounce_minutes) &&
+        isValidPushDebounceMinutes(body.review_push_debounce_minutes)
+      )
+    ) {
+      return c.json(
+        {
+          error: `review_push_debounce_minutes must be an integer between 0 and ${MAX_PUSH_DEBOUNCE_MINUTES}`,
+        },
+        400,
+      );
+    }
     if (isBoolean(body.enabled)) await setRepoEnabled(repo.id, body.enabled);
     if (isBoolean(body.review_on_push)) await setRepoReviewOnPush(repo.id, body.review_on_push);
+    if (isNumber(body.review_push_debounce_minutes)) {
+      await setRepoReviewPushDebounceMinutes(repo.id, body.review_push_debounce_minutes);
+    }
     if (body.review_intake) await setRepoReviewIntake(repo.id, body.review_intake);
     if (body.process_profile) await setRepoProcessProfile(repo.id, body.process_profile);
     if (isBoolean(body.blocking_reviews))

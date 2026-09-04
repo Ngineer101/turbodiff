@@ -439,6 +439,9 @@ export interface ApiRepoSettings {
   provider: string; // 'github' | 'artifacts'
   enabled: boolean;
   review_on_push: boolean;
+  // Trailing window (minutes) a push waits before its re-review runs; a newer
+  // push in the window supersedes it. 0 reviews immediately.
+  review_push_debounce_minutes: number;
   review_intake: 'factory_only' | 'on_demand' | 'all_changes';
   process_profile: ApiProcessProfile;
   blocking_reviews: boolean;
@@ -509,6 +512,27 @@ export interface ApiOrgMembers {
   members: ApiMember[];
   invitations: ApiInvitation[];
   my_role: ApiRole;
+}
+
+// A pending invitation as seen by its recipient on /accept-invite. Only the
+// signed-in user whose email matches the invitation can read it.
+export interface ApiInvitationPreview {
+  id: string;
+  email: string;
+  role: ApiRole;
+  org_name: string;
+  // The GitHub installation behind the organization — the members page the
+  // recipient lands on after accepting, if GitHub also lists them on it.
+  installation_id: number | null;
+  // "@login" for a GitHub inviter, their display name for a password
+  // account, null when the inviter's account no longer exists.
+  invited_by: string | null;
+  expires_at: string | null;
+}
+
+export interface ApiInvitationAccepted {
+  org_name: string;
+  installation_id: number | null;
 }
 
 export interface ApiError {

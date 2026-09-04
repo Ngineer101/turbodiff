@@ -107,7 +107,10 @@ function repoSummary(repo: ApiRepoSettings): string {
   const agents = repo.agents.filter((a) => a.enabled).length;
   const skills = repo.skills.filter((s) => s.enabled).length;
   const flags = [
-    repo.review_on_push && 'on push',
+    repo.review_on_push &&
+      (repo.review_push_debounce_minutes > 0
+        ? `on push (${repo.review_push_debounce_minutes}m)`
+        : 'on push'),
     repo.blocking_reviews && 'blocking',
     repo.auto_fix && 'auto-fix',
     repo.auto_merge && 'auto-merge',
@@ -150,6 +153,50 @@ function CheckCommandForm({ repo }: { repo: ApiRepoSettings }) {
         aria-label={`Check command for ${repo.owner}/${repo.name}`}
         className="py-1 font-mono text-xs sm:text-xs"
       />
+      {dirty ? (
+        <Button size="sm" variant="secondary" type="submit" loading={patchRepo.isPending}>
+          Save
+        </Button>
+      ) : null}
+    </form>
+  );
+}
+
+// The trailing window a push waits before its re-review runs (a newer push
+// in the window supersedes it). Saved on submit, like the check command.
+function PushDebounceForm({ repo }: { repo: ApiRepoSettings }) {
+  const patchRepo = usePatchRepo(repo.id);
+  const [minutes, setMinutes] = useState(String(repo.review_push_debounce_minutes));
+  const parsed = Number(minutes);
+  const valid = minutes.trim() !== '' && Number.isInteger(parsed) && parsed >= 0 && parsed <= 720;
+  const dirty = valid && parsed !== repo.review_push_debounce_minutes;
+  const save = (e: FormEvent) => {
+    e.preventDefault();
+    if (!dirty) return;
+    patchRepo.mutate(
+      { review_push_debounce_minutes: parsed },
+      { onSuccess: () => toast.success('Push debounce saved') },
+    );
+  };
+  return (
+    <form onSubmit={save} className="inline-flex items-center gap-1.5">
+      <label className="inline-flex items-center gap-1.5 text-xs text-mute">
+        <span className="whitespace-nowrap">wait</span>
+        <Input
+          type="number"
+          inputMode="numeric"
+          min={0}
+          max={720}
+          step={1}
+          value={minutes}
+          onChange={(e) => setMinutes(e.target.value)}
+          aria-label={`Minutes to wait after a push before re-reviewing ${repo.owner}/${repo.name}`}
+          aria-invalid={!valid}
+          title="Minutes a push waits before its re-review runs; a newer push in the window replaces it. 0 reviews immediately."
+          className="w-16 py-1 text-center font-mono text-xs sm:text-xs"
+        />
+        <span className="whitespace-nowrap">min</span>
+      </label>
       {dirty ? (
         <Button size="sm" variant="secondary" type="submit" loading={patchRepo.isPending}>
           Save
@@ -350,11 +397,12 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
           <ConfigRow label="Behavior">
             <Chip
               on={repo.review_on_push}
-              title={`${repo.review_on_push ? 'Stop' : 'Start'} re-reviewing this repo's factory PRs when new commits are pushed (debounced)`}
+              title={`${repo.review_on_push ? 'Stop' : 'Start'} re-reviewing open PRs when new commits are pushed — after a quiet window, only the agents the pushed changes concern`}
               onClick={() => patchRepo.mutate({ review_on_push: !repo.review_on_push })}
             >
               <RefreshCw className="size-3" aria-hidden /> On push
             </Chip>
+            {repo.review_on_push ? <PushDebounceForm repo={repo} /> : null}
             <Chip
               on={repo.blocking_reviews}
               title={`${repo.blocking_reviews ? 'Reviews post as plain comments' : 'P1 findings request changes; clean reviews approve'} — click to ${repo.blocking_reviews ? 'disable' : 'enable'}`}

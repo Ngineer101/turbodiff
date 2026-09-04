@@ -1057,6 +1057,7 @@ export async function tryRecordReview(
   agentInstanceId: string,
   riskTier: string | null = null,
   stageRunId: number | null = null,
+  headSha: string | null = null,
 ): Promise<number | null> {
   return withTransaction(async (transaction) => {
     await transaction.execute(sql`
@@ -1068,9 +1069,9 @@ export async function tryRecordReview(
     const result = await transaction.execute<{ id: number }>(sql`
         INSERT INTO app.reviews
           (repository_id, installation_id, pr_number, trigger_event, status,
-           agent_slug, agent_instance_id, risk_tier, stage_run_id)
+           agent_slug, agent_instance_id, risk_tier, stage_run_id, head_sha)
         VALUES (${repositoryId}, ${installationId}, ${prNumber}, ${trigger},
-          'running', ${agentSlug}, ${agentInstanceId}, ${riskTier}, ${stageRunId})
+          'running', ${agentSlug}, ${agentInstanceId}, ${riskTier}, ${stageRunId}, ${headSha})
         ON CONFLICT DO NOTHING
         RETURNING id
       `);
@@ -1080,16 +1081,19 @@ export async function tryRecordReview(
 
 // Called by the post_review tool once the agent has published to GitHub.
 // Keyed by the exact agent instance so concurrent agents reviewing the same
-// PR can never complete each other's rows.
+// PR can never complete each other's rows. `findingPaths` are the files the
+// findings anchored to; the push re-review policy reads them back.
 export async function completeReview(
   agentInstanceId: string,
   reviewUrl: string | null,
   findingsCount: number | null = null,
   verdict: 'approve' | 'comment' | 'request_changes' = 'comment',
+  findingPaths: string[] | null = null,
 ): Promise<{ stage_run_id: number | null } | null> {
   return queryOne<{ stage_run_id: number | null }>(sql`
     UPDATE app.reviews SET status = 'completed', completed_at = CURRENT_TIMESTAMP,
-      review_url = ${reviewUrl}, findings_count = ${findingsCount}, verdict = ${verdict}
+      review_url = ${reviewUrl}, findings_count = ${findingsCount}, verdict = ${verdict},
+      finding_paths = ${findingPaths === null ? null : JSON.stringify(findingPaths)}::jsonb
     WHERE id = (
       SELECT id FROM app.reviews
       WHERE agent_instance_id = ${agentInstanceId} AND status = 'running'

@@ -255,20 +255,56 @@ export async function hasActiveReview(
   return row !== null;
 }
 
-// True when this agent reviewed (or started reviewing) this PR within the
-// window, regardless of outcome. Backs the push-trigger debounce: a burst of
-// pushes re-dispatches at most once per window per agent.
-export async function reviewedRecently(
+export interface PriorAgentReview {
+  agent_slug: string;
+  verdict: 'approve' | 'comment' | 'request_changes';
+  head_sha: string | null;
+  finding_paths: string[] | null; // null on rows recorded before the column existed
+}
+
+// Each agent's most recent completed review of this PR — what a push
+// re-review reconciles against (verdict + the files its findings anchored
+// to). Running and failed rows never count: they concluded nothing.
+export async function latestCompletedReviewsByAgent(
   repositoryId: number,
   prNumber: number,
-  agentSlug: string,
-  windowMinutes: number,
+): Promise<PriorAgentReview[]> {
+  return queryRows<PriorAgentReview>(sql`
+    SELECT DISTINCT ON (agent_slug) agent_slug, verdict, head_sha, finding_paths
+    FROM app.reviews
+    WHERE repository_id = ${repositoryId} AND pr_number = ${prNumber}
+      AND status = 'completed' AND agent_slug IS NOT NULL AND verdict IS NOT NULL
+    ORDER BY agent_slug, id DESC
+  `);
+}
+
+// The newest head any agent finished reviewing on this PR: the base a push
+// re-review diffs from. Null when nothing completed yet, or only rows from
+// before head tracking exist — callers then tier the whole PR as before.
+export async function lastReviewedHead(
+  repositoryId: number,
+  prNumber: number,
+): Promise<string | null> {
+  const row = await queryOne<{ head_sha: string }>(sql`
+    SELECT head_sha FROM app.reviews
+    WHERE repository_id = ${repositoryId} AND pr_number = ${prNumber}
+      AND status = 'completed' AND head_sha IS NOT NULL
+    ORDER BY id DESC LIMIT 1
+  `);
+  return row?.head_sha ?? null;
+}
+
+// True when some agent already completed a review of exactly this head —
+// a force-push back to a reviewed commit has nothing new to look at.
+export async function headHasCompletedReview(
+  repositoryId: number,
+  prNumber: number,
+  headSha: string,
 ): Promise<boolean> {
   const row = await queryOne<{ id: number }>(sql`
     SELECT id FROM app.reviews
     WHERE repository_id = ${repositoryId} AND pr_number = ${prNumber}
-      AND agent_slug = ${agentSlug}
-      AND created_at > ${minutesAgo(windowMinutes)}
+      AND status = 'completed' AND head_sha = ${headSha}
     LIMIT 1
   `);
   return row !== null;

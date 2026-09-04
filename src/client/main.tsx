@@ -134,6 +134,15 @@ const onboardingRoute = createRoute({
   component: lazyRouteComponent(() => import('./pages/onboarding.tsx'), 'OnboardingPage'),
 });
 
+// Invitation-email landing page — outside the shell like /onboarding: the
+// recipient may have no installation to show a board for yet.
+const acceptInviteRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/accept-invite',
+  validateSearch: (s: JsonObject): { id?: string } => (isString(s.id) ? { id: s.id } : {}),
+  component: lazyRouteComponent(() => import('./pages/accept-invite.tsx'), 'AcceptInvitePage'),
+});
+
 const boardRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/',
@@ -300,6 +309,7 @@ const automationRunRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   onboardingRoute,
+  acceptInviteRoute,
   shellRoute.addChildren([
     boardRoute,
     taskRoute,

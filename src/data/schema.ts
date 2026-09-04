@@ -279,6 +279,10 @@ export const repositories = appSchema.table(
     enabled: boolean().default(true).notNull(),
     model: text(),
     reviewOnPush: boolean('review_on_push').default(false).notNull(),
+    // Trailing window for push re-reviews: a push schedules its review this
+    // many minutes out, and a newer push in the meantime supersedes it. 0
+    // reviews immediately. Capped at 720 (the queue's 12h delay ceiling).
+    reviewPushDebounceMinutes: integer('review_push_debounce_minutes').default(10).notNull(),
     reviewIntake: text('review_intake').default('factory_only').notNull(),
     processProfile: text('process_profile').default('legacy_factory').notNull(),
     blockingReviews: boolean('blocking_reviews').default(false).notNull(),
@@ -307,6 +311,10 @@ export const repositories = appSchema.table(
       table.provider,
       table.owner,
       table.name,
+    ),
+    check(
+      'repositories_review_push_debounce_check',
+      sql`(review_push_debounce_minutes >= 0) AND (review_push_debounce_minutes <= 720)`,
     ),
     foreignKey({
       columns: [table.installationId, table.provider],
@@ -393,7 +401,10 @@ export const skills = appSchema.table(
     instructions: text().notNull(),
     // Extra files beyond SKILL.md for imported multi-file skills:
     // [{path, contents}]. Hand-written skills keep the empty default.
-    files: jsonb().$type<JsonValue>().notNull().default(sql`'[]'::jsonb`),
+    files: jsonb()
+      .$type<JsonValue>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
     // Import provenance; all null for hand-written skills. source is
     // 'skills.sh' or 'github'; sourceRef is "<owner>/<repo>/<slug>" or the
     // GitHub folder URL; sourceHash is skills.sh's snapshot sha-256 (null
@@ -701,6 +712,13 @@ export const reviews = appSchema.table(
     // Why a failed row failed: the dispatch error or the agent's settlement
     // error. Null on completed rows.
     error: text(),
+    // The change head this dispatch reviewed. Push re-reviews diff from the
+    // last reviewed head instead of re-tiering the whole PR. Null on rows
+    // recorded before the column existed.
+    headSha: text('head_sha'),
+    // Files the agent anchored findings to (post_review). A later push
+    // re-runs an approving agent only when its delta touches one of these.
+    findingPaths: jsonb('finding_paths').$type<string[]>(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .default(sql`CURRENT_TIMESTAMP`)
       .notNull(),
@@ -759,6 +777,10 @@ export const reviews = appSchema.table(
     check(
       'reviews_completion_shape',
       sql`((status = 'running'::text) AND (completed_at IS NULL)) OR (status <> 'running'::text)`,
+    ),
+    check(
+      'reviews_finding_paths_array_check',
+      sql`(finding_paths IS NULL) OR (jsonb_typeof(finding_paths) = 'array'::text)`,
     ),
   ],
 );

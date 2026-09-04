@@ -1,6 +1,6 @@
 {
-  "id": "1e439f97-3c20-4675-94ba-81a44aa323e6",
-  "prevId": "23bbcc60-4d44-40b4-b4d0-adb5a146159f",
+  "id": "6a0c1af3-2ba0-4836-a76f-f7a3645558fb",
+  "prevId": "1e439f97-3c20-4675-94ba-81a44aa323e6",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -5918,6 +5918,37 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "files": {
+          "name": "files",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source_ref": {
+          "name": "source_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source_hash": {
+          "name": "source_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "imported_at": {
+          "name": "imported_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         },
         "created_at": {
           "name": "created_at",

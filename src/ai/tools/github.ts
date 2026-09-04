@@ -419,7 +419,9 @@ export const makePostReview = (agentInstanceId: string, pin: RepoPin = null) =>
             : intended === 'APPROVE'
               ? 'approve'
               : 'comment';
-      await completeLifecycleReview(agentInstanceId, output.url, data.findings.length, verdict);
+      await completeLifecycleReview(agentInstanceId, output.url, data.findings.length, verdict, [
+        ...new Set(data.findings.map((finding) => finding.path)),
+      ]);
       // Factory-PR gate: a blocking verdict on a self-authored PR never fires
       // the pull_request_review webhook trigger (the posted state is COMMENT),
       // so enqueue the fix directly. The consumer re-validates toggle and cap.

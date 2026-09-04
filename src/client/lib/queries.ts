@@ -13,6 +13,7 @@ import type {
   ApiFeatureDetail,
   ApiFeatureDiff,
   ApiIntegrations,
+  ApiInvitationPreview,
   ApiMe,
   ApiModels,
   ApiOrgMembers,
@@ -220,6 +221,16 @@ export const orgMembersQuery = (installationId: number) =>
   queryOptions({
     queryKey: ['org-members', installationId],
     queryFn: () => api.get<ApiOrgMembers>(`/api/organizations/${installationId}/members`),
+  });
+
+// Never retried: every failure here (not found, expired, wrong account) is a
+// definitive answer the page turns into a message, not a transient.
+export const invitationQuery = (id: string) =>
+  queryOptions({
+    queryKey: ['invitation', id],
+    queryFn: () => api.get<ApiInvitationPreview>(`/api/invitations/${encodeURIComponent(id)}`),
+    retry: false,
+    staleTime: 0,
   });
 
 export const integrationsQuery = queryOptions({
