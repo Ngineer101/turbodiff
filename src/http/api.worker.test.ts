@@ -740,6 +740,7 @@ describe('organization member management', () => {
       role: 'admin',
       org_name: 'acme',
       installation_id: 1001,
+      invited_by: '@octocat',
     });
 
     const accept = await app.request('https://turbodiff.test/api/invitations/inv1/accept', {

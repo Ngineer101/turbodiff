@@ -472,6 +472,9 @@ export interface ApiInvitationPreview {
   // The GitHub installation behind the organization — the members page the
   // recipient lands on after accepting, if GitHub also lists them on it.
   installation_id: number | null;
+  // "@login" for a GitHub inviter, their display name for a password
+  // account, null when the inviter's account no longer exists.
+  invited_by: string | null;
   expires_at: string | null;
 }
 

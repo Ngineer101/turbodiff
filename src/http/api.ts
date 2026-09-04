@@ -130,7 +130,7 @@ import {
 import { APIError } from 'better-auth';
 import { withAuth } from '../integrations/auth/better-auth.ts';
 import { certificateUrl } from '../services/certificates.ts';
-import { memberRole, organizationSummary } from '../services/access-control.ts';
+import { inviterLabel, memberRole, organizationSummary } from '../services/access-control.ts';
 import {
   CR_BOT_AUTHOR,
   getCrDiffPatch,
@@ -3062,13 +3062,17 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
           query: { id: c.req.param('id') },
         }),
       );
-      const org = await organizationSummary(invitation.organizationId);
+      const [org, invitedBy] = await Promise.all([
+        organizationSummary(invitation.organizationId),
+        inviterLabel(invitation.inviterId),
+      ]);
       return c.json<ApiInvitationPreview>({
         id: invitation.id,
         email: invitation.email,
         role: apiRole(invitation.role),
         org_name: org?.name ?? invitation.organizationName,
         installation_id: org?.installationId ?? null,
+        invited_by: invitedBy,
         expires_at: invitation.expiresAt ? new Date(invitation.expiresAt).toISOString() : null,
       });
     } catch (err) {
