@@ -11,6 +11,7 @@ import type { ApiBoard, ApiModels, ApiUsage } from '../shared/api-types.ts';
 import { isJsonObject, isString, parseJson } from '../shared/json.ts';
 import { RUNNER_MODELS } from '../shared/runner-models.ts';
 import { createApiRoutes, type ApiRouteDependencies } from './api.ts';
+import { handleEmailSignUp } from './auth-email.ts';
 import {
   ensureBuiltinAgents,
   getFactoryRun,
@@ -695,6 +696,103 @@ describe('organization member management', () => {
       .prepare('SELECT id FROM "organization" WHERE "installationId" = 1001')
       .first();
     expect(orgRow).toBeNull();
+  });
+
+  // The invitation endpoints resolve the recipient from a real better-auth
+  // session (cookie), not from the `authenticate` stub — so the invitee is
+  // signed up through the same handler production uses.
+  async function inviteeCookie(email: string): Promise<string> {
+    const app = new Hono();
+    app.post('/api/auth/sign-up/email', handleEmailSignUp);
+    const response = await app.request('https://turbodiff.test/api/auth/sign-up/email', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Invitee', email, password: 'a-long-password' }),
+    });
+    expect(response.status).toBe(200);
+    return response.headers.get('set-cookie')?.split(';', 1)[0] ?? '';
+  }
+
+  async function seedInvitation(email: string): Promise<void> {
+    await testDatabase()
+      .prepare(
+        `INSERT INTO "invitation" (id, "organizationId", email, role, status, "expiresAt", "createdAt", "inviterId")
+				 VALUES ('inv1', 'org1', ?1, 'admin', 'pending', '2999-01-01T00:00:00.000Z',
+				         '2026-01-01T00:00:00.000Z', 'u1')`,
+      )
+      .bind(email)
+      .run();
+  }
+
+  it('lets the invited address read and accept its invitation, recording the member row', async () => {
+    await seedOrg('owner');
+    await seedInvitation('invitee@example.test');
+    const cookie = await inviteeCookie('invitee@example.test');
+    const app = authenticatedApi();
+
+    const preview = await app.request('https://turbodiff.test/api/invitations/inv1', {
+      headers: { cookie },
+    });
+    expect(preview.status).toBe(200);
+    expect(await preview.json()).toMatchObject({
+      id: 'inv1',
+      email: 'invitee@example.test',
+      role: 'admin',
+      org_name: 'acme',
+      installation_id: 1001,
+      invited_by: '@octocat',
+    });
+
+    const accept = await app.request('https://turbodiff.test/api/invitations/inv1/accept', {
+      method: 'POST',
+      headers: { cookie },
+    });
+    expect(accept.status).toBe(200);
+    expect(await accept.json()).toEqual({ org_name: 'acme', installation_id: 1001 });
+
+    const member = await testDatabase()
+      .prepare(
+        `SELECT m.role FROM "member" m JOIN "user" u ON u.id = m."userId"
+				 WHERE m."organizationId" = 'org1' AND u.email = 'invitee@example.test'`,
+      )
+      .first<{ role: string }>();
+    expect(member).toEqual({ role: 'admin' });
+    const invitation = await testDatabase()
+      .prepare(`SELECT status FROM "invitation" WHERE id = 'inv1'`)
+      .first<{ status: string }>();
+    expect(invitation).toEqual({ status: 'accepted' });
+  });
+
+  it('refuses the invitation to a session whose email does not match', async () => {
+    await seedOrg('owner');
+    await seedInvitation('invitee@example.test');
+    const cookie = await inviteeCookie('someone-else@example.test');
+    const app = authenticatedApi();
+
+    const preview = await app.request('https://turbodiff.test/api/invitations/inv1', {
+      headers: { cookie },
+    });
+    expect(preview.status).toBe(403);
+    const accept = await app.request('https://turbodiff.test/api/invitations/inv1/accept', {
+      method: 'POST',
+      headers: { cookie },
+    });
+    expect(accept.status).toBe(403);
+    const members = await testDatabase()
+      .prepare(`SELECT COUNT(*) AS n FROM "member" WHERE "organizationId" = 'org1'`)
+      .first<{ n: number }>();
+    expect(members).toEqual({ n: 1 });
+  });
+
+  it('reports an unknown invitation id as not found rather than a server error', async () => {
+    await seedOrg('owner');
+    const cookie = await inviteeCookie('invitee@example.test');
+    const preview = await authenticatedApi().request(
+      'https://turbodiff.test/api/invitations/nope',
+      { headers: { cookie } },
+    );
+    expect(preview.status).toBe(400);
+    expect(await preview.json()).toEqual({ error: 'Invitation not found!' });
   });
 
   it('rejects invite, remove, and role-change requests from a member-role caller', async () => {

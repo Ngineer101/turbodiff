@@ -271,3 +271,25 @@ export async function capabilityDenied(
   if (orgRoles[role].authorize(request).success) return null;
   return `'${action}' capability required for this organization`;
 }
+
+// The organization an invitation belongs to, as the accept-invite page
+// reports it: its display name and the GitHub installation behind it (where
+// the recipient is sent next). Null for an unknown organization id.
+export async function organizationSummary(
+  organizationId: string,
+): Promise<{ name: string; installationId: number } | null> {
+  return queryOne<{ name: string; installationId: number }>(sql`
+    SELECT name, "installationId" FROM auth."organization" WHERE id = ${organizationId}
+  `);
+}
+
+// Who sent an invitation, for the accept-invite page's "Invited by" line —
+// the GitHub login when the inviter has one, their display name otherwise
+// (password accounts). Null when the inviter's user row is gone.
+export async function inviterLabel(userId: string): Promise<string | null> {
+  const row = await queryOne<{ login: string | null; name: string }>(sql`
+    SELECT login, name FROM auth."user" WHERE id = ${userId}
+  `);
+  if (!row) return null;
+  return row.login ? `@${row.login}` : row.name;
+}

@@ -462,6 +462,27 @@ export interface ApiOrgMembers {
   my_role: ApiRole;
 }
 
+// A pending invitation as seen by its recipient on /accept-invite. Only the
+// signed-in user whose email matches the invitation can read it.
+export interface ApiInvitationPreview {
+  id: string;
+  email: string;
+  role: ApiRole;
+  org_name: string;
+  // The GitHub installation behind the organization — the members page the
+  // recipient lands on after accepting, if GitHub also lists them on it.
+  installation_id: number | null;
+  // "@login" for a GitHub inviter, their display name for a password
+  // account, null when the inviter's account no longer exists.
+  invited_by: string | null;
+  expires_at: string | null;
+}
+
+export interface ApiInvitationAccepted {
+  org_name: string;
+  installation_id: number | null;
+}
+
 export interface ApiError {
   error: string;
 }
