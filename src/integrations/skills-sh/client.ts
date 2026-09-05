@@ -1,4 +1,10 @@
-import { isJsonArray, isJsonObject, isNumber, isString, type JsonValue } from '../../shared/json.ts';
+import {
+  isJsonArray,
+  isJsonObject,
+  isNumber,
+  isString,
+  type JsonValue,
+} from '../../shared/json.ts';
 
 // skills.sh catalog adapter. Endpoints, params, and response shapes below
 // follow https://www.skills.sh/docs/api (verified against the published docs
@@ -80,7 +86,8 @@ function catalogSkill(value: JsonValue): CatalogSkill | null {
 
 function catalogSkills(value: JsonValue): CatalogSkill[] {
   // The documented list envelope is { data: [...] }; tolerate a bare array.
-  const list = isJsonObject(value) && isJsonArray(value.data) ? value.data : isJsonArray(value) ? value : [];
+  const list =
+    isJsonObject(value) && isJsonArray(value.data) ? value.data : isJsonArray(value) ? value : [];
   return list.map(catalogSkill).filter((s): s is CatalogSkill => s !== null);
 }
 
@@ -124,9 +131,7 @@ export function createSkillsShClient(token: string | undefined): SkillsShClient 
     configured: () => Boolean(token),
 
     async search(q, limit = 30) {
-      const payload = await requestJson(
-        `/skills/search?q=${encodeURIComponent(q)}&limit=${limit}`,
-      );
+      const payload = await requestJson(`/skills/search?q=${encodeURIComponent(q)}&limit=${limit}`);
       return catalogSkills(payload);
     },
 
@@ -137,9 +142,14 @@ export function createSkillsShClient(token: string | undefined): SkillsShClient 
 
     async detail(source, slug) {
       const payload = await requestJson(`/skills/${source}/${encodeURIComponent(slug)}`);
-      const base = catalogSkill(isJsonObject(payload) && isJsonObject(payload.skill) ? payload.skill : payload);
+      const base = catalogSkill(
+        isJsonObject(payload) && isJsonObject(payload.skill) ? payload.skill : payload,
+      );
       if (!base) {
-        throw new SkillsShApiError(502, `skills.sh returned an unrecognized skill shape for ${source}/${slug}`);
+        throw new SkillsShApiError(
+          502,
+          `skills.sh returned an unrecognized skill shape for ${source}/${slug}`,
+        );
       }
       const body = isJsonObject(payload) ? payload : {};
       return {
@@ -167,8 +177,16 @@ export function createSkillsShClient(token: string | undefined): SkillsShClient 
       for (const entry of list) {
         if (!isJsonObject(entry)) continue;
         // Documented audit rows carry { provider, status: "pass" | "warn" | "fail" }.
-        const auditor = isString(entry.provider) ? entry.provider : isString(entry.auditor) ? entry.auditor : null;
-        const verdict = isString(entry.status) ? entry.status : isString(entry.verdict) ? entry.verdict : null;
+        const auditor = isString(entry.provider)
+          ? entry.provider
+          : isString(entry.auditor)
+            ? entry.auditor
+            : null;
+        const verdict = isString(entry.status)
+          ? entry.status
+          : isString(entry.verdict)
+            ? entry.verdict
+            : null;
         if (auditor && verdict) verdicts.push({ auditor, verdict });
       }
       return verdicts;

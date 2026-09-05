@@ -18,6 +18,7 @@ import { toast } from 'sonner';
 import type {
   ApiCockpitComment,
   ApiFeatureDetail,
+  ApiFeatureExplanation,
   ApiMe,
   ApiVerificationSummary,
 } from '../../shared/api-types.ts';
@@ -28,6 +29,7 @@ import { applyOptimistic, optimisticId, optimisticNow } from '../lib/optimistic.
 import {
   chatQuery,
   featureDiffQuery,
+  featureExplainQuery,
   featureQuery,
   FIX_TERMINAL,
   GENERATION_STOPPED,
@@ -68,6 +70,17 @@ type CockpitFile = ApiFeatureDetail['files'][number];
 const CockpitPatchDiff = lazy(() =>
   import('../components/cockpit-patch-diff.tsx').then((module) => ({
     default: module.CockpitPatchDiff,
+  })),
+);
+// The Explain tab is its own chunk: most cockpit visits never open it.
+const CockpitExplain = lazy(() =>
+  import('../components/cockpit-explain.tsx').then((module) => ({
+    default: module.CockpitExplain,
+  })),
+);
+const ExplainTabAside = lazy(() =>
+  import('../components/cockpit-explain.tsx').then((module) => ({
+    default: module.ExplainTabAside,
   })),
 );
 const CockpitDiffWorkspace = lazy(() =>
@@ -763,6 +776,51 @@ export default function FeaturePage() {
     });
   }, []);
 
+  // Review tabs: the raw diff, or the Explain document (cockpit-explain.tsx).
+  // The explanation's status is read whenever a change exists so the tab
+  // can show its lamp before it is opened; writing one is on demand.
+  const [reviewTab, setReviewTab] = useState<'diff' | 'explain'>('diff');
+  const explainQuery = useQuery({
+    ...featureExplainQuery(id, summary.diff_version),
+    enabled: summary.pr !== null && summary.diff_version !== null,
+  });
+  const generateExplanation = useMutation({
+    mutationFn: (force: boolean) =>
+      api.post<ApiFeatureExplanation, { v: string | null; force: boolean }>(
+        `/api/factory/features/${id}/explain`,
+        { v: summary.diff_version, force },
+      ),
+    onSuccess: (result) => {
+      queryClient.setQueryData(['feature-explain', id, summary.diff_version], result);
+    },
+    onError: onApiError,
+  });
+  const requestExplanation = useCallback(
+    () => generateExplanation.mutate(false),
+    [generateExplanation],
+  );
+  // A jump ref switches tabs first; the file sections mount on the next
+  // render, so the scroll waits for them.
+  const pendingJump = useRef<string | null>(null);
+  const jumpToDiff = useCallback((path: string) => {
+    pendingJump.current = path;
+    setReviewTab('diff');
+  }, []);
+  useEffect(() => {
+    const path = pendingJump.current;
+    if (reviewTab !== 'diff' || !path) return;
+    let tries = 0;
+    const attempt = () => {
+      if (sectionEls.current.has(path) || tries++ > 30) {
+        pendingJump.current = null;
+        jumpToFile(path);
+        return;
+      }
+      requestAnimationFrame(attempt);
+    };
+    attempt();
+  }, [reviewTab, jumpToFile]);
+
   // Scroll spy: highlight the file nearest the top of the viewport in the tree.
   useEffect(() => {
     const observer = new IntersectionObserver(
@@ -1202,47 +1260,112 @@ export default function FeaturePage() {
       {/* Review workspace: an always-visible file tree beside the diff, so the
           tree lines up with the code it navigates (not the evidence above). */}
       <section>
-        <SectionHeading
-          aside={
-            <span className="flex flex-wrap items-center gap-1">
-              <span
-                className="mr-1 inline-flex overflow-hidden rounded-md border border-line-2/70"
-                role="group"
-                aria-label="Diff layout"
-              >
-                {(['unified', 'split'] as const).map((style) => (
-                  <button
-                    key={style}
-                    type="button"
-                    aria-pressed={diffStyle === style}
-                    onClick={() => setDiffStyle(style)}
-                    className={cn(
-                      'cursor-pointer px-2.5 py-1 text-xs transition-colors max-sm:px-3.5 max-sm:py-2',
-                      diffStyle === style
-                        ? 'bg-raised text-accent-bright'
-                        : 'text-mute hover:text-ink',
-                    )}
-                  >
-                    {style === 'split' ? 'Side-by-side' : 'Unified'}
-                  </button>
-                ))}
-              </span>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setCollapsed(new Set(data.files.map((f) => f.filename)))}
-              >
-                Collapse all
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => setCollapsed(new Set())}>
-                Expand all
-              </Button>
-            </span>
-          }
-        >
-          Diff
-        </SectionHeading>
-        {prState === 'open' ? (
+        {/* Two tabs over one workspace: the raw diff, and the Explain
+            document that points back into it. */}
+        <div className="mt-9 mb-3 flex flex-wrap items-end justify-between gap-x-4 gap-y-2 border-b border-line">
+          <div role="tablist" aria-label="Review view" className="flex items-end gap-1">
+            {(['diff', 'explain'] as const).map((tab) => {
+              const active = reviewTab === tab;
+              const lamp =
+                tab === 'explain'
+                  ? explainQuery.data?.status === 'running'
+                    ? 'hold'
+                    : explainQuery.data?.status === 'ready'
+                      ? 'go'
+                      : null
+                  : null;
+              return (
+                <button
+                  key={tab}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setReviewTab(tab)}
+                  className={cn(
+                    'flex cursor-pointer items-center gap-2 border-b-2 px-3 pt-1.5 pb-2.5 font-mono text-[11px] tracking-[0.14em] uppercase transition-colors max-sm:px-3.5',
+                    active
+                      ? 'border-accent font-semibold text-ink'
+                      : 'border-transparent font-medium text-mute hover:text-ink',
+                  )}
+                >
+                  {tab}
+                  {tab === 'diff' ? (
+                    <span className="font-normal tracking-normal text-mute tabular-nums normal-case">
+                      {data.files.length}
+                    </span>
+                  ) : lamp ? (
+                    <Lamp tone={lamp} pulse={lamp === 'hold'} className="size-1.5" />
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+          <span className="flex flex-wrap items-center gap-1 pb-1.5">
+            {reviewTab === 'diff' ? (
+              <>
+                <span
+                  className="mr-1 inline-flex overflow-hidden rounded-md border border-line-2/70"
+                  role="group"
+                  aria-label="Diff layout"
+                >
+                  {(['unified', 'split'] as const).map((style) => (
+                    <button
+                      key={style}
+                      type="button"
+                      aria-pressed={diffStyle === style}
+                      onClick={() => setDiffStyle(style)}
+                      className={cn(
+                        'cursor-pointer px-2.5 py-1 text-xs transition-colors max-sm:px-3.5 max-sm:py-2',
+                        diffStyle === style
+                          ? 'bg-raised text-accent-bright'
+                          : 'text-mute hover:text-ink',
+                      )}
+                    >
+                      {style === 'split' ? 'Side-by-side' : 'Unified'}
+                    </button>
+                  ))}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setCollapsed(new Set(data.files.map((f) => f.filename)))}
+                >
+                  Collapse all
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setCollapsed(new Set())}>
+                  Expand all
+                </Button>
+              </>
+            ) : (
+              <Suspense fallback={null}>
+                <ExplainTabAside
+                  explanation={explainQuery.data}
+                  generating={generateExplanation.isPending}
+                  onGenerate={() => generateExplanation.mutate(true)}
+                />
+              </Suspense>
+            )}
+          </span>
+        </div>
+        {reviewTab === 'explain' ? (
+          <Suspense
+            fallback={
+              <div className="mt-3 h-64 animate-pulse rounded-lg border border-line bg-surface" />
+            }
+          >
+            <CockpitExplain
+              title={data.feature.title}
+              version={summary.diff_version}
+              fileCount={data.files.length}
+              explanation={explainQuery.data}
+              loading={explainQuery.isPending}
+              generating={generateExplanation.isPending}
+              onGenerate={requestExplanation}
+              onJump={jumpToDiff}
+            />
+          </Suspense>
+        ) : null}
+        {reviewTab === 'diff' && prState === 'open' ? (
           <Muted className="block">
             Select a line range in the diff to comment — click Submit to address every pending
             comment in one pass.
@@ -1250,7 +1373,12 @@ export default function FeaturePage() {
         ) : null}
 
         {/* Small screens: a jump list instead of the side rail. */}
-        <Accordion type="single" collapsible className="mt-3 lg:hidden">
+        <Accordion
+          type="single"
+          collapsible
+          hidden={reviewTab !== 'diff'}
+          className="mt-3 lg:hidden"
+        >
           <AccordionItem value="files">
             <AccordionTrigger className="text-xs text-mute">
               {data.files.length} file{data.files.length === 1 ? '' : 's'} changed — jump to a file
@@ -1259,7 +1387,12 @@ export default function FeaturePage() {
           </AccordionItem>
         </Accordion>
 
-        <div className="mt-3 lg:grid lg:grid-cols-[15rem_minmax(0,1fr)] lg:items-start lg:gap-6">
+        {/* The diff stays mounted (hidden) behind the Explain tab so its
+            worker-rendered patches and scroll position survive a round trip. */}
+        <div
+          hidden={reviewTab !== 'diff'}
+          className="mt-3 lg:grid lg:grid-cols-[15rem_minmax(0,1fr)] lg:items-start lg:gap-6"
+        >
           {/* Always-visible sticky file tree (desktop). */}
           <aside className="hidden lg:sticky lg:top-4 lg:block lg:max-h-[calc(100dvh-2rem)] lg:overflow-y-auto lg:pb-2">
             <div className="mb-2 flex items-baseline justify-between gap-2 px-1.5">

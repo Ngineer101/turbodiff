@@ -1,5 +1,6 @@
 import { observe } from '@flue/runtime';
 import { addReviewUsage } from '../../data/db.ts';
+import { isExplainInstanceId } from '../../domain/explain.ts';
 import { failLifecycleReview } from '../../services/lifecycle.ts';
 
 // Meters model usage per review. Every completed model call emits a `turn`
@@ -26,7 +27,9 @@ export function settlementReason(event: {
 
 export function registerReviewMetering(): void {
   observe((event) => {
-    if (event.instanceId === undefined) return;
+    // Explain runs share the isolate's event stream but own their rows
+    // (src/ai/explain/metering.ts).
+    if (event.instanceId === undefined || isExplainInstanceId(event.instanceId)) return;
     // When the submission settles and post_review never completed the row
     // (agent error, abort, or a run that ended without posting), flip it to
     // failed so it doesn't sit "running" until the stall cutoff.

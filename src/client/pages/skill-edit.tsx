@@ -47,7 +47,9 @@ export function SkillEditPage() {
       <div className="space-y-2 text-xs text-mute">
         <p className="flex flex-wrap items-center gap-2">
           <Pill tone="on">{skill.source}</Pill>
-          {skill.source_ref ? <span className="font-mono break-all">{skill.source_ref}</span> : null}
+          {skill.source_ref ? (
+            <span className="font-mono break-all">{skill.source_ref}</span>
+          ) : null}
           {skill.source_hash ? (
             <span className="font-mono">{skill.source_hash.slice(0, 12)}</span>
           ) : null}

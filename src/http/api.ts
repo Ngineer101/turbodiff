@@ -24,6 +24,10 @@ import {
   getChangeRequest,
   getChange,
   getRepoByFullName,
+  latestExplanation,
+  latestReadyExplanation,
+  tryRecordExplanation,
+  type ExplanationRow,
   listCrChecks,
   listCrComments,
   createConnection,
@@ -136,12 +140,11 @@ import { APIError } from 'better-auth';
 import { withAuth } from '../integrations/auth/better-auth.ts';
 import { certificateUrl } from '../services/certificates.ts';
 import { inviterLabel, memberRole, organizationSummary } from '../services/access-control.ts';
-import {
-  CR_BOT_AUTHOR,
-  getCrDiffPatch,
-  changeRequestFiles,
-  splitPatchByFile,
-} from '../services/change-requests.ts';
+import { CR_BOT_AUTHOR, changeRequestFiles } from '../services/change-requests.ts';
+import { loadFeatureDiff } from '../services/feature-diff.ts';
+import { dispatchExplain } from '../ai/explain/dispatch.ts';
+import { explainInstanceId, parseExplanationDocument } from '../domain/explain.ts';
+import { DEFAULT_MODEL } from '../domain/personas.ts';
 import {
   createArtifactsProject,
   mintArtifactsCloneToken,
@@ -223,6 +226,7 @@ import type {
   ApiConnectionTest,
   ApiFeatureDetail,
   ApiFeatureDiff,
+  ApiFeatureExplanation,
   ApiIntegrations,
   ApiInvitation,
   ApiInvitationAccepted,
@@ -514,6 +518,43 @@ export interface ApiRouteDependencies {
   enqueueFactory?: typeof enqueueFactoryMessage;
   // Injectable for tests (no outbound fetch in the worker pool).
   skillsSh?: SkillsShClient;
+  // Injectable for tests (no agent runtime in the worker pool).
+  dispatchExplain?: typeof dispatchExplain;
+}
+
+// POST /factory/features/:id/explain — the head to explain and whether to
+// replace a finished document (Regenerate).
+interface ExplainRequestBody {
+  v?: string;
+  force?: boolean;
+}
+
+// Only commit-like versions key an explanation (same rule as the diff route).
+function explainVersion(raw: string | undefined): string | null {
+  return raw && /^[0-9a-f]{7,64}$/i.test(raw) ? raw.toLowerCase() : null;
+}
+
+function serializeExplanation(
+  version: string | null,
+  row: ExplanationRow | null,
+): ApiFeatureExplanation {
+  const document = row?.status === 'ready' ? parseExplanationDocument(row.document) : null;
+  return {
+    version,
+    // A ready row whose stored document no longer parses reads as failed so
+    // the tab offers Regenerate instead of an empty page.
+    status: !row ? 'none' : row.status === 'ready' && !document ? 'failed' : row.status,
+    document,
+    model: row?.model ?? null,
+    error: row
+      ? row.status === 'ready' && !document
+        ? 'stored document is unreadable'
+        : row.error
+      : null,
+    created_at: row?.created_at ?? null,
+    completed_at: row?.completed_at ?? null,
+    previous: null,
+  };
 }
 
 // A verify stage completes whenever the verification ran (its pass/fail is a
@@ -531,6 +572,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   const orgAdmin = dependencies.orgAdmin ?? userIsGithubOrgAdmin;
   const enqueueFactory = dependencies.enqueueFactory ?? enqueueFactoryMessage;
   const skillsSh = dependencies.skillsSh ?? createSkillsShClient(env.SKILLS_SH_API_TOKEN);
+  const explain = dependencies.dispatchExplain ?? dispatchExplain;
 
   // Every API response exposes its Worker time to DevTools. Slow paths emit a
   // structured event into Workers Observability with a stable 250ms budget.
@@ -1715,65 +1757,77 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         ? await getChangeRequest(feature.change_request_id)
         : null;
     const diffVersion = artifactsCr?.source_head ?? requestedVersion;
-    const empty: ApiFeatureDiff = { version: diffVersion, files: [], more_files: 0 };
-    if (!feature.pr_number) return c.json(empty);
-
-    const MAX_FILES = 50;
-    const load = async (): Promise<ApiFeatureDiff> => {
-      if (repo.provider === 'artifacts') {
-        if (!artifactsCr) return empty;
-        const patchByPath = new Map(
-          splitPatchByFile(await getCrDiffPatch(artifactsCr)).map((file) => [
-            file.path,
-            file.patch,
-          ]),
-        );
-        const crFiles = changeRequestFiles(artifactsCr);
-        return {
-          version: artifactsCr.source_head,
-          files: crFiles.slice(0, MAX_FILES).map((file) => {
-            const patch = patchByPath.get(file.path);
-            return {
-              filename: file.path,
-              status: file.status,
-              additions: file.additions ?? 0,
-              deletions: file.deletions ?? 0,
-              patch: patch && patch.length < 100_000 ? patch : null,
-            };
-          }),
-          more_files: Math.max(0, crFiles.length - MAX_FILES),
-        };
-      }
-
-      const token = await installationToken(repo.installation_id);
-      const files = await githubJsonCached<
-        {
-          filename: string;
-          status: string;
-          additions: number;
-          deletions: number;
-          patch?: string;
-        }[]
-      >(token, `/repos/${repo.owner}/${repo.name}/pulls/${feature.pr_number}/files?per_page=100`);
-      return {
-        version: requestedVersion,
-        files: files.slice(0, MAX_FILES).map((file) => ({
-          filename: file.filename,
-          status: file.status,
-          additions: file.additions,
-          deletions: file.deletions,
-          patch:
-            file.patch && file.patch.length < 100_000
-              ? `diff --git a/${file.filename} b/${file.filename}\n--- a/${file.filename}\n+++ b/${file.filename}\n${file.patch}\n`
-              : null,
-        })),
-        more_files: Math.max(0, files.length - MAX_FILES),
-      };
-    };
+    if (!feature.pr_number) {
+      return c.json({ version: diffVersion, files: [], more_files: 0 } satisfies ApiFeatureDiff);
+    }
     const cacheKey = diffVersion
       ? `feature-diff/${feature.id}/${encodeURIComponent(diffVersion)}`
       : null;
-    return c.json(await immutableRepoJson(deferredExecution(c), cacheKey, load));
+    return c.json(
+      await immutableRepoJson(deferredExecution(c), cacheKey, () =>
+        loadFeatureDiff(feature, repo, artifactsCr, requestedVersion),
+      ),
+    );
+  });
+
+  // Explain tab (src/domain/explain.ts): the show-me document for the head
+  // the cockpit is showing. `v` is the diff version the client holds; a head
+  // with no row reads as 'none' so the tab can request one. `previous` is
+  // the newest finished document for an earlier head — shown, marked stale,
+  // while the current one is written.
+  app.get('/factory/features/:id/explain', async (c) => {
+    const id = Number(c.req.param('id'));
+    const feature = Number.isInteger(id) ? await getFeature(id) : null;
+    const repo = feature ? await getRepoById(feature.repository_id) : null;
+    if (!feature || !repo || !c.get('user').installationIds.includes(repo.installation_id)) {
+      return c.json({ error: 'unknown feature' }, 404);
+    }
+    const version = explainVersion(c.req.query('v'));
+    const current = version ? await latestExplanation(feature.id, version) : null;
+    const body = serializeExplanation(version, current);
+    if (body.status !== 'ready') {
+      const previous = await latestReadyExplanation(feature.id);
+      const document = previous ? parseExplanationDocument(previous.document) : null;
+      if (previous && document && previous.head_sha !== version) {
+        body.previous = {
+          version: previous.head_sha,
+          document,
+          completed_at: previous.completed_at ?? previous.created_at,
+        };
+      }
+    }
+    return c.json(body);
+  });
+
+  // Write (or rewrite) the explanation for a head. Idempotent by default: an
+  // existing running/ready row for the head is returned untouched; `force`
+  // starts a fresh row (Regenerate). One explanation runs per feature at a
+  // time — a concurrent request sees 409 and polls the running row.
+  app.post('/factory/features/:id/explain', async (c) => {
+    const id = Number(c.req.param('id'));
+    const feature = Number.isInteger(id) ? await getFeature(id) : null;
+    const repo = feature ? await getRepoById(feature.repository_id) : null;
+    if (!feature || !repo || !c.get('user').installationIds.includes(repo.installation_id)) {
+      return c.json({ error: 'unknown feature' }, 404);
+    }
+    if (!feature.pr_number) return c.json({ error: 'no change to explain yet' }, 409);
+    const payload = await c.req.json<ExplainRequestBody>().catch((): ExplainRequestBody => ({}));
+    const version = explainVersion(payload.v);
+    if (!version) return c.json({ error: 'a diff version is required' }, 400);
+    if (!payload.force) {
+      const existing = await latestExplanation(feature.id, version);
+      if (existing && existing.status !== 'failed') {
+        return c.json(serializeExplanation(version, existing));
+      }
+    }
+    // Gateway model id (the reviewer's default) — runner_model is a sandbox
+    // CLI id and does not apply on this path.
+    const model = DEFAULT_MODEL;
+    const instanceId = explainInstanceId(feature.id, version, crypto.randomUUID().slice(0, 8));
+    const rowId = await tryRecordExplanation(feature.id, version, instanceId, model);
+    if (rowId === null) return c.json({ error: 'an explanation is already being written' }, 409);
+    await explain(feature, repo, version, instanceId, model);
+    return c.json(serializeExplanation(version, await latestExplanation(feature.id, version)), 202);
   });
 
   // Line-anchored review comment from the cockpit diff. This only records

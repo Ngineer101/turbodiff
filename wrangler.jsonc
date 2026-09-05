@@ -192,5 +192,6 @@
     { "tag": "v1", "new_sqlite_classes": ["FluePrReviewerAgent"] },
     { "tag": "v2", "new_sqlite_classes": ["Sandbox"] },
     { "tag": "v3", "new_sqlite_classes": ["LiveUpdates"] },
+    { "tag": "v4", "new_sqlite_classes": ["FlueExplainerAgent"] },
   ],
 }

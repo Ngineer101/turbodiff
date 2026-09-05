@@ -4,6 +4,7 @@ import { env } from 'cloudflare:workers';
 import { sql } from 'drizzle-orm';
 import { execute, withDatabaseScope } from './data/database.ts';
 import { Hono } from 'hono';
+import { registerExplainMetering } from './ai/explain/metering.ts';
 import { registerReviewMetering } from './ai/review/metering.ts';
 import { createApiRoutes } from './http/api.ts';
 import { handleEmailSignUp } from './http/auth-email.ts';
@@ -30,6 +31,7 @@ setProvider(
 
 // Accumulate per-turn token usage and cost onto review rows in PostgreSQL.
 registerReviewMetering();
+registerExplainMetering();
 
 const startedAt = Date.now();
 

@@ -12,6 +12,7 @@ import type {
   ApiChatList,
   ApiFeatureDetail,
   ApiFeatureDiff,
+  ApiFeatureExplanation,
   ApiIntegrations,
   ApiInvitationPreview,
   ApiMe,
@@ -150,6 +151,20 @@ export const featureDiffQuery = (id: number, version: string | null) =>
     staleTime: Infinity,
     gcTime: 30 * 60_000,
   });
+
+// The Explain tab's document for the diff version on screen. Polls while a
+// run is in flight; a finished row is immutable, like the diff snapshot.
+export const featureExplainQuery = (id: number, version: string | null) =>
+  queryOptions({
+    queryKey: ['feature-explain', id, version],
+    queryFn: () =>
+      api.get<ApiFeatureExplanation>(
+        `/api/factory/features/${id}/explain${version ? `?v=${encodeURIComponent(version)}` : ''}`,
+      ),
+    refetchInterval: (query) => (query.state.data?.status === 'running' ? EXPLAIN_POLL_MS : false),
+    staleTime: (query) => (query.state.data?.status === 'ready' ? Infinity : 0),
+  });
+export const EXPLAIN_POLL_MS = 4_000;
 
 // While a user turn is in flight the rail polls until the reply lands.
 export const chatQuery = (featureId: number) =>

@@ -100,7 +100,14 @@ describe('skills.sh catalog client', () => {
       vi
         .fn()
         .mockResolvedValueOnce(
-          Response.json({ id: 'skl_1', source: 'a/b', slug: 'c', installs: 9, hash: null, files: null }),
+          Response.json({
+            id: 'skl_1',
+            source: 'a/b',
+            slug: 'c',
+            installs: 9,
+            hash: null,
+            files: null,
+          }),
         )
         .mockResolvedValueOnce(new Response('not found', { status: 404 })),
     );
