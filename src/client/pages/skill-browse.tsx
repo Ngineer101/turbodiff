@@ -84,10 +84,7 @@ export function SkillBrowsePage() {
         title="Browse skills"
         description="Search skills.sh and import a skill as an editable copy — review its instructions and files before importing."
         action={
-          <Link
-            to="/skills"
-            className={buttonVariants({ variant: 'secondary', size: 'default' })}
-          >
+          <Link to="/skills" className={buttonVariants({ variant: 'secondary', size: 'default' })}>
             <ArrowLeft className="size-4" aria-hidden /> Skills
           </Link>
         }
@@ -164,9 +161,7 @@ export function SkillBrowsePage() {
                     description={s.description ?? undefined}
                     meta={
                       s.installs !== null ? (
-                        <span className="tabular-nums">
-                          {s.installs.toLocaleString()} installs
-                        </span>
+                        <span className="tabular-nums">{s.installs.toLocaleString()} installs</span>
                       ) : undefined
                     }
                   />
