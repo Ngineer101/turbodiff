@@ -11,9 +11,11 @@ import { PREMORTEM_CRITERION } from '../domain/verification.ts';
 import type {
   ApiBoard,
   ApiFeatureDetail,
+  ApiFeatureExplanation,
   ApiModels,
   ApiSettings,
   ApiUsage,
+  ExplanationDocument,
 } from '../shared/api-types.ts';
 import { isJsonObject, isString, parseJson, type JsonObject } from '../shared/json.ts';
 import { RUNNER_MODELS } from '../shared/runner-models.ts';
@@ -21,7 +23,9 @@ import { createApiRoutes, type ApiRouteDependencies } from './api.ts';
 import { handleEmailSignUp } from './auth-email.ts';
 import { SkillsShApiError, type SkillsShClient } from '../integrations/skills-sh/client.ts';
 import {
+  completeExplanation,
   ensureBuiltinAgents,
+  failExplanation,
   getFactoryRun,
   getRepoById,
   getStageRun,
@@ -1610,6 +1614,154 @@ describe('cockpit chat', () => {
     };
     expect(chat.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
     expect(chat.messages[1]).toMatchObject({ outcome: 'changed', commit_sha: 'abc1234' });
+  });
+});
+
+describe('cockpit explain', () => {
+  type DispatchExplain = NonNullable<ApiRouteDependencies['dispatchExplain']>;
+  const HEAD = 'abcdef1234567890';
+  const NEXT_HEAD = '0123456789abcdef';
+  const document: ExplanationDocument = {
+    blocks: [
+      { kind: 'summary', text: 'deliver() now retries.' },
+      {
+        kind: 'call_tree',
+        title: 'deliver()',
+        text: 'One fetch becomes a loop.',
+        lines: [{ text: 'deliver()' }, { text: '  for attempt', change: '+' }],
+        refs: [{ path: 'src/http/webhooks.ts', start: 14, end: 31 }],
+      },
+    ],
+  };
+
+  async function seedFeature(repoId: number, prNumber: number | null = 42): Promise<number> {
+    const row = await testDatabase()
+      .prepare(
+        `INSERT INTO features (repository_id, title, spec, status, pr_number)
+         VALUES (?1, 'Feature', 'Spec', 'pr_opened', ?2) RETURNING id`,
+      )
+      .bind(repoId, prNumber)
+      .first<{ id: number }>();
+    return row!.id;
+  }
+
+  function explainApp(dispatchExplain: DispatchExplain = async () => {}) {
+    return apiApp({
+      authenticate: async () => acmeUser,
+      canPushToRepo: async () => true,
+      orgAdmin: async () => true,
+      dispatchExplain,
+    });
+  }
+
+  const explainUrl = (featureId: number, version?: string) =>
+    `https://turbodiff.test/api/factory/features/${featureId}/explain${version ? `?v=${version}` : ''}`;
+
+  async function read(app: Hono, featureId: number, version: string) {
+    const response = await app.request(explainUrl(featureId, version));
+    expect(response.status).toBe(200);
+    // SAFETY: the 200 body is the ApiFeatureExplanation contract under test.
+    return (await response.json()) as ApiFeatureExplanation;
+  }
+
+  function write(app: Hono, featureId: number, version: string, force = false) {
+    return app.request(explainUrl(featureId), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ v: version, force }),
+    });
+  }
+
+  it('conceals a foreign feature from both explain routes', async () => {
+    const foreignId = await seedFeature(202);
+    const app = explainApp();
+    expect((await app.request(explainUrl(foreignId, HEAD))).status).toBe(404);
+    expect((await write(app, foreignId, HEAD)).status).toBe(404);
+  });
+
+  it('reads none before any run and refuses to write without a change or a version', async () => {
+    const app = explainApp();
+    const featureId = await seedFeature(101);
+    expect(await read(app, featureId, HEAD)).toMatchObject({
+      version: HEAD,
+      status: 'none',
+      document: null,
+      previous: null,
+    });
+    expect((await write(app, featureId, 'not-a-sha')).status).toBe(400);
+    const noChange = await seedFeature(101, null);
+    expect((await write(app, noChange, HEAD)).status).toBe(409);
+  });
+
+  it('admits one run per feature and hands the dispatcher the head it admitted', async () => {
+    const calls: { featureId: number; repoId: number; head: string; instance: string }[] = [];
+    const app = explainApp(async (feature, repo, headSha, instanceId) => {
+      calls.push({ featureId: feature.id, repoId: repo.id, head: headSha, instance: instanceId });
+    });
+    const featureId = await seedFeature(101);
+
+    const admitted = await write(app, featureId, HEAD);
+    expect(admitted.status).toBe(202);
+    // SAFETY: the 202 body is the ApiFeatureExplanation contract under test.
+    expect((await admitted.json()) as ApiFeatureExplanation).toMatchObject({
+      version: HEAD,
+      status: 'running',
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ featureId, repoId: 101, head: HEAD });
+    expect(calls[0]?.instance.startsWith(`explain--${featureId}--abcdef123456--`)).toBe(true);
+
+    // Idempotent re-request returns the running row; a forced rewrite is
+    // refused while one is in flight; neither dispatches again.
+    expect((await write(app, featureId, HEAD)).status).toBe(200);
+    expect((await write(app, featureId, HEAD, true)).status).toBe(409);
+    expect(calls).toHaveLength(1);
+    expect((await read(app, featureId, HEAD)).status).toBe('running');
+  });
+
+  it('serves the finished document, then shows it as previous once the head moves', async () => {
+    let instance = '';
+    const app = explainApp(async (_feature, _repo, _head, instanceId) => {
+      instance = instanceId;
+    });
+    const featureId = await seedFeature(101);
+    await write(app, featureId, HEAD);
+    expect(await completeExplanation(instance, document)).not.toBeNull();
+
+    const ready = await read(app, featureId, HEAD);
+    expect(ready.status).toBe('ready');
+    expect(ready.document).toEqual(document);
+    expect(ready.previous).toBeNull();
+
+    // A push: the new head has no row, but the old document is offered as
+    // the stale fallback until the rewrite lands.
+    const moved = await read(app, featureId, NEXT_HEAD);
+    expect(moved.status).toBe('none');
+    expect(moved.previous).toMatchObject({ version: HEAD, document });
+
+    await write(app, featureId, NEXT_HEAD);
+    const rewriting = await read(app, featureId, NEXT_HEAD);
+    expect(rewriting.status).toBe('running');
+    expect(rewriting.previous?.version).toBe(HEAD);
+  });
+
+  it('reads a failed run with its reason and lets a fresh request replace it', async () => {
+    let dispatches = 0;
+    let instance = '';
+    const app = explainApp(async (_feature, _repo, _head, instanceId) => {
+      dispatches += 1;
+      instance = instanceId;
+    });
+    const featureId = await seedFeature(101);
+    await write(app, featureId, HEAD);
+    await failExplanation(instance, 'dispatch failed: no files');
+
+    const failed = await read(app, featureId, HEAD);
+    expect(failed).toMatchObject({ status: 'failed', error: 'dispatch failed: no files' });
+
+    expect((await write(app, featureId, HEAD)).status).toBe(202);
+    expect(dispatches).toBe(2);
+    expect((await read(app, featureId, HEAD)).status).toBe('running');
   });
 });
 

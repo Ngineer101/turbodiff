@@ -978,6 +978,57 @@ export const chatMessages = appSchema.table(
   ],
 );
 
+// One row per Explain-tab generation (src/domain/explain.ts): keyed by the
+// change head it describes, so a push starts a fresh row and the earlier
+// document stays readable while the new one is written. `document` is the
+// agent-submitted block list; null until ready or on failure.
+export const featureExplanations = appSchema.table(
+  'feature_explanations',
+  {
+    id: bigint({ mode: 'number' })
+      .primaryKey()
+      .generatedByDefaultAsIdentity({ maxValue: '9007199254740991' }),
+    featureId: bigint('feature_id', { mode: 'number' }).notNull(),
+    headSha: text('head_sha').notNull(),
+    status: text().default('running').notNull(),
+    agentInstanceId: text('agent_instance_id').notNull(),
+    document: jsonb().$type<JsonValue>(),
+    model: text(),
+    error: text(),
+    inputTokens: bigint('input_tokens', { mode: 'number' }).default(0).notNull(),
+    outputTokens: bigint('output_tokens', { mode: 'number' }).default(0).notNull(),
+    cacheReadTokens: bigint('cache_read_tokens', { mode: 'number' }).default(0).notNull(),
+    cacheWriteTokens: bigint('cache_write_tokens', { mode: 'number' }).default(0).notNull(),
+    costUsd: numeric('cost_usd', { precision: 20, scale: 10, mode: 'number' }).default(0).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+    completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
+  },
+  (table) => [
+    index('feature_explanations_feature_head_idx').using(
+      'btree',
+      table.featureId,
+      table.headSha,
+      table.id.desc(),
+    ),
+    uniqueIndex('feature_explanations_instance_idx').using('btree', table.agentInstanceId),
+    // Single flight per feature: one explanation is written at a time.
+    uniqueIndex('feature_explanations_one_running_idx')
+      .using('btree', table.featureId)
+      .where(sql`(status = 'running'::text)`),
+    foreignKey({
+      columns: [table.featureId],
+      foreignColumns: [features.id],
+      name: 'feature_explanations_feature_id_fkey',
+    }).onDelete('cascade'),
+    check(
+      'feature_explanations_status_check',
+      sql`status = ANY (ARRAY['running'::text, 'ready'::text, 'failed'::text])`,
+    ),
+  ],
+);
+
 export const automations = appSchema.table(
   'automations',
   {

@@ -332,6 +332,70 @@ export interface ApiFeatureDiff {
   more_files: number;
 }
 
+// The Explain tab's document (src/domain/explain.ts owns the validating
+// schema; these are the wire shapes it produces). A ref points into the Diff
+// tab: a changed file and, optionally, a new-file line range.
+export interface ExplanationRef {
+  path: string;
+  start?: number;
+  end?: number;
+}
+export interface ExplanationSketchLine {
+  text: string;
+  change?: '+' | '-';
+}
+export type ExplanationSketchKind = 'call_tree' | 'pseudocode' | 'file_tree' | 'component_tree';
+export interface ExplanationSummaryBlock {
+  kind: 'summary';
+  text: string;
+}
+export interface ExplanationSketchBlock {
+  kind: ExplanationSketchKind;
+  title: string;
+  text: string;
+  lines: ExplanationSketchLine[];
+  refs: ExplanationRef[];
+}
+export interface ExplanationSequenceMessage {
+  from: string;
+  to: string;
+  label: string;
+  style: 'call' | 'reply' | 'error';
+}
+export interface ExplanationSequenceBlock {
+  kind: 'sequence';
+  title: string;
+  text: string;
+  participants: string[];
+  messages: ExplanationSequenceMessage[];
+  // Inclusive 0-based message indexes bracketed by the loop.
+  loop?: { label: string; from: number; to: number };
+  refs: ExplanationRef[];
+}
+export type ExplanationBlock =
+  | ExplanationSummaryBlock
+  | ExplanationSketchBlock
+  | ExplanationSequenceBlock;
+export interface ExplanationDocument {
+  blocks: ExplanationBlock[];
+}
+
+// The Explain tab's document for one diff version.
+// 'none' means no row exists for this head yet — the tab requests one.
+export interface ApiFeatureExplanation {
+  version: string | null;
+  status: 'none' | 'running' | 'ready' | 'failed' | (string & {});
+  document: ExplanationDocument | null;
+  model: string | null;
+  error: string | null;
+  created_at: string | null;
+  completed_at: string | null;
+  // Newest finished document for an earlier head, shown (marked stale) while
+  // the current head's explanation is running or absent; null when current
+  // is ready.
+  previous: { version: string; document: ExplanationDocument; completed_at: string } | null;
+}
+
 export interface ApiAgentSummary {
   id: number;
   slug: string;
