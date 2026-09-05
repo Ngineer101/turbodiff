@@ -27,7 +27,7 @@ const schemas = await db.query(`
 `);
 
 const counts = new Map(schemas.rows.map((row) => [row.table_schema, row.count]));
-if (counts.get('app') !== 38) throw new Error(`Expected 38 app tables, found ${counts.get('app')}`);
+if (counts.get('app') !== 39) throw new Error(`Expected 39 app tables, found ${counts.get('app')}`);
 if (counts.get('auth') !== 10)
   throw new Error(`Expected 10 auth tables, found ${counts.get('auth')}`);
 
