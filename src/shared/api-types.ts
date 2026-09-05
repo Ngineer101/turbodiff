@@ -160,6 +160,8 @@ export interface ApiPlan {
   questions: ApiPlanQuestion[];
   acceptance: string[];
   plan: string | null;
+  // Reader-facing short summary; null = trivial-tier/legacy plan (render `plan` instead).
+  summary: string | null;
   archived: boolean;
   // The model this task's sandboxed runs use (see src/shared/runner-models.ts).
   model: string;

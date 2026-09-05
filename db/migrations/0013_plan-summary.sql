@@ -1,0 +1,1 @@
+ALTER TABLE "app"."plans" ADD COLUMN "summary" text;

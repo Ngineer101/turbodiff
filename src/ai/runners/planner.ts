@@ -303,12 +303,12 @@ function planPrompt(
 ${trivial ? '\nThis request is classified TRIVIAL: a small, localized change. The plan must be proportionate — a reader should grasp it in seconds.\n' : ''}
 Produce an implementation plan for the feature below, grounded in the real code, then write these files:
 
-1. ${OUT_DIR}/plan.md — ${trivial ? 'a brief plan (≤15 lines): the exact files to edit and what changes in each. No background essays, no scope-decision narratives.' : 'a file-level implementation plan: what changes in which files, in what order, and why. Concrete enough for an implementation agent to follow without further questions.'}
+1. ${OUT_DIR}/plan.md — ${trivial ? 'a brief plan (≤15 lines): the exact files to edit and what changes in each. No background essays, no scope-decision narratives.' : 'a file-level implementation plan: what changes in which files, in what order, and why. Concrete enough for an implementation agent to follow without further questions. Constraint: no preamble, no background essays, no surveys of options you rejected; do NOT copy code from the repo or write out full implementations — when logic genuinely needs showing, a few lines of pseudocode or a signature is the ceiling. Prefer naming the file/function and saying what changes over showing how the code will look.'}
 2. ${OUT_DIR}/acceptance.json — a JSON array of at most ${trivial ? 4 : 8} machine-checkable acceptance criteria (strings), each about the observable behavior of the change itself. Rules:
    - NEVER include build/typecheck/test-suite-passes criteria — the harness runs the repository's check command as its own gate.
    - NEVER include "file X is unchanged" criteria — the diff itself shows that.
    - Not vague ("works well"); each must be objectively verifiable.
-
+${trivial ? '' : `3. ${OUT_DIR}/summary.md — a short summary for the human reviewer (this is what they read first; the full plan sits behind it). Lead with 2–4 sentences: what will be built and the shape of the approach. Then a handful of bullets naming the files/areas that change and what each change does. No code, no pseudocode, no headings-per-file.\n`}
 ${UNTRUSTED_CONTENT_RULES}
 
 ## Feature: ${plan.title}
@@ -327,12 +327,12 @@ ${reposList(dirs)}
 
 Produce ONE implementation plan for the feature below, grounded in the real code across ALL repositories above, designed as a single coherent feature — not one plan per repo. Then write these files:
 
-1. ${OUT_DIR}/plan.md — a file-level implementation plan: what changes in which files, in what order, and why. Concrete enough for an implementation agent to follow without further questions. Write one "## <owner>/<name>" section per repository listed above, so each repo's slice of the plan is identifiable.
+1. ${OUT_DIR}/plan.md — a file-level implementation plan: what changes in which files, in what order, and why. Concrete enough for an implementation agent to follow without further questions.${trivial ? '' : ' Constraint: no preamble, no background essays, no surveys of options you rejected; do NOT copy code from the repo or write out full implementations — when logic genuinely needs showing, a few lines of pseudocode or a signature is the ceiling. Prefer naming the file/function and saying what changes over showing how the code will look.'} Write one "## <owner>/<name>" section per repository listed above, so each repo's slice of the plan is identifiable.
 2. ${OUT_DIR}/acceptance.json — a JSON array of at most ${trivial ? 4 : 8} machine-checkable acceptance criteria (strings), each about the observable behavior of the change itself. Rules:
    - NEVER include build/typecheck/test-suite-passes criteria — the harness runs the repository's check command as its own gate.
    - NEVER include "file X is unchanged" criteria — the diff itself shows that.
    - Not vague ("works well"); each must be objectively verifiable.
-
+${trivial ? '' : `3. ${OUT_DIR}/summary.md — a short summary for the human reviewer (this is what they read first; the full plan sits behind it). Lead with 2–4 sentences: what will be built and the shape of the approach. Then a handful of bullets naming the files/areas that change and what each change does. No code, no pseudocode, no headings-per-file. Group the bullets by repository.\n`}
 ${UNTRUSTED_CONTENT_RULES}
 
 ## Feature: ${plan.title}
@@ -395,12 +395,14 @@ export async function runPlanAnalyze(planId: number): Promise<void> {
         plan.runner_model,
       );
       const planMd = await readText(sandbox, `${OUT_DIR}/plan.md`);
+      const summary = await readText(sandbox, `${OUT_DIR}/summary.md`);
       const acceptance = await readJsonArray(sandbox, `${OUT_DIR}/acceptance.json`);
       await updatePlan(planId, {
         status: 'plan_ready',
         analysis,
         questions: [],
         plan: planMd,
+        summary,
         acceptance,
       });
       await notifyPlanUsers(planId, {
@@ -467,7 +469,7 @@ export async function runPlanRefine(planId: number): Promise<void> {
     : [];
   const fb =
     feedback.length > 0
-      ? `\n## Reviewer feedback on the previous draft\nThe user reviewed the previous plan draft and left the comments below. Produce a REVISED plan that addresses every comment — keep what wasn't commented on unless a comment forces a change.\n\n### Previous draft\n${plan.plan ?? '(none)'}\n\n### Comments\n${feedback.map((f, i) => `${i + 1}. On "${f.snippet}": ${f.comment}`).join('\n')}\n`
+      ? `\n## Reviewer feedback on the previous draft\nThe user reviewed the previous plan draft and left the comments below. Produce a REVISED plan that addresses every comment — keep what wasn't commented on unless a comment forces a change.${plan.summary ? ` Also write a revised ${OUT_DIR}/summary.md for the new draft.` : ''}\n\n### Previous draft\n${plan.summary ? `#### Summary shown to the reviewer\n${plan.summary}\n\n` : ''}${plan.plan ?? '(none)'}\n\n### Comments\n${feedback.map((f, i) => `${i + 1}. On "${f.snippet}": ${f.comment}`).join('\n')}\n`
       : '';
 
   let sandbox: Sandbox | undefined;
@@ -486,10 +488,12 @@ export async function runPlanRefine(planId: number): Promise<void> {
       plan.runner_model,
     );
     const planMd = await readText(sandbox, `${OUT_DIR}/plan.md`);
+    const summary = await readText(sandbox, `${OUT_DIR}/summary.md`);
     const acceptance = await readJsonArray(sandbox, `${OUT_DIR}/acceptance.json`);
     await updatePlan(planId, {
       status: 'plan_ready',
       plan: planMd,
+      summary,
       acceptance,
       // Consumed — a later answers-driven refine must not replay it.
       feedback: '[]',

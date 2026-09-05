@@ -753,6 +753,7 @@ export interface PlanRow {
   questions: ApiPlanQuestion[] | null;
   answers: string[] | null;
   plan: string | null;
+  summary: string | null; // reader-facing short summary; null = trivial tier or pre-summary plan
   acceptance: string[] | null;
   feature_id: number | null;
   status: string;
@@ -942,6 +943,7 @@ export async function updatePlan(
     questions?: ApiPlanQuestion[];
     answers?: string[];
     plan?: string;
+    summary?: string;
     acceptance?: string[];
     featureId?: number;
     error?: string;
@@ -956,6 +958,7 @@ export async function updatePlan(
       questions = COALESCE(${fields.questions ? JSON.stringify(fields.questions) : null}::jsonb, questions),
       answers = COALESCE(${fields.answers ? JSON.stringify(fields.answers) : null}::jsonb, answers),
       plan = COALESCE(${fields.plan ?? null}::text, plan),
+      summary = COALESCE(${fields.summary ?? null}::text, summary),
       acceptance = COALESCE(${fields.acceptance ? JSON.stringify(fields.acceptance) : null}::jsonb, acceptance),
       feature_id = COALESCE(${fields.featureId ?? null}::bigint, feature_id),
       error = COALESCE(${fields.error ?? null}::text, error),
