@@ -344,7 +344,21 @@ export function TaskPage() {
                     onTouchEnd={onPlanSelect}
                     className="max-w-3xl cursor-text selection:bg-accent/30"
                   >
-                    <Markdown>{task.plan ?? ''}</Markdown>
+                    {task.summary ? (
+                      <>
+                        <Markdown>{task.summary}</Markdown>
+                        <Accordion type="single" collapsible className="mt-4">
+                          <AccordionItem value="full-plan">
+                            <AccordionTrigger>Full implementation plan</AccordionTrigger>
+                            <AccordionContent>
+                              <Markdown>{task.plan ?? ''}</Markdown>
+                            </AccordionContent>
+                          </AccordionItem>
+                        </Accordion>
+                      </>
+                    ) : (
+                      <Markdown>{task.plan ?? ''}</Markdown>
+                    )}
                   </div>
                 </Panel>
               </section>
@@ -515,6 +529,11 @@ export function TaskPage() {
           {task.plan && task.status === 'approved' ? (
             <section>
               <BlockLabel className="mb-2">Implementation plan</BlockLabel>
+              {task.summary ? (
+                <div className="mb-3 max-w-3xl">
+                  <Markdown>{task.summary}</Markdown>
+                </div>
+              ) : null}
               <Accordion type="single" collapsible>
                 <AccordionItem value="plan">
                   <AccordionTrigger>Implementation plan (approved)</AccordionTrigger>

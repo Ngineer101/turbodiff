@@ -92,6 +92,13 @@
       "when": 1788598698267,
       "tag": "0012_feature-explanations",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1788640885499,
+      "tag": "0013_plan-summary",
+      "breakpoints": true
     }
   ]
 }
