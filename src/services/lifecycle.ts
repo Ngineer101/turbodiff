@@ -837,6 +837,18 @@ export async function runLifecycleStage(
         headSha: scheduledHead,
         computeDelta: dependencies.computeDelta ?? computePushDelta,
       };
+    } else if (stageRun.trigger === 'stage.completed' && change.source_head) {
+      // The coordinator's own follow-on review (after a repair) reuses the
+      // push selection machinery against the current head: agents holding a
+      // block re-judge it, agents that already approved are re-dispatched
+      // only when the repair's delta reaches their findings, and an empty
+      // selection settles the stage clean instead of re-running the whole
+      // fleet. Explicit human triggers (manual resume, PR open) keep the
+      // full dispatch they asked for.
+      push = {
+        headSha: change.source_head,
+        computeDelta: dependencies.computeDelta ?? computePushDelta,
+      };
     }
     const result = await dispatchChangeReviews(
       change,

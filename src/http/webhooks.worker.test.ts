@@ -1382,6 +1382,53 @@ describe('push re-reviews', () => {
       { stage: 'review', attempt: 2, status: 'completed' },
     ]);
   });
+
+  it('re-runs only the concerned agents on the post-repair re-review', async () => {
+    await seedReviewedRepo({ processProfile: 'review_and_repair' });
+    const h = harness();
+    // The default agent blocks on src/a.ts; security approved but flagged
+    // src/b.ts; the other two approved cleanly.
+    await reviewedOpening(h, {
+      review: { verdict: 'request_changes', paths: ['src/a.ts'] },
+      security: { verdict: 'approve', paths: ['src/b.ts'] },
+    });
+    const opening = h.commands()[0];
+    const repair = h.commands().find((command) => command.stage === 'repair');
+    if (!repair) throw new Error('repair stage was not scheduled');
+    await runLifecycleStage(repair, h.dispatch, { enqueue: h.enqueue });
+    await completeLifecycleRepair(repair.stageRunId, true, { kind: 'fixed' }, h.enqueue);
+    const attempt2 = h
+      .commands()
+      .find((command) => command.stage === 'review' && command.stageRunId !== opening.stageRunId);
+    if (!attempt2) throw new Error('post-repair review was not scheduled');
+    await expect(getStageRun(attempt2.stageRunId)).resolves.toMatchObject({
+      trigger: 'stage.completed',
+    });
+
+    h.calls.length = 0;
+    // The repair's commits touched the blocker's file and security's flagged
+    // file, but nothing the clean approvers signed off on.
+    await runLifecycleStage(attempt2, h.dispatch, {
+      computeRisk: async () => 'full',
+      computeDelta: async () => ({
+        sinceHead: headA,
+        files: [
+          { filename: 'src/a.ts', additions: 4, deletions: 1 },
+          { filename: 'src/b.ts', additions: 1, deletions: 0 },
+        ],
+        tier: 'trivial' as const,
+      }),
+      enqueue: h.enqueue,
+    });
+    expect(h.calls.map((call) => call.slug).sort()).toEqual(['review', 'security']);
+    const stageRun = await getStageRun(attempt2.stageRunId);
+    expect(stageRun?.output).toMatchObject({
+      skipped: [
+        { slug: 'a11y', reason: 'approved earlier and the push does not touch its findings' },
+        { slug: 'o11y', reason: 'approved earlier and the push does not touch its findings' },
+      ],
+    });
+  });
 });
 
 describe('CI failure auto-fix', () => {
