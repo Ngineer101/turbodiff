@@ -18,7 +18,7 @@ function fact(context: LifecycleContext, key: string): boolean {
   return context.facts?.[key] === true;
 }
 
-function lastCompletedStage(context: LifecycleContext): LifecycleStage | null {
+function furthestCompletedStage(context: LifecycleContext): LifecycleStage | null {
   const completed = new Set(context.completedStages ?? []);
   let latest: LifecycleStage | null = null;
   for (const stage of LIFECYCLE_STAGES) {
@@ -123,7 +123,7 @@ export function decideLifecycle(
     return schedule('implement', context);
   }
   if (context.event === 'human.approved') {
-    const latest = lastCompletedStage(context) ?? context.startStage;
+    const latest = furthestCompletedStage(context) ?? context.startStage;
     const next = nextEnabledStage(profileKey, latest);
     return next ? schedule(next, context) : { kind: 'complete' };
   }
@@ -165,15 +165,16 @@ export function decideLifecycle(
       };
     }
 
-    const completed = context.completedStages ?? [];
-    if (completed.includes(context.stopAfterStage)) {
+    // A review after a repair is a new completion, even though repair is
+    // further along the stage order. Only this attempt can advance the run
+    // or reach its stop boundary; older attempts are historical evidence.
+    const latest = context.completedStage;
+    if (!latest) return { kind: 'wait', reason: 'completed stage required' };
+    if (latest === context.stopAfterStage) {
       return context.stopAfterStage === 'merge'
         ? { kind: 'complete' }
         : { kind: 'handoff', reason: 'requested stop boundary reached' };
     }
-
-    const latest = lastCompletedStage(context);
-    if (!latest) return schedule(context.startStage, context);
 
     if (latest === 'review' && fact(context, 'blockingFindings')) {
       return schedule('repair', context);
