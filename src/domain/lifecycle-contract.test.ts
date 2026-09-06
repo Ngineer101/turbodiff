@@ -3,6 +3,7 @@ import {
   LIFECYCLE_STAGES,
   PROCESS_PROFILE_KEYS,
   type LifecycleScenario,
+  type LifecycleStage,
 } from './lifecycle-contract.ts';
 import { decideLifecycle } from './lifecycle-coordinator.ts';
 
@@ -125,6 +126,7 @@ export const LIFECYCLE_SCENARIOS: LifecycleScenario[] = [
     profile: 'full_delivery',
     given: {
       event: 'stage.completed',
+      completedStage: 'implement',
       origin: 'factory',
       startStage: 'plan',
       stopAfterStage: 'merge',
@@ -153,6 +155,7 @@ export const LIFECYCLE_SCENARIOS: LifecycleScenario[] = [
     profile: 'full_delivery',
     given: {
       event: 'stage.completed',
+      completedStage: 'plan',
       origin: 'factory',
       startStage: 'plan',
       stopAfterStage: 'merge',
@@ -167,6 +170,7 @@ export const LIFECYCLE_SCENARIOS: LifecycleScenario[] = [
     profile: 'idea_to_pr',
     given: {
       event: 'stage.completed',
+      completedStage: 'publish',
       origin: 'factory',
       startStage: 'plan',
       stopAfterStage: 'publish',
@@ -234,6 +238,7 @@ export const LIFECYCLE_SCENARIOS: LifecycleScenario[] = [
     profile: 'review_and_repair',
     given: {
       event: 'stage.completed',
+      completedStage: 'review',
       origin: 'human',
       startStage: 'review',
       stopAfterStage: 'repair',
@@ -305,6 +310,7 @@ export const LIFECYCLE_SCENARIOS: LifecycleScenario[] = [
     profile: 'full_delivery',
     given: {
       event: 'stage.completed',
+      completedStage: 'verify',
       origin: 'factory',
       startStage: 'plan',
       stopAfterStage: 'merge',
@@ -320,6 +326,7 @@ export const LIFECYCLE_SCENARIOS: LifecycleScenario[] = [
     profile: 'full_delivery',
     given: {
       event: 'stage.completed',
+      completedStage: 'verify',
       origin: 'factory',
       startStage: 'plan',
       stopAfterStage: 'merge',
@@ -356,6 +363,7 @@ export const LIFECYCLE_SCENARIOS: LifecycleScenario[] = [
     profile: 'full_delivery',
     given: {
       event: 'stage.completed',
+      completedStage: 'verify',
       origin: 'factory',
       startStage: 'plan',
       stopAfterStage: 'merge',
@@ -522,5 +530,102 @@ describe('composable lifecycle acceptance contract', () => {
     for (const required of requiredBoundaries) {
       expect(boundaries.has(required)).toBe(true);
     }
+  });
+});
+
+describe('repeated lifecycle stages', () => {
+  it.each(['full_delivery', 'assisted_delivery', 'native_turnkey', 'legacy_factory'] as const)(
+    '%s reaches verification after repeated review and repair cycles',
+    (profile) => {
+      const completedStages: LifecycleStage[] = ['implement', 'publish'];
+      for (const [completedStage, blockingFindings, next] of [
+        ['review', true, 'repair'],
+        ['repair', false, 'review'],
+        ['review', true, 'repair'],
+        ['repair', false, 'review'],
+        ['review', false, 'verify'],
+      ] as const) {
+        completedStages.push(completedStage);
+        expect(
+          decideLifecycle(profile, {
+            event: 'stage.completed',
+            completedStage,
+            origin: 'factory',
+            startStage: 'implement',
+            stopAfterStage: profile === 'assisted_delivery' ? 'verify' : 'merge',
+            completedStages,
+            capabilities: ['read_change', 'publish_review', 'write_head', 'merge'],
+            facts: { acceptanceContractPresent: true, blockingFindings },
+          }),
+        ).toEqual({ kind: 'schedule', stage: next });
+      }
+    },
+  );
+
+  it('finishes review-and-repair after a clean re-review', () => {
+    expect(
+      decideLifecycle('review_and_repair', {
+        event: 'stage.completed',
+        completedStage: 'review',
+        origin: 'human',
+        startStage: 'review',
+        stopAfterStage: 'merge',
+        completedStages: ['review', 'repair', 'review'],
+        capabilities: ['read_change', 'publish_review', 'write_head'],
+        facts: { blockingFindings: false },
+      }),
+    ).toEqual({ kind: 'complete' });
+  });
+
+  it('does not reuse old verification after a repair', () => {
+    const completedStages: LifecycleStage[] = ['review', 'verify'];
+    for (const [completedStage, facts, next] of [
+      ['verify', { verificationPassed: false, repairAttemptsRemaining: true }, 'repair'],
+      ['repair', {}, 'review'],
+      ['review', { blockingFindings: false }, 'verify'],
+      ['verify', { verificationPassed: true }, 'merge'],
+    ] as const) {
+      completedStages.push(completedStage);
+      expect(
+        decideLifecycle('full_delivery', {
+          event: 'stage.completed',
+          completedStage,
+          origin: 'factory',
+          startStage: 'review',
+          stopAfterStage: 'merge',
+          completedStages,
+          capabilities: ['read_change', 'publish_review', 'write_head', 'merge'],
+          facts: { acceptanceContractPresent: true, ...facts },
+        }),
+      ).toEqual({ kind: 'schedule', stage: next });
+    }
+  });
+
+  it('does not reach a stop boundary using a historical completion', () => {
+    expect(
+      decideLifecycle('assisted_delivery', {
+        event: 'stage.completed',
+        completedStage: 'review',
+        origin: 'factory',
+        startStage: 'review',
+        stopAfterStage: 'verify',
+        completedStages: ['review', 'verify', 'repair', 'review'],
+        capabilities: ['read_change', 'publish_review', 'write_head'],
+        facts: { acceptanceContractPresent: true, blockingFindings: false },
+      }),
+    ).toEqual({ kind: 'schedule', stage: 'verify' });
+  });
+
+  it('waits for completion identity instead of guessing from history', () => {
+    expect(
+      decideLifecycle('full_delivery', {
+        event: 'stage.completed',
+        origin: 'factory',
+        startStage: 'review',
+        stopAfterStage: 'merge',
+        completedStages: ['review', 'repair'],
+        capabilities: ['read_change', 'publish_review', 'write_head'],
+      }),
+    ).toEqual({ kind: 'wait', reason: 'completed stage required' });
   });
 });

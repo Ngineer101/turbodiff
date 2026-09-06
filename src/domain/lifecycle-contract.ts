@@ -97,6 +97,9 @@ export interface LifecycleScenario {
     startStage: LifecycleStage;
     stopAfterStage: LifecycleStage;
     completedStages?: LifecycleStage[];
+    // The attempt that emitted stage.completed; history may contain older
+    // repairs or verifications even when this attempt is a re-review.
+    completedStage?: LifecycleStage;
     capabilities?: ChangeCapability[];
     facts?: Record<string, boolean | string | number | null>;
   };

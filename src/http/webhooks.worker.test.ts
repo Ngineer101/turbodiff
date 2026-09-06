@@ -592,6 +592,138 @@ describe('composable feature delivery', () => {
     });
   });
 
+  it.each([1, 2])('reaches verification and merge after %i repair rounds', async (repairs) => {
+    await seedRepo();
+    await ensureBuiltinAgents(1001);
+    const featureId = await createFeature(101, 'Repaired delivery', 'Ship it', ['It works']);
+    const change = await upsertChange({
+      repositoryId: 101,
+      providerKey: 'github:93',
+      number: 93,
+      origin: 'factory',
+      title: 'Repaired delivery',
+      externalUrl: 'https://github.com/acme/api/pull/93',
+      sourceBranch: 'turbodiff/feature-93',
+      targetBranch: 'main',
+      status: 'open',
+      sourceHead: 'a'.repeat(40),
+      targetHead: 'b'.repeat(40),
+      draft: false,
+      capabilities: ['read_change', 'publish_review', 'write_head', 'publish_check', 'merge'],
+    });
+    await updateFeature(featureId, { status: 'pr_opened', prNumber: 93, changeId: change.id });
+    const created = await createFactoryRunWithStage({
+      repositoryId: 101,
+      changeId: change.id,
+      profileKey: 'full_delivery',
+      startStage: 'review',
+      stopAfterStage: 'merge',
+      policySnapshot: { key: 'full_delivery' },
+      trigger: 'test',
+      eventKind: 'human.resume_requested',
+      decision: { kind: 'schedule', stage: 'review' },
+      idempotencyKey: `repair-delivery:${featureId}`,
+      stageInput: { featureId },
+    });
+    const queued: FactoryMessage[] = [];
+    const enqueue = async (message: FactoryMessage) => void queued.push(message);
+    const dispatch: ReviewDispatcher = async (agent, repo, prNumber, _url, trigger, options) => {
+      return (
+        (await tryRecordReview(
+          repo.id,
+          repo.installation_id,
+          prNumber,
+          trigger,
+          agent.slug,
+          `${agent.slug}--${repo.owner}--${repo.name}--${prNumber}`,
+          options?.riskTier ?? null,
+          options?.stageRunId ?? null,
+          options?.headSha ?? null,
+        )) !== null
+      );
+    };
+    let review: RunStageCommand = {
+      kind: 'run_stage',
+      factoryRunId: created.run.id,
+      stageRunId: created.stageRun!.id,
+      stage: 'review',
+      idempotencyKey: created.stageRun!.idempotency_key,
+      changeId: change.id,
+    };
+    for (let round = 0; round <= repairs; round++) {
+      await runLifecycleStage(review, dispatch, { computeRisk: async () => 'full', enqueue });
+      queued.length = 0;
+      const blocking = round < repairs;
+      await completeLifecycleReview(
+        'review--acme--api--93',
+        null,
+        blocking ? 1 : 0,
+        blocking ? 'request_changes' : 'approve',
+        blocking ? ['src/a.ts'] : [],
+        enqueue,
+      );
+      expect(stageCommands(queued)).toHaveLength(1);
+      const [next] = stageCommands(queued);
+      expect(next.stage).toBe(blocking ? 'repair' : 'verify');
+      if (!blocking) break;
+      await runLifecycleStage(next, dispatch, { enqueue });
+      expect(queued).toContainEqual(
+        expect.objectContaining({
+          kind: 'fix',
+          stageRunId: next.stageRunId,
+          factoryRunId: created.run.id,
+        }),
+      );
+      await testDatabase()
+        .prepare('UPDATE changes SET source_head = ?1 WHERE id = ?2')
+        .bind(String(round + 1).repeat(40), change.id)
+        .run();
+      queued.length = 0;
+      await completeLifecycleRepair(next.stageRunId, true, { kind: 'fixed' }, enqueue);
+      expect(stageCommands(queued)).toHaveLength(1);
+      [review] = stageCommands(queued);
+      expect(review.stage).toBe('review');
+    }
+    const [verify] = stageCommands(queued);
+    await runLifecycleStage(verify, dispatch, { enqueue });
+    expect(queued).toContainEqual({
+      kind: 'verify',
+      featureId,
+      factoryRunId: created.run.id,
+      stageRunId: verify.stageRunId,
+    });
+    queued.length = 0;
+    await completeLifecycleStage(
+      verify.stageRunId,
+      'verify',
+      true,
+      { kind: 'verification_completed', status: 'passed' },
+      { verificationPassed: true },
+      enqueue,
+    );
+    // A duplicated completion must not dispatch a second merge or review.
+    await completeLifecycleStage(
+      verify.stageRunId,
+      'verify',
+      true,
+      { kind: 'verification_completed', status: 'passed' },
+      { verificationPassed: true },
+      enqueue,
+    );
+    expect(stageCommands(queued)).toHaveLength(1);
+    const [merge] = stageCommands(queued);
+    expect(merge.stage).toBe('merge');
+    const mergeGithub = vi.fn(async () => {});
+    await runLifecycleStage(merge, dispatch, { enqueue, mergeGithub });
+    expect(mergeGithub).toHaveBeenCalledExactlyOnceWith(101, 93);
+    await expect(getFactoryRun(created.run.id)).resolves.toMatchObject({ status: 'completed' });
+    const stages = await listStageRuns(created.run.id);
+    expect(stages.filter((stage) => stage.stage === 'review')).toHaveLength(repairs + 1);
+    expect(stages.filter((stage) => stage.stage === 'repair')).toHaveLength(repairs);
+    expect(stages.filter((stage) => stage.stage === 'verify')).toHaveLength(1);
+    expect(stages.every((stage) => stage.status === 'completed')).toBe(true);
+  });
+
   it('hands verified delivery to the merge executor and completes the run', async () => {
     await seedRepo();
     const featureId = await createFeature(101, 'Verified delivery', 'Ship it', [
@@ -1237,6 +1369,18 @@ describe('push re-reviews', () => {
     });
     expect(h.calls.length).toBeGreaterThan(0);
     await expect(getStageRun(attempt2.stageRunId)).resolves.toMatchObject({ status: 'running' });
+
+    const commandCount = h.commands().length;
+    for (const call of h.calls) {
+      await completeLifecycleReview(instance(call.slug), null, 0, 'approve', [], h.enqueue);
+    }
+    await expect(getFactoryRun(pushB.factoryRunId)).resolves.toMatchObject({ status: 'completed' });
+    expect(h.commands()).toHaveLength(commandCount);
+    await expect(listStageRuns(pushB.factoryRunId)).resolves.toMatchObject([
+      { stage: 'review', attempt: 1, status: 'completed' },
+      { stage: 'repair', attempt: 1, status: 'completed' },
+      { stage: 'review', attempt: 2, status: 'completed' },
+    ]);
   });
 });
 

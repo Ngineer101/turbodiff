@@ -393,16 +393,13 @@ async function coordinateStageOutcome(
   const feature = featureId ? await getFeature(featureId) : null;
   const acceptanceContract = change ? await latestAcceptanceContractForChange(change.id) : null;
 
-  const completed = (await listStageRuns(run.id))
-    .filter((stageRun) => stageRun.status === 'completed')
-    .map((stageRun) => stageRun.stage);
   const event: LifecycleEventKind = success ? 'stage.completed' : 'stage.failed';
   const context: LifecycleContext = {
     event,
     origin: change?.origin ?? 'imported',
     startStage: run.start_stage,
     stopAfterStage: run.stop_after_stage,
-    completedStages: completed,
+    completedStage: command.stage,
     capabilities: change?.capabilities,
     facts: {
       repositoryEnabled: repo.enabled,
