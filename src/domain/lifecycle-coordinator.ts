@@ -6,6 +6,7 @@ import {
   type LifecycleStage,
   type ProcessProfileKey,
 } from './lifecycle-contract.ts';
+import { REVIEW_REPAIR_EXHAUSTED, VERIFY_REPAIR_EXHAUSTED } from './lifecycle-resume.ts';
 import { processProfile } from './process-profiles.ts';
 
 export type LifecycleContext = LifecycleScenario['given'];
@@ -177,16 +178,14 @@ export function decideLifecycle(
     }
 
     if (latest === 'review' && fact(context, 'blockingFindings')) {
-      // The review↔repair cycle needs this brake: a reviewer that keeps
-      // blocking (or re-rolls its verdict on an unchanged head) would
-      // otherwise re-run the full review fleet forever. Parking keeps the
-      // human resume path open, which bypasses this gate.
+      // Pause for manual fixes when the shared automatic repair budget is
+      // exhausted. A human can rerun the review without granting more repairs.
       if (fact(context, 'repairAttemptsRemaining')) return schedule('repair', context);
-      return { kind: 'handoff', reason: 'blocking findings remain and repair policy is exhausted' };
+      return { kind: 'wait', reason: REVIEW_REPAIR_EXHAUSTED };
     }
     if (latest === 'verify' && context.facts?.verificationPassed === false) {
       if (fact(context, 'repairAttemptsRemaining')) return schedule('repair', context);
-      return { kind: 'handoff', reason: 'verification failed and repair policy is exhausted' };
+      return { kind: 'wait', reason: VERIFY_REPAIR_EXHAUSTED };
     }
     if (latest === 'verify') return mergeDecision(context);
     if (latest === 'repair') return schedule('review', context);

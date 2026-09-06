@@ -307,7 +307,7 @@ export const LIFECYCLE_SCENARIOS: LifecycleScenario[] = [
       facts: { blockingFindings: true, repairAttemptsRemaining: false },
     },
     expected: {
-      kind: 'handoff',
+      kind: 'wait',
       reason: 'blocking findings remain and repair policy is exhausted',
     },
   },

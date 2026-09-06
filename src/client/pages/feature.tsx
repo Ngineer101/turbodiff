@@ -22,6 +22,7 @@ import type {
   ApiMe,
   ApiVerificationSummary,
 } from '../../shared/api-types.ts';
+import { canResumeLifecycleRun, isRepairBudgetPause } from '../../domain/lifecycle-resume.ts';
 import { api, ApiError } from '../lib/api.ts';
 import { useDictation } from '../lib/dictation.ts';
 import { sentence } from '../lib/format.ts';
@@ -309,7 +310,7 @@ function LifecycleHistory({
   resuming,
 }: {
   runs: ApiFeatureDetail['lifecycle_runs'];
-  // Re-run the failed stage of a run parked on a human decision.
+  // Retry a failure or rerun checks after manual fixes.
   onResume: (runId: number) => void;
   resuming: boolean;
 }) {
@@ -364,7 +365,7 @@ function LifecycleHistory({
                   </li>
                 ))}
               </ol>
-              {run.status === 'awaiting_human' && run.stages.at(-1)?.status === 'failed' ? (
+              {canResumeLifecycleRun(run, run.stages.at(-1)) ? (
                 <div className="mt-3">
                   <Button
                     size="sm"
@@ -372,8 +373,16 @@ function LifecycleHistory({
                     onClick={() => onResume(run.id)}
                     loading={resuming}
                   >
-                    Retry {sentence(run.stages.at(-1)?.stage ?? 'stage')}
+                    {isRepairBudgetPause(run, run.stages.at(-1))
+                      ? 'Resume checks'
+                      : `Retry ${sentence(run.stages.at(-1)?.stage ?? 'stage')}`}
                   </Button>
+                  {isRepairBudgetPause(run, run.stages.at(-1)) ? (
+                    <p className="mt-2 text-xs text-mute">
+                      Fix the remaining issues manually, then resume checks. This does not reset the
+                      automated repair budget.
+                    </p>
+                  ) : null}
                 </div>
               ) : null}
               {run.handoff_reason ? (
