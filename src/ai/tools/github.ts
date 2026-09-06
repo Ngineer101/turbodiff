@@ -11,6 +11,7 @@ import {
   githubRequest as gh,
 } from '../../integrations/github/client.ts';
 import { REVIEW_NOISE_PATTERNS, splitDiffSegments } from '../../domain/review-diff.ts';
+import { findingSeverity } from '../../domain/review-findings.ts';
 
 // The repository a review dispatch is scoped to. The model supplies
 // owner/repo as tool arguments, and tokenFor resolves a full installation
@@ -281,22 +282,6 @@ export const findingSchema = v.object({
   severity: v.optional(v.picklist(['P1', 'P2']), 'P2'),
   body: v.pipe(v.string(), v.minLength(1)),
 });
-
-// Severity gates merges in blocking mode, so the model's structured field is
-// not trusted alone: the body's visible tag is an independent claim of the
-// same fact. A finding counts as P1 when either says so — a mislabel can then
-// only escalate (a spurious REQUEST_CHANGES a re-review clears), never
-// silently APPROVE past a real P1 — and disagreements are logged.
-export function findingSeverity(f: v.InferOutput<typeof findingSchema>): 'P1' | 'P2' {
-  const bodyTagged = f.body.includes('**P1**') || f.body.includes('\u{1F534}');
-  if (bodyTagged !== (f.severity === 'P1')) {
-    console.warn(
-      `turbodiff: severity mismatch on finding ${f.path}:${f.line} — field says ${f.severity}, ` +
-        `body ${bodyTagged ? 'is' : 'is not'} tagged P1; treating as P1`,
-    );
-  }
-  return bodyTagged || f.severity === 'P1' ? 'P1' : 'P2';
-}
 
 function findingsAsMarkdown(findings: v.InferOutput<typeof findingSchema>[]): string {
   return findings.map((f) => `**\`${f.path}:${f.line}\`**\n${f.body}`).join('\n\n');

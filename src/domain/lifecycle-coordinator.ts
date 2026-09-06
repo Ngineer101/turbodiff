@@ -177,7 +177,12 @@ export function decideLifecycle(
     }
 
     if (latest === 'review' && fact(context, 'blockingFindings')) {
-      return schedule('repair', context);
+      // The review↔repair cycle needs this brake: a reviewer that keeps
+      // blocking (or re-rolls its verdict on an unchanged head) would
+      // otherwise re-run the full review fleet forever. Parking keeps the
+      // human resume path open, which bypasses this gate.
+      if (fact(context, 'repairAttemptsRemaining')) return schedule('repair', context);
+      return { kind: 'handoff', reason: 'blocking findings remain and repair policy is exhausted' };
     }
     if (latest === 'verify' && context.facts?.verificationPassed === false) {
       if (fact(context, 'repairAttemptsRemaining')) return schedule('repair', context);

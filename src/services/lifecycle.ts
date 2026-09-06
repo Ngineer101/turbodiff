@@ -42,7 +42,11 @@ import {
   type JsonValue,
 } from '../shared/json.ts';
 import { parseUtc } from '../shared/time.ts';
-import type { GenerateQueueMessage, VerifyQueueMessage } from '../shared/factory-messages.ts';
+import {
+  FIX_MAX_ATTEMPTS,
+  type GenerateQueueMessage,
+  type VerifyQueueMessage,
+} from '../shared/factory-messages.ts';
 import { installationToken } from '../integrations/github/app.ts';
 import { githubJson, githubPaginate } from '../integrations/github/client.ts';
 import {
@@ -393,6 +397,12 @@ async function coordinateStageOutcome(
   const feature = featureId ? await getFeature(featureId) : null;
   const acceptanceContract = change ? await latestAcceptanceContractForChange(change.id) : null;
 
+  // Every scheduled repair spends an attempt regardless of outcome, so a
+  // fixer that keeps failing or declining still terminates. Cancelled runs
+  // were skipped by a human, not attempted.
+  const repairAttempts = (await listStageRuns(run.id)).filter(
+    (stageRun) => stageRun.stage === 'repair' && stageRun.status !== 'cancelled',
+  ).length;
   const event: LifecycleEventKind = success ? 'stage.completed' : 'stage.failed';
   const context: LifecycleContext = {
     event,
@@ -405,6 +415,7 @@ async function coordinateStageOutcome(
       repositoryEnabled: repo.enabled,
       acceptanceContractPresent: acceptanceContract !== null || feature?.acceptance != null,
       criteriaConflict: feature?.criteria_conflict === true,
+      repairAttemptsRemaining: repairAttempts < FIX_MAX_ATTEMPTS,
       ...outcomeFacts,
     },
   };
