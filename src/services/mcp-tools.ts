@@ -151,6 +151,7 @@ export async function getTask(user: AuthedUser, taskId: number) {
     created_at: plan.created_at,
     requirements: plan.requirements,
     plan: plan.plan,
+    summary: plan.summary,
     questions: plan.questions ?? [],
     answers: plan.answers ?? [],
     acceptance: plan.acceptance ?? [],

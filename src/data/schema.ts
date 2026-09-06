@@ -555,6 +555,7 @@ export const plans = appSchema.table(
     questions: jsonb().$type<JsonValue>(),
     answers: jsonb().$type<JsonValue>(),
     plan: text(),
+    summary: text(),
     acceptance: jsonb().$type<JsonValue>(),
     status: text().default('analyzing').notNull(),
     error: text(),

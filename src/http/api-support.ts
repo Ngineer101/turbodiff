@@ -275,6 +275,7 @@ export function serializeTask(
     questions,
     acceptance,
     plan: opts.includePlan ? p.plan : null,
+    summary: opts.includePlan ? p.summary : null,
     archived: p.archived,
     model: p.runner_model ?? DEFAULT_RUNNER_MODEL,
     attachments: attachments.map((a) => ({ name: a.name })),
