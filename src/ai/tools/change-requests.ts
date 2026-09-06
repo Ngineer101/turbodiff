@@ -25,11 +25,11 @@ import {
   assertPinned,
   filterDiffNoise,
   findingSchema,
-  findingSeverity,
   truncate,
   MAX_DIFF_CHARS,
   MAX_FILE_CHARS,
 } from './github.ts';
+import { findingSeverity } from '../../domain/review-findings.ts';
 
 // Native change-request tools for the PrReviewer agent
 // (docs/artifacts-provider.md). Deliberately the SAME tool names and input

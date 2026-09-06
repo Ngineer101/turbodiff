@@ -46,8 +46,11 @@ The scenario ids are stable references shared with
 | `verify`    | Change and acceptance contract       | Evidence and verification verdict      |
 | `merge`     | Mergeable change and satisfied gates | Merged provider state                  |
 
-`repair` may loop back into `review` and `verify`. Conflict resolution and
-interactive chat are repair triggers, not separate lifecycle stages.
+`repair` may loop back into `review` and `verify`, but only while the run's
+repair attempt budget lasts; a review that still blocks after the budget is
+spent hands the run off to a human, who may resume it past the gate.
+Conflict resolution and interactive chat are repair triggers, not separate
+lifecycle stages.
 
 ## Domain objects
 
@@ -266,6 +269,7 @@ flowchart TB
 - `RUN`: orchestration, deduplication, retry, and terminal-state behavior.
 - `HND`: stop boundaries, wait states, handoff, and resume.
 - `CAP`: capability degradation and authorization.
+- `REP`: repair scheduling and the review↔repair attempt budget.
 - `VER`: acceptance contracts and verification loops.
 - `MRG`: external gates and merge readiness.
 - `CMP`: compatibility and migration behavior.

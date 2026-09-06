@@ -4,6 +4,7 @@ import {
   cancelStageRun,
   claimStageRun,
   completeReview,
+  countBudgetedFixAttempts,
   createAcceptanceContract,
   createFactoryRunWithStage,
   finishStageRun,
@@ -26,6 +27,7 @@ import {
   type StageRunRow,
 } from '../data/db.ts';
 import { decideLifecycle, type LifecycleContext } from '../domain/lifecycle-coordinator.ts';
+import { canResumeLifecycleRun } from '../domain/lifecycle-resume.ts';
 import { isDeliveryProcessProfile, processProfile } from '../domain/process-profiles.ts';
 import type {
   LifecycleDecision,
@@ -42,7 +44,11 @@ import {
   type JsonValue,
 } from '../shared/json.ts';
 import { parseUtc } from '../shared/time.ts';
-import type { GenerateQueueMessage, VerifyQueueMessage } from '../shared/factory-messages.ts';
+import {
+  FIX_MAX_ATTEMPTS,
+  type GenerateQueueMessage,
+  type VerifyQueueMessage,
+} from '../shared/factory-messages.ts';
 import { installationToken } from '../integrations/github/app.ts';
 import { githubJson, githubPaginate } from '../integrations/github/client.ts';
 import {
@@ -393,6 +399,9 @@ async function coordinateStageOutcome(
   const feature = featureId ? await getFeature(featureId) : null;
   const acceptanceContract = change ? await latestAcceptanceContractForChange(change.id) : null;
 
+  // Match the fixer's per-PR, non-chat budget across lifecycle runs. Merely
+  // scheduling a repair does not spend it; the atomic claim is the final guard.
+  const repairAttempts = change ? await countBudgetedFixAttempts(repo.id, change.number) : 0;
   const event: LifecycleEventKind = success ? 'stage.completed' : 'stage.failed';
   const context: LifecycleContext = {
     event,
@@ -405,6 +414,7 @@ async function coordinateStageOutcome(
       repositoryEnabled: repo.enabled,
       acceptanceContractPresent: acceptanceContract !== null || feature?.acceptance != null,
       criteriaConflict: feature?.criteria_conflict === true,
+      repairAttemptsRemaining: repairAttempts < FIX_MAX_ATTEMPTS,
       ...outcomeFacts,
     },
   };
@@ -511,10 +521,8 @@ export type ResumeStageResult =
   | { kind: 'scheduled'; stageRunId: number; stage: LifecycleStage; attempt: number }
   | { kind: 'rejected'; reason: string };
 
-// A run parked by a stage failure ("stage failure requires retry policy
-// evaluation") has no automatic retry policy yet — a human is the policy.
-// Re-run the failed stage as a fresh attempt on the same run, so the rest of
-// the delivery (verify, merge) continues from there once it passes.
+// Retry failed stages or rerun a check paused by the repair budget after a
+// manual fix. Resuming never resets the automatic repair budget.
 export async function resumeFailedStage(
   runId: number,
   actor: string | null,
@@ -529,8 +537,8 @@ export async function resumeFailedStage(
     };
   }
   const latest = (await listStageRuns(run.id)).at(-1);
-  if (!latest || latest.status !== 'failed') {
-    return { kind: 'rejected', reason: 'the latest stage did not fail' };
+  if (!latest || !canResumeLifecycleRun(run, latest)) {
+    return { kind: 'rejected', reason: 'the latest stage is not available to resume' };
   }
   const repo = await getRepoById(run.repository_id);
   if (!repo) return { kind: 'rejected', reason: 'repository missing' };
@@ -824,6 +832,18 @@ export async function runLifecycleStage(
     if (scheduledHead) {
       push = {
         headSha: scheduledHead,
+        computeDelta: dependencies.computeDelta ?? computePushDelta,
+      };
+    } else if (stageRun.trigger === 'stage.completed' && change.source_head) {
+      // The coordinator's own follow-on review (after a repair) reuses the
+      // push selection machinery against the current head: agents holding a
+      // block re-judge it, agents that already approved are re-dispatched
+      // only when the repair's delta reaches their findings, and an empty
+      // selection settles the stage clean instead of re-running the whole
+      // fleet. Explicit human triggers (manual resume, PR open) keep the
+      // full dispatch they asked for.
+      push = {
+        headSha: change.source_head,
         computeDelta: dependencies.computeDelta ?? computePushDelta,
       };
     }

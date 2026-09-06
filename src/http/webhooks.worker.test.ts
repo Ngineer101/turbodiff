@@ -9,6 +9,7 @@ import { Hono } from 'hono';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import {
   createFeature,
+  countBudgetedFixAttempts,
   createFactoryRunWithStage,
   ensureBuiltinAgents,
   finishFixAttempt,
@@ -590,6 +591,191 @@ describe('composable feature delivery', () => {
     await expect(resumeFailedStage(created.run.id, 'nico', enqueue)).resolves.toMatchObject({
       kind: 'rejected',
     });
+  });
+
+  it.each(['review', 'verify'] as const)(
+    'pauses an exhausted %s and resumes checks without granting more repairs',
+    async (stage) => {
+      await seedRepo();
+      await ensureBuiltinAgents(1001);
+      const featureId = await createFeature(101, 'Manual recovery', 'Ship it', ['It works']);
+      const change = await upsertChange({
+        repositoryId: 101,
+        providerKey: 'github:94',
+        number: 94,
+        origin: 'factory',
+        title: 'Manual recovery',
+        externalUrl: 'https://github.com/acme/api/pull/94',
+        sourceBranch: 'turbodiff/feature-94',
+        targetBranch: 'main',
+        status: 'open',
+        sourceHead: 'a'.repeat(40),
+        targetHead: 'b'.repeat(40),
+        draft: false,
+        capabilities: ['read_change', 'publish_review', 'write_head', 'merge'],
+      });
+      await updateFeature(featureId, { status: 'pr_opened', prNumber: 94, changeId: change.id });
+      // Earlier webhook fixes consume the same PR budget even though this new
+      // lifecycle run has no repair stages of its own.
+      for (let i = 0; i < FIX_MAX_ATTEMPTS; i++) {
+        const attempt = await tryRecordFixAttempt(101, 94, 'review', FIX_MAX_ATTEMPTS);
+        expect(attempt).not.toBeNull();
+        await finishFixAttempt(attempt!, 'failed');
+      }
+      const created = await createFactoryRunWithStage({
+        repositoryId: 101,
+        changeId: change.id,
+        profileKey: 'full_delivery',
+        startStage: stage,
+        stopAfterStage: 'merge',
+        policySnapshot: { key: 'full_delivery' },
+        trigger: 'test',
+        eventKind: 'human.resume_requested',
+        decision: { kind: 'schedule', stage },
+        idempotencyKey: `budget:${featureId}`,
+        stageInput: { featureId },
+      });
+      const queued: FactoryMessage[] = [];
+      const enqueue = async (message: FactoryMessage) => void queued.push(message);
+      const heads: (string | null)[] = [];
+      const dispatch: ReviewDispatcher = async (agent, repo, prNumber, _url, trigger, options) => {
+        heads.push(options?.headSha ?? null);
+        return (
+          (await tryRecordReview(
+            repo.id,
+            repo.installation_id,
+            prNumber,
+            trigger,
+            agent.slug,
+            `${agent.slug}--${repo.owner}--${repo.name}--${prNumber}`,
+            options?.riskTier ?? null,
+            options?.stageRunId ?? null,
+            options?.headSha ?? null,
+          )) !== null
+        );
+      };
+      let command: RunStageCommand = {
+        kind: 'run_stage',
+        factoryRunId: created.run.id,
+        stageRunId: created.stageRun!.id,
+        stage,
+        idempotencyKey: created.stageRun!.idempotency_key,
+        changeId: change.id,
+      };
+      // Resuming unchanged checks must pause again; after a manual fix they
+      // progress to verify/merge. Duplicate resume clicks cannot queue more work.
+      for (const passed of [false, false, true]) {
+        await runLifecycleStage(command, dispatch, { enqueue, computeRisk: async () => 'full' });
+        queued.length = 0;
+        if (stage === 'review') {
+          await completeLifecycleReview(
+            'review--acme--api--94',
+            null,
+            passed ? 0 : 1,
+            passed ? 'approve' : 'request_changes',
+            passed ? [] : ['src/a.ts'],
+            enqueue,
+          );
+        } else {
+          await completeLifecycleStage(
+            command.stageRunId,
+            'verify',
+            true,
+            { status: passed ? 'passed' : 'failed' },
+            { verificationPassed: passed },
+            enqueue,
+          );
+        }
+        expect(await countBudgetedFixAttempts(101, 94)).toBe(FIX_MAX_ATTEMPTS);
+        expect(await tryRecordFixAttempt(101, 94, 'lifecycle_repair', FIX_MAX_ATTEMPTS)).toBeNull();
+        if (passed) break;
+        expect(queued).toHaveLength(0);
+        await expect(getFactoryRun(created.run.id)).resolves.toMatchObject({
+          status: 'awaiting_human',
+        });
+        await expect(getStageRun(command.stageRunId)).resolves.toMatchObject({
+          status: 'completed',
+        });
+        await testDatabase()
+          .prepare('UPDATE changes SET source_head = ?1 WHERE id = ?2')
+          .bind('c'.repeat(40), change.id)
+          .run();
+        expect(await resumeFailedStage(created.run.id, 'nico', enqueue)).toMatchObject({
+          kind: 'scheduled',
+          stage,
+        });
+        expect(await resumeFailedStage(created.run.id, 'nico', enqueue)).toMatchObject({
+          kind: 'rejected',
+        });
+        expect(stageCommands(queued)).toHaveLength(1);
+        [command] = stageCommands(queued);
+      }
+      expect(stageCommands(queued)).toHaveLength(1);
+      expect(stageCommands(queued)[0].stage).toBe(stage === 'review' ? 'verify' : 'merge');
+      if (stage === 'review')
+        expect(heads).toEqual(['a'.repeat(40), 'c'.repeat(40), 'c'.repeat(40)]);
+    },
+  );
+
+  it('does not spend repair budget on scheduled stages, chat, or another PR', async () => {
+    await seedRepo();
+    const change = await upsertChange({
+      repositoryId: 101,
+      providerKey: 'github:95',
+      number: 95,
+      origin: 'human',
+      title: 'Budget',
+      externalUrl: 'https://github.com/acme/api/pull/95',
+      sourceBranch: 'fix',
+      targetBranch: 'main',
+      status: 'open',
+      sourceHead: 'a'.repeat(40),
+      targetHead: 'b'.repeat(40),
+      draft: false,
+      capabilities: ['read_change', 'publish_review', 'write_head'],
+    });
+    const created = await createFactoryRunWithStage({
+      repositoryId: 101,
+      changeId: change.id,
+      profileKey: 'full_delivery',
+      startStage: 'review',
+      stopAfterStage: 'merge',
+      policySnapshot: { key: 'full_delivery' },
+      trigger: 'test',
+      eventKind: 'human.resume_requested',
+      decision: { kind: 'schedule', stage: 'review' },
+      idempotencyKey: 'unspent-budget',
+    });
+    for (let i = 0; i < FIX_MAX_ATTEMPTS; i++) {
+      // Historical repairs that never reached the fixer do not consume claims.
+      await testDatabase()
+        .prepare(`INSERT INTO stage_runs
+        (factory_run_id, change_id, stage, attempt, status, trigger, idempotency_key)
+        VALUES (?1, ?2, 'repair', ?3, 'failed', 'test', ?4)`)
+        .bind(created.run.id, change.id, i + 1, `unclaimed:${i}`)
+        .run();
+      const chat = await tryRecordFixAttempt(101, 95, 'chat', 10, 'chat');
+      await finishFixAttempt(chat!, 'failed');
+      const other = await tryRecordFixAttempt(101, 96, 'review', FIX_MAX_ATTEMPTS);
+      await finishFixAttempt(other!, 'failed');
+    }
+    expect(await countBudgetedFixAttempts(101, 95)).toBe(0);
+    await testDatabase()
+      .prepare("UPDATE stage_runs SET status = 'running' WHERE id = ?1")
+      .bind(created.stageRun!.id)
+      .run();
+    const queued: FactoryMessage[] = [];
+    await completeLifecycleStage(
+      created.stageRun!.id,
+      'review',
+      true,
+      {},
+      { blockingFindings: true },
+      async (message) => void queued.push(message),
+    );
+    expect(stageCommands(queued)).toHaveLength(1);
+    expect(stageCommands(queued)[0].stage).toBe('repair');
+    expect(await tryRecordFixAttempt(101, 95, 'lifecycle_repair', FIX_MAX_ATTEMPTS)).not.toBeNull();
   });
 
   it.each([1, 2])('reaches verification and merge after %i repair rounds', async (repairs) => {
@@ -1381,6 +1567,53 @@ describe('push re-reviews', () => {
       { stage: 'repair', attempt: 1, status: 'completed' },
       { stage: 'review', attempt: 2, status: 'completed' },
     ]);
+  });
+
+  it('re-runs only the concerned agents on the post-repair re-review', async () => {
+    await seedReviewedRepo({ processProfile: 'review_and_repair' });
+    const h = harness();
+    // The default agent blocks on src/a.ts; security approved but flagged
+    // src/b.ts; the other two approved cleanly.
+    await reviewedOpening(h, {
+      review: { verdict: 'request_changes', paths: ['src/a.ts'] },
+      security: { verdict: 'approve', paths: ['src/b.ts'] },
+    });
+    const opening = h.commands()[0];
+    const repair = h.commands().find((command) => command.stage === 'repair');
+    if (!repair) throw new Error('repair stage was not scheduled');
+    await runLifecycleStage(repair, h.dispatch, { enqueue: h.enqueue });
+    await completeLifecycleRepair(repair.stageRunId, true, { kind: 'fixed' }, h.enqueue);
+    const attempt2 = h
+      .commands()
+      .find((command) => command.stage === 'review' && command.stageRunId !== opening.stageRunId);
+    if (!attempt2) throw new Error('post-repair review was not scheduled');
+    await expect(getStageRun(attempt2.stageRunId)).resolves.toMatchObject({
+      trigger: 'stage.completed',
+    });
+
+    h.calls.length = 0;
+    // The repair's commits touched the blocker's file and security's flagged
+    // file, but nothing the clean approvers signed off on.
+    await runLifecycleStage(attempt2, h.dispatch, {
+      computeRisk: async () => 'full',
+      computeDelta: async () => ({
+        sinceHead: headA,
+        files: [
+          { filename: 'src/a.ts', additions: 4, deletions: 1 },
+          { filename: 'src/b.ts', additions: 1, deletions: 0 },
+        ],
+        tier: 'trivial' as const,
+      }),
+      enqueue: h.enqueue,
+    });
+    expect(h.calls.map((call) => call.slug).sort()).toEqual(['review', 'security']);
+    const stageRun = await getStageRun(attempt2.stageRunId);
+    expect(stageRun?.output).toMatchObject({
+      skipped: [
+        { slug: 'a11y', reason: 'approved earlier and the push does not touch its findings' },
+        { slug: 'o11y', reason: 'approved earlier and the push does not touch its findings' },
+      ],
+    });
   });
 });
 

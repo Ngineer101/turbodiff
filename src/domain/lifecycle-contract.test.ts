@@ -244,7 +244,7 @@ export const LIFECYCLE_SCENARIOS: LifecycleScenario[] = [
       stopAfterStage: 'repair',
       completedStages: ['review'],
       capabilities: ['read_change', 'publish_review'],
-      facts: { blockingFindings: true },
+      facts: { blockingFindings: true, repairAttemptsRemaining: true },
     },
     expected: { kind: 'handoff', reason: 'change head is not writable' },
   },
@@ -275,6 +275,41 @@ export const LIFECYCLE_SCENARIOS: LifecycleScenario[] = [
       facts: { allGatesGreen: true },
     },
     expected: { kind: 'handoff', reason: 'merge authority unavailable' },
+  },
+  {
+    id: 'REP-001',
+    description: 'blocking findings schedule a repair while attempts remain',
+    profile: 'review_and_repair',
+    given: {
+      event: 'stage.completed',
+      completedStage: 'review',
+      origin: 'human',
+      startStage: 'review',
+      stopAfterStage: 'merge',
+      completedStages: ['review'],
+      capabilities: ['read_change', 'publish_review', 'write_head'],
+      facts: { blockingFindings: true, repairAttemptsRemaining: true },
+    },
+    expected: { kind: 'schedule', stage: 'repair' },
+  },
+  {
+    id: 'REP-002',
+    description: 'a still-blocking review with no repair budget parks the run instead of looping',
+    profile: 'full_delivery',
+    given: {
+      event: 'stage.completed',
+      completedStage: 'review',
+      origin: 'factory',
+      startStage: 'plan',
+      stopAfterStage: 'merge',
+      completedStages: ['plan', 'implement', 'publish', 'review'],
+      capabilities: ['read_change', 'publish_review', 'write_head', 'merge'],
+      facts: { blockingFindings: true, repairAttemptsRemaining: false },
+    },
+    expected: {
+      kind: 'wait',
+      reason: 'blocking findings remain and repair policy is exhausted',
+    },
   },
   {
     id: 'VER-001',
@@ -470,7 +505,7 @@ describe('composable lifecycle acceptance contract', () => {
   it('uses stable, unique scenario ids', () => {
     const ids = LIFECYCLE_SCENARIOS.map((scenario) => scenario.id);
     expect(new Set(ids).size).toBe(ids.length);
-    for (const id of ids) expect(id).toMatch(/^(REV|RUN|HND|CAP|VER|MRG|CMP)-\d{3}$/);
+    for (const id of ids) expect(id).toMatch(/^(REV|RUN|HND|CAP|REP|VER|MRG|CMP)-\d{3}$/);
   });
 
   it('covers every built-in process profile', () => {
@@ -555,7 +590,11 @@ describe('repeated lifecycle stages', () => {
             stopAfterStage: profile === 'assisted_delivery' ? 'verify' : 'merge',
             completedStages,
             capabilities: ['read_change', 'publish_review', 'write_head', 'merge'],
-            facts: { acceptanceContractPresent: true, blockingFindings },
+            facts: {
+              acceptanceContractPresent: true,
+              blockingFindings,
+              repairAttemptsRemaining: true,
+            },
           }),
         ).toEqual({ kind: 'schedule', stage: next });
       }

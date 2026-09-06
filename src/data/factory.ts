@@ -337,6 +337,25 @@ export async function countFixAttempts(repositoryId: number, prNumber: number): 
   return row?.n ?? 0;
 }
 
+// Keep orchestration and the atomic claim on the same per-PR budget. Chat
+// turns are supervised and excluded; attempts from earlier runs still count.
+function fixBudgetPredicate(repositoryId: number, prNumber: number, capTrigger?: string) {
+  return sql`repository_id = ${repositoryId} AND pr_number = ${prNumber}
+    AND ((${capTrigger ?? null}::text IS NOT NULL AND "trigger" = ${capTrigger ?? null})
+      OR (${capTrigger ?? null}::text IS NULL AND "trigger" <> 'chat'))`;
+}
+
+export async function countBudgetedFixAttempts(
+  repositoryId: number,
+  prNumber: number,
+): Promise<number> {
+  const row = await queryOne<{ n: number }>(sql`
+    SELECT COUNT(*) AS n FROM app.fix_attempts
+    WHERE ${fixBudgetPredicate(repositoryId, prNumber)}
+  `);
+  return row?.n ?? 0;
+}
+
 // Records an attempt only while under the cap and only when no attempt is
 // already running for this PR. The partial unique index is the concurrency
 // guard, so two consumers can't both claim the same sandbox.
@@ -372,9 +391,7 @@ export async function tryRecordFixAttempt(
         SELECT ${repositoryId}, ${prNumber}, ${trigger}, ${stageRunId}
         WHERE (
           SELECT COUNT(*) FROM app.fix_attempts
-          WHERE repository_id = ${repositoryId} AND pr_number = ${prNumber}
-            AND ((${capTrigger ?? null}::text IS NOT NULL AND "trigger" = ${capTrigger ?? null})
-              OR (${capTrigger ?? null}::text IS NULL AND "trigger" <> 'chat'))
+          WHERE ${fixBudgetPredicate(repositoryId, prNumber, capTrigger)}
         ) < ${cap}
         ON CONFLICT DO NOTHING
         RETURNING id
