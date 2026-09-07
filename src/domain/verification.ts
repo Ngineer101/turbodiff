@@ -25,6 +25,28 @@ export function verificationSkipReason(
   return null;
 }
 
+// Clock tolerance between the Workflows engine's instance timestamp and the
+// database's row timestamps.
+const INSTANCE_CLOCK_SKEW_MS = 60_000;
+
+// A Workflows step callback can execute more than once: the engine re-runs
+// it when an attempt ends in an internal error, even after the callback's
+// own work finished (live finding: verify-6's first attempt recorded a full
+// failed verdict and dispatched the fix, then died with "Attempt failed due
+// to internal workflows error" and was re-executed at once — a second
+// verification of a checkout that predated the fix already in flight). A
+// terminal verdict recorded since this instance was queued is this
+// instance's verdict, so the re-run has nothing to add. A 'running' or
+// 'error' row is a dead earlier attempt: re-running is the intended
+// recovery (the fresh row supersedes it).
+export function verdictRecordedSince(
+  latest: { status: string; created_at: string } | null,
+  instanceQueuedAt: number,
+): boolean {
+  if (!latest || (latest.status !== 'passed' && latest.status !== 'failed')) return false;
+  return parseUtc(latest.created_at) >= instanceQueuedAt - INSTANCE_CLOCK_SKEW_MS;
+}
+
 export interface CriterionResult {
   index: number;
   verdict: 'pass' | 'fail' | 'skip';
