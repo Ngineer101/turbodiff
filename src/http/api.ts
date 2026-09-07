@@ -2926,7 +2926,9 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const values = readAutomationPayload(body);
     const error = validateAutomation(values);
     if (error) return c.json({ error }, 400);
-    if (values.runner_model) {
+    // Only a *changed* model must be in the catalog: a stored model that has
+    // since dropped out may ride along, so unrelated edits still save.
+    if (values.runner_model && values.runner_model !== automation.runner_model) {
       const catalog = await getModelCatalog();
       if (!catalog.runner.options.some((o) => o.id === values.runner_model)) {
         return c.json({ error: 'unknown model' }, 400);

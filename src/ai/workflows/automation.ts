@@ -13,6 +13,7 @@ import {
   tryRecordAutomationRun,
   type AutomationRow,
 } from '../../data/db.ts';
+import { getModelCatalog } from '../../data/models.ts';
 import { buildSandboxMcpConfig } from '../../services/mcp-proxy.ts';
 import { resolveRunnerAuth, runnerEnvironment } from '../runtime/runner-auth.ts';
 import { runnerSandbox } from '../runtime/sandbox.ts';
@@ -113,8 +114,9 @@ type RunContext = {
   checkCommand: string | null;
   automationName: string;
   prompt: string;
-  // Per-automation runner model; null rides as ANTHROPIC_MODEL's default.
-  runnerModel: string | null;
+  // Per-automation runner model; a NULL column resolves to the catalog's
+  // runner default at claim time, so "Default (X)" in the form runs X.
+  runnerModel: string;
   // The user-authored prompt mentions .github/workflows — the push token may
   // carry the App's workflows permission (see sandboxGitToken).
   workflows: boolean;
@@ -167,7 +169,7 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
             checkCommand: repo.check_command,
             automationName: automation.name,
             prompt: automation.prompt,
-            runnerModel: automation.runner_model,
+            runnerModel: automation.runner_model ?? (await getModelCatalog()).runner.defaultModel,
             workflows: authorizesWorkflowFiles(automation.prompt),
             remoteSource: remoteSourceOf(repo),
           };
