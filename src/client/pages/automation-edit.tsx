@@ -104,6 +104,7 @@ export function AutomationEditPage() {
           schedule_kind: data.automation.schedule_kind,
           time_of_day: data.automation.time_of_day ?? '09:00',
           day_of_week: data.automation.day_of_week ?? 1,
+          runner_model: data.automation.runner_model ?? '',
           enabled: data.automation.enabled,
         }}
         repos={[data.automation.repository]}

@@ -99,6 +99,13 @@
       "when": 1788640885499,
       "tag": "0013_plan-summary",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1788810826415,
+      "tag": "0014_automation-model",
+      "breakpoints": true
     }
   ]
 }

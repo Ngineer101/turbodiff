@@ -398,6 +398,7 @@ export function readAutomationPayload(body: JsonObject): AutomationFields {
     schedule_kind: get('schedule_kind'),
     time_of_day: timeOfDay || null,
     day_of_week: isNumber(dayOfWeek) && Number.isInteger(dayOfWeek) ? dayOfWeek : null,
+    runner_model: get('runner_model') || null,
   };
 }
 
@@ -437,6 +438,7 @@ export function serializeAutomation(
     time_of_day: a.time_of_day,
     day_of_week: a.day_of_week,
     enabled: a.enabled,
+    runner_model: a.runner_model,
     next_run_at: a.next_run_at,
     last_run: lastRun,
   };

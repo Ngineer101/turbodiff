@@ -1,6 +1,9 @@
+import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { ArrowLeft, Check } from 'lucide-react';
 import { useState, type FormEvent, type ReactNode } from 'react';
+import { DEFAULT_RUNNER_MODEL, RUNNER_MODELS } from '../../shared/runner-models.ts';
+import { modelsQuery } from '../lib/queries.ts';
 import { EntityFormLayout, FormSection } from './entity-form.tsx';
 import { Button } from './ui/button.tsx';
 import { Field, Input, Select, Textarea } from './ui/input.tsx';
@@ -13,11 +16,13 @@ export interface AutomationFormValues {
   schedule_kind: 'hourly' | 'daily' | 'weekly';
   time_of_day: string; // 'HH:MM'; only meaningful for daily/weekly
   day_of_week: number; // 0 (Sun) - 6 (Sat); only meaningful for weekly
+  runner_model: string; // '' = deployment default
   enabled: boolean;
 }
 
 // What actually goes over the wire — time_of_day/day_of_week null out for
-// schedule kinds where they don't apply, matching the server's validation.
+// schedule kinds where they don't apply, matching the server's validation,
+// and an untouched model picker rides as null (= deployment default).
 export interface AutomationSubmitValues {
   name: string;
   repository_id: number;
@@ -25,6 +30,7 @@ export interface AutomationSubmitValues {
   schedule_kind: 'hourly' | 'daily' | 'weekly';
   time_of_day: string | null;
   day_of_week: number | null;
+  runner_model: string | null;
   enabled: boolean;
 }
 
@@ -63,6 +69,23 @@ export function AutomationForm({
   const [values, setValues] = useState(initial);
   const set = (patch: Partial<AutomationFormValues>) => setValues((v) => ({ ...v, ...patch }));
 
+  // Catalog options with the static constants as the not-yet-loaded fallback,
+  // so the form never blocks on the fetch. An untouched picker keeps
+  // runner_model as '' — the server stores unset as NULL (= default), so the
+  // preselected default doesn't pin future default changes.
+  const { data: models } = useQuery(modelsQuery);
+  const runnerOptions = models?.runner.options ?? RUNNER_MODELS;
+  const runnerDefault = models?.runner.default_model ?? DEFAULT_RUNNER_MODEL;
+  // An automation whose stored model predates the catalog still shows (and
+  // can re-save) its value.
+  const modelOptions =
+    initial.runner_model && !runnerOptions.some((m) => m.id === initial.runner_model)
+      ? [
+          { id: initial.runner_model, label: `${initial.runner_model} (not in catalog)` },
+          ...runnerOptions,
+        ]
+      : runnerOptions;
+
   const submit = (e: FormEvent) => {
     e.preventDefault();
     onSubmit({
@@ -72,6 +95,7 @@ export function AutomationForm({
       schedule_kind: values.schedule_kind,
       time_of_day: values.schedule_kind === 'hourly' ? null : values.time_of_day,
       day_of_week: values.schedule_kind === 'weekly' ? values.day_of_week : null,
+      runner_model: values.runner_model || null,
       enabled: values.enabled,
     });
   };
@@ -183,6 +207,21 @@ export function AutomationForm({
             onChange={(e) => set({ prompt: e.target.value })}
             required
           />
+        </Field>
+        <Field label="Model" className="mt-0">
+          <Select
+            value={values.runner_model}
+            onChange={(e) => set({ runner_model: e.target.value })}
+          >
+            <option value="">
+              Default ({runnerOptions.find((m) => m.id === runnerDefault)?.label ?? runnerDefault})
+            </option>
+            {modelOptions.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+          </Select>
         </Field>
       </FormSection>
 

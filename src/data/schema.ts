@@ -1043,6 +1043,7 @@ export const automations = appSchema.table(
     timeOfDay: time('time_of_day'),
     dayOfWeek: smallint('day_of_week'),
     enabled: boolean().default(true).notNull(),
+    runnerModel: text('runner_model'),
     nextRunAt: timestamp('next_run_at', { withTimezone: true, mode: 'string' }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .default(sql`CURRENT_TIMESTAMP`)

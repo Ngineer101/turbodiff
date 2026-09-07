@@ -113,6 +113,8 @@ type RunContext = {
   checkCommand: string | null;
   automationName: string;
   prompt: string;
+  // Per-automation runner model; null rides as ANTHROPIC_MODEL's default.
+  runnerModel: string | null;
   // The user-authored prompt mentions .github/workflows — the push token may
   // carry the App's workflows permission (see sandboxGitToken).
   workflows: boolean;
@@ -165,6 +167,7 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
             checkCommand: repo.check_command,
             automationName: automation.name,
             prompt: automation.prompt,
+            runnerModel: automation.runner_model,
             workflows: authorizesWorkflowFiles(automation.prompt),
             remoteSource: remoteSourceOf(repo),
           };
@@ -198,7 +201,7 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
         'run coding agent',
         { retries: { limit: 1, delay: '5 minutes' }, timeout: '23 minutes' },
         async (): Promise<{ changed: boolean; usage: CliUsage | null }> => {
-          const auth = resolveRunnerAuth();
+          const auth = resolveRunnerAuth(undefined, ctx.runnerModel);
           const sandbox = sandboxFor(ctx);
           await mountSkills(sandbox, WORK, await listEnabledSkillsForRepo(ctx.repositoryId));
           // Mount the repo's MCP connections through the Worker's relay:
@@ -276,7 +279,7 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
             // Same PATH handling and executable-vs-failing distinction as
             // the generation workflow: a check that cannot run at all is a
             // misconfiguration to report, not a checks_failed verdict.
-            const auth = resolveRunnerAuth();
+            const auth = resolveRunnerAuth(undefined, ctx.runnerModel);
             const scrub = (s: string) => redactSecrets(s, Object.values(auth.vars));
             const res = await runCheckCommand(
               sandboxFor(ctx),

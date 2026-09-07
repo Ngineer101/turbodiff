@@ -32,6 +32,7 @@ export function AutomationNewPage() {
         schedule_kind: 'daily',
         time_of_day: '09:00',
         day_of_week: 1,
+        runner_model: '',
         enabled: true,
       }}
       repos={data.repos}
