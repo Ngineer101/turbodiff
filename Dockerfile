@@ -4,8 +4,7 @@ FROM docker.io/cloudflare/sandbox:0.12.4
 
 # Coding agent CLI used by the fix/generation runners, plus pnpm for repos
 # whose check_command installs dependencies. Preinstalled so runs don't pay
-# the install on every container cold start.
-RUN npm install -g @anthropic-ai/claude-code pnpm
+RUN npm install -g @anthropic-ai/claude-code pnpm@12
 
 # Headless browser for the verification step (Phase 4): the verifier agent
 # drives Chrome via puppeteer-core to capture screenshot evidence of the
@@ -14,7 +13,7 @@ RUN npm install -g @anthropic-ai/claude-code pnpm
 # ad-hoc scripts require the global puppeteer-core install.
 RUN apt-get update && \
 	curl -fsSL -o /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && \
-	apt-get install -y --no-install-recommends /tmp/chrome.deb ffmpeg && \
+	apt-get install -y --no-install-recommends /tmp/chrome.deb ffmpeg libatomic1 && \
 	rm /tmp/chrome.deb && rm -rf /var/lib/apt/lists/* && \
 	npm install -g puppeteer-core
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable

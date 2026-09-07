@@ -392,12 +392,17 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
               CHECK_TIMEOUT_MS,
             );
             if (res.notExecutable) {
-              const cause = installFailure
-                ? ` (dependency install failed first: ${installFailure.slice(-300)})`
-                : '';
-              throw new NonRetryableError(
-                checkCommandUnrunnable(ctx.checkCommand!, res.output).message + cause,
-              );
+              // When the preinstall failed, that is the cause and the
+              // "command not found" is only its consequence — lead with it.
+              // Leading with the symptom made an environment failure (pnpm
+              // unable to start in the sandbox) read as the long-fixed
+              // PATH bug.
+              const message = installFailure
+                ? `dependency install failed, so the repository check command ` +
+                  `(\`${ctx.checkCommand!}\`) could not be run. Install output: ` +
+                  `${installFailure.slice(-300)}`
+                : checkCommandUnrunnable(ctx.checkCommand!, res.output).message;
+              throw new NonRetryableError(message);
             }
             return { ok: res.ok, output: res.output.slice(-6_000) };
           },
