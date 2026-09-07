@@ -16,6 +16,7 @@ import {
   getStageRun,
   headHasCompletedReview,
   latestAcceptanceContractForChange,
+  latestVerificationForFeature,
   listCrChecks,
   listStageRuns,
   markReviewFailed,
@@ -28,6 +29,7 @@ import {
 } from '../data/db.ts';
 import { decideLifecycle, type LifecycleContext } from '../domain/lifecycle-coordinator.ts';
 import { canResumeLifecycleRun } from '../domain/lifecycle-resume.ts';
+import { formatUnmetCriteriaFindings } from '../domain/verification.ts';
 import { isDeliveryProcessProfile, processProfile } from '../domain/process-profiles.ts';
 import type {
   LifecycleDecision,
@@ -46,6 +48,7 @@ import {
 import { parseUtc } from '../shared/time.ts';
 import {
   FIX_MAX_ATTEMPTS,
+  type FixQueueMessage,
   type GenerateQueueMessage,
   type VerifyQueueMessage,
 } from '../shared/factory-messages.ts';
@@ -624,6 +627,27 @@ export async function completeLifecycleStage(
   await coordinateStageOutcome(command, success, enqueue, outcomeFacts);
 }
 
+// The work order for a repair scheduled after a failed verify stage. Without
+// it the fixer falls back to the latest blocking review — which, after a
+// clean review, is nothing — so the unmet criteria only ever reached a fixer
+// through the verifier's own dispatch, racing the coordinator's repair for
+// the PR's single-flight slot. Repairs scheduled after a blocking review keep
+// that review fallback: the verdict here is only consulted when the stage
+// this repair follows is a verify.
+async function unmetCriteriaRepairFindings(
+  runId: number,
+  feature: { id: number; acceptance: string[] | null },
+): Promise<string | undefined> {
+  const stages = await listStageRuns(runId);
+  const preceding = stages
+    .filter((stage) => stage.status === 'completed' && stage.stage !== 'repair')
+    .at(-1);
+  if (preceding?.stage !== 'verify') return undefined;
+  const verification = await latestVerificationForFeature(feature.id);
+  if (verification?.status !== 'failed' || !verification.results) return undefined;
+  return formatUnmetCriteriaFindings(feature.acceptance ?? [], verification.results) || undefined;
+}
+
 export async function runLifecycleStage(
   command: RunStageCommand,
   dispatchReview: ReviewDispatcher,
@@ -702,7 +726,8 @@ export async function runLifecycleStage(
     return;
   }
   if (stageRun.stage === 'repair') {
-    await enqueue({
+    const findings = feature ? await unmetCriteriaRepairFindings(run.id, feature) : undefined;
+    const fix: FixQueueMessage = {
       kind: 'fix',
       repoId: repo.id,
       prNumber: change.number,
@@ -710,8 +735,13 @@ export async function runLifecycleStage(
       factoryRunId: run.id,
       stageRunId: stageRun.id,
       changeId: change.id,
+    };
+    if (findings) fix.findings = findings;
+    await enqueue(fix);
+    await recordStageRunOutput(stageRun.id, {
+      kind: 'repair_enqueued',
+      source: findings ? 'verification' : 'review',
     });
-    await recordStageRunOutput(stageRun.id, { kind: 'repair_enqueued' });
     return;
   }
   if (stageRun.stage === 'verify') {

@@ -11,8 +11,10 @@ import {
   createFeature,
   countBudgetedFixAttempts,
   createFactoryRunWithStage,
+  createVerification,
   ensureBuiltinAgents,
   finishFixAttempt,
+  finishVerification,
   getChangeByProviderKey,
   getFactoryRun,
   getFeature,
@@ -590,6 +592,86 @@ describe('composable feature delivery', () => {
     // Only a parked run can be retried.
     await expect(resumeFailedStage(created.run.id, 'nico', enqueue)).resolves.toMatchObject({
       kind: 'rejected',
+    });
+  });
+
+  it('hands a repair scheduled after a failed verify the unmet criteria', async () => {
+    await seedRepo();
+    await ensureBuiltinAgents(1001);
+    const featureId = await createFeature(101, 'Model picker', 'Add a model select', [
+      'Users can pick a runner model',
+    ]);
+    const change = await upsertChange({
+      repositoryId: 101,
+      providerKey: 'github:95',
+      number: 95,
+      origin: 'factory',
+      title: 'Model picker',
+      externalUrl: 'https://github.com/acme/api/pull/95',
+      sourceBranch: 'turbodiff/feature-95',
+      targetBranch: 'main',
+      status: 'open',
+      sourceHead: 'a'.repeat(40),
+      targetHead: 'b'.repeat(40),
+      draft: false,
+      capabilities: ['read_change', 'publish_review', 'write_head', 'merge'],
+    });
+    await updateFeature(featureId, { status: 'pr_opened', prNumber: 95, changeId: change.id });
+    const created = await createFactoryRunWithStage({
+      repositoryId: 101,
+      changeId: change.id,
+      profileKey: 'full_delivery',
+      startStage: 'verify',
+      stopAfterStage: 'merge',
+      policySnapshot: { key: 'full_delivery' },
+      trigger: 'test',
+      eventKind: 'human.resume_requested',
+      decision: { kind: 'schedule', stage: 'verify' },
+      idempotencyKey: `verify-findings:${featureId}`,
+      stageInput: { featureId },
+    });
+    const queued: FactoryMessage[] = [];
+    const enqueue = async (message: FactoryMessage) => void queued.push(message);
+    const dispatch: ReviewDispatcher = async () => true;
+    const verify: RunStageCommand = {
+      kind: 'run_stage',
+      factoryRunId: created.run.id,
+      stageRunId: created.stageRun!.id,
+      stage: 'verify',
+      idempotencyKey: created.stageRun!.idempotency_key,
+      changeId: change.id,
+    };
+    await runLifecycleStage(verify, dispatch, { enqueue });
+    // The verifier records the verdict; under the lifecycle it dispatches no
+    // fix of its own, so the coordinator's repair must carry the findings.
+    const verificationId = await createVerification(featureId);
+    await finishVerification(verificationId, 'failed', {
+      results: [{ index: 0, verdict: 'fail', note: 'the automation form has no model select' }],
+    });
+    queued.length = 0;
+    await completeLifecycleStage(
+      verify.stageRunId,
+      'verify',
+      true,
+      { kind: 'verification_completed', status: 'failed' },
+      { verificationPassed: false },
+      enqueue,
+    );
+    const [repair] = stageCommands(queued);
+    expect(repair.stage).toBe('repair');
+    queued.length = 0;
+    await runLifecycleStage(repair, dispatch, { enqueue });
+    const fix = queued.find((message) => message.kind === 'fix');
+    expect(fix).toMatchObject({
+      trigger: 'lifecycle_repair',
+      stageRunId: repair.stageRunId,
+      findings: expect.stringContaining('Users can pick a runner model'),
+    });
+    expect(fix).toMatchObject({
+      findings: expect.stringContaining('the automation form has no model select'),
+    });
+    await expect(getStageRun(repair.stageRunId)).resolves.toMatchObject({
+      output: { kind: 'repair_enqueued', source: 'verification' },
     });
   });
 

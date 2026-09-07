@@ -283,7 +283,17 @@ async function runPremortem(
   return { mechanism: mechanism || null, ruledOut };
 }
 
-export async function runVerification(featureId: number): Promise<void> {
+export async function runVerification(
+  featureId: number,
+  options: {
+    // Set when the run is a lifecycle verify stage: the coordinator reads the
+    // recorded verdict and schedules the repair (carrying the unmet
+    // criteria) itself, so the verifier must not dispatch its own fix — the
+    // two would race for the PR's single-flight repair slot, and the
+    // coordinator's one would lose with "another repair is already running".
+    lifecycleOwned?: boolean;
+  } = {},
+): Promise<void> {
   const feature = await getFeature(featureId);
   if (!feature || !feature.branch || !feature.pr_number) {
     console.warn(`turbodiff: verify skipped, feature ${featureId} has no branch/PR`);
@@ -300,7 +310,7 @@ export async function runVerification(featureId: number): Promise<void> {
   const verificationId = await createVerification(featureId);
 
   try {
-    const outcome = await verify(feature, repo, criteria);
+    const outcome = await verify(feature, repo, criteria, options.lifecycleOwned === true);
     await finishVerification(verificationId, outcome.status, {
       results: outcome.results,
       summary: outcome.summary,
@@ -323,6 +333,7 @@ async function verify(
   feature: FeatureRow,
   repo: RepositoryRow,
   criteria: string[],
+  lifecycleOwned: boolean,
 ): Promise<{
   status: string;
   results: CriterionResult[];
@@ -506,6 +517,10 @@ async function verify(
         await postCriteriaConflictNotice(token, repo, feature, criteria, results);
         console.log(
           `turbodiff: criteria conflict flagged for feature ${feature.id} — awaiting decision`,
+        );
+      } else if (lifecycleOwned) {
+        console.log(
+          `turbodiff: unmet criteria for feature ${feature.id} left to the lifecycle repair stage`,
         );
       } else {
         await enqueueFactoryMessage({

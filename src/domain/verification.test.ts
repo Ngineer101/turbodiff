@@ -3,6 +3,7 @@ import {
   formatUnmetCriteriaFindings,
   gradedCriteria,
   PREMORTEM_CRITERION,
+  verdictRecordedSince,
   verificationSkipReason,
 } from './verification.ts';
 
@@ -30,6 +31,35 @@ describe('verificationSkipReason', () => {
   it('dispatches when the latest run already finished', () => {
     const latest = { status: 'passed', created_at: '2026-08-29 11:59:00' };
     expect(verificationSkipReason({ status: 'pr_opened' }, latest, now)).toBeNull();
+  });
+});
+
+describe('verdictRecordedSince', () => {
+  const queuedAt = Date.parse('2026-09-07T20:02:23Z');
+
+  it('reuses a terminal verdict recorded after the instance was queued', () => {
+    for (const status of ['passed', 'failed']) {
+      const latest = { status, created_at: '2026-09-07 20:02:27' };
+      expect(verdictRecordedSince(latest, queuedAt)).toBe(true);
+    }
+  });
+
+  it('tolerates the database clock running slightly behind the engine', () => {
+    const latest = { status: 'failed', created_at: '2026-09-07 20:01:40' };
+    expect(verdictRecordedSince(latest, queuedAt)).toBe(true);
+  });
+
+  it('re-runs over a verdict that predates the instance', () => {
+    const latest = { status: 'failed', created_at: '2026-09-07 19:30:00' };
+    expect(verdictRecordedSince(latest, queuedAt)).toBe(false);
+  });
+
+  it('re-runs over a dead earlier attempt and with no row at all', () => {
+    for (const status of ['running', 'error']) {
+      const latest = { status, created_at: '2026-09-07 20:02:27' };
+      expect(verdictRecordedSince(latest, queuedAt)).toBe(false);
+    }
+    expect(verdictRecordedSince(null, queuedAt)).toBe(false);
   });
 });
 
