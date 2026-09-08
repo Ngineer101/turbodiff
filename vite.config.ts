@@ -100,6 +100,9 @@ export default defineConfig({
         dependsOn: ['db:reset-test'],
         cache: false,
       },
+      'test:review-evals': {
+        command: 'vp test --run src/evals/review-quality.test.ts',
+      },
       'check:types': {
         command:
           'wrangler types && tsc --noEmit && tsc -p tsconfig.client.json --noEmit && tsc -p tsconfig.worker-tests.json --noEmit',

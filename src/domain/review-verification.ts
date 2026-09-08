@@ -42,7 +42,10 @@ export function decisionsCoverCandidates(
 ): boolean {
   if (decisions.length !== candidateCount) return false;
   const indexes = new Set(decisions.map((decision) => decision.candidate));
-  return indexes.size === candidateCount && [...indexes].every((index) => index < candidateCount);
+  return (
+    indexes.size === candidateCount &&
+    [...indexes].every((index) => index >= 0 && index < candidateCount)
+  );
 }
 
 function withSeverity(body: string, severity: 'P1' | 'P2'): string {

@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { STALL_AFTER_MINUTES } from '../shared/time.ts';
-import { queryOne, queryRows } from './database.ts';
+import type { CandidateFinding, FindingDecision } from '../domain/review-verification.ts';
+import { queryOne, queryRows, withTransaction } from './database.ts';
 import { bigintArray, minutesAgo } from './sql.ts';
 
 export interface AgentUsageRow {
@@ -51,6 +52,173 @@ export interface ReviewActivityRow {
   error: string | null; // why a failed row failed
   repo_owner: string | null; // null if the repo was since removed
   repo_name: string | null;
+}
+
+export type ReviewVerificationStatus = 'skipped' | 'completed' | 'failed' | 'incomplete';
+export type ReviewFindingFeedback = 'useful' | 'false_positive' | 'fixed' | 'dismissed';
+
+export interface ReviewQualityRecord {
+  candidates: CandidateFinding[];
+  decisions: FindingDecision[];
+  publishedCandidateIndexes: number[];
+  status: ReviewVerificationStatus;
+  model: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  latencyMs: number | null;
+  experimentKey: string | null;
+}
+
+export async function recordReviewQuality(
+  agentInstanceId: string,
+  quality: ReviewQualityRecord,
+): Promise<void> {
+  await withTransaction(async (transaction) => {
+    const found = await transaction.execute<{ id: number }>(sql`
+      SELECT id FROM app.reviews
+      WHERE agent_instance_id = ${agentInstanceId} AND status = 'running'
+      ORDER BY id DESC LIMIT 1 FOR UPDATE
+    `);
+    const reviewId = found.rows[0]?.id;
+    if (!reviewId) return;
+    await transaction.execute(sql`
+      UPDATE app.reviews SET
+        candidate_count = ${quality.candidates.length},
+        verification_status = ${quality.status},
+        verification_model = ${quality.model},
+        verification_input_tokens = ${quality.inputTokens},
+        verification_output_tokens = ${quality.outputTokens},
+        verification_cost_usd = ${quality.costUsd},
+        verification_latency_ms = ${quality.latencyMs},
+        experiment_key = ${quality.experimentKey}
+      WHERE id = ${reviewId}
+    `);
+    await transaction.execute(sql`DELETE FROM app.review_findings WHERE review_id = ${reviewId}`);
+    if (quality.candidates.length === 0) return;
+    const published = new Set(quality.publishedCandidateIndexes);
+    const decisions = new Map(quality.decisions.map((decision) => [decision.candidate, decision]));
+    const values = quality.candidates.map((candidate, index) => {
+      const decision = decisions.get(index);
+      return sql`(
+        ${reviewId}, ${index}, ${candidate.path}, ${candidate.line}, ${candidate.side},
+        ${candidate.severity}, ${candidate.body}, ${candidate.evidence}, ${candidate.failurePath},
+        ${published.has(index)}, ${decision?.confidence ?? null}, ${decision?.severity ?? null},
+        ${decision?.reason ?? null}
+      )`;
+    });
+    await transaction.execute(sql`
+      INSERT INTO app.review_findings
+        (review_id, candidate_index, path, line, side, severity, body, evidence, failure_path,
+         published, verifier_confidence, verifier_severity, verification_reason)
+      VALUES ${sql.join(values, sql`, `)}
+    `);
+  });
+}
+
+export interface ReviewQualityFindingRow {
+  id: number;
+  review_id: number;
+  repo: string | null;
+  pr_number: number;
+  agent_slug: string | null;
+  path: string;
+  line: number;
+  severity: 'P1' | 'P2';
+  body: string;
+  verification_reason: string | null;
+  feedback: ReviewFindingFeedback | null;
+  created_at: string;
+}
+
+export interface ReviewQualityStats {
+  candidates: number;
+  published: number;
+  labeled: number;
+  true_positives: number;
+  false_positives: number;
+  avg_verification_latency_ms: number | null;
+  verification_cost_usd: number;
+}
+
+export async function reviewQualityDashboard(
+  installationIds: number[],
+): Promise<{ stats: ReviewQualityStats; findings: ReviewQualityFindingRow[] }> {
+  const empty: ReviewQualityStats = {
+    candidates: 0,
+    published: 0,
+    labeled: 0,
+    true_positives: 0,
+    false_positives: 0,
+    avg_verification_latency_ms: null,
+    verification_cost_usd: 0,
+  };
+  if (installationIds.length === 0) return { stats: empty, findings: [] };
+  const ids = bigintArray(installationIds);
+  const [reviewStats, findingStats, findings] = await Promise.all([
+    queryOne<
+      Pick<
+        ReviewQualityStats,
+        'candidates' | 'avg_verification_latency_ms' | 'verification_cost_usd'
+      >
+    >(sql`
+      SELECT
+        COALESCE(SUM(r.candidate_count), 0) AS candidates,
+        AVG(r.verification_latency_ms) FILTER (
+          WHERE r.verification_latency_ms IS NOT NULL
+        ) AS avg_verification_latency_ms,
+        COALESCE(SUM(r.verification_cost_usd), 0) AS verification_cost_usd
+      FROM app.reviews r
+      WHERE r.installation_id = ANY(${ids})
+        AND r.created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'
+    `),
+    queryOne<
+      Pick<ReviewQualityStats, 'published' | 'labeled' | 'true_positives' | 'false_positives'>
+    >(sql`
+      SELECT
+        COUNT(f.id) AS published,
+        COUNT(f.id) FILTER (WHERE f.feedback IS NOT NULL) AS labeled,
+        COUNT(f.id) FILTER (WHERE f.feedback IN ('useful', 'fixed')) AS true_positives,
+        COUNT(f.id) FILTER (WHERE f.feedback = 'false_positive') AS false_positives
+      FROM app.review_findings f
+      JOIN app.reviews r ON r.id = f.review_id
+      WHERE r.installation_id = ANY(${ids}) AND f.published
+        AND r.created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'
+    `),
+    queryRows<ReviewQualityFindingRow>(sql`
+      SELECT f.id, f.review_id,
+        CASE WHEN repo.id IS NULL THEN NULL ELSE repo.owner || '/' || repo.name END AS repo,
+        r.pr_number, r.agent_slug, f.path, f.line, f.severity, f.body,
+        f.verification_reason, f.feedback, f.created_at
+      FROM app.review_findings f
+      JOIN app.reviews r ON r.id = f.review_id
+      LEFT JOIN app.repositories repo ON repo.id = r.repository_id
+      WHERE r.installation_id = ANY(${ids}) AND f.published
+      ORDER BY f.id DESC LIMIT 100
+    `),
+  ]);
+  return {
+    stats: { ...empty, ...reviewStats, ...findingStats },
+    findings,
+  };
+}
+
+export async function setReviewFindingFeedback(
+  id: number,
+  installationIds: number[],
+  githubUserId: number,
+  feedback: ReviewFindingFeedback,
+): Promise<boolean> {
+  if (installationIds.length === 0) return false;
+  const result = await queryOne<{ id: number }>(sql`
+    UPDATE app.review_findings f SET feedback = ${feedback},
+      feedback_by_github_id = ${githubUserId}, feedback_at = CURRENT_TIMESTAMP
+    FROM app.reviews r
+    WHERE f.id = ${id} AND f.review_id = r.id AND f.published
+      AND r.installation_id = ANY(${bigintArray(installationIds)})
+    RETURNING f.id
+  `);
+  return result !== null;
 }
 
 export async function listRecentReviews(

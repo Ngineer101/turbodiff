@@ -59,6 +59,9 @@ changes through on-demand or automatic repository intake):
   approves. Approval is coverage-gated: the reviewer receives a complete
   changed-file manifest, fetches omitted patches in bounded packets, and must
   account for every reviewable file before Turbodiff can approve.
+- An independent verifier rejects or downgrades unproven candidates before one
+  consolidated review is published. The Quality inbox captures useful,
+  false-positive, fixed, and dismissed labels for precision tracking and evals.
 - Custom review agents (personas) per installation, with optional remote
   [MCP](https://modelcontextprotocol.io) tool connections (bearer tokens
   encrypted at rest; servers are treated as untrusted, like the PR itself).
@@ -115,7 +118,7 @@ flowchart TB
   end
 
   subgraph storage ["State"]
-    PG[("PostgreSQL via Hyperdrive<br/>installations · repos · reviews · features/plans<br/>connections · repo_connections · automations<br/>(secrets AES-GCM sealed)")]
+    PG[("PostgreSQL via Hyperdrive<br/>installations · repos · reviews/findings/feedback<br/>features/plans · connections · automations<br/>(secrets AES-GCM sealed)")]
     R2[("R2<br/>screenshots · demo videos")]
     Q[["Queue<br/>turbodiff-factory"]]
   end

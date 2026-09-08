@@ -12,6 +12,7 @@ import {
   Plug,
   Repeat,
   Search,
+  ShieldCheck,
   Settings,
   Sparkles,
 } from 'lucide-react';
@@ -48,6 +49,7 @@ export const SIDEBAR_NAV = [
   { to: '/automations', label: 'Automations', icon: Repeat },
   { to: '/integrations', label: 'Integrations', icon: Plug },
   { to: '/usage', label: 'Usage', icon: BarChart2 },
+  { to: '/review-quality', label: 'Quality', icon: ShieldCheck },
   { to: '/settings', label: 'Settings', icon: Settings },
 ] as const;
 

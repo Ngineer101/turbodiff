@@ -6,6 +6,7 @@ import {
   type AgentRow,
   type RepositoryRow,
 } from '../../data/db.ts';
+import { assignReviewModels } from '../../data/models.ts';
 import { connectionSnapshot } from '../../services/connections.ts';
 import { PrReviewer } from '../agents/pr-reviewer.ts';
 
@@ -53,6 +54,10 @@ export async function dispatchReviewAgent(
       ? `${agent.slug}--${repo.owner}--${repo.name}--cr-${opts.changeRequest.number}`
       : `${agent.slug}--${repo.owner}--${repo.name}--${prNumber}`
   ).toLowerCase();
+  const assignment = await assignReviewModels(
+    `${repo.id}:${prNumber}:${opts.headSha ?? 'unknown'}:${agent.slug}`,
+    opts.modelOverride ?? agent.model,
+  );
   const reviewId = await tryRecordReview(
     repo.id,
     repo.installation_id,
@@ -65,12 +70,13 @@ export async function dispatchReviewAgent(
     opts.headSha ?? null,
   );
   if (reviewId === null) return false;
-
   const connections = (await listRepoConnections(repo.id, 'reviews')).map(connectionSnapshot);
   const baseAttributes = {
     agent_slug: agent.slug,
     agent_name: agent.name,
-    model: opts.modelOverride ?? agent.model,
+    model: assignment.scout,
+    verifier_model: assignment.verifier,
+    experiment_key: assignment.experimentKey ?? '',
     risk_tier: opts.riskTier ?? 'full',
     ...(opts.changeRequest
       ? {

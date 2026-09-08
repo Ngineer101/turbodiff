@@ -22,6 +22,7 @@ import type {
   ApiRepoCode,
   ApiRepoFile,
   ApiRepoTree,
+  ApiReviewQuality,
   ApiSettings,
   ApiSkillCatalog,
   ApiSkillDetail,
@@ -111,6 +112,11 @@ export const taskQuery = (id: number) =>
 export const usageQuery = queryOptions({
   queryKey: ['usage'],
   queryFn: () => api.get<ApiUsage>('/api/usage'),
+});
+
+export const reviewQualityQuery = queryOptions({
+  queryKey: ['review-quality'],
+  queryFn: () => api.get<ApiReviewQuality>('/api/review-quality'),
 });
 
 // Terminal fix-run outcomes for a cockpit comment's linked batch — anything

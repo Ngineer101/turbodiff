@@ -3,7 +3,7 @@ import * as v from 'valibot';
 import { maybeAutoMerge } from '../../services/auto-merge.ts';
 import { maybeResolveConflict } from '../../services/merge-conflicts.ts';
 import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
-import { getRepoByFullName } from '../../data/db.ts';
+import { getRepoByFullName, recordReviewQuality } from '../../data/db.ts';
 import { completeLifecycleReview } from '../../services/lifecycle.ts';
 import { installationToken } from '../../integrations/github/app.ts';
 import {
@@ -356,7 +356,12 @@ interface ReviewComment {
 // A per-render factory rather than a shared definition: the tool closes over
 // the agent instance id so completing the PostgreSQL review row targets exactly the
 // dispatch that ran it — concurrent agents on the same PR never collide.
-export const makePostReview = (agentInstanceId: string, pin: RepoPin = null) =>
+export const makePostReview = (
+  agentInstanceId: string,
+  pin: RepoPin = null,
+  verifierModel: string | null = null,
+  experimentKey: string | null = null,
+) =>
   defineTool({
     name: 'post_review',
     description:
@@ -390,7 +395,14 @@ export const makePostReview = (agentInstanceId: string, pin: RepoPin = null) =>
       const candidates = consolidateCandidates(data.findings);
       let verificationComplete = true;
       let verifiedFindings = candidates;
+      let decisions: FindingDecision[] = [];
+      let verificationStatus: 'skipped' | 'completed' | 'failed' | 'incomplete' = 'skipped';
+      let verificationInputTokens = 0;
+      let verificationOutputTokens = 0;
+      let verificationCostUsd = 0;
+      let verificationLatencyMs: number | null = null;
       if (candidates.length > 0) {
+        const startedAt = Date.now();
         try {
           const result = await harness.prompt(
             `Independently verify candidate code-review findings for ${data.owner}/${data.repo}#${data.number}.
@@ -407,23 +419,39 @@ promote P2 to P1. Return exactly one decision for every candidate index.
 <candidate-data>
 ${JSON.stringify(candidates)}
 </candidate-data>`,
-            {
-              result: findingVerificationSchema,
-              tools: [
-                makeFetchPr(pin, 'verify_fetch_pr'),
-                makeFetchDiff(pin, 'verify_fetch_diff'),
-                makeFetchFile(pin, 'verify_fetch_file'),
-              ],
-              thinkingLevel: 'high',
-            },
+            verifierModel
+              ? {
+                  result: findingVerificationSchema,
+                  tools: [
+                    makeFetchPr(pin, 'verify_fetch_pr'),
+                    makeFetchDiff(pin, 'verify_fetch_diff'),
+                    makeFetchFile(pin, 'verify_fetch_file'),
+                  ],
+                  model: verifierModel,
+                  thinkingLevel: 'high',
+                }
+              : {
+                  result: findingVerificationSchema,
+                  tools: [
+                    makeFetchPr(pin, 'verify_fetch_pr'),
+                    makeFetchDiff(pin, 'verify_fetch_diff'),
+                    makeFetchFile(pin, 'verify_fetch_file'),
+                  ],
+                  thinkingLevel: 'high',
+                },
           );
-          const decisions: FindingDecision[] = result.data.decisions;
+          decisions = result.data.decisions;
           verificationComplete = decisionsCoverCandidates(candidates.length, decisions);
+          verificationStatus = verificationComplete ? 'completed' : 'incomplete';
+          verificationInputTokens = result.usage.input;
+          verificationOutputTokens = result.usage.output;
+          verificationCostUsd = result.usage.cost.total;
           verifiedFindings = verificationComplete
             ? applyFindingDecisions(candidates, decisions)
             : [];
         } catch (error) {
           verificationComplete = false;
+          verificationStatus = 'failed';
           verifiedFindings = [];
           console.error(
             JSON.stringify({
@@ -434,8 +462,27 @@ ${JSON.stringify(candidates)}
               error: error instanceof Error ? error.message : String(error),
             }),
           );
+        } finally {
+          verificationLatencyMs = Date.now() - startedAt;
         }
       }
+      const publishedCandidateIndexes = verificationComplete
+        ? decisions
+            .filter((decision) => decision.accepted && decision.confidence === 'high')
+            .map((decision) => decision.candidate)
+        : [];
+      await recordReviewQuality(agentInstanceId, {
+        candidates,
+        decisions,
+        publishedCandidateIndexes,
+        status: verificationStatus,
+        model: candidates.length > 0 ? verifierModel : null,
+        inputTokens: verificationInputTokens,
+        outputTokens: verificationOutputTokens,
+        costUsd: verificationCostUsd,
+        latencyMs: verificationLatencyMs,
+        experimentKey,
+      });
       const liveDiff = await pullRequestDiff(token, data.owner, data.repo, data.number);
       const manifest = buildReviewDiffSnapshot(liveDiff, 0).files;
       const missingFiles = missingReviewFiles(manifest, data.reviewedFiles);

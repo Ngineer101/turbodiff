@@ -75,5 +75,17 @@ describe('review finding verification', () => {
     expect(decisionsCoverCandidates(1, [decision])).toBe(true);
     expect(decisionsCoverCandidates(2, [decision])).toBe(false);
     expect(decisionsCoverCandidates(2, [decision, decision])).toBe(false);
+    expect(
+      decisionsCoverCandidates(2, [
+        { ...decision, candidate: -1 },
+        { ...decision, candidate: 0 },
+      ]),
+    ).toBe(false);
+    expect(
+      decisionsCoverCandidates(2, [
+        { ...decision, candidate: 0 },
+        { ...decision, candidate: 2 },
+      ]),
+    ).toBe(false);
   });
 });

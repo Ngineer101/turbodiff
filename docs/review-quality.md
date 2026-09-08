@@ -105,5 +105,66 @@ flowchart LR
   CHECK -->|"owner-configured command<br/>5 minute cap"| RESULT["Redacted bounded result"]
 ```
 
-The remaining layer adds labeled feedback, regression evals, telemetry, and
-controlled model experiments.
+## Feedback and quality telemetry
+
+Every candidate and verifier decision is persisted in `review_findings`,
+including private evidence, causal path, confidence, downgrade/rejection
+reason, and whether it was published. Review rows separately record verifier
+model, input/output tokens, cost, latency, status, and experiment assignment.
+This keeps scout spend and verification overhead attributable without adding
+verifier tokens twice to total review metering.
+
+The signed-in **Quality** page is a finding inbox. Maintainers label published
+findings as `useful`, `false_positive`, `fixed`, or `dismissed`; updates are
+authorized through the review's installation, and only published findings can
+be labeled. The 30-day dashboard reports labeled precision, verifier retention,
+latency, and cost. `useful` and `fixed` are positive labels;
+`false_positive` is negative; `dismissed` remains neutral because a valid
+finding can be intentionally deferred.
+
+## Regression evals
+
+`vp run test:review-evals` validates the scoring and rollout-gate implementation
+against adversarial cases: false alarms, missed findings, duplicate comments,
+and P1 findings reported at the wrong severity. The rollout gate requires:
+
+- precision at least 90%;
+- recall at least 80%;
+- P1 precision at least 95%; and
+- P1 recall at least 90%.
+
+New production false-positive labels should be reduced to the smallest
+self-contained code/context fixture and added to the corpus. Before changing a
+prompt or model, run both variants against that corpus and pass their captured
+outputs to `scoreReviewEval`. CI deliberately does not hard-code
+`actual === expected` or claim that a static fixture exercised a live model;
+the scorer is the deterministic gate used by a separate model-evaluation run.
+This makes “sounds better” measurable without turning a self-fulfilling unit
+test into coverage theater, and prevents a new model from buying recall with
+noisy or duplicated findings.
+
+## Controlled model experiments
+
+The operator-managed `app.models` catalog has independent
+`reviewer_experiment_weight` and `verifier_experiment_weight` columns. Zero is
+off. Positive weights opt enabled reviewer models into deterministic weighted
+assignment; scout and verifier use independent buckets. The assignment key is
+stable for repository, PR head, and persona, so retries do not jump variants.
+The exact pair is persisted with the review for labeled comparison.
+
+For example, this runs an equal verifier split while leaving scout selection
+unchanged:
+
+```sql
+UPDATE app.models
+SET verifier_experiment_weight = CASE
+  WHEN provider = 'anthropic' AND model_id = 'claude-sonnet-5' THEN 1
+  WHEN provider = 'openai' AND model_id = 'gpt-5.6-terra' THEN 1
+  ELSE 0
+END
+WHERE for_reviewer;
+```
+
+Set both weight columns back to zero to stop an experiment immediately. A
+promotion remains an explicit operator action (`reviewer_default` or persona
+configuration); experiments never rewrite catalog defaults.

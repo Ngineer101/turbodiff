@@ -110,7 +110,8 @@ configuration. After changing the binding, regenerate types with `vp exec wrangl
 ## Schema layout
 
 - `auth`: Better Auth users, sessions, accounts, organizations, invitations, and MCP OAuth data.
-- `app`: installations, repositories, configuration, factory tasks, reviews, runs, usage, and
+- `app`: installations, repositories, configuration, factory tasks, reviews, review findings and
+  quality feedback, runs, usage, and
   collaboration data.
 - `public.schema_migrations`: Drizzle's immutable migration ledger only.
 

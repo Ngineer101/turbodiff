@@ -39,7 +39,7 @@ const schemas = await db.query(`
 `);
 
 const counts = new Map(schemas.rows.map((row) => [row.table_schema, row.count]));
-if (counts.get('app') !== 39) throw new Error(`Expected 39 app tables, found ${counts.get('app')}`);
+if (counts.get('app') !== 40) throw new Error(`Expected 40 app tables, found ${counts.get('app')}`);
 if (counts.get('auth') !== 10)
   throw new Error(`Expected 10 auth tables, found ${counts.get('auth')}`);
 
@@ -95,6 +95,16 @@ await db.exec(`
   INSERT INTO reviews
     (repository_id, installation_id, pr_number, trigger_event, status, agent_instance_id)
   VALUES (3001, 1001, 42, 'opened', 'running', 'review--acme--rocket--42');
+  INSERT INTO review_findings
+    (
+      review_id, candidate_index, path, line, side, severity, body, evidence,
+      failure_path, published, verifier_confidence, verifier_severity
+    )
+  SELECT
+    id, 0, 'src/index.ts', 12, 'RIGHT', 'P1', 'The guard is bypassed.',
+    'The request reaches the mutation before authorization.',
+    'An unauthenticated request can mutate state.', true, 'high', 'P1'
+  FROM reviews WHERE agent_instance_id = 'review--acme--rocket--42';
   INSERT INTO auth."user"
     ("id", "name", "email", "createdAt", "updatedAt")
   VALUES ('auth-user', 'Auth User', 'auth@example.test', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
@@ -223,4 +233,4 @@ if (Number(versionAfterRollback.rows[0]?.version) !== versionBeforeRollback) {
 }
 
 await db.close();
-console.log(`Fresh PostgreSQL schema passed (${files.length} migrations, 48 tables)`);
+console.log(`Fresh PostgreSQL schema passed (${files.length} migrations, 50 tables)`);

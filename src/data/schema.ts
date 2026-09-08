@@ -448,6 +448,8 @@ export const models = appSchema.table(
     runnerDefault: boolean('runner_default').default(false).notNull(),
     runnerFastDefault: boolean('runner_fast_default').default(false).notNull(),
     reviewerDefault: boolean('reviewer_default').default(false).notNull(),
+    reviewerExperimentWeight: integer('reviewer_experiment_weight').default(0).notNull(),
+    verifierExperimentWeight: integer('verifier_experiment_weight').default(0).notNull(),
     enabled: boolean().default(true).notNull(),
     sortOrder: integer('sort_order').default(0).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
@@ -466,6 +468,14 @@ export const models = appSchema.table(
     uniqueIndex('models_reviewer_default_unique')
       .on(table.reviewerDefault)
       .where(sql`reviewer_default`),
+    check(
+      'models_reviewer_experiment_weight_check',
+      sql`reviewer_experiment_weight >= 0 AND reviewer_experiment_weight <= 10000`,
+    ),
+    check(
+      'models_verifier_experiment_weight_check',
+      sql`verifier_experiment_weight >= 0 AND verifier_experiment_weight <= 10000`,
+    ),
   ],
 );
 
@@ -709,6 +719,24 @@ export const reviews = appSchema.table(
     agentInstanceId: text('agent_instance_id'),
     riskTier: text('risk_tier'),
     findingsCount: integer('findings_count'),
+    candidateCount: integer('candidate_count'),
+    verificationStatus: text('verification_status'),
+    verificationModel: text('verification_model'),
+    verificationInputTokens: bigint('verification_input_tokens', { mode: 'number' })
+      .default(0)
+      .notNull(),
+    verificationOutputTokens: bigint('verification_output_tokens', { mode: 'number' })
+      .default(0)
+      .notNull(),
+    verificationCostUsd: numeric('verification_cost_usd', {
+      precision: 20,
+      scale: 10,
+      mode: 'number',
+    })
+      .default(0)
+      .notNull(),
+    verificationLatencyMs: integer('verification_latency_ms'),
+    experimentKey: text('experiment_key'),
     stageRunId: bigint('stage_run_id', { mode: 'number' }).references(
       (): AnyPgColumn => stageRuns.id,
       { onDelete: 'set null' },
@@ -776,6 +804,21 @@ export const reviews = appSchema.table(
     ),
     check('reviews_findings_count_check', sql`(findings_count IS NULL) OR (findings_count >= 0)`),
     check(
+      'reviews_candidate_count_check',
+      sql`(candidate_count IS NULL) OR (candidate_count >= 0)`,
+    ),
+    check(
+      'reviews_verification_status_check',
+      sql`(verification_status IS NULL) OR (verification_status = ANY (ARRAY['skipped'::text, 'completed'::text, 'failed'::text, 'incomplete'::text]))`,
+    ),
+    check('reviews_verification_input_tokens_check', sql`verification_input_tokens >= 0`),
+    check('reviews_verification_output_tokens_check', sql`verification_output_tokens >= 0`),
+    check('reviews_verification_cost_usd_check', sql`verification_cost_usd >= (0)::numeric`),
+    check(
+      'reviews_verification_latency_ms_check',
+      sql`(verification_latency_ms IS NULL) OR (verification_latency_ms >= 0)`,
+    ),
+    check(
       'reviews_verdict_check',
       sql`(verdict IS NULL) OR (verdict = ANY (ARRAY['approve'::text, 'comment'::text, 'request_changes'::text]))`,
     ),
@@ -786,6 +829,59 @@ export const reviews = appSchema.table(
     check(
       'reviews_finding_paths_array_check',
       sql`(finding_paths IS NULL) OR (jsonb_typeof(finding_paths) = 'array'::text)`,
+    ),
+  ],
+);
+
+export const reviewFindings = appSchema.table(
+  'review_findings',
+  {
+    id: bigint({ mode: 'number' })
+      .primaryKey()
+      .generatedByDefaultAsIdentity({ maxValue: '9007199254740991' }),
+    reviewId: bigint('review_id', { mode: 'number' })
+      .notNull()
+      .references(() => reviews.id, { onDelete: 'cascade' }),
+    candidateIndex: integer('candidate_index').notNull(),
+    path: text().notNull(),
+    line: integer().notNull(),
+    side: text().notNull(),
+    severity: text().notNull(),
+    body: text().notNull(),
+    evidence: text().notNull(),
+    failurePath: text('failure_path').notNull(),
+    published: boolean().default(false).notNull(),
+    verifierConfidence: text('verifier_confidence'),
+    verifierSeverity: text('verifier_severity'),
+    verificationReason: text('verification_reason'),
+    feedback: text(),
+    feedbackByGithubId: bigint('feedback_by_github_id', { mode: 'number' }),
+    feedbackAt: timestamp('feedback_at', { withTimezone: true, mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+  },
+  (table) => [
+    unique('review_findings_review_candidate_unique').on(table.reviewId, table.candidateIndex),
+    index('review_findings_review_idx').on(table.reviewId),
+    index('review_findings_feedback_idx')
+      .on(table.feedback, table.id.desc())
+      .where(sql`published`),
+    check('review_findings_candidate_index_check', sql`candidate_index >= 0`),
+    check('review_findings_line_check', sql`line > 0`),
+    check('review_findings_side_check', sql`side = ANY (ARRAY['LEFT'::text, 'RIGHT'::text])`),
+    check('review_findings_severity_check', sql`severity = ANY (ARRAY['P1'::text, 'P2'::text])`),
+    check(
+      'review_findings_verifier_confidence_check',
+      sql`(verifier_confidence IS NULL) OR (verifier_confidence = ANY (ARRAY['low'::text, 'medium'::text, 'high'::text]))`,
+    ),
+    check(
+      'review_findings_verifier_severity_check',
+      sql`(verifier_severity IS NULL) OR (verifier_severity = ANY (ARRAY['P1'::text, 'P2'::text]))`,
+    ),
+    check(
+      'review_findings_feedback_check',
+      sql`(feedback IS NULL) OR (feedback = ANY (ARRAY['useful'::text, 'false_positive'::text, 'fixed'::text, 'dismissed'::text]))`,
     ),
   ],
 );
