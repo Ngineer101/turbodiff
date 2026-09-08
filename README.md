@@ -102,6 +102,7 @@ flowchart TB
   subgraph durable ["Durable Objects"]
     REVIEWER["PrReviewer (Flue agent)<br/>one instance per PR"]
     FINDING_VERIFIER["Isolated finding verifier<br/>fresh read-only model context"]
+    REVIEW_BOX["Review workspace (container)<br/>per-agent checkout · read-only tools"]
     SANDBOX["Sandbox (container)<br/>runs pinned OpenCode"]
   end
 
@@ -137,6 +138,8 @@ flowchart TB
   REVIEWER -->|"candidate batch"| FINDING_VERIFIER
   FINDING_VERIFIER -->|"one consolidated,<br/>coverage-gated review"| GH
   FINDING_VERIFIER -->|"re-fetch PR + files"| GH
+  REVIEWER & FINDING_VERIFIER -->|"search · configured check"| REVIEW_BOX
+  REVIEW_BOX -->|"short-lived read token<br/>fetch exact PR head"| GH
   REVIEWER -->|"env.AI binding"| LLM
   FINDING_VERIFIER -->|"env.AI binding"| LLM
   REVIEWER -->|"streamable HTTP<br/>per-request auth resolver"| MCPS
@@ -193,6 +196,9 @@ rejected at the proxy.
 - [src/ai/runtime/coding-agent.ts](src/ai/runtime/coding-agent.ts) and
   [src/services/ai-gateway-proxy.ts](src/services/ai-gateway-proxy.ts) — the
   shared OpenCode execution seam and capability-authenticated model relay.
+- [src/ai/runtime/review-workspace.ts](src/ai/runtime/review-workspace.ts) and
+  [src/ai/tools/repository-workspace.ts](src/ai/tools/repository-workspace.ts) —
+  exact-head, credential-free review checkouts with bounded search and checks.
 - [src/cloudflare.ts](src/cloudflare.ts) — the factory queue consumer and the
   sandbox container export.
 - [src/http/webhooks.ts](src/http/webhooks.ts) and

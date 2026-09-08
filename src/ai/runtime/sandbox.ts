@@ -30,3 +30,14 @@ export function generationSandbox(
     ...options,
   });
 }
+
+// Hosted reviews get a dedicated per-repository container, separate from
+// repository-changing factory runs. Individual agent worktrees live beneath
+// it, so concurrent PRs/personas share package-manager caches without sharing
+// mutable source trees.
+export function reviewSandbox(repo: { owner: string; name: string }, options?: SandboxOptions) {
+  return runnerSandbox(`review--${repo.owner}--${repo.name}`.toLowerCase(), {
+    sleepAfter: '10m',
+    ...options,
+  });
+}

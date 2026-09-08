@@ -97,6 +97,18 @@ thin route adapter; `src/services/ai-gateway-proxy.ts` owns authorization and
 upstream behavior. See [Sandbox coding harness](coding-harness.md) for the
 full runtime contract, security properties, and rollout requirements.
 
+### Hosted review workspace boundary
+
+Hosted reviewers keep GitHub publication in narrow Worker tools, but can search
+and validate an exact-head checkout in a separate Cloudflare Sandbox. The model
+does not receive the sandbox's general shell: it gets a literal repository
+search and the repository owner's preconfigured check command. A short-lived
+read token exists only in the pull-ref fetch environment and is absent when
+repository code runs. Per-agent worktrees prevent concurrent reviewers from
+sharing mutable source state; the per-repository container still shares warm
+package-manager caches. See [Review quality](review-quality.md) for the coverage
+and finding-verification pipeline around this workspace.
+
 ## Adding functionality
 
 1. Put pure rules and stable value types in `domain` or `shared`.

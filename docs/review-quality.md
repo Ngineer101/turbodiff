@@ -74,6 +74,36 @@ flowchart LR
   POLICY --> PUBLISH["One consolidated review"]
 ```
 
-The next layers build on this contract: read-only repository workspaces for
-search and tests, then labeled feedback, regression evals, and controlled model
-experiments.
+## Repository workspace
+
+Hosted GitHub reviews can inspect a full checkout without receiving a general
+shell. `search_repository` performs a literal, line-numbered `git grep` across
+the exact PR head and caps the response. `run_repository_check` can execute
+only the repository owner's stored check command; the model cannot provide a
+command string. Both tools remain pinned to the dispatched repository and SHA.
+
+Review checkouts use a dedicated per-repository Cloudflare Sandbox container,
+separate from the repository-changing factory workspace. Each durable agent
+gets its own worktree, while dependency caches remain warm across the repo.
+The checkout fetches same-repository and fork PRs through GitHub's pull ref
+with a short-lived read token supplied only to that command. No credential is
+stored in `.git/config` or exposed to the model/check process. Refreshes are
+serialized, reset tracked changes, and remove untracked outputs before reuse.
+
+The configured check runs with no repository credential and a five-minute
+limit. Dependency installation is cached, output is capped and redacted, and
+the source worktree is reset afterward. This is a validation aid, not a CI
+replacement; the normal GitHub checks remain authoritative.
+
+```mermaid
+flowchart LR
+  AGENT["Scout or verifier"] --> SEARCH["search_repository"]
+  AGENT --> CHECK["run_repository_check"]
+  SEARCH & CHECK --> WS["Per-agent exact-head worktree"]
+  TOKEN["Short-lived read token"] -->|"fetch only"| WS
+  WS --> CACHE["Shared warm package cache"]
+  CHECK -->|"owner-configured command<br/>5 minute cap"| RESULT["Redacted bounded result"]
+```
+
+The remaining layer adds labeled feedback, regression evals, telemetry, and
+controlled model experiments.

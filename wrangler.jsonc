@@ -83,7 +83,7 @@
       // 8 GiB: oxlint with JS plugins (`vp lint`) reserves a ~6 GiB arena per
       // thread, which Linux refuses on a 4 GiB VM before linting anything.
       "instance_type": "standard-3",
-      // Every sandbox id (per-repo gen--, plan--, fix--, provision--, ...)
+      // Every sandbox id (per-repo gen--, review--, plan--, fix--, provision--, ...)
       // holds one instance for its whole sleepAfter keep-warm window, so the
       // cap must cover concurrent runs PLUS warm idlers. 5 deadlocked in
       // production: five healthy-idle containers starved a new plan run into
