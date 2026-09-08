@@ -18,7 +18,6 @@ import type {
   ExplanationDocument,
 } from '../shared/api-types.ts';
 import { isJsonObject, isString, parseJson, type JsonObject } from '../shared/json.ts';
-import { RUNNER_MODELS } from '../shared/runner-models.ts';
 import { createApiRoutes, type ApiRouteDependencies } from './api.ts';
 import { handleEmailSignUp } from './auth-email.ts';
 import { SkillsShApiError, type SkillsShClient } from '../integrations/skills-sh/client.ts';
@@ -82,6 +81,15 @@ async function seedTenants(): Promise<void> {
     testDatabase().prepare(
       `INSERT INTO todo_repositories (todo_id, repository_id, position)
 		 VALUES (401, 101, 0), (402, 202, 0)`,
+    ),
+    testDatabase().prepare(
+      `INSERT INTO models
+         (model_id, provider, label, for_runner, for_reviewer, runner_default,
+          runner_fast_default, reviewer_default, sort_order)
+       VALUES
+         ('claude-fable-5.1', 'anthropic', 'Fable 5.1', true, false, true, false, false, 0),
+         ('claude-opus-5', 'anthropic', 'Opus 5', true, false, false, false, false, 1),
+         ('claude-haiku-4.5', 'anthropic', 'Haiku 4.5', true, false, false, true, false, 2)`,
     ),
     // A better-auth user row for acmeUser — session.userId (3001) is the
     // GitHub id memberRole and the owner bootstrap look members up by.
@@ -379,26 +387,27 @@ describe('API constraint validation', () => {
     expect(response.status).toBe(200);
   });
 
-  it('serves the constant fallbacks from /api/models while the catalog is empty', async () => {
+  it('returns a service error from /api/models while the runner catalog is empty', async () => {
+    await testDatabase().prepare('DELETE FROM models').run();
     const response = await authenticatedApi().request('https://turbodiff.test/api/models');
-    expect(response.status).toBe(200);
-    // SAFETY: /api/models' 200 body is the ApiModels contract this test
-    // exercises; the assertions below fail on any drift in that shape.
-    const catalog = (await response.json()) as ApiModels;
-    expect(catalog.runner.options).toEqual([...RUNNER_MODELS]);
-    expect(catalog.runner.default_model).toBe('claude-fable-5-1');
-    expect(catalog.reviewer.default_model).toBe('cloudflare/anthropic/claude-sonnet-5');
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      error: expect.stringContaining('runner model catalog is empty'),
+    });
   });
 
   it('serves the operator runner default that NULL runner models resolve to', async () => {
     // The runner_default row is what the automation form advertises as
     // "Default (X)" and what AutomationWorkflow resolves a NULL
     // runner_model to at claim time — one source of truth for both.
+    await testDatabase().prepare('DELETE FROM models').run();
     await testDatabase()
       .prepare(
-        `INSERT INTO models (model_id, provider, label, for_runner, for_reviewer, runner_default, sort_order)
-         VALUES ('claude-x', 'anthropic', 'Claude X', true, false, false, 0),
-                ('claude-y', 'anthropic', 'Claude Y', true, false, true, 1)`,
+        `INSERT INTO models
+           (model_id, provider, label, for_runner, for_reviewer, runner_default,
+            runner_fast_default, sort_order)
+         VALUES ('claude-x', 'anthropic', 'Claude X', true, false, false, true, 0),
+                ('claude-y', 'anthropic', 'Claude Y', true, false, true, false, 1)`,
       )
       .run();
     const response = await authenticatedApi().request('https://turbodiff.test/api/models');
@@ -406,7 +415,8 @@ describe('API constraint validation', () => {
     // SAFETY: /api/models' 200 body is the ApiModels contract this test
     // exercises.
     const catalog = (await response.json()) as ApiModels;
-    expect(catalog.runner.default_model).toBe('claude-y');
+    expect(catalog.runner.default_model).toBe('anthropic/claude-y');
+    expect(catalog.runner.fast_model).toBe('anthropic/claude-x');
   });
 
   it('validates the task runner model against the active list', async () => {
@@ -428,7 +438,7 @@ describe('API constraint validation', () => {
     const accepted = await app.request('https://turbodiff.test/api/tasks/702/model', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'claude-opus-5' }),
+      body: JSON.stringify({ model: 'anthropic/claude-opus-5' }),
     });
     expect(accepted.status).toBe(200);
   });
@@ -443,7 +453,7 @@ describe('API constraint validation', () => {
         name: 'Pinned model',
         prompt: 'Tidy up',
         schedule_kind: 'hourly',
-        runner_model: 'claude-opus-5',
+        runner_model: 'anthropic/claude-opus-5',
       }),
     });
     expect(created.status).toBe(200);
@@ -455,7 +465,7 @@ describe('API constraint validation', () => {
     // SAFETY: GET /automations/:id's 200 body is the ApiAutomationDetail
     // contract this test exercises.
     const body = (await detail.json()) as ApiAutomationDetail;
-    expect(body.automation.runner_model).toBe('claude-opus-5');
+    expect(body.automation.runner_model).toBe('anthropic/claude-opus-5');
   });
 
   it('stores an omitted automation runner model as null (= deployment default)', async () => {
@@ -546,13 +556,13 @@ describe('API constraint validation', () => {
     const pinned = await app.request(url, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ...payload, runner_model: 'claude-opus-5' }),
+      body: JSON.stringify({ ...payload, runner_model: 'anthropic/claude-opus-5' }),
     });
     expect(pinned.status).toBe(200);
     // SAFETY: GET /automations/:id's 200 body is the ApiAutomationDetail
     // contract this test exercises.
     let detail = (await (await app.request(url)).json()) as ApiAutomationDetail;
-    expect(detail.automation.runner_model).toBe('claude-opus-5');
+    expect(detail.automation.runner_model).toBe('anthropic/claude-opus-5');
 
     const cleared = await app.request(url, {
       method: 'PUT',
@@ -575,18 +585,21 @@ describe('API constraint validation', () => {
         name: 'Stale model',
         prompt: 'Tidy up',
         schedule_kind: 'hourly',
-        runner_model: 'claude-opus-5',
+        runner_model: 'anthropic/claude-opus-5',
       }),
     });
     expect(created.status).toBe(200);
     // SAFETY: POST /automations' 200 body carries the created automation_id.
     const { automation_id } = (await created.json()) as { automation_id: number };
-    // An operator catalog replaces the constant fallback and drops the
-    // stored model — an unrelated edit must still save it unchanged.
+    // An operator catalog drops the stored model — an unrelated edit must
+    // still save it unchanged.
+    await testDatabase().prepare('DELETE FROM models').run();
     await testDatabase()
       .prepare(
-        `INSERT INTO models (model_id, provider, label, for_runner, for_reviewer)
-         VALUES ('claude-x', 'anthropic', 'Claude X', true, false)`,
+        `INSERT INTO models
+           (model_id, provider, label, for_runner, for_reviewer, runner_default,
+            runner_fast_default)
+         VALUES ('claude-x', 'anthropic', 'Claude X', true, false, true, true)`,
       )
       .run();
 
@@ -598,14 +611,14 @@ describe('API constraint validation', () => {
         name: 'Stale model',
         prompt: 'Tidy up (edited)',
         schedule_kind: 'hourly',
-        runner_model: 'claude-opus-5',
+        runner_model: 'anthropic/claude-opus-5',
       }),
     });
     expect(resaved.status).toBe(200);
     // SAFETY: GET /automations/:id's 200 body is the ApiAutomationDetail
     // contract this test exercises.
     const detail = (await (await app.request(url)).json()) as ApiAutomationDetail;
-    expect(detail.automation.runner_model).toBe('claude-opus-5');
+    expect(detail.automation.runner_model).toBe('anthropic/claude-opus-5');
     expect(detail.automation.prompt).toBe('Tidy up (edited)');
 
     const switched = await app.request(url, {
@@ -615,7 +628,7 @@ describe('API constraint validation', () => {
         name: 'Stale model',
         prompt: 'Tidy up',
         schedule_kind: 'hourly',
-        runner_model: 'claude-opus-5-1',
+        runner_model: 'anthropic/claude-opus-5-1',
       }),
     });
     expect(switched.status).toBe(400);
@@ -822,8 +835,8 @@ describe('verification stall display', () => {
   async function seedTaskWithVerification(): Promise<void> {
     await testDatabase().batch([
       testDatabase().prepare(
-        `INSERT INTO plans (id, repository_id, title, requirements, status)
-			 VALUES (701, 101, 'Ship it', 'requirements', 'approved')`,
+        `INSERT INTO plans (id, repository_id, title, requirements, status, runner_model)
+			 VALUES (701, 101, 'Ship it', 'requirements', 'approved', 'anthropic/claude-fable-5.1')`,
       ),
       testDatabase().prepare(
         `INSERT INTO plan_repositories (plan_id, repository_id, position) VALUES (701, 101, 0)`,

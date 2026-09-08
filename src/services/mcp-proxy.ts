@@ -170,17 +170,25 @@ export async function buildSandboxMcpConfig(
     return null;
   }
   const servers: {
-    [name: string]: { type: 'http'; url: string; headers: { [h: string]: string } };
+    [name: string]: {
+      type: 'remote';
+      url: string;
+      enabled: true;
+      oauth: false;
+      headers: { [h: string]: string };
+    };
   } = {};
   const secrets: string[] = [];
   for (const conn of connections) {
     const grant = await mintMcpProxyGrant(conn.id, repositoryId);
     secrets.push(grant);
     servers[serverName(conn)] = {
-      type: 'http',
+      type: 'remote',
       url: `${env.PUBLIC_BASE_URL}/mcp-proxy/${conn.id}`,
+      enabled: true,
+      oauth: false,
       headers: { Authorization: `Bearer ${grant}` },
     };
   }
-  return { configJson: JSON.stringify({ mcpServers: servers }), secrets };
+  return { configJson: JSON.stringify({ mcp: servers }), secrets };
 }

@@ -220,7 +220,7 @@ importers:
   .:
     dependencies:
       '@cloudflare/sandbox':
-        specifier: ^0.12.4
+        specifier: 0.12.5
         version: 0.12.5
       '@codemirror/commands':
         specifier: ^6.11.0

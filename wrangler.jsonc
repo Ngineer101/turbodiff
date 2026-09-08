@@ -6,11 +6,8 @@
     "binding": "ASSETS",
   },
   "compatibility_flags": ["nodejs_compat"],
-  // Version preview URLs (<version-prefix>-turbodiff.<subdomain>.workers.dev)
-  // for the per-PR previews uploaded by .github/workflows/preview.yml. This
-  // does NOT serve production on workers.dev (that's workers_dev, still off);
-  // it only makes uploaded versions reachable. Requires the account's
-  // workers.dev subdomain to be registered.
+  // Permit preview URLs for manually uploaded Worker versions. Production
+  // routing is configured independently from this switch.
   "preview_urls": true,
   // Workers Traces shows each agent response as a trace with agent-level
   // spans: https://flueframework.com/docs/guide/observability/#cloudflare
@@ -52,6 +49,10 @@
     "ARTIFACTS_REMOTE_BASE": "https://ecc47d4dfbdb95d267139b409e343a13.artifacts.cloudflare.net/git/turbodiff-repos",
     // The name of your existing Cloudflare AI Gateway.
     "AI_GATEWAY_ID": "default",
+    // Account containing that gateway. Sandbox coding runs use Cloudflare's
+    // model-neutral AI REST API; pair with the AI_GATEWAY_API_TOKEN secret
+    // (Account / Workers AI / Read). Third-party models use Unified Billing.
+    "AI_GATEWAY_ACCOUNT_ID": "",
     // Public origin of this deployment — used to build absolute artifact URLs
     // embedded in PR comments.
     "PUBLIC_BASE_URL": "https://turbodiff.dev",
@@ -67,19 +68,14 @@
     // model on trivial-tier PRs (≤10 reviewable lines) — set a cheap model
     // (e.g. a haiku-class id) to cut cost. Empty disables the downgrade.
     "TRIVIAL_MODEL": "",
-    // Gateway-mode auth for the fix runner: the AI Gateway's Anthropic
-    // endpoint (https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/anthropic).
-    // Pair with the FIXER_ANTHROPIC_API_KEY secret. Empty disables gateway mode;
-    // the CLAUDE_CODE_OAUTH_TOKEN secret enables subscription mode instead.
-    "FIXER_ANTHROPIC_BASE_URL": "",
     // Web Push keys are all three secrets (see src/env.d.ts), including the
     // VAPID public key: it isn't confidential, but a committed one would ship
     // this deployment's app server key to every fork's users, whose pushes
     // would then be signed by a mismatched private key and rejected.
   },
   "dev": { "enable_containers": false },
-  // Fixer/codegen sandbox (docs/software-factory-design.md): each fix run
-  // executes Claude Code inside an isolated container. Local dev needs Docker.
+  // Factory sandbox (docs/coding-harness.md): repository-changing stages run
+  // pinned OpenCode inside an isolated container. Local dev needs Docker.
   "containers": [
     {
       "class_name": "Sandbox",

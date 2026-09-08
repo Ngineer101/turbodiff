@@ -12,6 +12,7 @@ import { renderCertificatePage } from './http/certificate-page.tsx';
 import { createInternalRoutes } from './http/internal.ts';
 import { createMcpRoutes } from './http/mcp.ts';
 import { handleMcpProxy } from './http/mcp-proxy.ts';
+import { handleAiGatewayProxy } from './http/ai-gateway-proxy.ts';
 import { createUiRoutes } from './http/ui.ts';
 import { createWebhookRoutes } from './http/webhooks.ts';
 import { oAuthDiscoveryMetadata, oAuthProtectedResourceMetadata } from 'better-auth/plugins';
@@ -129,6 +130,10 @@ app.route('/webhooks', createWebhookRoutes());
 // MCP relay for sandbox runs — authenticated by a short-lived sealed grant
 // minted per run, not by session or bearer secret (see lib/mcp-proxy.ts).
 app.on(['GET', 'POST', 'DELETE'], '/mcp-proxy/:id', handleMcpProxy);
+
+// Model relay for sandbox coding runs. The permanent Cloudflare API token
+// remains in this Worker; each sandbox gets a short-lived, model-scoped grant.
+app.post('/ai-proxy/v1/*', handleAiGatewayProxy);
 
 // Inbound MCP server (distinct from the /mcp-proxy/:id relay above — this is
 // turbodiff exposing its own tools, OAuth-bearer authed via better-auth's

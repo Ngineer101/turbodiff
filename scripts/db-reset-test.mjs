@@ -31,6 +31,18 @@ try {
     INSERT INTO app.factory_version (id, version) VALUES (1, 1)
     ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version
   `);
+  // The runner catalog is required application configuration, not fixture
+  // data. Recreate it after the blanket truncate so every Worker suite starts
+  // from the same valid deployment state.
+  await client.query(`
+    INSERT INTO app.models
+      (model_id, provider, label, for_runner, for_reviewer, runner_default,
+       runner_fast_default, reviewer_default, sort_order)
+    VALUES
+      ('claude-fable-5.1', 'anthropic', 'Fable 5.1', true, false, true, false, false, 0),
+      ('claude-opus-5', 'anthropic', 'Opus 5', true, false, false, false, false, 1),
+      ('claude-haiku-4.5', 'anthropic', 'Haiku 4.5', true, false, false, true, false, 2)
+  `);
   console.log('Local PostgreSQL test data reset');
 } finally {
   await client.end();

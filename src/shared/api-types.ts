@@ -163,7 +163,7 @@ export interface ApiPlan {
   // Reader-facing short summary; null = trivial-tier/legacy plan (render `plan` instead).
   summary: string | null;
   archived: boolean;
-  // The model this task's sandboxed runs use (see src/shared/runner-models.ts).
+  // The app.models entry snapshotted for this task's sandboxed runs.
   model: string;
   attachments: { name: string }[];
   repos: ApiTaskRepo[];
@@ -420,9 +420,10 @@ export interface ApiModelOption {
 }
 
 // GET /api/models — the model catalog for both pickers. Runner ids are bare
-// Anthropic ids; reviewer ids are gateway-prefixed (cloudflare/<provider>/<id>).
+// Runner ids use the AI REST catalog form (provider/model, or @cf/... for
+// Workers AI); reviewer ids are binding-prefixed (cloudflare/<provider>/<id>).
 export interface ApiModels {
-  runner: { options: ApiModelOption[]; default_model: string };
+  runner: { options: ApiModelOption[]; default_model: string; fast_model: string };
   reviewer: { options: ApiModelOption[]; default_model: string };
 }
 

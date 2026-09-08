@@ -1,5 +1,6 @@
 import { githubRequest as gh } from '../../integrations/github/client.ts';
 import { persistAgentLog } from '../runtime/agent-runs.ts';
+import { runCodingAgent } from '../runtime/coding-agent.ts';
 import { gitAuthorEnv } from '../../domain/attribution.ts';
 import {
   finishFixAttempt,
@@ -15,7 +16,7 @@ import {
   postFixHandoffComment,
   prTouchesWorkflowFiles,
 } from '../runtime/pull-requests.ts';
-import { resolveRunnerAuth, runnerEnvironment } from '../runtime/runner-auth.ts';
+import { resolveRunnerAuth } from '../runtime/runner-auth.ts';
 import { runnerSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
 import { checkCommandUnrunnable, runCheckCommand } from '../runtime/check-command.ts';
@@ -136,7 +137,14 @@ export async function processResolveConflictMessage(
   }
 
   try {
-    const outcome = await runConflictResolve(repo, msg.prNumber, mergeability.baseRef, attemptId);
+    const feature = await getFeatureByRepoPr(repo.id, msg.prNumber);
+    const outcome = await runConflictResolve(
+      repo,
+      msg.prNumber,
+      mergeability.baseRef,
+      attemptId,
+      feature?.runner_model,
+    );
     await finishFixAttempt(attemptId, outcome.status, outcome.commit);
     console.log(
       `turbodiff: conflict resolution ${outcome.status} for ${label} (attempt ${attemptId})`,
@@ -145,7 +153,6 @@ export async function processResolveConflictMessage(
     // same as a fix push: re-verify so the report and the auto-merge gate
     // reflect the merged code.
     if (outcome.status === 'fixed') {
-      const feature = await getFeatureByRepoPr(repo.id, msg.prNumber);
       if (feature?.acceptance) {
         await enqueueFactoryMessage({ kind: 'verify', featureId: feature.id });
       }
@@ -176,9 +183,10 @@ async function runConflictResolve(
   prNumber: number,
   baseRef: string,
   attemptId: number,
+  runnerModel?: string | null,
 ): Promise<ConflictResolveOutcome> {
   const token = await installationToken(repo.installation_id);
-  const auth = resolveRunnerAuth();
+  const auth = await resolveRunnerAuth(undefined, runnerModel);
   // Any surfaced output must never leak a token — same scrub discipline as
   // the fixer's sandbox output.
   // A conflicted workflow file resolves to new blob content, which GitHub
@@ -187,7 +195,7 @@ async function runConflictResolve(
   const gitToken = await sandboxGitToken(repo.installation_id, repo.name, 'write', {
     workflows: await prTouchesWorkflowFiles(token, repo.owner, repo.name, prNumber),
   });
-  const scrub = (s: string) => redactSecrets(s, [token, gitToken]);
+  const scrub = (s: string) => redactSecrets(s, [token, gitToken, ...Object.values(auth.vars)]);
 
   const { headRef, headRepo } = await fetchPushablePrHead(token, repo.owner, repo.name, prNumber);
 
@@ -266,17 +274,12 @@ async function runConflictResolve(
 
     await mountSkills(sandbox, CLONE_DIR, await listEnabledSkillsForRepo(repo.id));
 
-    // Headless Claude Code run. --dangerously-skip-permissions is safe here —
-    // the container is the isolation boundary (IS_SANDBOX acknowledges that).
-    const agent = await sandbox.exec(
-      `claude -p --dangerously-skip-permissions --output-format text < ${TASK_FILE}`,
-      {
-        cwd: CLONE_DIR,
-        timeout: AGENT_TIMEOUT_MS,
-        env: runnerEnvironment(auth),
-      },
-    );
-    const fullOutput = scrub(`${agent.stdout}\n${agent.stderr}`.trim());
+    const agent = await runCodingAgent(sandbox, auth, {
+      promptFile: TASK_FILE,
+      cwd: CLONE_DIR,
+      timeout: AGENT_TIMEOUT_MS,
+    });
+    const fullOutput = scrub(`${agent.resultText}\n${agent.stderr}`.trim());
     await persistAgentLog('resolve_conflict', fullOutput, agent.success, {
       fixAttemptId: attemptId,
     });

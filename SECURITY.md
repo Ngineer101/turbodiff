@@ -18,7 +18,7 @@ rather than a public issue.
 | Feature requirements / plan answers                | Untrusted as _content_; submitted only by authenticated repo admins                                                                                                                      |
 | Per-repo commands (`check_command`, `run_command`) | Trusted — set only by users who already control the repo the commands run against                                                                                                        |
 | The sandbox container                              | Semi-trusted execution: it isolates agent runs from the Worker, but code inside it (including the app under test and anything an agent writes) runs with the container's env and network |
-| The Worker                                         | Trusted — holds the App private key and mints all tokens                                                                                                                                 |
+| The Worker                                         | Trusted — holds permanent credentials, signs capability grants, and mints repository tokens                                                                                              |
 
 ## Mitigations in place
 
@@ -35,6 +35,14 @@ rather than a public issue.
   for fix/conflict runs — the PR already touches a workflow file). Workflow
   write is a CI-secrets exposure path, so it is never granted by default and
   an agent that writes a workflow file nobody asked for still fails at push.
+- **Model-scoped AI capabilities.** The permanent Cloudflare account token
+  stays in the Worker. Each sandbox run receives a signed, two-hour bearer
+  capability bound to one exact model id. `/ai-proxy/v1/*` verifies the
+  capability and `body.model`, accepts only the Responses, Messages, and Chat
+  Completions endpoints, limits request bodies to 16 MiB, and replaces the
+  grant with the account token before streaming the request through the named
+  AI Gateway. A captured grant cannot select another model or access
+  Cloudflare management and non-LLM APIs.
 - **Signed artifact URLs.** Verification screenshots are served from R2 via
   capability URLs — an HMAC over the object key is required, so evidence for
   a private repo's app cannot be enumerated or guessed. Anyone who can read
@@ -44,7 +52,7 @@ rather than a public issue.
   travel into sandbox commands via environment variables, never string
   interpolation.
 - **Prompt-injection defense in depth.** Every agent prompt carries explicit
-  untrusted-content rules (`src/lib/prompt-security.ts`). These are a layer,
+  untrusted-content rules (`src/domain/prompt-security.ts`). These are a layer,
   not a boundary — the structural mitigations above assume prompt rules can
   fail.
 - **Webhooks and operator endpoints.** GitHub webhooks are authenticated
@@ -55,23 +63,26 @@ rather than a public issue.
   `check_command` before it is pushed; agent changes are committed before
   checks run so check-side working-tree mutations cannot leak into commits.
 - **MCP connections.** Bearer tokens for agent MCP connections are AES-GCM
-  encrypted at rest and write-only in the UI; MCP responses are treated as
-  untrusted content.
+  encrypted at rest and write-only in the UI. A sandbox receives a short-lived
+  per-connection relay grant instead of the credential; the Worker decrypts
+  credentials on demand and enforces the connection's tool allowlist.
+  MCP responses are treated as untrusted content.
 
 ## Known limitations (accepted for single-tenant, blocking for multi-tenant)
 
 - **Unrestricted sandbox egress.** Cloudflare Containers do not currently
   expose per-container network policy, so a fully compromised agent run could
-  exfiltrate what the container holds. Token scoping bounds the blast radius
-  to one repository's contents.
-- **Runner credential in the container.** The Claude subscription token (or
-  gateway key) is present in the sandbox environment during agent runs and is
-  a theft target under prompt injection. Use a gateway key with spend limits
-  where this matters; subscription mode is recommended only for repos you
-  own.
-- **Agents run with permission checks disabled** inside the sandbox
-  (`--dangerously-skip-permissions`); the container plus token scoping is the
-  isolation boundary, not the agent harness.
+  exfiltrate what the container holds. Repository-token scoping plus short-lived
+  model and MCP capability grants bound the blast radius, but do not prevent
+  exfiltration during a run.
+- **Model-spend capability in the container.** The OpenCode process receives a
+  bearer grant, so compromised repository code can use or exfiltrate it until
+  its two-hour expiry. Its authority is limited to the exact selected model;
+  the permanent Cloudflare account token is never present in the container.
+- **The harness auto-approves tool use** (`opencode run --auto`) so unattended
+  workflows cannot stall on a permission prompt. The container, scoped
+  credentials, model/MCP proxy policy, and pre-push check gate are the security
+  boundary, not an OpenCode confirmation dialog.
 - **Auto-fix pushes to PR branches on its own.** The cap (3 attempts/PR),
   check gate, and review reconciliation bound it, but a malicious blocking
   review body on a repo with auto-fix enabled is an injection channel into

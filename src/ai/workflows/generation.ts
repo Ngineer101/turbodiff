@@ -5,13 +5,7 @@ import { githubRequest as gh } from '../../integrations/github/client.ts';
 import { persistAgentLog } from '../runtime/agent-runs.ts';
 import { parseUtc } from '../../shared/time.ts';
 import { coauthorTrailer, gitAuthorEnv } from '../../domain/attribution.ts';
-import {
-  addCliUsage,
-  claudeCliResultText,
-  claudeCliSessionId,
-  parseClaudeCliUsage,
-  type CliUsage,
-} from '../runtime/cli-usage.ts';
+import { addCliUsage, runCodingAgent, type CliUsage } from '../runtime/coding-agent.ts';
 import {
   changeProviderKey,
   getFeature,
@@ -21,7 +15,7 @@ import {
   upsertChange,
   type FeatureRow,
 } from '../../data/db.ts';
-import { resolveRunnerAuth, runnerEnvironment } from '../runtime/runner-auth.ts';
+import { resolveRunnerAuth } from '../runtime/runner-auth.ts';
 import { generationSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
 import { mountSkills } from '../runtime/skills.ts';
@@ -206,7 +200,7 @@ type RunContext = {
   base: string;
   branch: string;
   checkCommand: string | null;
-  runnerModel: string | null; // the task's requested model; null = default
+  runnerModel: string | null; // the task's model snapshot; null only on legacy rows
   title: string;
   spec: string;
   authorLogin: string | null;
@@ -382,7 +376,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
           { retries: { limit: 1, delay: '1 minute' }, timeout: '15 minutes' },
           async (): Promise<{ ok: boolean; output: string }> => {
             await updateFeature(featureId, { runStartedAt: 'now' });
-            const auth = resolveRunnerAuth(undefined, ctx.runnerModel);
+            const auth = await resolveRunnerAuth(undefined, ctx.runnerModel);
             const scrub = (s: string) => redactSecrets(s, Object.values(auth.vars));
             const res = await runCheckCommand(
               sandboxFor(ctx),
@@ -443,7 +437,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
           sessionId: string | null;
         }> => {
           await updateFeature(featureId, { runStartedAt: 'now' });
-          const auth = resolveRunnerAuth(undefined, ctx.runnerModel);
+          const auth = await resolveRunnerAuth(undefined, ctx.runnerModel);
           // The git/installation tokens live in other steps' scopes, not this
           // one — only the runner credential can appear in this step's output.
           const scrub = (s: string) => redactSecrets(s, Object.values(auth.vars));
@@ -457,19 +451,13 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
             specFile(featureId),
             generationPrompt(ctx, baselineFailure === null),
           );
-          // stream-json (requires --verbose headless) captures every turn,
-          // not just the final result — persisted below so a sandbox run can
-          // be compared against a local session turn by turn.
-          const agent = await sandbox.exec(
-            `claude -p --dangerously-skip-permissions --output-format stream-json --verbose < ${specFile(featureId)}`,
-            {
-              cwd: WORK,
-              timeout: AGENT_TIMEOUT_MS[ctx.tier],
-              env: runnerEnvironment(auth, NPM_CACHE_ENV),
-            },
-          );
-          const usage = parseClaudeCliUsage(agent.stdout);
-          const resultText = claudeCliResultText(agent.stdout);
+          const agent = await runCodingAgent(sandbox, auth, {
+            promptFile: specFile(featureId),
+            cwd: WORK,
+            timeout: AGENT_TIMEOUT_MS[ctx.tier],
+            env: NPM_CACHE_ENV,
+          });
+          const resultText = agent.resultText;
           await persistAgentLog(
             'generate',
             scrub(`${resultText}\n${agent.stderr}`.trim()),
@@ -486,8 +474,8 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
           }
           return {
             changed: await worktreeChanged(sandbox, WORK),
-            usage,
-            sessionId: claudeCliSessionId(agent.stdout),
+            usage: agent.usage,
+            sessionId: agent.codingSessionId,
           };
         },
       );
@@ -552,7 +540,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
               sessionId: string | null;
             }> => {
               await updateFeature(featureId, { runStartedAt: 'now' });
-              const auth = resolveRunnerAuth(undefined, ctx.runnerModel);
+              const auth = await resolveRunnerAuth(undefined, ctx.runnerModel);
               const scrub = (s: string) => redactSecrets(s, Object.values(auth.vars));
               const sandbox = sandboxFor(ctx);
               // Drop check-command working-tree mutations before the agent
@@ -563,35 +551,30 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
                 repairFile(featureId, round),
                 repairPrompt(ctx, checks.output, sessionId === null),
               );
-              // --resume continues the run that made the changes with its
-              // full context intact (each resume prints a fresh session id,
-              // carried forward for the next round). No id — a killed run
-              // that never printed its result payload — falls back to a
-              // fresh session pointed at the spec file.
-              const baseEnv = runnerEnvironment(auth, NPM_CACHE_ENV);
-              const agentEnv = sessionId ? { ...baseEnv, RESUME_SESSION: sessionId } : baseEnv;
-              const agent = await sandbox.exec(
-                `claude -p ${sessionId ? '--resume "$RESUME_SESSION" ' : ''}` +
-                  `--dangerously-skip-permissions --output-format stream-json --verbose < ${repairFile(featureId, round)}`,
-                { cwd: WORK, timeout: REPAIR_TIMEOUT_MS, env: agentEnv },
-              );
-              const usage = parseClaudeCliUsage(agent.stdout);
+              const agent = await runCodingAgent(sandbox, auth, {
+                promptFile: repairFile(featureId, round),
+                cwd: WORK,
+                timeout: REPAIR_TIMEOUT_MS,
+                sessionId,
+                env: NPM_CACHE_ENV,
+              });
               await persistAgentLog(
                 'generate',
-                scrub(`${claudeCliResultText(agent.stdout)}\n${agent.stderr}`.trim()),
+                scrub(`${agent.resultText}\n${agent.stderr}`.trim()),
                 agent.success,
                 { featureId },
                 scrub(agent.stdout),
               );
               // A failed repair run ends the loop, not the workflow — the
               // check verdict (checks_failed) is the recorded outcome.
-              if (!agent.success) return { ok: false, changed: false, usage, sessionId: null };
+              if (!agent.success)
+                return { ok: false, changed: false, usage: agent.usage, sessionId: null };
               const status = await sandbox.exec(`git -C ${WORK} status --porcelain`);
               return {
                 ok: true,
                 changed: Boolean(status.stdout.trim()),
-                usage,
-                sessionId: claudeCliSessionId(agent.stdout),
+                usage: agent.usage,
+                sessionId: agent.codingSessionId,
               };
             },
           );

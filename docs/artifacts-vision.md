@@ -56,8 +56,11 @@ humans-emulating-a-factory:
 
 1. **Create project** → `GIT_ARTIFACTS.create('org-slug/repo')`, namespace
    per org. The spike's create step is this, minus the PostgreSQL bookkeeping.
-2. **Agent works** → sandbox clones with a short-TTL write token (spike:
-   mint → push → revoke), commits to `turbodiff/feat-N`, pushes.
+2. **Agent works** → the shared OpenCode
+   [sandbox coding harness](coding-harness.md) clones with a short-TTL write
+   token (spike: mint → push → revoke), commits to `turbodiff/feat-N`, and
+   pushes. Model selection and AI Gateway authorization are independent of
+   whether the repo remote is Artifacts or GitHub.
 3. **Push event** arrives on the factory queue (spike: event capture) →
    opens or refreshes the change request row, computes the diff in the
    sandbox, caches it to R2.
@@ -105,5 +108,7 @@ or is existing turbodiff logic re-pointed at a `GitProvider` interface
 - **Phases 2-3 (this PR)**: the native CR layer in production — PostgreSQL records,
   the sandbox diff/merge engine, native reviews/checks/verification/merges,
   the cockpit rendering CRs through the existing diff surface, and a
-  create-project UI. Remaining GitHub-only flows: automations, the PR fix
-  loop, and GitHub import (`import()`) as the migration path.
+  create-project UI. Remaining GitHub-only flows: automations, the operator
+  PR-URL `/internal/fix` endpoint, and GitHub import (`import()`) as the
+  migration path. Native cockpit and failed-verification repair flows already
+  use the Artifacts source branch directly.

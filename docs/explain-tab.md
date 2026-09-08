@@ -40,7 +40,8 @@ time, so a stored document always points somewhere real.
   Flue agent on the same AI Gateway path as the reviewers. It receives the
   diff in the dispatch body — the same file list and patches the Diff tab
   renders (`src/services/feature-diff.ts`) — and answers only through the
-  `submit_explanation` tool. It never fetches.
+  `submit_explanation` tool. It never fetches and does not start the sandbox
+  OpenCode harness used by repository-changing factory stages.
 - **One row per run.** `app.feature_explanations` keys rows by feature and
   head; a partial unique index allows one running row per feature. Usage is
   metered onto the row by instance id (`src/ai/explain/metering.ts`); a run

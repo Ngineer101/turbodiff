@@ -3,7 +3,7 @@ import { env, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from '
 import { NonRetryableError } from 'cloudflare:workflows';
 import { githubRequest as gh } from '../../integrations/github/client.ts';
 import { persistAgentLog } from '../runtime/agent-runs.ts';
-import { claudeCliResultText, parseClaudeCliUsage, type CliUsage } from '../runtime/cli-usage.ts';
+import { runCodingAgent, type CliUsage } from '../runtime/coding-agent.ts';
 import {
   finishAutomationRun,
   getAutomationById,
@@ -13,9 +13,9 @@ import {
   tryRecordAutomationRun,
   type AutomationRow,
 } from '../../data/db.ts';
-import { getModelCatalog } from '../../data/models.ts';
+import { getRunnerModelCatalog } from '../../data/models.ts';
 import { buildSandboxMcpConfig } from '../../services/mcp-proxy.ts';
-import { resolveRunnerAuth, runnerEnvironment } from '../runtime/runner-auth.ts';
+import { resolveRunnerAuth } from '../runtime/runner-auth.ts';
 import { runnerSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
 import { mountSkills } from '../runtime/skills.ts';
@@ -55,7 +55,6 @@ const CACHE_DIR = '/workspace/repo-cache';
 const workDir = (runId: number) => `/workspace/automation-${runId}`;
 const specFile = (runId: number) => `/workspace/automation-spec-${runId}.md`;
 const prFile = (runId: number) => `/workspace/automation-pr-${runId}.md`;
-const mcpFile = (runId: number) => `/workspace/automation-mcp-${runId}.json`;
 const AGENT_TIMEOUT_MS = 20 * 60_000;
 const CHECK_TIMEOUT_MS = 12 * 60_000;
 
@@ -169,7 +168,7 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
             checkCommand: repo.check_command,
             automationName: automation.name,
             prompt: automation.prompt,
-            runnerModel: automation.runner_model ?? (await getModelCatalog()).runner.defaultModel,
+            runnerModel: automation.runner_model ?? (await getRunnerModelCatalog()).defaultModel,
             workflows: authorizesWorkflowFiles(automation.prompt),
             remoteSource: remoteSourceOf(repo),
           };
@@ -203,7 +202,7 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
         'run coding agent',
         { retries: { limit: 1, delay: '5 minutes' }, timeout: '23 minutes' },
         async (): Promise<{ changed: boolean; usage: CliUsage | null }> => {
-          const auth = resolveRunnerAuth(undefined, ctx.runnerModel);
+          const auth = await resolveRunnerAuth(undefined, ctx.runnerModel);
           const sandbox = sandboxFor(ctx);
           await mountSkills(sandbox, WORK, await listEnabledSkillsForRepo(ctx.repositoryId));
           // Mount the repo's MCP connections through the Worker's relay:
@@ -211,24 +210,17 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
           // credentials (see lib/mcp-proxy.ts).
           const connections = await listRepoConnections(ctx.repositoryId, 'automations');
           const mcp = await buildSandboxMcpConfig(connections, ctx.repositoryId);
-          let mcpFlags = '';
-          if (mcp) {
-            await sandbox.writeFile(mcpFile(ctx.runId), mcp.configJson);
-            mcpFlags = ` --mcp-config ${mcpFile(ctx.runId)} --strict-mcp-config`;
-          }
           const scrubValues = [...Object.values(auth.vars), ...(mcp?.secrets ?? [])];
           const scrub = (s: string) => redactSecrets(s, scrubValues);
           await sandbox.writeFile(specFile(ctx.runId), automationPrompt(ctx));
-          const agent = await sandbox.exec(
-            `claude -p --dangerously-skip-permissions${mcpFlags} --output-format json < ${specFile(ctx.runId)}`,
-            {
-              cwd: WORK,
-              timeout: AGENT_TIMEOUT_MS,
-              env: runnerEnvironment(auth, NPM_CACHE_ENV),
-            },
-          );
-          const usage = parseClaudeCliUsage(agent.stdout);
-          const resultText = claudeCliResultText(agent.stdout);
+          const agent = await runCodingAgent(sandbox, auth, {
+            promptFile: specFile(ctx.runId),
+            cwd: WORK,
+            timeout: AGENT_TIMEOUT_MS,
+            env: NPM_CACHE_ENV,
+            configExtensionJson: mcp?.configJson,
+          });
+          const resultText = agent.resultText;
           await persistAgentLog(
             'automation',
             scrub(`${resultText}\n${agent.stderr}`.trim()),
@@ -242,7 +234,7 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
               `automation agent exited ${agent.exitCode}: ${scrub(`${resultText}\n${agent.stderr}`.trim()).slice(-1_000)}`,
             );
           }
-          return { changed: await worktreeChanged(sandbox, WORK), usage };
+          return { changed: await worktreeChanged(sandbox, WORK), usage: agent.usage };
         },
       );
 
@@ -281,7 +273,7 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
             // Same PATH handling and executable-vs-failing distinction as
             // the generation workflow: a check that cannot run at all is a
             // misconfiguration to report, not a checks_failed verdict.
-            const auth = resolveRunnerAuth(undefined, ctx.runnerModel);
+            const auth = await resolveRunnerAuth(undefined, ctx.runnerModel);
             const scrub = (s: string) => redactSecrets(s, Object.values(auth.vars));
             const res = await runCheckCommand(
               sandboxFor(ctx),
@@ -377,9 +369,7 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
         { retries: { limit: 1, delay: '10 seconds' }, timeout: '2 minutes' },
         async () => {
           await sandboxFor(ctx)
-            .exec(
-              `rm -rf ${WORK} ${specFile(ctx.runId)} ${prFile(ctx.runId)} ${mcpFile(ctx.runId)}`,
-            )
+            .exec(`rm -rf ${WORK} ${specFile(ctx.runId)} ${prFile(ctx.runId)}`)
             .catch(() => {});
         },
       );

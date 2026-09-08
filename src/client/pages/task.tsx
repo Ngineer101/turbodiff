@@ -12,7 +12,6 @@ import {
 import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { ApiBoard, ApiPlan, ApiTaskDetail } from '../../shared/api-types.ts';
-import { RUNNER_MODELS } from '../../shared/runner-models.ts';
 import { api, ApiError } from '../lib/api.ts';
 import { useDictation } from '../lib/dictation.ts';
 import { ago } from '../lib/format.ts';
@@ -108,11 +107,10 @@ export function TaskPage() {
   const navigate = useNavigate();
   const { data: task } = useSuspenseQuery(taskQuery(id));
   const { data: me } = useSuspenseQuery(meQuery);
-  // Catalog options with the static constants as the not-yet-loaded fallback.
-  // A stored model outside the list (legacy or since-disabled) is prepended so
-  // the select keeps rendering it instead of coercing to the first option.
+  // A task keeps its model snapshot visible while the authoritative catalog
+  // loads, but changing it requires a successfully loaded catalog.
   const { data: models } = useQuery(modelsQuery);
-  const catalogOptions = models?.runner.options ?? RUNNER_MODELS;
+  const catalogOptions = models?.runner.options ?? [];
   const modelOptions = catalogOptions.some((m) => m.id === task.model)
     ? catalogOptions
     : [{ id: task.model, label: task.model }, ...catalogOptions];
@@ -556,7 +554,7 @@ export function TaskPage() {
               id="task-model"
               value={task.model}
               onChange={(e) => setModel.mutate(e.target.value)}
-              disabled={setModel.isPending}
+              disabled={setModel.isPending || !models}
               className="w-full text-xs"
             >
               {modelOptions.map((m) => (

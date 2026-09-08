@@ -11,11 +11,9 @@ export interface SkillDefinition {
   files?: SkillFile[] | null;
 }
 
-// Renders a skill as a native Claude Code SKILL.md so `claude -p` auto-
-// discovers it from .claude/skills/<slug>/SKILL.md in the sandboxed
-// checkout. JSON.stringify produces valid double-quoted YAML scalars, so
-// arbitrary name/description text (colons, quotes, newlines) can't corrupt
-// the frontmatter block.
+// Renders a portable Agent Skill. OpenCode intentionally discovers the
+// Claude-compatible .claude/skills path too, so existing mounted skills need
+// no on-disk migration. JSON.stringify produces safe YAML scalars.
 export function skillMarkdown(skill: SkillDefinition): string {
   const description = skill.description?.trim() || skill.name;
   return `---

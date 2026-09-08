@@ -1,7 +1,6 @@
 declare namespace Cloudflare {
   interface Env {
-    CLAUDE_CODE_OAUTH_TOKEN: string;
-    FIXER_ANTHROPIC_API_KEY: string;
+    AI_GATEWAY_API_TOKEN: string;
     GITHUB_APP_ID: string;
     GITHUB_APP_PRIVATE_KEY: string;
     GITHUB_OAUTH_CLIENT_ID: string;

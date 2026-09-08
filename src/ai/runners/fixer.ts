@@ -2,13 +2,7 @@ import { githubRequest as gh } from '../../integrations/github/client.ts';
 import { persistAgentLog } from '../runtime/agent-runs.ts';
 import { gitAuthorEnv } from '../../domain/attribution.ts';
 import { ciFailureFindings } from './ci-findings.ts';
-import {
-  addCliUsage,
-  claudeCliResultText,
-  claudeCliSessionId,
-  parseClaudeCliUsage,
-  type CliUsage,
-} from '../runtime/cli-usage.ts';
+import { addCliUsage, runCodingAgent, type CliUsage } from '../runtime/coding-agent.ts';
 import {
   finishFixAttempt,
   getChange,
@@ -33,11 +27,7 @@ import { checkCommandUnrunnable, runCheckCommand } from '../runtime/check-comman
 import { FIX_MAX_ATTEMPTS, type FixQueueMessage } from '../../shared/factory-messages.ts';
 import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
 import { completeLifecycleRepair } from '../../services/lifecycle.ts';
-import {
-  resolveRunnerAuth,
-  runnerEnvironment,
-  type RunnerAuthMode,
-} from '../runtime/runner-auth.ts';
+import { resolveRunnerAuth, type RunnerAuthMode } from '../runtime/runner-auth.ts';
 import { runnerSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
 import { prepareFreshClone, pushHeadCommand } from '../runtime/repository-workspace.ts';
@@ -59,9 +49,8 @@ import {
 // clone a PR's head branch into a Cloudflare Sandbox, run a coding agent CLI
 // against the review findings, run the repo's tests, and push the fix commit.
 //
-// Runner auth is pluggable so users can spend their existing Claude
-// subscription (claude setup-token → CLAUDE_CODE_OAUTH_TOKEN) instead of API
-// credits through the AI Gateway.
+// All coding models route through Cloudflare AI Gateway. The authMode field is
+// retained on the operator endpoint for a clear error to legacy callers.
 
 export type FixAuthMode = RunnerAuthMode;
 
@@ -92,7 +81,7 @@ export interface FixParams {
   // `latestBlockingFindings` is used when `findings` is absent for the review
   // trigger.
   workflowRunId?: number;
-  // The task's requested model (features.runner_model); absent = default.
+  // The task's model snapshot (features.runner_model); absent on human PRs.
   runnerModel?: string;
 }
 
@@ -240,19 +229,23 @@ ${UNTRUSTED_CONTENT_RULES}
 export async function sandboxSmoke(checkAuth = false): Promise<Record<string, string>> {
   const sandbox = runnerSandbox('smoke', { sleepAfter: '2m' });
   const out: Record<string, string> = {};
-  for (const cmd of ['git --version', 'node --version', 'claude --version']) {
+  for (const cmd of ['git --version', 'node --version', 'opencode --version']) {
     const res = await sandbox.exec(cmd, { timeout: 60_000 });
     out[cmd] = res.success ? res.stdout.trim() : `exit ${res.exitCode}: ${res.stderr.trim()}`;
   }
   if (checkAuth) {
-    const auth = resolveRunnerAuth();
-    const ping = await sandbox.exec(`claude -p "Reply with exactly: ok" --output-format text`, {
+    const auth = await resolveRunnerAuth();
+    const promptFile = '/workspace/smoke-task.md';
+    await sandbox.writeFile(promptFile, 'Reply with exactly: ok');
+    const ping = await runCodingAgent(sandbox, auth, {
+      promptFile,
+      cwd: '/workspace',
       timeout: 2 * 60_000,
-      env: runnerEnvironment(auth),
     });
+    const scrub = (value: string) => redactSecrets(value, Object.values(auth.vars));
     out[`agent auth (${auth.mode})`] = ping.success
-      ? ping.stdout.trim()
-      : `exit ${ping.exitCode}: ${`${ping.stdout}\n${ping.stderr}`.trim().slice(-500)}`;
+      ? scrub(ping.resultText).trim()
+      : `exit ${ping.exitCode}: ${scrub(`${ping.stdout}\n${ping.stderr}`).trim().slice(-500)}`;
   }
   return out;
 }
@@ -271,7 +264,7 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
     throw new Error(`change request #${prNumber} is not open`);
   }
   const token = cr ? '' : await installationToken(params.installationId);
-  const auth = resolveRunnerAuth(params.authMode, params.runnerModel);
+  const auth = await resolveRunnerAuth(params.authMode, params.runnerModel);
 
   const findings =
     params.findings?.trim() ||
@@ -309,7 +302,7 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
     headRepo = head.headRepo;
     remote = githubWorkspaceRemote(headRepo, gitToken);
   }
-  const scrub = (s: string) => redactSecrets(s, [token, remote.token]);
+  const scrub = (s: string) => redactSecrets(s, [token, remote.token, ...Object.values(auth.vars)]);
 
   const sandbox = runnerSandbox(`fix--${owner}--${repo}--${prNumber}`.toLowerCase(), {
     sleepAfter: '20m',
@@ -349,21 +342,14 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
 
     await mountSkills(sandbox, CLONE_DIR, await listEnabledSkillsForRepo(params.repositoryId));
 
-    // Headless Claude Code run. --dangerously-skip-permissions is safe here —
-    // the container is the isolation boundary (IS_SANDBOX acknowledges that).
-    // stream-json (requires --verbose headless) captures every turn, not just
-    // the final result — persisted below so a sandbox run can be compared
-    // against a local session turn by turn.
-    const agent = await sandbox.exec(
-      `claude -p --dangerously-skip-permissions --output-format stream-json --verbose < ${TASK_FILE}`,
-      {
-        cwd: CLONE_DIR,
-        timeout: AGENT_TIMEOUT_MS,
-        env: runnerEnvironment(auth, NPM_CACHE_ENV),
-      },
-    );
-    let totalUsage = parseClaudeCliUsage(agent.stdout);
-    const fullOutput = scrub(`${claudeCliResultText(agent.stdout)}\n${agent.stderr}`.trim());
+    const agent = await runCodingAgent(sandbox, auth, {
+      promptFile: TASK_FILE,
+      cwd: CLONE_DIR,
+      timeout: AGENT_TIMEOUT_MS,
+      env: NPM_CACHE_ENV,
+    });
+    let totalUsage = agent.usage;
+    const fullOutput = scrub(`${agent.resultText}\n${agent.stderr}`.trim());
     const agentOutput = fullOutput.slice(-8_000);
     if (params.attemptId !== undefined) {
       await persistAgentLog(
@@ -419,7 +405,7 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
       // not a failing test — fail loudly rather than recording tests_failed
       // and discarding the committed fix.
       if (tests.notExecutable) throw checkCommandUnrunnable(params.testCommand, tests.output);
-      let sessionId = claudeCliSessionId(agent.stdout);
+      let sessionId = agent.codingSessionId;
       for (let round = 1; !tests.ok && round <= REPAIR_ROUNDS; round++) {
         // Drop test-command working-tree mutations before the agent looks:
         // tracked files reset to the fix commit, and untracked test
@@ -429,22 +415,18 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
           repairFile(round),
           repairPrompt(params.testCommand, tests.output.slice(-6_000), sessionId === null),
         );
-        // --resume continues the run that made the changes with its full
-        // context intact (each resume prints a fresh session id, carried
-        // forward). No id — a killed run that never printed its result —
-        // falls back to a fresh session pointed at the task file.
-        const baseEnv = runnerEnvironment(auth, NPM_CACHE_ENV);
-        const repairEnv = sessionId ? { ...baseEnv, RESUME_SESSION: sessionId } : baseEnv;
-        const repair = await sandbox.exec(
-          `claude -p ${sessionId ? '--resume "$RESUME_SESSION" ' : ''}` +
-            `--dangerously-skip-permissions --output-format stream-json --verbose < ${repairFile(round)}`,
-          { cwd: CLONE_DIR, timeout: REPAIR_TIMEOUT_MS, env: repairEnv },
-        );
-        totalUsage = addCliUsage(totalUsage, parseClaudeCliUsage(repair.stdout));
+        const repair = await runCodingAgent(sandbox, auth, {
+          promptFile: repairFile(round),
+          cwd: CLONE_DIR,
+          timeout: REPAIR_TIMEOUT_MS,
+          sessionId,
+          env: NPM_CACHE_ENV,
+        });
+        totalUsage = addCliUsage(totalUsage, repair.usage);
         if (params.attemptId !== undefined) {
           await persistAgentLog(
             'fix',
-            scrub(`${claudeCliResultText(repair.stdout)}\n${repair.stderr}`.trim()),
+            scrub(`${repair.resultText}\n${repair.stderr}`.trim()),
             repair.success,
             { fixAttemptId: params.attemptId },
             scrub(repair.stdout),
@@ -453,7 +435,7 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
         // A failed repair run ends the loop, not the fix — the last test
         // verdict is the recorded outcome either way.
         if (!repair.success) break;
-        sessionId = claudeCliSessionId(repair.stdout) ?? sessionId;
+        sessionId = repair.codingSessionId ?? sessionId;
         const repaired = await sandbox.exec(`git -C ${CLONE_DIR} status --porcelain`);
         if (!repaired.stdout.trim()) break;
         // Fold into the existing fix commit: nothing is pushed yet, and one

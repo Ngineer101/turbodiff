@@ -25,7 +25,6 @@ import { RESERVED_AGENT_SLUGS } from '../domain/personas.ts';
 import { certificateUrl } from '../services/certificates.ts';
 import { capabilityDenied, orgForInstallationWithHeal } from '../services/access-control.ts';
 import { userCanPushToRepo, type AuthedUser, type userIsGithubOrgAdmin } from '../services/auth.ts';
-import { DEFAULT_RUNNER_MODEL } from '../shared/runner-models.ts';
 import { isNumber, isString, type JsonObject } from '../shared/json.ts';
 import { parseUtc, STALL_AFTER_MS, VERIFY_STALL_AFTER_MS } from '../shared/time.ts';
 import type {
@@ -263,6 +262,9 @@ export function serializeTask(
   // task page passes true.
   opts: { includePlan: boolean } = { includePlan: true },
 ): ApiPlan {
+  if (!p.runner_model) {
+    throw new Error(`task ${p.id} has no runner model snapshot`);
+  }
   const questions: ApiPlanQuestion[] = p.questions ?? [];
   const acceptance = p.acceptance ?? [];
   const attachments = p.attachments ?? [];
@@ -277,7 +279,7 @@ export function serializeTask(
     plan: opts.includePlan ? p.plan : null,
     summary: opts.includePlan ? p.summary : null,
     archived: p.archived,
-    model: p.runner_model ?? DEFAULT_RUNNER_MODEL,
+    model: p.runner_model,
     attachments: attachments.map((a) => ({ name: a.name })),
     repos: repoStatuses
       .filter((r) => r.plan_id === p.id)

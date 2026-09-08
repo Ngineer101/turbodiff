@@ -4,6 +4,7 @@ import type { ApiPlanQuestion } from '../shared/api-types.ts';
 import { STALL_AFTER_MINUTES, VERIFY_STALL_AFTER_MINUTES } from '../shared/time.ts';
 import type { CliUsage } from '../shared/usage.ts';
 import { execute, queryOne, queryRows, withTransaction } from './database.ts';
+import { resolveRunnerModel } from './models.ts';
 import type { RepositoryRow } from './repositories.ts';
 import { bigintArray, minutesAgo } from './sql.ts';
 
@@ -537,8 +538,8 @@ export interface FeatureRow {
   cache_write_tokens: number;
   cost_usd: number;
   model: string | null;
-  runner_model: string | null; // requested model for this feature's runs; null = default
-  chat_session_id: string | null; // resumable Claude CLI session for cockpit chat
+  runner_model: string | null; // task model snapshot; null only on legacy/direct rows
+  chat_session_id: string | null; // resumable coding-harness session for cockpit chat
 }
 
 export async function createFeature(
@@ -558,15 +559,16 @@ export async function createFeature(
   // /internal/generate intakes).
   planId?: number,
 ): Promise<number> {
+  const runnerModel = await resolveRunnerModel();
   const row = await queryOne<{ id: number }>(sql`
     INSERT INTO app.features
       (repository_id, title, spec, acceptance, author_login, author_id,
-       coauthor_login, coauthor_id, tier, plan_id)
+       coauthor_login, coauthor_id, tier, plan_id, runner_model)
     VALUES (
       ${repositoryId}, ${title}, ${spec},
       ${acceptance ? JSON.stringify(acceptance) : null}::jsonb,
       ${author?.login ?? null}, ${author?.id ?? null}, ${coauthor?.login ?? null},
-      ${coauthor?.id ?? null}, ${tier ?? null}, ${planId ?? null}
+      ${coauthor?.id ?? null}, ${tier ?? null}, ${planId ?? null}, ${runnerModel}
     )
     RETURNING id
   `);
@@ -783,7 +785,7 @@ export interface PlanRow {
   feedback: string | null; // JSON [{snippet, comment}] awaiting a revise run
   attachments: { key: string; name: string; content_type: string }[] | null;
   todo_id: number | null; // unique origin todo; prevents concurrent double-start
-  runner_model: string | null; // requested model for this task's runs; null = default
+  runner_model: string | null; // task model snapshot; null only on legacy rows
 }
 
 // repositoryIds[0] becomes plans.repository_id (the "primary" repo — every
@@ -801,13 +803,16 @@ export async function createPlan(
 ): Promise<number> {
   const primaryRepositoryId = repositoryIds[0];
   if (primaryRepositoryId === undefined) throw new Error('a plan requires at least one repository');
+  const runnerModel = await resolveRunnerModel();
   return withTransaction(async (transaction) => {
     const inserted = await transaction.execute<{ id: number }>(sql`
         INSERT INTO app.plans
-          (repository_id, title, requirements, created_by_login, created_by_id, attachments)
+          (repository_id, title, requirements, created_by_login, created_by_id, attachments,
+           runner_model)
         VALUES (
           ${primaryRepositoryId}, ${title}, ${requirements}, ${createdBy?.login ?? null},
-          ${createdBy?.id ?? null}, ${attachments ? JSON.stringify(attachments) : null}::jsonb
+          ${createdBy?.id ?? null}, ${attachments ? JSON.stringify(attachments) : null}::jsonb,
+          ${runnerModel}
         )
         RETURNING id
       `);
@@ -838,11 +843,13 @@ export async function createPlanForTodo(
   requirements: string,
   createdBy?: { login: string; id: number },
   attachments?: { key: string; name: string; content_type: string }[],
-  // Model for this task's sandboxed runs; null = the default.
+  // Model for this task's sandboxed runs; omitted snapshots the current
+  // database-managed default.
   runnerModel?: string,
 ): Promise<CreatePlanForTodoResult | null> {
   if (repositoryIds.length === 0) return null;
   const primaryRepositoryId = repositoryIds[0]!;
+  const selectedRunnerModel = await resolveRunnerModel(runnerModel);
   return withTransaction(async (transaction) => {
     const inserted = await transaction.execute<{ id: number }>(sql`
         INSERT INTO app.plans
@@ -851,7 +858,7 @@ export async function createPlanForTodo(
         SELECT ${primaryRepositoryId}, ${title}, ${requirements},
           ${createdBy?.login ?? null}, ${createdBy?.id ?? null},
           ${attachments ? JSON.stringify(attachments) : null}::jsonb,
-          ${todoId}, ${runnerModel ?? null}
+          ${todoId}, ${selectedRunnerModel}
         FROM app.todos WHERE id = ${todoId} AND plan_id IS NULL
         ON CONFLICT(todo_id) DO NOTHING
         RETURNING id
@@ -864,6 +871,12 @@ export async function createPlanForTodo(
           `);
     const planId = created?.id ?? existing?.rows[0]?.id;
     if (!planId) return null;
+
+    await transaction.execute(sql`
+        UPDATE app.plans
+        SET runner_model = COALESCE(runner_model, ${selectedRunnerModel})
+        WHERE id = ${planId}
+      `);
 
     for (const [position, repositoryId] of repositoryIds.entries()) {
       await transaction.execute(sql`
