@@ -46,20 +46,20 @@ export const SHELL_CSS = `
 		background: var(--accent); color: var(--accent-ink);
 		font-family: var(--mono); font-size: 0.66rem; font-weight: 700;
 		letter-spacing: 0.18em; text-transform: uppercase;
-		box-shadow: 2px 2px 0 var(--ink);
+		box-shadow: 1px 1px 0 var(--ink);
 		transform: rotate(-3deg);
 	}
 	.tag.flat { transform: rotate(-2deg); box-shadow: none; }
 	.mark {
 		display: block; width: 34px; height: 34px; border-radius: 7px;
-		box-shadow: 3px 3px 0 var(--accent);
+		box-shadow: 1px 1px 0 var(--accent);
 		transform: rotate(-6deg);
 	}
 	.card {
 		background: var(--surface); border: 1px solid var(--line-2); border-radius: 10px;
-		box-shadow: 3px 3px 0 var(--line);
+		box-shadow: 1px 1px 0 var(--line);
 	}
-	.card.live { border-color: var(--accent); box-shadow: 3px 3px 0 var(--accent); }
+	.card.live { border-color: var(--accent); box-shadow: 1px 1px 0 var(--accent); }
 	.lamp {
 		display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
 	}

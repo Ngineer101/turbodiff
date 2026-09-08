@@ -39,7 +39,7 @@ const CSS = `
 		width: 100%; max-width: 24rem;
 		background: var(--surface);
 		border: 1px solid var(--line-2); border-radius: 10px;
-		box-shadow: 4px 4px 0 var(--line);
+		box-shadow: 1px 1px 0 var(--line);
 		padding: 1.75rem;
 	}
 	.tabs { display: flex; gap: 0.25rem; margin-bottom: 1.4rem; }
@@ -77,12 +77,12 @@ const CSS = `
 		width: 100%; padding: 0.6rem 0; margin-top: 0.2rem;
 		font: 600 0.9rem/1 "IBM Plex Sans", system-ui, sans-serif;
 		color: var(--accent-ink); background: var(--accent); border: 0; border-radius: 6px;
-		box-shadow: 3px 3px 0 var(--ink);
+		box-shadow: 1px 1px 0 var(--ink);
 		cursor: pointer;
 		transition: transform 0.12s ease-out, box-shadow 0.12s ease-out, background 0.12s;
 	}
-	.submit:hover { background: var(--accent-bright); transform: translate(-1px, -1px); box-shadow: 4px 4px 0 var(--ink); }
-	.submit:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--ink); }
+	.submit:hover { background: var(--accent-bright); }
+	.submit:active { transform: translate(1px, 1px); box-shadow: none; }
 	.submit[disabled] { opacity: 0.6; cursor: default; }
 	.divider {
 		display: flex; align-items: center; gap: 0.8rem; margin: 1.2rem 0;

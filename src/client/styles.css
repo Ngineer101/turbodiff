@@ -3,7 +3,7 @@
 /* Turbodiff's identity as Tailwind v4 theme tokens: "Signage" — a warm
    graphite ground, bone text, and one working colour (chrome yellow) wherever
    the app is busy or asks for a click. Phosphor green survives only as GO:
-   success, never an action. Depth is hard-offset sticker shadows, no blur.
+   success, never an action. Depth is shallow paper edges, no blur.
    IBM Plex Sans for reading text, IBM Plex Mono for code, identifiers, and
    terminal chrome (both loaded in the shell). The Paper file is the source of
    truth for these values: https://app.paper.design/file/01M1H1H5D09QPHCSFA3X0727EN */
@@ -36,19 +36,20 @@
      the accent on purpose — the app is yellow where it is busy. */
   --color-warn: #d9a521;
   --color-hold: #ffc72c;
-  /* Sticker shadows: hard offsets, no blur. --shadow-sticker* sit under dark
-     surfaces; --shadow-edge* sit under yellow fills (bone offset). */
+  /* Paper edges: 1px for cards, controls and stamps; 2px for media and
+     popovers; 3px for dialogs. Hover keeps the same offset. --shadow-sticker*
+     sit under dark surfaces; --shadow-edge* sit under yellow fills. */
   --color-shadow: var(--color-line);
   --color-shadow-live: var(--color-accent);
   --color-sticker-edge: var(--color-ink);
-  --shadow-sticker: 3px 3px 0 var(--color-shadow);
-  --shadow-sticker-lg: 4px 4px 0 var(--color-shadow);
-  --shadow-sticker-live: 3px 3px 0 var(--color-shadow-live);
-  --shadow-sticker-xl: 8px 8px 0 var(--color-shadow);
-  --shadow-edge: 3px 3px 0 var(--color-sticker-edge);
-  --shadow-edge-lg: 4px 4px 0 var(--color-sticker-edge);
+  --shadow-sticker: 1px 1px 0 var(--color-shadow);
+  --shadow-sticker-lg: 2px 2px 0 var(--color-shadow);
+  --shadow-sticker-live: 1px 1px 0 var(--color-shadow-live);
+  --shadow-sticker-xl: 3px 3px 0 var(--color-shadow);
+  --shadow-edge: 1px 1px 0 var(--color-sticker-edge);
+  --shadow-edge-lg: 2px 2px 0 var(--color-sticker-edge);
   --shadow-edge-sm: 1px 1px 0 var(--color-sticker-edge);
-  --shadow-edge-xs: 2px 2px 0 var(--color-sticker-edge);
+  --shadow-edge-xs: 1px 1px 0 var(--color-sticker-edge);
 
   /* Syntax-highlight hues (rendered markdown only). The UI chrome stays
      bone and yellow; code gets a real multi-hue palette so tokens are
