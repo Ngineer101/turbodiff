@@ -38,6 +38,7 @@ import {
   orgMembersQuery,
   queryClient,
   repoCodeQuery,
+  reviewQualityQuery,
   settingsQuery,
   skillCatalogQuery,
   skillQuery,
@@ -162,6 +163,13 @@ const usageRoute = createRoute({
   path: '/usage',
   loader: () => queryClient.ensureQueryData(usageQuery),
   component: lazyRouteComponent(() => import('./pages/usage.tsx'), 'UsagePage'),
+});
+
+const reviewQualityRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: '/review-quality',
+  loader: () => queryClient.ensureQueryData(reviewQualityQuery),
+  component: lazyRouteComponent(() => import('./pages/review-quality.tsx'), 'ReviewQualityPage'),
 });
 
 const integrationsRoute = createRoute({
@@ -314,6 +322,7 @@ const routeTree = rootRoute.addChildren([
     boardRoute,
     taskRoute,
     usageRoute,
+    reviewQualityRoute,
     integrationsRoute,
     integrationNewRoute,
     featureRoute,

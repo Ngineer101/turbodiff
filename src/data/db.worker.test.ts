@@ -31,11 +31,14 @@ import {
   listReposForPlan,
   pipelineCostByMonth,
   recentChatHistory,
+  recordReviewQuality,
+  reviewQualityDashboard,
   recordRepositoryRef,
   repositoryRef,
   repositoryRefs,
   setChatMessageStatus,
   setChatSessionId,
+  setReviewFindingFeedback,
   tryRecordAutomationRun,
   tryRecordFixAttempt,
   markReviewFailed,
@@ -92,6 +95,7 @@ beforeEach(async () => {
     'connections',
     'skills',
     'agents',
+    'review_findings',
     'reviews',
     'todo_repositories',
     'plan_repositories',
@@ -329,6 +333,54 @@ describe('cockpit chat messages', () => {
 });
 
 describe('review dispatch invariants', () => {
+  it('records verifier evidence and tenant-scoped finding feedback', async () => {
+    await tryRecordReview(101, 1001, 15, 'opened', 'review', 'review--acme--api--15');
+    const candidate = {
+      path: 'src/app.ts',
+      line: 12,
+      side: 'RIGHT' as const,
+      severity: 'P1' as const,
+      body: '🔴 **P1** authorization runs too late',
+      evidence: 'mutation is called before requireUser',
+      failurePath: 'anonymous request -> mutation',
+    };
+    await recordReviewQuality('review--acme--api--15', {
+      candidates: [candidate],
+      decisions: [
+        {
+          candidate: 0,
+          accepted: true,
+          confidence: 'high',
+          severity: 'P1',
+          reason: 'reachable without a session',
+        },
+      ],
+      publishedCandidateIndexes: [0],
+      status: 'completed',
+      model: 'cloudflare/anthropic/claude-sonnet-5',
+      inputTokens: 120,
+      outputTokens: 20,
+      costUsd: 0.02,
+      latencyMs: 900,
+      experimentKey: 'weighted-v1:test',
+    });
+    await completeReview('review--acme--api--15', null, 1, 'request_changes', ['src/app.ts']);
+
+    const dashboard = await reviewQualityDashboard([1001]);
+    expect(dashboard.stats).toMatchObject({ candidates: 1, published: 1, labeled: 0 });
+    expect(dashboard.findings[0]).toMatchObject({
+      repo: 'acme/api',
+      pr_number: 15,
+      verification_reason: 'reachable without a session',
+    });
+    const findingId = dashboard.findings[0].id;
+    await expect(setReviewFindingFeedback(findingId, [9999], 3001, 'useful')).resolves.toBe(false);
+    await expect(setReviewFindingFeedback(findingId, [1001], 3001, 'useful')).resolves.toBe(true);
+    await expect(reviewQualityDashboard([1001])).resolves.toMatchObject({
+      stats: { labeled: 1, true_positives: 1, false_positives: 0 },
+    });
+  });
+
   it('records why a review failed', async () => {
     const id = await tryRecordReview(101, 1001, 12, 'opened', 'review', 'review--acme--api--12');
     await expect(

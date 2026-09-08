@@ -15,7 +15,15 @@ export function UsagePage() {
 
   return (
     <>
-      <PageTitle>Usage</PageTitle>
+      <PageTitle
+        aside={
+          <Link to="/review-quality" className="text-[0.85rem] text-accent-bright hover:underline">
+            Review quality &rarr;
+          </Link>
+        }
+      >
+        Usage
+      </PageTitle>
 
       <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile

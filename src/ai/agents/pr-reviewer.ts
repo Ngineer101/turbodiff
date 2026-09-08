@@ -82,6 +82,8 @@ function deliveryConfig() {
     return {
       agentName: delivery.attributes.agent_name || 'Code Review',
       model: delivery.attributes.model || DEFAULT_MODEL,
+      verifierModel: delivery.attributes.verifier_model || DEFAULT_MODEL,
+      experimentKey: delivery.attributes.experiment_key || null,
       riskTier: delivery.attributes.risk_tier || 'full',
       connections: parseConnections(delivery.attributes.connections),
       pin: parsePin(delivery.attributes.pull_request),
@@ -94,6 +96,8 @@ function deliveryConfig() {
   return {
     agentName: 'Code Review',
     model: DEFAULT_MODEL,
+    verifierModel: DEFAULT_MODEL,
+    experimentKey: null,
     riskTier: 'full',
     connections: [],
     pin: null,
@@ -151,7 +155,7 @@ export function PrReviewer(props: AgentProps) {
     useTool(makeRunRepositoryCheck(props.id, cfg.pin));
     // post_review closes over the instance id so completing the PostgreSQL review row
     // can never hit another agent's concurrent review of the same PR.
-    useTool(makePostReview(props.id, cfg.pin));
+    useTool(makePostReview(props.id, cfg.pin, cfg.verifierModel, cfg.experimentKey));
   }
 
   // The agent's configured external MCP servers (e.g. an Executor catalog).

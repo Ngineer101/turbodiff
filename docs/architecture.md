@@ -107,7 +107,10 @@ read token exists only in the pull-ref fetch environment and is absent when
 repository code runs. Per-agent worktrees prevent concurrent reviewers from
 sharing mutable source state; the per-repository container still shares warm
 package-manager caches. See [Review quality](review-quality.md) for the coverage
-and finding-verification pipeline around this workspace.
+and finding-verification pipeline around this workspace. Candidate evidence,
+verifier telemetry, deterministic model variants, and maintainer labels are
+stored in PostgreSQL so regression decisions use production outcomes rather
+than comment volume.
 
 ## Adding functionality
 

@@ -111,6 +111,34 @@ export interface ApiReviewsPage {
   reviews: ApiReview[];
 }
 
+export type ApiReviewFindingFeedback = 'useful' | 'false_positive' | 'fixed' | 'dismissed';
+
+export interface ApiReviewQuality {
+  stats: {
+    candidates: number;
+    published: number;
+    labeled: number;
+    true_positives: number;
+    false_positives: number;
+    avg_verification_latency_ms: number | null;
+    verification_cost_usd: number;
+  };
+  findings: {
+    id: number;
+    review_id: number;
+    repo: string | null;
+    pr_number: number;
+    agent_slug: string | null;
+    path: string;
+    line: number;
+    severity: 'P1' | 'P2';
+    body: string;
+    verification_reason: string | null;
+    feedback: ApiReviewFindingFeedback | null;
+    created_at: string;
+  }[];
+}
+
 export type PlanStatus =
   | 'analyzing'
   | 'awaiting_answers'

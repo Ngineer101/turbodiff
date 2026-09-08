@@ -73,6 +73,7 @@ import {
   listPlansForInstallations,
   listRecentFeaturesForUsage,
   listRecentReviews,
+  reviewQualityDashboard,
   listRepoAgentOverrides,
   listRepoSkillOverrides,
   listReposForTodo,
@@ -104,6 +105,7 @@ import {
   setRepoReviewOnPush,
   setRepoReviewPushDebounceMinutes,
   setRepoReviewIntake,
+  setReviewFindingFeedback,
   setRepoProcessProfile,
   setRepoSkillEnabled,
   setTaskRunnerModel,
@@ -865,6 +867,34 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const page = Math.min(pages, Math.max(1, Number(c.req.query('page')) || 1));
     const reviews = await listRecentReviews(installationIds, PER_PAGE, (page - 1) * PER_PAGE);
     return c.json<ApiReviewsPage>({ total, page, pages, reviews: reviews.map(serializeReview) });
+  });
+
+  app.get('/review-quality', async (c) => {
+    const { installationIds } = c.get('user');
+    return c.json(await reviewQualityDashboard(installationIds));
+  });
+
+  app.patch('/review-findings/:id', async (c) => {
+    const id = Number(c.req.param('id'));
+    const body = await c.req.json<{ feedback?: unknown }>().catch(() => null);
+    const feedback = body?.feedback;
+    if (
+      !Number.isInteger(id) ||
+      id <= 0 ||
+      !isString(feedback) ||
+      !['useful', 'false_positive', 'fixed', 'dismissed'].includes(feedback)
+    ) {
+      return c.json({ error: 'invalid finding feedback' }, 400);
+    }
+    const { installationIds, session } = c.get('user');
+    const updated = await setReviewFindingFeedback(
+      id,
+      installationIds,
+      session.userId,
+      feedback as 'useful' | 'false_positive' | 'fixed' | 'dismissed',
+    );
+    if (!updated) return c.json({ error: 'finding not found' }, 404);
+    return c.json({ ok: true });
   });
 
   // Cheap live-poll target: a single-row change counter (0042 triggers) the
