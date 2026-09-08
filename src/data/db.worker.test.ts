@@ -53,6 +53,7 @@ import {
   finishInstallationRepoSync,
   storeInstallationAccessSnapshot,
 } from './db.ts';
+import { assignReviewModels } from './models.ts';
 
 async function seedTenant(): Promise<void> {
   await testDatabase().batch([
@@ -364,6 +365,42 @@ describe('review dispatch invariants', () => {
       latencyMs: 900,
       experimentKey: 'weighted-v1:test',
     });
+    await expect(
+      testDatabase()
+        .prepare(
+          `SELECT candidate_count, verification_status, verification_model,
+                  verification_input_tokens, verification_output_tokens,
+                  verification_cost_usd, verification_latency_ms, experiment_key
+           FROM reviews WHERE agent_instance_id = 'review--acme--api--15'`,
+        )
+        .first(),
+    ).resolves.toMatchObject({
+      candidate_count: 1,
+      verification_status: 'completed',
+      verification_model: 'cloudflare/anthropic/claude-sonnet-5',
+      verification_input_tokens: 120,
+      verification_output_tokens: 20,
+      verification_cost_usd: 0.02,
+      verification_latency_ms: 900,
+      experiment_key: 'weighted-v1:test',
+    });
+    await expect(
+      testDatabase()
+        .prepare(
+          `SELECT evidence, failure_path, published, verifier_confidence,
+                  verifier_severity, verification_reason, feedback
+           FROM review_findings WHERE candidate_index = 0`,
+        )
+        .first(),
+    ).resolves.toMatchObject({
+      evidence: 'mutation is called before requireUser',
+      failure_path: 'anonymous request -> mutation',
+      published: true,
+      verifier_confidence: 'high',
+      verifier_severity: 'P1',
+      verification_reason: 'reachable without a session',
+      feedback: null,
+    });
     await completeReview('review--acme--api--15', null, 1, 'request_changes', ['src/app.ts']);
 
     const dashboard = await reviewQualityDashboard([1001]);
@@ -375,10 +412,52 @@ describe('review dispatch invariants', () => {
     });
     const findingId = dashboard.findings[0].id;
     await expect(setReviewFindingFeedback(findingId, [9999], 3001, 'useful')).resolves.toBe(false);
+    await expect(
+      testDatabase()
+        .prepare('SELECT feedback, feedback_by_github_id FROM review_findings WHERE id = ?1')
+        .bind(findingId)
+        .first(),
+    ).resolves.toMatchObject({ feedback: null, feedback_by_github_id: null });
     await expect(setReviewFindingFeedback(findingId, [1001], 3001, 'useful')).resolves.toBe(true);
+    await expect(
+      testDatabase()
+        .prepare(
+          'SELECT feedback, feedback_by_github_id, feedback_at IS NOT NULL AS stamped FROM review_findings WHERE id = ?1',
+        )
+        .bind(findingId)
+        .first(),
+    ).resolves.toMatchObject({ feedback: 'useful', feedback_by_github_id: 3001, stamped: true });
     await expect(reviewQualityDashboard([1001])).resolves.toMatchObject({
       stats: { labeled: 1, true_positives: 1, false_positives: 0 },
     });
+  });
+
+  it('assigns database-weighted scout and verifier models with gateway ids', async () => {
+    await testDatabase()
+      .prepare(
+        `UPDATE models SET for_reviewer = true, reviewer_default = true,
+          reviewer_experiment_weight = 10, verifier_experiment_weight = 10
+         WHERE model_id = 'claude-fable-5.1'`,
+      )
+      .run();
+    try {
+      await expect(
+        assignReviewModels('acme/api:15:head', 'cloudflare/anthropic/fallback'),
+      ).resolves.toEqual({
+        scout: 'cloudflare/anthropic/claude-fable-5.1',
+        verifier: 'cloudflare/anthropic/claude-fable-5.1',
+        experimentKey:
+          'weighted-v1:scout=cloudflare/anthropic/claude-fable-5.1:verifier=cloudflare/anthropic/claude-fable-5.1',
+      });
+    } finally {
+      await testDatabase()
+        .prepare(
+          `UPDATE models SET for_reviewer = false, reviewer_default = false,
+            reviewer_experiment_weight = 0, verifier_experiment_weight = 0
+           WHERE model_id = 'claude-fable-5.1'`,
+        )
+        .run();
+    }
   });
 
   it('records why a review failed', async () => {

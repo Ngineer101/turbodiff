@@ -127,6 +127,7 @@ beforeEach(async () => {
     'plan_repositories',
     'features',
     'plans',
+    'review_findings',
     'reviews',
     'repositories',
     'installations',
@@ -211,6 +212,75 @@ describe('API authentication and CSRF', () => {
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({ error: 'cross-origin request rejected' });
     expect(authenticate).not.toHaveBeenCalled();
+  });
+});
+
+describe('review quality feedback', () => {
+  async function seedPublishedFindings(): Promise<void> {
+    await testDatabase().batch([
+      testDatabase().prepare(
+        `INSERT INTO reviews
+          (id, repository_id, installation_id, pr_number, trigger_event, status, agent_instance_id)
+         VALUES
+          (9001, 101, 1001, 15, 'opened', 'completed', 'review--acme--api--15'),
+          (9002, 202, 2002, 16, 'opened', 'completed', 'review--other--private--16')`,
+      ),
+      testDatabase().prepare(
+        `INSERT INTO review_findings
+          (id, review_id, candidate_index, path, line, side, severity, body, evidence,
+           failure_path, published, verifier_confidence, verifier_severity)
+         VALUES
+          (9101, 9001, 0, 'src/app.ts', 12, 'RIGHT', 'P1', 'authorization runs too late',
+           'mutation precedes requireUser', 'anonymous request -> mutation', true, 'high', 'P1'),
+          (9102, 9002, 0, 'src/private.ts', 7, 'RIGHT', 'P2', 'other tenant finding',
+           'private evidence', 'private path', true, 'high', 'P2')`,
+      ),
+    ]);
+  }
+
+  it('lists only tenant findings and persists authorized feedback', async () => {
+    await seedPublishedFindings();
+    const app = authenticatedApi();
+
+    const quality = await app.request('https://turbodiff.test/api/review-quality');
+    expect(quality.status).toBe(200);
+    const qualityPayload = await quality.json();
+    expect(qualityPayload).toMatchObject({
+      stats: { published: 1, labeled: 0 },
+      findings: [{ id: 9101, repo: 'acme/api', pr_number: 15 }],
+    });
+    expect(JSON.stringify(qualityPayload)).not.toContain('private evidence');
+
+    const invalid = await app.request('https://turbodiff.test/api/review-findings/9101', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ feedback: 'probably' }),
+    });
+    expect(invalid.status).toBe(400);
+
+    const crossTenant = await app.request('https://turbodiff.test/api/review-findings/9102', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ feedback: 'useful' }),
+    });
+    expect(crossTenant.status).toBe(404);
+    await expect(
+      testDatabase().prepare('SELECT feedback FROM review_findings WHERE id = 9102').first(),
+    ).resolves.toMatchObject({ feedback: null });
+
+    const accepted = await app.request('https://turbodiff.test/api/review-findings/9101', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ feedback: 'useful' }),
+    });
+    expect(accepted.status).toBe(200);
+    await expect(
+      testDatabase()
+        .prepare(
+          'SELECT feedback, feedback_by_github_id, feedback_at IS NOT NULL AS stamped FROM review_findings WHERE id = 9101',
+        )
+        .first(),
+    ).resolves.toMatchObject({ feedback: 'useful', feedback_by_github_id: 3001, stamped: true });
   });
 });
 

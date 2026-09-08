@@ -124,18 +124,24 @@ finding can be intentionally deferred.
 
 ## Regression evals
 
-`vp run test:review-evals` scores the checked-in regression corpus on precision,
-recall, P1 precision, and comment density. The rollout gate currently requires:
+`vp run test:review-evals` validates the scoring and rollout-gate implementation
+against adversarial cases: false alarms, missed findings, duplicate comments,
+and P1 findings reported at the wrong severity. The rollout gate requires:
 
 - precision at least 90%;
-- recall at least 80%; and
-- P1 precision at least 95%.
+- recall at least 80%;
+- P1 precision at least 95%; and
+- P1 recall at least 90%.
 
 New production false-positive labels should be reduced to the smallest
 self-contained code/context fixture and added to the corpus. Before changing a
-prompt or model, capture that candidate's outputs in the cases and compare it
-to the current baseline. This makes “sounds better” measurable and prevents a
-new model from buying recall with noisy P1s.
+prompt or model, run both variants against that corpus and pass their captured
+outputs to `scoreReviewEval`. CI deliberately does not hard-code
+`actual === expected` or claim that a static fixture exercised a live model;
+the scorer is the deterministic gate used by a separate model-evaluation run.
+This makes “sounds better” measurable without turning a self-fulfilling unit
+test into coverage theater, and prevents a new model from buying recall with
+noisy or duplicated findings.
 
 ## Controlled model experiments
 
