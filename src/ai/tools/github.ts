@@ -33,7 +33,13 @@ export function assertPinned(pin: RepoPin, owner: string, repo: string): void {
   }
 }
 
-export const MAX_DIFF_CHARS = 300_000;
+// Sized for the smallest review model in service: cloudflare/@cf/zai-org/
+// glm-4.7-flash has a 131,072-token window, dense JSON/code tokenizes at
+// about 3 chars per token, and a re-review after a push lands in the SAME
+// agent conversation as the first review — so two full fetches plus the
+// system prompt and tool traffic must fit. 300k chars did not (feature 7:
+// "estimated input and maximum output tokens (152525) exceeded ... 131072").
+export const MAX_DIFF_CHARS = 120_000;
 export const MAX_FILE_CHARS = 60_000;
 
 // Every GitHub call authenticates as the App installation that owns the repo.
