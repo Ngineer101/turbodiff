@@ -7,6 +7,12 @@ export const REVIEW_NOISE_PATTERNS: { pattern: RegExp; reason: string }[] = [
   },
   { pattern: /\.min\.(js|css)$/, reason: 'minified asset' },
   { pattern: /\.map$/, reason: 'source map' },
+  // drizzle-kit writes a full schema snapshot (thousands of lines of JSON)
+  // beside every migration; the .sql next to it is what changes the schema
+  // and gets reviewed. The generated-marker heuristic in ai/tools/github.ts
+  // exempts migration paths on purpose, so the snapshot needs its own entry:
+  // one snapshot alone overflowed a 131k-token review model (feature 7).
+  { pattern: /(^|\/)meta\/\d{4}_snapshot\.json$/, reason: 'drizzle schema snapshot' },
 ];
 
 export interface DiffSegment {
