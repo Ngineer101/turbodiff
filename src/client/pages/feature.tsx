@@ -175,14 +175,18 @@ function stationsFor(data: ApiFeatureDetail): Station[] {
     ?.stages.filter((stage) => stage.stage === 'review')
     .at(-1);
   const build: Station = { label: 'Build', verdict: 'GO', tone: 'go' };
+  // A failed review stage outranks earlier rounds' verdicts: after a repair
+  // the re-review is the one that gates the run, and its failure parks the
+  // lifecycle — the lamp read GO off round one while the run sat awaiting a
+  // human (feature 7).
   const review: Station =
-    data.reviews.length === 0
-      ? lastReviewStage?.status === 'failed'
-        ? { label: 'Review', verdict: 'FAILED', tone: 'abort' }
-        : { label: 'Review', verdict: 'POLLING', tone: 'hold', pulse: true }
-      : blocking
-        ? { label: 'Review', verdict: 'NO-GO', tone: 'abort' }
-        : { label: 'Review', verdict: 'GO', tone: 'go' };
+    lastReviewStage?.status === 'failed'
+      ? { label: 'Review', verdict: 'FAILED', tone: 'abort' }
+      : data.reviews.length === 0
+        ? { label: 'Review', verdict: 'POLLING', tone: 'hold', pulse: true }
+        : blocking
+          ? { label: 'Review', verdict: 'NO-GO', tone: 'abort' }
+          : { label: 'Review', verdict: 'GO', tone: 'go' };
   const verify = verifyStation(v, merged);
   const ship: Station = merged
     ? { label: 'Ship', verdict: 'MERGED', tone: 'go' }
@@ -318,7 +322,14 @@ function LifecycleHistory({
   return (
     <>
       <SectionHeading>Factory lifecycle</SectionHeading>
-      <Accordion type="multiple">
+      {/* A run that needs a human opens expanded: the failed stage, its
+          reason, and the retry control must not sit behind a collapsed row. */}
+      <Accordion
+        type="multiple"
+        defaultValue={runs
+          .filter((run) => run.status === 'awaiting_human' || run.status === 'failed')
+          .map((run) => String(run.id))}
+      >
         {runs.map((run) => (
           <AccordionItem key={run.id} value={String(run.id)}>
             <AccordionTrigger

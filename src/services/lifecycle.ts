@@ -478,10 +478,18 @@ async function settleReviewStage(
   };
   if (stageRun.change_id !== null) command.changeId = stageRun.change_id;
   if (progress.completed === 0) {
-    // The first recorded reason rides on the stage error — that's what the
-    // lifecycle panel shows.
-    const why = progress.errors[0] ? `: ${progress.errors[0]}` : '';
-    await finishStageRun(stageRun.id, 'failed', output, `all review dispatches failed${why}`);
+    // Every distinct reason rides on the stage error — that's what the
+    // lifecycle panel shows. The first one alone hid the cause on feature 7:
+    // "agent run ended without posting a review" led, and the AI binding's
+    // 413 that explained it came second.
+    const reasons = [...new Set(progress.errors.filter(Boolean))];
+    const why = reasons.length > 0 ? `: ${reasons.join(' · ')}` : '';
+    await finishStageRun(
+      stageRun.id,
+      'failed',
+      output,
+      `all review dispatches failed${why}`.slice(0, 1_000),
+    );
     await coordinateStageOutcome(command, false, enqueue);
     return;
   }
