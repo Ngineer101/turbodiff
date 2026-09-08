@@ -47,6 +47,24 @@ export function verdictRecordedSince(
   return parseUtc(latest.created_at) >= instanceQueuedAt - INSTANCE_CLOCK_SKEW_MS;
 }
 
+// The lifecycle outcome of a verify stage, from the verification it ran.
+// Only a verdict completes the stage; an 'error' (sandbox, git, agent crash)
+// or a missing row fails it, so the coordinator parks the run for a retry of
+// verify instead of spending a repair on a verdict that was never reached.
+// Live finding: a cache-sync error read as "verification failed" scheduled
+// the last repair in the budget, which found nothing to fix, and the run
+// parked on a failed repair with no way back to verify.
+export interface VerifyStageOutcome {
+  success: boolean;
+  facts: { verificationPassed?: boolean };
+}
+export function verifyStageOutcome(status: string | null | undefined): VerifyStageOutcome {
+  if (status === 'passed' || status === 'failed') {
+    return { success: true, facts: { verificationPassed: status === 'passed' } };
+  }
+  return { success: false, facts: {} };
+}
+
 export interface CriterionResult {
   index: number;
   verdict: 'pass' | 'fail' | 'skip';

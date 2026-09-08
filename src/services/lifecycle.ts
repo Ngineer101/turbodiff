@@ -28,7 +28,7 @@ import {
   type StageRunRow,
 } from '../data/db.ts';
 import { decideLifecycle, type LifecycleContext } from '../domain/lifecycle-coordinator.ts';
-import { canResumeLifecycleRun } from '../domain/lifecycle-resume.ts';
+import { canResumeLifecycleRun, resumeTargetStage } from '../domain/lifecycle-resume.ts';
 import { formatUnmetCriteriaFindings } from '../domain/verification.ts';
 import { isDeliveryProcessProfile, processProfile } from '../domain/process-profiles.ts';
 import type {
@@ -547,21 +547,24 @@ export async function resumeFailedStage(
       reason: `run is ${run.status.replaceAll('_', ' ')}, not waiting on a human`,
     };
   }
-  const latest = (await listStageRuns(run.id)).at(-1);
+  const stages = await listStageRuns(run.id);
+  const latest = stages.at(-1);
   if (!latest || !canResumeLifecycleRun(run, latest)) {
     return { kind: 'rejected', reason: 'the latest stage is not available to resume' };
   }
+  // A failed repair resumes as the check it was repairing for.
+  const target = resumeTargetStage(stages) ?? latest;
   const repo = await getRepoById(run.repository_id);
   if (!repo) return { kind: 'rejected', reason: 'repository missing' };
-  const changeId = latest.change_id ?? run.change_id;
+  const changeId = target.change_id ?? latest.change_id ?? run.change_id;
   const change = changeId ? await getChange(changeId) : null;
-  const featureId = featureIdFromInput(latest.input);
+  const featureId = featureIdFromInput(target.input ?? latest.input);
   const feature = featureId ? await getFeature(featureId) : null;
   const acceptanceContract = change ? await latestAcceptanceContractForChange(change.id) : null;
   const decision = decideLifecycle(run.profile_key, {
     event: 'human.resume_requested',
     origin: change?.origin ?? (feature ? 'factory' : 'imported'),
-    startStage: latest.stage,
+    startStage: target.stage,
     stopAfterStage: run.stop_after_stage,
     capabilities: change?.capabilities,
     facts: {
@@ -583,7 +586,7 @@ export async function resumeFailedStage(
     { stageRunId: latest.id, actor },
     decision,
     `resume:${run.id}:${latest.id}`,
-    latest.input ?? undefined,
+    target.input ?? latest.input ?? undefined,
   );
   if (!next) return { kind: 'rejected', reason: 'this stage was already retried' };
   await resumeFactoryRun(run.id);

@@ -45,16 +45,27 @@ export async function prepareCachedWorktree({
 }: PrepareCachedWorktreeOptions): Promise<void> {
   const scrub = (s: string) => redactSecrets(s, [remote.token, ...secrets]);
   const git = `git ${remote.configFlags}`;
+  // The branchless path fetches straight into refs/heads/$BASE_REF, which git
+  // refuses while that ref is the cache's checked-out branch — and a cold
+  // bootstrap leaves exactly that checked out (clone --branch). Live finding:
+  // the first verification after a container rollout bootstrapped the cache
+  // on the PR branch, and the re-verification after the repair died with
+  // "Refusing to fetch into current branch". The cache's HEAD is detached
+  // before the fetch and after the bootstrap, so the ref is always free.
+  const detach = `git -C ${cacheDir} checkout -q --detach && `;
   const warmFetch = branch
     ? `${git} -C ${cacheDir} fetch --depth 50 "${remote.authUrl}" "$BASE_REF" && ` +
       `git -C ${cacheDir} checkout -q -B "$BASE_REF" FETCH_HEAD; `
-    : `${git} -C ${cacheDir} fetch --depth 50 "${remote.authUrl}" "+refs/heads/$BASE_REF:refs/heads/$BASE_REF"; `;
+    : detach +
+      `${git} -C ${cacheDir} fetch --depth 50 "${remote.authUrl}" "+refs/heads/$BASE_REF:refs/heads/$BASE_REF"; `;
   const sync = await sandbox.exec(
     `if [ -d ${cacheDir}/.git ]; then ` +
       warmFetch +
       `else ${git} clone --depth 50 --single-branch --branch "$BASE_REF" ` +
       `"${remote.authUrl}" ${cacheDir} && ` +
-      `git -C ${cacheDir} remote set-url origin "${remote.cleanUrl}"; fi`,
+      `git -C ${cacheDir} remote set-url origin "${remote.cleanUrl}"` +
+      (branch ? '' : ` && git -C ${cacheDir} checkout -q --detach`) +
+      `; fi`,
     { env: { ...remote.env, BASE_REF: base }, timeout: 5 * 60_000 },
   );
   if (!sync.success) {
