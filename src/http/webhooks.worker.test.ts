@@ -27,7 +27,12 @@ import {
   updateFeature,
   upsertChange,
 } from '../data/db.ts';
-import { FIX_MAX_ATTEMPTS, type FactoryMessage } from '../shared/factory-messages.ts';
+import {
+  FIX_MAX_ATTEMPTS,
+  type FactoryMessage,
+  type FixQueueMessage,
+} from '../shared/factory-messages.ts';
+import { verifyStageOutcome } from '../domain/verification.ts';
 import type { RunStageCommand } from '../domain/lifecycle-contract.ts';
 import type { JsonObject } from '../shared/json.ts';
 import { createWebhookRoutes, type WebhookRouteDependencies } from './webhooks.ts';
@@ -1008,6 +1013,204 @@ describe('composable feature delivery', () => {
     expect(stages.filter((stage) => stage.stage === 'repair')).toHaveLength(repairs);
     expect(stages.filter((stage) => stage.stage === 'verify')).toHaveLength(1);
     expect(stages.every((stage) => stage.status === 'completed')).toBe(true);
+  });
+
+  // The whole repair loop, end to end, on the path production run 51 took on
+  // 2026-09-08 — plus the completion it never reached. Every transition here
+  // had executed for the first time in production before this test existed.
+  it('drives a delivery through review repair, verify repair, a verify error, a resume, and merge', async () => {
+    await seedRepo();
+    await ensureBuiltinAgents(1001);
+    const featureId = await createFeature(101, 'Model rename', 'Rename the model id', [
+      'The catalog row is renamed',
+    ]);
+    const change = await upsertChange({
+      repositoryId: 101,
+      providerKey: 'github:152',
+      number: 152,
+      origin: 'factory',
+      title: 'Model rename',
+      externalUrl: 'https://github.com/acme/api/pull/152',
+      sourceBranch: 'turbodiff/feat-7',
+      targetBranch: 'main',
+      status: 'open',
+      sourceHead: '1'.repeat(40),
+      targetHead: '0'.repeat(40),
+      draft: false,
+      capabilities: ['read_change', 'publish_review', 'write_head', 'publish_check', 'merge'],
+    });
+    await updateFeature(featureId, { status: 'pr_opened', prNumber: 152, changeId: change.id });
+    const created = await createFactoryRunWithStage({
+      repositoryId: 101,
+      changeId: change.id,
+      profileKey: 'full_delivery',
+      startStage: 'review',
+      stopAfterStage: 'merge',
+      policySnapshot: { key: 'full_delivery' },
+      trigger: 'test',
+      eventKind: 'human.resume_requested',
+      decision: { kind: 'schedule', stage: 'review' },
+      idempotencyKey: `loop:${featureId}`,
+      stageInput: { featureId },
+    });
+    const queued: FactoryMessage[] = [];
+    const enqueue = async (message: FactoryMessage) => void queued.push(message);
+    const dispatch: ReviewDispatcher = async (agent, repo, prNumber, _url, trigger, options) =>
+      (await tryRecordReview(
+        repo.id,
+        repo.installation_id,
+        prNumber,
+        trigger,
+        agent.slug,
+        `${agent.slug}--${repo.owner}--${repo.name}--${prNumber}`,
+        options?.riskTier ?? null,
+        options?.stageRunId ?? null,
+        options?.headSha ?? null,
+      )) !== null;
+    const next = (stage: string): RunStageCommand => {
+      const commands = stageCommands(queued);
+      expect(commands.map((command) => command.stage)).toEqual([stage]);
+      queued.length = 0;
+      return commands[0];
+    };
+    const push = async (head: string) => {
+      await testDatabase()
+        .prepare('UPDATE changes SET source_head = ?1 WHERE id = ?2')
+        .bind(head, change.id)
+        .run();
+    };
+    // What the fix consumer does with the message, minus the sandbox: claim
+    // the budgeted attempt, finish it, settle the repair stage.
+    const fixer = async (stageRunId: number, status: 'fixed' | 'no_changes', head: string) => {
+      const fix = queued.find(
+        (message): message is FixQueueMessage =>
+          message.kind === 'fix' && message.stageRunId === stageRunId,
+      );
+      if (!fix) throw new Error('repair did not enqueue a lifecycle fix');
+      const attempt = await tryRecordFixAttempt(
+        fix.repoId,
+        fix.prNumber,
+        fix.trigger,
+        FIX_MAX_ATTEMPTS,
+        undefined,
+        stageRunId,
+      );
+      if (attempt === null) throw new Error('fix attempt was not admitted');
+      await finishFixAttempt(attempt, status, status === 'fixed' ? head : undefined);
+      if (status === 'fixed') await push(head);
+      queued.length = 0;
+      await completeLifecycleRepair(
+        stageRunId,
+        status === 'fixed',
+        { detail: `repair outcome: ${status}` },
+        enqueue,
+      );
+      return fix;
+    };
+    const verified = async (
+      stageRunId: number,
+      status: 'passed' | 'failed' | 'error',
+      note: string,
+    ) => {
+      const id = await createVerification(featureId);
+      await finishVerification(
+        id,
+        status,
+        status === 'error'
+          ? { error: note }
+          : { results: [{ index: 0, verdict: status === 'passed' ? 'pass' : 'fail', note }] },
+      );
+      const outcome = verifyStageOutcome(status);
+      await completeLifecycleStage(
+        stageRunId,
+        'verify',
+        outcome.success,
+        { kind: 'verification_completed', status },
+        outcome.facts,
+        enqueue,
+      );
+    };
+
+    // Round 1: one agent blocks on a nit → repair → re-review clean.
+    let command: RunStageCommand = {
+      kind: 'run_stage',
+      factoryRunId: created.run.id,
+      stageRunId: created.stageRun!.id,
+      stage: 'review',
+      idempotencyKey: created.stageRun!.idempotency_key,
+      changeId: change.id,
+    };
+    await runLifecycleStage(command, dispatch, { enqueue, computeRisk: async () => 'full' });
+    queued.length = 0;
+    await completeLifecycleReview(
+      'review--acme--api--152',
+      null,
+      1,
+      'request_changes',
+      ['db/m.sql'],
+      enqueue,
+    );
+    command = next('repair');
+    await runLifecycleStage(command, dispatch, { enqueue });
+    const reviewFix = await fixer(command.stageRunId, 'fixed', '2'.repeat(40));
+    expect(reviewFix.findings).toBeUndefined(); // the fixer reads the blocking review itself
+    command = next('review');
+    await runLifecycleStage(command, dispatch, { enqueue, computeRisk: async () => 'lite' });
+    queued.length = 0;
+    await completeLifecycleReview('review--acme--api--152', null, 0, 'approve', [], enqueue);
+
+    // Verify 1 fails on the criteria → repair carries them → re-review clean.
+    command = next('verify');
+    await runLifecycleStage(command, dispatch, { enqueue });
+    queued.length = 0;
+    await verified(command.stageRunId, 'failed', 'pinned rows still hold the old id');
+    command = next('repair');
+    await runLifecycleStage(command, dispatch, { enqueue });
+    const verifyFix = await fixer(command.stageRunId, 'fixed', '3'.repeat(40));
+    expect(verifyFix.findings).toContain('pinned rows still hold the old id');
+    command = next('review');
+    await runLifecycleStage(command, dispatch, { enqueue, computeRisk: async () => 'lite' });
+    queued.length = 0;
+    await completeLifecycleReview('review--acme--api--152', null, 0, 'approve', [], enqueue);
+
+    // Verify 2 errors (infrastructure): no repair is spent, the run parks,
+    // and the retry re-runs verify.
+    command = next('verify');
+    await runLifecycleStage(command, dispatch, { enqueue });
+    queued.length = 0;
+    await verified(command.stageRunId, 'error', 'repo cache sync failed');
+    expect(queued).toHaveLength(0);
+    expect(await countBudgetedFixAttempts(101, 152)).toBe(2);
+    await expect(getFactoryRun(created.run.id)).resolves.toMatchObject({
+      status: 'awaiting_human',
+    });
+    expect(await resumeFailedStage(created.run.id, 'nico', enqueue)).toMatchObject({
+      kind: 'scheduled',
+      stage: 'verify',
+    });
+
+    // Verify 3 passes → merge → the run completes.
+    command = next('verify');
+    await runLifecycleStage(command, dispatch, { enqueue });
+    queued.length = 0;
+    await verified(command.stageRunId, 'passed', 'ok');
+    command = next('merge');
+    const mergeGithub = vi.fn(async () => {});
+    await runLifecycleStage(command, dispatch, { enqueue, mergeGithub });
+    expect(mergeGithub).toHaveBeenCalledExactlyOnceWith(101, 152);
+    await expect(getFactoryRun(created.run.id)).resolves.toMatchObject({ status: 'completed' });
+    const stages = await listStageRuns(created.run.id);
+    expect(stages.map((stage) => `${stage.stage}:${stage.status}`)).toEqual([
+      'review:completed',
+      'repair:completed',
+      'review:completed',
+      'verify:completed',
+      'repair:completed',
+      'review:completed',
+      'verify:failed',
+      'verify:completed',
+      'merge:completed',
+    ]);
   });
 
   it('hands verified delivery to the merge executor and completes the run', async () => {

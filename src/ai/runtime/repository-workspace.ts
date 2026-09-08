@@ -32,18 +32,35 @@ interface PrepareCachedWorktreeOptions {
   secrets?: string[];
 }
 
-// Refreshes one credential-free repository cache, then creates an isolated
-// local worktree for a run.
-export async function prepareCachedWorktree({
-  sandbox,
+// Shell-embedded paths and env-passed refs. Every caller passes constants
+// (/workspace/repo-cache, /workspace/verify-<id>) and refs that come from
+// GitHub (which enforces git's ref-name rules) or the factory's own slugs, so
+// none can carry shell metacharacters or a leading dash that git would read
+// as an option. The builders enforce those shapes anyway, so a future caller
+// cannot turn a path or a branch into shell or git options.
+const WORKSPACE_PATH = /^\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
+const GIT_REF = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9._-]+)*$/;
+
+export function assertWorkspacePath(value: string, label: string): string {
+  if (!WORKSPACE_PATH.test(value)) throw new Error(`${label} is not a workspace path: ${value}`);
+  return value;
+}
+
+export function assertGitRef(value: string, label: string): string {
+  if (!GIT_REF.test(value)) throw new Error(`${label} is not a plain git ref: ${value}`);
+  return value;
+}
+
+// The shell for refreshing (or bootstrapping) one repository cache. Pure so
+// the cold -> warm -> warm sequence can be proven against a real git remote
+// in a unit test instead of on the first production run after a rollout.
+export function cacheSyncCommand({
   cacheDir,
-  workDir,
   remote,
-  base,
   branch,
-  secrets = [],
-}: PrepareCachedWorktreeOptions): Promise<void> {
-  const scrub = (s: string) => redactSecrets(s, [remote.token, ...secrets]);
+}: Pick<PrepareCachedWorktreeOptions, 'cacheDir' | 'remote' | 'branch'>): string {
+  assertWorkspacePath(cacheDir, 'cacheDir');
+  if (branch !== undefined) assertGitRef(branch, 'branch');
   const git = `git ${remote.configFlags}`;
   // The branchless path fetches straight into refs/heads/$BASE_REF, which git
   // refuses while that ref is the cache's checked-out branch — and a cold
@@ -58,28 +75,59 @@ export async function prepareCachedWorktree({
       `git -C ${cacheDir} checkout -q -B "$BASE_REF" FETCH_HEAD; `
     : detach +
       `${git} -C ${cacheDir} fetch --depth 50 "${remote.authUrl}" "+refs/heads/$BASE_REF:refs/heads/$BASE_REF"; `;
-  const sync = await sandbox.exec(
+  return (
     `if [ -d ${cacheDir}/.git ]; then ` +
-      warmFetch +
-      `else ${git} clone --depth 50 --single-branch --branch "$BASE_REF" ` +
-      `"${remote.authUrl}" ${cacheDir} && ` +
-      `git -C ${cacheDir} remote set-url origin "${remote.cleanUrl}"` +
-      (branch ? '' : ` && git -C ${cacheDir} checkout -q --detach`) +
-      `; fi`,
-    { env: { ...remote.env, BASE_REF: base }, timeout: 5 * 60_000 },
+    warmFetch +
+    `else ${git} clone --depth 50 --single-branch --branch "$BASE_REF" ` +
+    `"${remote.authUrl}" ${cacheDir} && ` +
+    `git -C ${cacheDir} remote set-url origin "${remote.cleanUrl}"` +
+    (branch ? '' : ` && git -C ${cacheDir} checkout -q --detach`) +
+    `; fi`
   );
+}
+
+// The shell that clones a run's working copy off the cache: a fresh work
+// branch off the cache's checkout (generation), or the fetched base branch
+// itself (verification).
+export function worktreeCloneCommand({
+  cacheDir,
+  workDir,
+  branch,
+}: Pick<PrepareCachedWorktreeOptions, 'cacheDir' | 'workDir' | 'branch'>): string {
+  assertWorkspacePath(cacheDir, 'cacheDir');
+  assertWorkspacePath(workDir, 'workDir');
+  if (branch !== undefined) assertGitRef(branch, 'branch');
+  return branch
+    ? `rm -rf ${workDir} && git clone --local ${cacheDir} ${workDir} && ` +
+        `git -C ${workDir} checkout -q -b "$WORK_BRANCH" && ${botIdentity(workDir)}`
+    : `rm -rf ${workDir} && git clone --local ${cacheDir} ${workDir} -b "$WORK_BRANCH" && ` +
+        botIdentity(workDir);
+}
+
+// Refreshes one credential-free repository cache, then creates an isolated
+// local worktree for a run.
+export async function prepareCachedWorktree({
+  sandbox,
+  cacheDir,
+  workDir,
+  remote,
+  base,
+  branch,
+  secrets = [],
+}: PrepareCachedWorktreeOptions): Promise<void> {
+  const scrub = (s: string) => redactSecrets(s, [remote.token, ...secrets]);
+  assertGitRef(base, 'base');
+  const sync = await sandbox.exec(cacheSyncCommand({ cacheDir, remote, branch }), {
+    env: { ...remote.env, BASE_REF: base },
+    timeout: 5 * 60_000,
+  });
   if (!sync.success) {
     // Never let one corrupted warm cache wedge future runs.
     await sandbox.exec(`rm -rf ${cacheDir}`).catch(() => {});
     throw new Error(`repo cache sync failed: ${scrub(sync.stderr).slice(0, 500)}`);
   }
 
-  const cloneCommand = branch
-    ? `rm -rf ${workDir} && git clone --local ${cacheDir} ${workDir} && ` +
-      `git -C ${workDir} checkout -q -b "$WORK_BRANCH" && ${botIdentity(workDir)}`
-    : `rm -rf ${workDir} && git clone --local ${cacheDir} ${workDir} -b "$WORK_BRANCH" && ` +
-      botIdentity(workDir);
-  const clone = await sandbox.exec(cloneCommand, {
+  const clone = await sandbox.exec(worktreeCloneCommand({ cacheDir, workDir, branch }), {
     env: { WORK_BRANCH: branch ?? base },
     timeout: 2 * 60_000,
   });
