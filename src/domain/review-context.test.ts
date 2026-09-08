@@ -55,5 +55,6 @@ describe('review context', () => {
     expect(reviewPublicationEvent(true, false, true)).toBe('APPROVE');
     expect(reviewPublicationEvent(true, true, false)).toBe('REQUEST_CHANGES');
     expect(reviewPublicationEvent(false, true, true)).toBe('COMMENT');
+    expect(reviewPublicationEvent(true, false, true, false)).toBe('COMMENT');
   });
 });

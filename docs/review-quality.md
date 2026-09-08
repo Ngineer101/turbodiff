@@ -48,6 +48,32 @@ Telemetry gaps, optional hardening, maintainability suggestions, unsupported
 external API assumptions, and style preferences are not P1. P3 findings are
 discarded rather than posted.
 
-The next layers build on this contract: independent candidate verification and
-consolidated publication, read-only repository workspaces for search and tests,
-then labeled feedback, regression evals, and controlled model experiments.
+## Independent verification and publication
+
+The scout model cannot publish a raw finding. `post_review` is a harness-backed
+publication boundary: it de-duplicates the candidate batch, then opens a fresh
+model operation instructed to use dedicated, repository-pinned read-only fetch
+tools. That verifier re-fetches the live change and tries to disprove every
+candidate against its anchor, guards, callers, preconditions, and claimed
+impact. Candidate JSON is explicitly treated as untrusted data.
+
+Only high-confidence acceptances are published. A verifier may reject or
+downgrade a finding but cannot promote P2 to P1. Missing or duplicate decisions
+fail closed. If the verification operation itself fails, all candidates are
+withheld and the review is forced to `COMMENT`; it cannot accidentally approve
+or request changes from unverified output. The publisher then emits one
+consolidated GitHub review with the retained inline comments.
+
+```mermaid
+flowchart LR
+  SCOUT["Persona scout"] -->|"candidates + causal evidence"| BOUNDARY["post_review boundary"]
+  BOUNDARY --> DEDUPE["Deterministic de-duplication"]
+  DEDUPE --> VERIFY["Fresh verifier context<br/>high reasoning"]
+  VERIFY -->|"read-only re-fetch"| PR["Current PR + files"]
+  VERIFY --> POLICY["High-confidence only<br/>reject or downgrade"]
+  POLICY --> PUBLISH["One consolidated review"]
+```
+
+The next layers build on this contract: read-only repository workspaces for
+search and tests, then labeled feedback, regression evals, and controlled model
+experiments.
