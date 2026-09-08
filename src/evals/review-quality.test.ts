@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
 import { reviewEvalPasses, scoreReviewEval, type ReviewEvalCase } from './review-quality.ts';
 
 // Seed regressions encode the failure modes seen in review of #158. Replace

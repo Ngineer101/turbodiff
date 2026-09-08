@@ -117,6 +117,7 @@ import {
   updateSkill,
   upsertPushSubscription,
   type ConnectionRow,
+  type ReviewFindingFeedback,
   type VerificationRow,
   setFeatureCriteriaConflict,
   updateFeatureAcceptance,
@@ -878,20 +879,26 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const id = Number(c.req.param('id'));
     const body = await c.req.json<{ feedback?: unknown }>().catch(() => null);
     const feedback = body?.feedback;
-    if (
-      !Number.isInteger(id) ||
-      id <= 0 ||
-      !isString(feedback) ||
-      !['useful', 'false_positive', 'fixed', 'dismissed'].includes(feedback)
-    ) {
+    if (!Number.isInteger(id) || id <= 0 || !isString(feedback)) {
       return c.json({ error: 'invalid finding feedback' }, 400);
+    }
+    let parsedFeedback: ReviewFindingFeedback;
+    switch (feedback) {
+      case 'useful':
+      case 'false_positive':
+      case 'fixed':
+      case 'dismissed':
+        parsedFeedback = feedback;
+        break;
+      default:
+        return c.json({ error: 'invalid finding feedback' }, 400);
     }
     const { installationIds, session } = c.get('user');
     const updated = await setReviewFindingFeedback(
       id,
       installationIds,
       session.userId,
-      feedback as 'useful' | 'false_positive' | 'fixed' | 'dismissed',
+      parsedFeedback,
     );
     if (!updated) return c.json({ error: 'finding not found' }, 404);
     return c.json({ ok: true });

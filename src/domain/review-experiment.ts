@@ -3,6 +3,11 @@ export interface WeightedReviewModel {
   weight: number;
 }
 
+export interface ReviewModelAssignment {
+  model: string;
+  experimental: boolean;
+}
+
 function stableBucket(key: string, total: number): number {
   let hash = 2_166_136_261;
   for (const char of key) {
@@ -17,7 +22,7 @@ export function weightedReviewModel(
   role: 'scout' | 'verifier',
   candidates: WeightedReviewModel[],
   fallback: string,
-): { model: string; experimental: boolean } {
+): ReviewModelAssignment {
   const enabled = candidates.filter((candidate) => candidate.weight > 0);
   const total = enabled.reduce((sum, candidate) => sum + candidate.weight, 0);
   if (total === 0) return { model: fallback, experimental: false };

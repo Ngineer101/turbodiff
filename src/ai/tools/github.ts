@@ -419,16 +419,26 @@ promote P2 to P1. Return exactly one decision for every candidate index.
 <candidate-data>
 ${JSON.stringify(candidates)}
 </candidate-data>`,
-            {
-              result: findingVerificationSchema,
-              tools: [
-                makeFetchPr(pin, 'verify_fetch_pr'),
-                makeFetchDiff(pin, 'verify_fetch_diff'),
-                makeFetchFile(pin, 'verify_fetch_file'),
-              ],
-              ...(verifierModel ? { model: verifierModel } : {}),
-              thinkingLevel: 'high',
-            },
+            verifierModel
+              ? {
+                  result: findingVerificationSchema,
+                  tools: [
+                    makeFetchPr(pin, 'verify_fetch_pr'),
+                    makeFetchDiff(pin, 'verify_fetch_diff'),
+                    makeFetchFile(pin, 'verify_fetch_file'),
+                  ],
+                  model: verifierModel,
+                  thinkingLevel: 'high',
+                }
+              : {
+                  result: findingVerificationSchema,
+                  tools: [
+                    makeFetchPr(pin, 'verify_fetch_pr'),
+                    makeFetchDiff(pin, 'verify_fetch_diff'),
+                    makeFetchFile(pin, 'verify_fetch_file'),
+                  ],
+                  thinkingLevel: 'high',
+                },
           );
           decisions = result.data.decisions;
           verificationComplete = decisionsCoverCandidates(candidates.length, decisions);
