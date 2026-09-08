@@ -16,6 +16,7 @@ export interface AutomationRow {
   time_of_day: string | null; // 'HH:MM' UTC
   day_of_week: number | null; // 0 (Sun) - 6 (Sat)
   enabled: boolean;
+  runner_model: string | null; // NULL = track the deployment default
   next_run_at: string;
   created_at: string;
 }
@@ -42,6 +43,7 @@ export interface AutomationFields {
   schedule_kind: string;
   time_of_day: string | null;
   day_of_week: number | null;
+  runner_model: string | null;
 }
 
 export interface AutomationWithRepo extends AutomationRow {
@@ -101,10 +103,11 @@ export async function createAutomation(
 ): Promise<number> {
   const row = await queryOne<{ id: number }>(sql`
     INSERT INTO app.automations
-      (repository_id, name, prompt, schedule_kind, time_of_day, day_of_week, next_run_at)
+      (repository_id, name, prompt, schedule_kind, time_of_day, day_of_week, runner_model,
+       next_run_at)
     VALUES (
       ${repositoryId}, ${fields.name}, ${fields.prompt}, ${fields.schedule_kind},
-      ${fields.time_of_day}, ${fields.day_of_week}, ${nextRunAt}
+      ${fields.time_of_day}, ${fields.day_of_week}, ${fields.runner_model}, ${nextRunAt}
     )
     RETURNING id
   `);
@@ -120,8 +123,8 @@ export async function updateAutomation(
     UPDATE app.automations SET
       name = ${fields.name}, prompt = ${fields.prompt},
       schedule_kind = ${fields.schedule_kind}, time_of_day = ${fields.time_of_day},
-      day_of_week = ${fields.day_of_week}, enabled = ${fields.enabled},
-      next_run_at = ${nextRunAt}
+      day_of_week = ${fields.day_of_week}, runner_model = ${fields.runner_model},
+      enabled = ${fields.enabled}, next_run_at = ${nextRunAt}
     WHERE id = ${id}
   `);
 }

@@ -463,6 +463,7 @@ describe('single-flight database claims', () => {
         schedule_kind: 'daily',
         time_of_day: '09:00',
         day_of_week: null,
+        runner_model: null,
       },
       '2026-08-14 09:00:00',
     );
@@ -488,6 +489,7 @@ describe('single-flight database claims', () => {
         schedule_kind: 'daily',
         time_of_day: '09:00',
         day_of_week: null,
+        runner_model: null,
       },
       '2026-08-14T09:00:00Z',
     );

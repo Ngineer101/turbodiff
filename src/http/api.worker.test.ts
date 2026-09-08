@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import type { AuthedUser } from '../services/auth.ts';
 import { PREMORTEM_CRITERION } from '../domain/verification.ts';
 import type {
+  ApiAutomationDetail,
   ApiBoard,
   ApiFeatureDetail,
   ApiFeatureExplanation,
@@ -390,6 +391,25 @@ describe('API constraint validation', () => {
     expect(catalog.reviewer.default_model).toBe('cloudflare/anthropic/claude-sonnet-5');
   });
 
+  it('serves the operator runner default that NULL runner models resolve to', async () => {
+    // The runner_default row is what the automation form advertises as
+    // "Default (X)" and what AutomationWorkflow resolves a NULL
+    // runner_model to at claim time — one source of truth for both.
+    await testDatabase()
+      .prepare(
+        `INSERT INTO models (model_id, provider, label, for_runner, for_reviewer, runner_default, sort_order)
+         VALUES ('claude-x', 'anthropic', 'Claude X', true, false, false, 0),
+                ('claude-y', 'anthropic', 'Claude Y', true, false, true, 1)`,
+      )
+      .run();
+    const response = await authenticatedApi().request('https://turbodiff.test/api/models');
+    expect(response.status).toBe(200);
+    // SAFETY: /api/models' 200 body is the ApiModels contract this test
+    // exercises.
+    const catalog = (await response.json()) as ApiModels;
+    expect(catalog.runner.default_model).toBe('claude-y');
+  });
+
   it('validates the task runner model against the active list', async () => {
     await testDatabase()
       .prepare(
@@ -412,6 +432,195 @@ describe('API constraint validation', () => {
       body: JSON.stringify({ model: 'claude-opus-5' }),
     });
     expect(accepted.status).toBe(200);
+  });
+
+  it('persists an automation runner model from the active list', async () => {
+    const app = authenticatedApi();
+    const created = await app.request('https://turbodiff.test/api/automations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repository_id: 101,
+        name: 'Pinned model',
+        prompt: 'Tidy up',
+        schedule_kind: 'hourly',
+        runner_model: 'claude-opus-5',
+      }),
+    });
+    expect(created.status).toBe(200);
+    // SAFETY: POST /automations' 200 body carries the created automation_id.
+    const { automation_id } = (await created.json()) as { automation_id: number };
+
+    const detail = await app.request(`https://turbodiff.test/api/automations/${automation_id}`);
+    expect(detail.status).toBe(200);
+    // SAFETY: GET /automations/:id's 200 body is the ApiAutomationDetail
+    // contract this test exercises.
+    const body = (await detail.json()) as ApiAutomationDetail;
+    expect(body.automation.runner_model).toBe('claude-opus-5');
+  });
+
+  it('stores an omitted automation runner model as null (= deployment default)', async () => {
+    const app = authenticatedApi();
+    const created = await app.request('https://turbodiff.test/api/automations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repository_id: 101,
+        name: 'Default model',
+        prompt: 'Tidy up',
+        schedule_kind: 'hourly',
+      }),
+    });
+    expect(created.status).toBe(200);
+    // SAFETY: POST /automations' 200 body carries the created automation_id.
+    const { automation_id } = (await created.json()) as { automation_id: number };
+
+    const detail = await app.request(`https://turbodiff.test/api/automations/${automation_id}`);
+    // SAFETY: GET /automations/:id's 200 body is the ApiAutomationDetail
+    // contract this test exercises.
+    const body = (await detail.json()) as ApiAutomationDetail;
+    expect(body.automation.runner_model).toBeNull();
+  });
+
+  it('rejects an automation runner model outside the active list', async () => {
+    const app = authenticatedApi();
+    const rejected = await app.request('https://turbodiff.test/api/automations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repository_id: 101,
+        name: 'Bad model',
+        prompt: 'Tidy up',
+        schedule_kind: 'hourly',
+        runner_model: 'not-a-runner-model',
+      }),
+    });
+    expect(rejected.status).toBe(400);
+    expect(await rejected.json()).toEqual({ error: 'unknown model' });
+
+    const created = await app.request('https://turbodiff.test/api/automations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repository_id: 101,
+        name: 'Good model',
+        prompt: 'Tidy up',
+        schedule_kind: 'hourly',
+      }),
+    });
+    // SAFETY: POST /automations' 200 body carries the created automation_id.
+    const { automation_id } = (await created.json()) as { automation_id: number };
+    const updateRejected = await app.request(
+      `https://turbodiff.test/api/automations/${automation_id}`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Good model',
+          prompt: 'Tidy up',
+          schedule_kind: 'hourly',
+          runner_model: 'not-a-runner-model',
+        }),
+      },
+    );
+    expect(updateRejected.status).toBe(400);
+    expect(await updateRejected.json()).toEqual({ error: 'unknown model' });
+  });
+
+  it('updates and clears an automation runner model through PUT', async () => {
+    const app = authenticatedApi();
+    const created = await app.request('https://turbodiff.test/api/automations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repository_id: 101,
+        name: 'Model swap',
+        prompt: 'Tidy up',
+        schedule_kind: 'hourly',
+      }),
+    });
+    // SAFETY: POST /automations' 200 body carries the created automation_id.
+    const { automation_id } = (await created.json()) as { automation_id: number };
+    const url = `https://turbodiff.test/api/automations/${automation_id}`;
+    const payload = { name: 'Model swap', prompt: 'Tidy up', schedule_kind: 'hourly' };
+
+    const pinned = await app.request(url, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...payload, runner_model: 'claude-opus-5' }),
+    });
+    expect(pinned.status).toBe(200);
+    // SAFETY: GET /automations/:id's 200 body is the ApiAutomationDetail
+    // contract this test exercises.
+    let detail = (await (await app.request(url)).json()) as ApiAutomationDetail;
+    expect(detail.automation.runner_model).toBe('claude-opus-5');
+
+    const cleared = await app.request(url, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...payload, runner_model: '' }),
+    });
+    expect(cleared.status).toBe(200);
+    // SAFETY: same ApiAutomationDetail contract as above.
+    detail = (await (await app.request(url)).json()) as ApiAutomationDetail;
+    expect(detail.automation.runner_model).toBeNull();
+  });
+
+  it('re-saves an automation whose stored model dropped out of the catalog', async () => {
+    const app = authenticatedApi();
+    const created = await app.request('https://turbodiff.test/api/automations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        repository_id: 101,
+        name: 'Stale model',
+        prompt: 'Tidy up',
+        schedule_kind: 'hourly',
+        runner_model: 'claude-opus-5',
+      }),
+    });
+    expect(created.status).toBe(200);
+    // SAFETY: POST /automations' 200 body carries the created automation_id.
+    const { automation_id } = (await created.json()) as { automation_id: number };
+    // An operator catalog replaces the constant fallback and drops the
+    // stored model — an unrelated edit must still save it unchanged.
+    await testDatabase()
+      .prepare(
+        `INSERT INTO models (model_id, provider, label, for_runner, for_reviewer)
+         VALUES ('claude-x', 'anthropic', 'Claude X', true, false)`,
+      )
+      .run();
+
+    const url = `https://turbodiff.test/api/automations/${automation_id}`;
+    const resaved = await app.request(url, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Stale model',
+        prompt: 'Tidy up (edited)',
+        schedule_kind: 'hourly',
+        runner_model: 'claude-opus-5',
+      }),
+    });
+    expect(resaved.status).toBe(200);
+    // SAFETY: GET /automations/:id's 200 body is the ApiAutomationDetail
+    // contract this test exercises.
+    const detail = (await (await app.request(url)).json()) as ApiAutomationDetail;
+    expect(detail.automation.runner_model).toBe('claude-opus-5');
+    expect(detail.automation.prompt).toBe('Tidy up (edited)');
+
+    const switched = await app.request(url, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Stale model',
+        prompt: 'Tidy up',
+        schedule_kind: 'hourly',
+        runner_model: 'claude-opus-5-1',
+      }),
+    });
+    expect(switched.status).toBe(400);
+    expect(await switched.json()).toEqual({ error: 'unknown model' });
   });
 
   it('rejects line zero before inserting a cockpit comment', async () => {

@@ -675,6 +675,7 @@ export interface ApiAutomationSummary {
   time_of_day: string | null;
   day_of_week: number | null;
   enabled: boolean;
+  runner_model: string | null; // null = deployment default
   next_run_at: string;
   last_run: { id: number; status: string; created_at: string } | null;
 }

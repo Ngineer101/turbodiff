@@ -2870,6 +2870,12 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const values = readAutomationPayload(body);
     const error = validateAutomation(values);
     if (error) return c.json({ error }, 400);
+    if (values.runner_model) {
+      const catalog = await getModelCatalog();
+      if (!catalog.runner.options.some((o) => o.id === values.runner_model)) {
+        return c.json({ error: 'unknown model' }, 400);
+      }
+    }
     const repositoryId = Number(body.repository_id);
     const repo = Number.isInteger(repositoryId) ? await getRepoById(repositoryId) : null;
     if (!repo || !installationIds.includes(repo.installation_id) || !repo.enabled) {
@@ -2920,6 +2926,14 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const values = readAutomationPayload(body);
     const error = validateAutomation(values);
     if (error) return c.json({ error }, 400);
+    // Only a *changed* model must be in the catalog: a stored model that has
+    // since dropped out may ride along, so unrelated edits still save.
+    if (values.runner_model && values.runner_model !== automation.runner_model) {
+      const catalog = await getModelCatalog();
+      if (!catalog.runner.options.some((o) => o.id === values.runner_model)) {
+        return c.json({ error: 'unknown model' }, 400);
+      }
+    }
     const enabled = body.enabled === undefined ? automation.enabled : Boolean(body.enabled);
     // Recompute next_run_at only when the schedule actually changed, so an
     // untouched schedule keeps its already-computed firing time.
