@@ -56,7 +56,9 @@ changes through on-demand or automatic repository intake):
   concerns: those that requested changes, and approvers whose flagged files
   it touches.
 - Optional blocking mode: a P1 finding posts `REQUEST_CHANGES`, a clean review
-  approves.
+  approves. Approval is coverage-gated: the reviewer receives a complete
+  changed-file manifest, fetches omitted patches in bounded packets, and must
+  account for every reviewable file before Turbodiff can approve.
 - Custom review agents (personas) per installation, with optional remote
   [MCP](https://modelcontextprotocol.io) tool connections (bearer tokens
   encrypted at rest; servers are treated as untrusted, like the PR itself).
@@ -131,7 +133,7 @@ flowchart TB
   MODEL_PROXY -->|"Worker-only account token<br/>retry + streaming"| LLM
   SANDBOX -->|"JSON-RPC + sealed grant"| PROXY
   PROXY -->|"inject decrypted credential"| MCPS
-  REVIEWER -->|"fetch PR · post review"| GH
+  REVIEWER -->|"manifest · bounded diff packets<br/>coverage-gated review"| GH
   REVIEWER -->|"env.AI binding"| LLM
   REVIEWER -->|"streamable HTTP<br/>per-request auth resolver"| MCPS
   VERIFY -->|"evidence"| R2
@@ -176,7 +178,9 @@ rejected at the proxy.
 
 - [src/ai/agents/pr-reviewer.ts](src/ai/agents/pr-reviewer.ts) — the review agent.
 - [src/ai/tools/github.ts](src/ai/tools/github.ts) — its tools (`fetch_pr`,
-  `fetch_file`, `fetch_review_threads`, `post_review`).
+  `fetch_diff`, `fetch_file`, `fetch_review_threads`, `post_review`).
+- [docs/review-quality.md](docs/review-quality.md) — review context, evidence,
+  publication, evaluation, and model-experimentation contracts.
 - [src/ai/runners/planner.ts](src/ai/runners/planner.ts) /
   [generation workflow](src/ai/workflows/generation.ts) /
   [fixer.ts](src/ai/runners/fixer.ts) /

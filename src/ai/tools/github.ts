@@ -10,7 +10,12 @@ import {
   githubGraphql as ghGraphql,
   githubRequest as gh,
 } from '../../integrations/github/client.ts';
-import { REVIEW_NOISE_PATTERNS, splitDiffSegments } from '../../domain/review-diff.ts';
+import {
+  buildReviewDiffSnapshot,
+  missingReviewFiles,
+  reviewPublicationEvent,
+} from '../../domain/review-context.ts';
+import { splitDiffSegments } from '../../domain/review-diff.ts';
 import { findingSeverity } from '../../domain/review-findings.ts';
 
 // The repository a review dispatch is scoped to. The model supplies
@@ -33,12 +38,9 @@ export function assertPinned(pin: RepoPin, owner: string, repo: string): void {
   }
 }
 
-// Sized for the smallest review model in service: cloudflare/@cf/zai-org/
-// glm-4.7-flash has a 131,072-token window, dense JSON/code tokenizes at
-// about 3 chars per token, and a re-review after a push lands in the SAME
-// agent conversation as the first review — so two full fetches plus the
-// system prompt and tool traffic must fit. 300k chars did not (feature 7:
-// "estimated input and maximum output tokens (152525) exceeded ... 131072").
+// One bounded packet stays safe for the smallest reviewer model. Unlike the
+// old prefix truncation, every file remains visible in a manifest and omitted
+// reviewable patches can be requested explicitly with fetch_diff.
 export const MAX_DIFF_CHARS = 120_000;
 export const MAX_FILE_CHARS = 60_000;
 
@@ -61,43 +63,14 @@ export function truncate(text: string, max: number, label: string): string {
   return `${text.slice(0, max)}\n\n[turbodiff: ${label} truncated at ${max} characters of ${text.length}]`;
 }
 
-// Files whose diffs are machine noise: no reviewable intent, and large enough
-// to eat the truncation budget before the real code gets seen. Also consumed
-// by the risk-tier computation (src/domain/review-diff.ts) so noise churn doesn't
-// inflate a PR's reviewable size.
-// An @generated marker in a file's header comment means machine output —
-// except migrations, whose generated SQL still changes schema and needs
-// review. Only the first hunk is checked, and only when it starts at the top
-// of the new file: the marker convention is "first few lines", and matching
-// deeper would drop files that merely mention @generated in code.
-function isGeneratedSegment(path: string, segment: string): boolean {
-  if (/migration/i.test(path)) return false;
-  const hunk = segment.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@.*$/m);
-  if (!hunk || Number(hunk[1]) > 3) return false;
-  const start = segment.indexOf(hunk[0]) + hunk[0].length;
-  return segment
-    .slice(start)
-    .split('\n', 10)
-    .some((line) => line.includes('@generated'));
+export function filterDiffNoise(diff: string): string {
+  return buildReviewDiffSnapshot(diff, Number.MAX_SAFE_INTEGER).diff;
 }
 
-// Replaces each noise file's segment of the unified diff with a one-line
-// marker, so the model knows the file changed without reading it and the
-// MAX_DIFF_CHARS budget goes to reviewable code. Runs before truncation.
-export function filterDiffNoise(diff: string): string {
-  return diff
-    .split(/^(?=diff --git )/m)
-    .map((segment) => {
-      const [entry] = splitDiffSegments(segment);
-      if (!entry) return segment;
-      const reason =
-        REVIEW_NOISE_PATTERNS.find((n) => n.pattern.test(entry.path))?.reason ??
-        (isGeneratedSegment(entry.path, segment) ? 'generated file' : null);
-      return reason === null
-        ? segment
-        : `[turbodiff: diff for ${entry.path} omitted — ${reason}]\n`;
-    })
-    .join('');
+async function pullRequestDiff(token: string, owner: string, repo: string, number: number) {
+  return gh(token, `/repos/${owner}/${repo}/pulls/${number}`, {
+    accept: 'application/vnd.github.v3.diff',
+  }).then((response) => response.text());
 }
 
 // Per-render factories (like makePostReview): each dispatch pins its tools
@@ -106,10 +79,9 @@ export const makeFetchPr = (pin: RepoPin) =>
   defineTool({
     name: 'fetch_pr',
     description:
-      'Fetch a pull request: its title, description, author, branch info, and the full unified diff. ' +
-      'Call this first to see what the PR changes. Large diffs are truncated with a marker; noise ' +
-      'files (lockfiles, minified assets, source maps, generated code) are omitted and replaced ' +
-      'with per-file markers.',
+      'Fetch pull-request metadata, a complete changed-file manifest, and an initial bounded diff ' +
+      'packet containing only complete file patches. Call this first. Request reviewable paths in ' +
+      'remainingFiles with fetch_diff. Noise files are explicitly marked non-reviewable.',
     input: v.object({
       owner: v.string(),
       repo: v.string(),
@@ -132,8 +104,9 @@ export const makeFetchPr = (pin: RepoPin) =>
       const base = `/repos/${data.owner}/${data.repo}/pulls/${data.number}`;
       const [meta, diff] = await Promise.all([
         gh(token, base).then((r) => r.json<PrMeta>()),
-        gh(token, base, { accept: 'application/vnd.github.v3.diff' }).then((r) => r.text()),
+        pullRequestDiff(token, data.owner, data.repo, data.number),
       ]);
+      const snapshot = buildReviewDiffSnapshot(diff, MAX_DIFF_CHARS);
       return {
         output: {
           title: meta.title,
@@ -146,7 +119,60 @@ export const makeFetchPr = (pin: RepoPin) =>
           changedFiles: meta.changed_files,
           additions: meta.additions,
           deletions: meta.deletions,
-          diff: truncate(filterDiffNoise(diff), MAX_DIFF_CHARS, 'diff'),
+          diff: snapshot.diff,
+          files: snapshot.files.map((file) => ({
+            path: file.path,
+            chars: file.chars,
+            reviewable: file.reviewable,
+            omittedReason: file.omittedReason,
+            included: file.included,
+          })),
+          includedFiles: snapshot.includedFiles,
+          remainingFiles: snapshot.remainingFiles,
+          coverageComplete: snapshot.complete,
+        },
+      };
+    },
+  });
+
+export const makeFetchDiff = (pin: RepoPin) =>
+  defineTool({
+    name: 'fetch_diff',
+    description:
+      'Fetch reviewable patches for specific changed paths omitted from fetch_pr. Request paths ' +
+      'from remainingFiles in batches. The response lists includedFiles and remainingFiles; keep ' +
+      'calling until every requested reviewable path is included or explicitly reported too large.',
+    input: v.object({
+      owner: v.string(),
+      repo: v.string(),
+      number: v.number(),
+      paths: v.pipe(v.array(v.string()), v.minLength(1), v.maxLength(50)),
+    }),
+    async run({ data }) {
+      assertPinned(pin, data.owner, data.repo);
+      const token = await tokenFor(data.owner, data.repo);
+      const diff = await pullRequestDiff(token, data.owner, data.repo, data.number);
+      const requested = new Set(data.paths);
+      const selected = splitDiffSegments(diff)
+        .filter((entry) => requested.has(entry.path))
+        .map((entry) => entry.segment)
+        .join('');
+      const snapshot = buildReviewDiffSnapshot(selected, MAX_DIFF_CHARS);
+      const found = new Set(snapshot.files.map((file) => file.path));
+      return {
+        output: {
+          diff: snapshot.diff,
+          files: snapshot.files.map((file) => ({
+            path: file.path,
+            chars: file.chars,
+            reviewable: file.reviewable,
+            omittedReason: file.omittedReason,
+            included: file.included,
+          })),
+          includedFiles: snapshot.includedFiles,
+          remainingFiles: snapshot.remainingFiles,
+          missingPaths: data.paths.filter((path) => !found.has(path)),
+          coverageComplete: snapshot.complete,
         },
       };
     },
@@ -316,13 +342,15 @@ export const makePostReview = (agentInstanceId: string, pin: RepoPin = null) =>
       'of the same PR posts a new review). Each comment must anchor to ' +
       'a line that is part of the diff (use side RIGHT with new-file line numbers for added/context ' +
       'lines, side LEFT with old-file line numbers for deleted lines). Findings about code outside ' +
-      'the diff belong in the summary body instead.',
+      'the diff belong in the summary body instead. Pass every inspected reviewable path in ' +
+      'reviewedFiles; an incomplete review is never allowed to approve.',
     input: v.object({
       owner: v.string(),
       repo: v.string(),
       number: v.number(),
       body: v.pipe(v.string(), v.minLength(1)),
       findings: v.optional(v.array(findingSchema), []),
+      reviewedFiles: v.optional(v.array(v.string()), []),
     }),
     async run({ data }) {
       assertPinned(pin, data.owner, data.repo);
@@ -334,15 +362,16 @@ export const makePostReview = (agentInstanceId: string, pin: RepoPin = null) =>
         );
       }
       const token = await installationToken(row.installation_id);
+      const liveDiff = await pullRequestDiff(token, data.owner, data.repo, data.number);
+      const manifest = buildReviewDiffSnapshot(liveDiff, 0).files;
+      const missingFiles = missingReviewFiles(manifest, data.reviewedFiles);
+      const hasP1 = data.findings.map(findingSeverity).includes('P1');
+      const coverageComplete = missingFiles.length === 0;
       // Verdict mapping (repo blocking mode, default off): a P1 requests
-      // changes, a clean or P2-only review approves. Off posts plain
-      // comments — today's behavior. The bot's latest review state wins on
-      // GitHub, so a re-review that finds the P1s fixed clears the block.
-      const event = !row.blocking_reviews
-        ? 'COMMENT'
-        : data.findings.map(findingSeverity).includes('P1')
-          ? 'REQUEST_CHANGES'
-          : 'APPROVE';
+      // changes, and a fully-covered clean or P2-only review approves. A
+      // partial review can comment, but absence of a finding is not approval
+      // evidence until every reviewable changed file has been accounted for.
+      const event = reviewPublicationEvent(row.blocking_reviews, hasP1, coverageComplete);
       const path = `/repos/${data.owner}/${data.repo}/pulls/${data.number}/reviews`;
       const comments = data.findings.map((f) => {
         const comment: ReviewComment = { path: f.path, line: f.line, side: f.side, body: f.body };
@@ -361,7 +390,9 @@ export const makePostReview = (agentInstanceId: string, pin: RepoPin = null) =>
       //     review — fold findings into the summary body.
       const intended = event;
       let postEvent = event;
-      let postBody = data.body;
+      let postBody = coverageComplete
+        ? data.body
+        : `${data.body}\n\n_Coverage incomplete: ${missingFiles.length} reviewable file(s) were not inspected; this review cannot approve the change._`;
       let postComments = comments;
       let fallback: string | null = null;
       let review: { html_url?: string };
@@ -397,13 +428,14 @@ export const makePostReview = (agentInstanceId: string, pin: RepoPin = null) =>
         inline: postComments.length,
         url: review.html_url ?? null,
         fallback,
+        coverageComplete,
+        missingFiles,
       };
       // Flip this dispatch's row to completed so /reviews stops showing it
       // as running. The findings count feeds the noise metric on the
       // dashboard (fallback-posted findings still count — they reached the PR).
       const verdict =
-        data.findings.map(findingSeverity).includes('P1') &&
-        row.process_profile !== 'legacy_factory'
+        hasP1 && row.process_profile !== 'legacy_factory'
           ? 'request_changes'
           : intended === 'REQUEST_CHANGES'
             ? 'request_changes'

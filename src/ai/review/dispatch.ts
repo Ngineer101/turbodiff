@@ -71,6 +71,7 @@ export async function dispatchReviewAgent(
     agent_slug: agent.slug,
     agent_name: agent.name,
     model: opts.modelOverride ?? agent.model,
+    risk_tier: opts.riskTier ?? 'full',
     ...(opts.changeRequest
       ? {
           change_request: `${repo.owner}/${repo.name}#${opts.changeRequest.number}`,
