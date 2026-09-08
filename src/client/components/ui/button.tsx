@@ -4,15 +4,13 @@ import { Loader2 } from 'lucide-react';
 import { cn } from '../../lib/utils.ts';
 
 export const buttonVariants = cva(
-  'inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-md font-medium whitespace-nowrap transition-[color,background-color,border-color,transform,box-shadow] duration-100 ease-out disabled:pointer-events-none disabled:opacity-50',
+  'inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-md font-medium whitespace-nowrap transition-[color,background-color,border-color,transform,translate,box-shadow] duration-120 ease-out disabled:pointer-events-none disabled:opacity-50',
   {
     variants: {
       variant: {
-        // The yellow sticker: lifts into a bigger shadow on hover and presses
-        // into a smaller one on click (translate, not scale, so the offset
-        // shadow reads as depth).
+        // Keep the 1px paper edge steady on hover; pressing travels into it.
         default:
-          'bg-accent font-semibold text-accent-ink shadow-edge hover:-translate-x-px hover:-translate-y-px hover:bg-accent-bright hover:shadow-edge-lg active:translate-x-0.5 active:translate-y-0.5 active:shadow-edge-sm',
+          'bg-accent font-semibold text-accent-ink shadow-edge hover:bg-accent-bright active:translate-x-px active:translate-y-px active:shadow-none',
         secondary:
           'border border-line-2 bg-transparent text-ink hover:border-accent hover:bg-raised active:scale-[0.97]',
         danger:

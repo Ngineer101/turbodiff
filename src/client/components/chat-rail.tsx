@@ -604,7 +604,7 @@ function Transcript({
           onClick={() => scrollToBottom('smooth')}
           aria-label={unread > 0 ? `${unread} new replies — jump to latest` : 'Jump to latest'}
           className={cn(
-            'absolute bottom-3 left-1/2 flex -translate-x-1/2 cursor-pointer items-center gap-1.5 rounded-full font-mono text-[11px] font-semibold tracking-[0.04em] transition-transform hover:-translate-y-px active:translate-y-0',
+            'absolute bottom-3 left-1/2 flex -translate-x-1/2 cursor-pointer items-center gap-1.5 rounded-full font-mono text-[11px] font-semibold tracking-[0.04em] transition-[translate,box-shadow] duration-120 ease-out active:translate-y-px active:shadow-none',
             unread > 0
               ? 'bg-accent py-1.5 pr-3 pl-2.5 text-accent-ink shadow-edge-xs'
               : 'size-7 justify-center border border-line-2 bg-raised text-ink shadow-sticker',
@@ -753,7 +753,7 @@ function Composer({ chat, activeFile, composerRef, focusTick }: ComposerProps) {
               onClick={submit}
               disabled={!canSend}
               aria-label={inFlight ? 'Queue message' : 'Send message'}
-              className="flex size-7 cursor-pointer items-center justify-center rounded-md bg-accent text-accent-ink shadow-edge-xs transition-[transform,box-shadow,background-color] duration-100 hover:bg-accent-bright active:translate-x-px active:translate-y-px active:shadow-none disabled:pointer-events-none disabled:opacity-40 max-sm:size-11"
+              className="flex size-7 cursor-pointer items-center justify-center rounded-md bg-accent text-accent-ink shadow-edge-xs transition-[translate,box-shadow,background-color] duration-120 ease-out hover:bg-accent-bright active:translate-x-px active:translate-y-px active:shadow-none disabled:pointer-events-none disabled:opacity-40 max-sm:size-11"
             >
               <ArrowUp className="size-3.5" strokeWidth={2.5} aria-hidden />
             </button>
@@ -1056,7 +1056,7 @@ export function ChatRail(props: ChatRailProps) {
         type="button"
         onClick={() => setSheetOpen(true)}
         aria-label={chat.unread > 0 ? `Agent chat, ${chat.unread} new replies` : 'Agent chat'}
-        className="fixed right-4 bottom-[calc(env(safe-area-inset-bottom)+4.5rem)] z-40 flex cursor-pointer items-center gap-2 rounded-full bg-accent py-2.5 pr-3.5 pl-3 font-mono text-[11px] font-bold tracking-[0.04em] text-accent-ink shadow-edge transition-[transform,box-shadow,background-color] duration-100 hover:bg-accent-bright active:translate-x-0.5 active:translate-y-0.5 active:shadow-edge-sm md:bottom-6"
+        className="fixed right-4 bottom-[calc(env(safe-area-inset-bottom)+4.5rem)] z-40 flex cursor-pointer items-center gap-2 rounded-full bg-accent py-2.5 pr-3.5 pl-3 font-mono text-[11px] font-bold tracking-[0.04em] text-accent-ink shadow-edge transition-[translate,box-shadow,background-color] duration-120 ease-out hover:bg-accent-bright active:translate-x-px active:translate-y-px active:shadow-none md:bottom-6"
       >
         <MessageSquare className="size-3.5" strokeWidth={2.2} aria-hidden />
         Agent

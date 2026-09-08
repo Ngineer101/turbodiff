@@ -2,8 +2,8 @@
 // syntax, stringified in the Worker — no client-side React bundle).
 //
 // Signage direction: warm graphite ground, bone text, chrome yellow as the one
-// working colour, phosphor green only for GO. Depth is hard-offset sticker
-// shadows. The hero object is a terminal "sticker card" that drops onto the
+// working colour, phosphor green only for GO. Depth is shallow paper
+// edges. The hero object is a terminal "sticker card" that drops onto the
 // page with CSS keyframes and then types a factory run out with one timer —
 // no canvas, no WebGL, no third-party script. The Paper file is the source of
 // truth for the design: https://app.paper.design/file/01M1H1H5D09QPHCSFA3X0727EN
@@ -40,11 +40,11 @@ const CSS = `
 		padding: 0.8rem 1.4rem; border-radius: 8px;
 		background: var(--accent); color: var(--accent-ink);
 		font-weight: 700; font-size: 0.95rem;
-		box-shadow: 4px 4px 0 var(--ink);
+		box-shadow: 2px 2px 0 var(--ink);
 		transition: transform 0.12s ease-out, box-shadow 0.12s ease-out, background 0.12s;
 	}
-	.cta:hover { background: var(--accent-bright); transform: translate(-1px, -1px); box-shadow: 5px 5px 0 var(--ink); }
-	.cta:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--ink); }
+	.cta:hover { background: var(--accent-bright); }
+	.cta:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 var(--ink); }
 	.cta svg { width: 1em; height: 1em; fill: currentColor; }
 	.read {
 		display: inline-flex; align-items: center; gap: 0.6em;
@@ -61,7 +61,7 @@ const CSS = `
 		position: relative;
 		border-radius: 12px; overflow: hidden;
 		background: var(--surface); border: 1.5px solid var(--line-2);
-		box-shadow: 8px 8px 0 var(--accent);
+		box-shadow: 3px 3px 0 var(--accent);
 		transform: rotate(1deg);
 		font-family: var(--mono);
 	}
@@ -100,12 +100,12 @@ const CSS = `
 	}
 	@keyframes land {
 		from { transform: rotate(0deg); box-shadow: 0 0 0 var(--accent); }
-		to { transform: rotate(1deg); box-shadow: 8px 8px 0 var(--accent); }
+		to { transform: rotate(1deg); box-shadow: 3px 3px 0 var(--accent); }
 	}
 	@media (max-width: 899px) {
 		.hero .wrap { grid-template-columns: 1fr; gap: 2.5rem; }
-		.term, .term.boot { transform: none; box-shadow: 6px 6px 0 var(--accent); }
-		@keyframes land { from { box-shadow: 0 0 0 var(--accent); } to { box-shadow: 6px 6px 0 var(--accent); } }
+		.term, .term.boot { transform: none; box-shadow: 2px 2px 0 var(--accent); }
+		@keyframes land { from { box-shadow: 0 0 0 var(--accent); } to { box-shadow: 2px 2px 0 var(--accent); } }
 	}
 
 	/* --- proof strip --- */
@@ -156,7 +156,7 @@ const CSS = `
 	.ghost:hover { background: rgba(255, 199, 44, 0.1); }
 	.certificate {
 		padding: 1.75rem; display: flex; flex-direction: column; gap: 1.1rem;
-		border-radius: 12px; border-width: 1.5px; box-shadow: 8px 8px 0 var(--line);
+		border-radius: 12px; border-width: 1.5px; box-shadow: 3px 3px 0 var(--line);
 		transform: rotate(-1deg);
 	}
 	.certificate .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
@@ -168,7 +168,7 @@ const CSS = `
 		padding: 0.35em 0.8em; border-radius: 5px;
 		background: var(--accent); color: var(--accent-ink);
 		font-family: var(--mono); font-size: 0.8rem; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase;
-		box-shadow: 3px 3px 0 var(--ink); transform: rotate(-8deg);
+		box-shadow: 1px 1px 0 var(--ink); transform: rotate(-8deg);
 	}
 	.criteria { padding: 0.9rem; border-radius: 8px; background: var(--bg); border: 1px solid var(--line-2); display: flex; flex-direction: column; gap: 0.55rem; }
 	.criteria .meta { font-size: 0.6rem; }
@@ -191,7 +191,7 @@ const CSS = `
 		.tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 		.stages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 		.cert .wrap { grid-template-columns: 1fr; gap: 2rem; }
-		.certificate { transform: none; box-shadow: 6px 6px 0 var(--line); }
+		.certificate { transform: none; box-shadow: 2px 2px 0 var(--line); }
 		.proof .head, .how .head { flex-direction: column; align-items: flex-start; gap: 0.8rem; }
 	}
 	@media (max-width: 600px) {
