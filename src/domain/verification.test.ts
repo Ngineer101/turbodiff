@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vite-plus/test';
 import {
   formatUnmetCriteriaFindings,
   gradedCriteria,
-  PREMORTEM_CRITERION,
   verdictRecordedSince,
   verificationSkipReason,
   verifyStageOutcome,
@@ -96,31 +95,23 @@ describe('gradedCriteria', () => {
     ]);
   });
 
-  it('re-derives the premortem row the verifier appended beyond the stored criteria', () => {
-    const premortem = { index: 2, verdict: 'fail', note: 'Surviving mechanism: …' } as const;
+  it('keeps rows a verification recorded beyond the stored criteria, labeled as retired', () => {
+    const appended = { index: 2, verdict: 'fail', note: 'Surviving mechanism: …' } as const;
     const rows = gradedCriteria(acceptance, [
       { index: 0, verdict: 'pass', note: 'ok' },
       { index: 1, verdict: 'pass', note: 'ok' },
-      premortem,
+      appended,
     ]);
     expect(rows).toHaveLength(3);
-    expect(rows[2]).toEqual({ text: PREMORTEM_CRITERION, result: premortem });
-  });
-
-  it('labels any further appended rows generically instead of as the premortem', () => {
-    const rows = gradedCriteria(
-      ['only'],
-      [
-        { index: 2, verdict: 'pass', note: 'extra' },
-        { index: 1, verdict: 'pass', note: 'premortem' },
-      ],
-    );
-    expect(rows.map((r) => r.text)).toEqual(['only', PREMORTEM_CRITERION, 'Verification check #3']);
+    expect(rows[2]).toEqual({ text: 'Verification check #3 (retired)', result: appended });
+    expect(
+      gradedCriteria(['only'], [{ index: 2, verdict: 'pass', note: 'x' }]).map((r) => r.text),
+    ).toEqual(['only', 'Verification check #3 (retired)']);
   });
 });
 
 describe('formatUnmetCriteriaFindings', () => {
-  it('names the premortem when it is the failing row', () => {
+  it('names a retired appended row when it is the failing one', () => {
     const findings = formatUnmetCriteriaFindings(
       ['stored criterion'],
       [
@@ -128,7 +119,7 @@ describe('formatUnmetCriteriaFindings', () => {
         { index: 1, verdict: 'fail', note: 'Surviving mechanism: X' },
       ],
     );
-    expect(findings).toContain(`not met: ${PREMORTEM_CRITERION}`);
+    expect(findings).toContain('not met: Verification check #2 (retired)');
     expect(findings).toContain('Evidence: Surviving mechanism: X');
     expect(findings).not.toContain('undefined');
   });

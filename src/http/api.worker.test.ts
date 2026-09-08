@@ -7,7 +7,6 @@ import { testDatabase } from '../test/database-fixture.ts';
 import { Hono } from 'hono';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import type { AuthedUser } from '../services/auth.ts';
-import { PREMORTEM_CRITERION } from '../domain/verification.ts';
 import type {
   ApiAutomationDetail,
   ApiBoard,
@@ -867,9 +866,9 @@ describe('verification stall display', () => {
     expect(row?.status).toBe('running');
   });
 
-  it('shows the premortem row the verifier appended beyond the stored criteria', async () => {
+  it('shows a row an older verification recorded beyond the stored criteria', async () => {
     // Feature 502 has one human criterion; its failed verification carries a
-    // second result at index 1 — the run-time premortem. The cockpit must
+    // second result at index 1 (a retired run-time check). The cockpit must
     // list it (and its failure), not paint 1/1 proven under a failed verdict.
     // An artifacts-hosted repo keeps the route off GitHub; a PR number is
     // needed because criteria are only graded once a change exists.
@@ -905,7 +904,7 @@ describe('verification stall display', () => {
     const detail = (await response.json()) as ApiFeatureDetail;
     expect(detail.criteria.map((c) => [c.text, c.verdict])).toEqual([
       ['GET /a returns 200', 'pass'],
-      [PREMORTEM_CRITERION, 'fail'],
+      ['Verification check #2 (retired)', 'fail'],
     ]);
     expect(detail.criteria[1]?.note).toBe('Surviving mechanism: X');
     expect(detail.verification).toEqual({ status: 'failed', total: 2, failed: 1 });
