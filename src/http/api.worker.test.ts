@@ -386,7 +386,7 @@ describe('API constraint validation', () => {
     // exercises; the assertions below fail on any drift in that shape.
     const catalog = (await response.json()) as ApiModels;
     expect(catalog.runner.options).toEqual([...RUNNER_MODELS]);
-    expect(catalog.runner.default_model).toBe('claude-fable-5');
+    expect(catalog.runner.default_model).toBe('claude-fable-5-1');
     expect(catalog.reviewer.default_model).toBe('cloudflare/anthropic/claude-sonnet-5');
   });
 
