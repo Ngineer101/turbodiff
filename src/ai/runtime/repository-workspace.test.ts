@@ -3,7 +3,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vite-plus/test';
-import { cacheSyncCommand, worktreeCloneCommand } from './repository-workspace.ts';
+import {
+  assertGitRef,
+  assertWorkspacePath,
+  cacheSyncCommand,
+  worktreeCloneCommand,
+} from './repository-workspace.ts';
 import type { WorkspaceRemote } from '../../integrations/git/remotes.ts';
 
 // Runs the exact shell the sandbox would run, against a real git remote on
@@ -111,5 +116,42 @@ describe('cache sync shell against a real git remote', () => {
       WORK_BRANCH: 'turbodiff/feat-8',
     });
     expect(git(workDir, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('turbodiff/feat-8');
+  });
+});
+
+describe('shell-embedded values are shape-checked before they reach a command', () => {
+  const remote: WorkspaceRemote = {
+    provider: 'github',
+    authUrl: 'https://x-access-token:$GIT_TOKEN@github.com/acme/api.git',
+    cleanUrl: 'https://github.com/acme/api.git',
+    configFlags: '',
+    env: { GIT_TOKEN: 't' },
+    token: 't',
+  };
+
+  it('accepts the shapes every caller actually passes', () => {
+    for (const ref of ['main', 'release/v1.2', 'turbodiff/feat-7-add-support-for-fable-5-1']) {
+      expect(assertGitRef(ref, 'ref')).toBe(ref);
+    }
+    for (const path of ['/workspace/repo-cache', '/workspace/verify-7']) {
+      expect(assertWorkspacePath(path, 'path')).toBe(path);
+    }
+    expect(cacheSyncCommand({ cacheDir: '/workspace/repo-cache', remote })).toMatch(/git\s+clone/);
+  });
+
+  it('refuses paths and refs that could become shell or git options', () => {
+    for (const path of ['/workspace/x; rm -rf /', 'relative/dir', '/workspace/$(id)', '/a b']) {
+      expect(() => assertWorkspacePath(path, 'path')).toThrow(/not a workspace path/);
+      expect(() => cacheSyncCommand({ cacheDir: path, remote })).toThrow(/not a workspace path/);
+      expect(() =>
+        worktreeCloneCommand({ cacheDir: '/workspace/repo-cache', workDir: path }),
+      ).toThrow(/not a workspace path/);
+    }
+    for (const ref of ['--upload-pack=touch /tmp/pwn', 'feat"; touch pwn; "', 'a b', '', '-x']) {
+      expect(() => assertGitRef(ref, 'ref')).toThrow(/not a plain git ref/);
+      expect(() =>
+        cacheSyncCommand({ cacheDir: '/workspace/repo-cache', remote, branch: ref }),
+      ).toThrow(/not a plain git ref/);
+    }
   });
 });

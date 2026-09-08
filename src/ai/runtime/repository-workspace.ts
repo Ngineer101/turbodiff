@@ -32,6 +32,25 @@ interface PrepareCachedWorktreeOptions {
   secrets?: string[];
 }
 
+// Shell-embedded paths and env-passed refs. Every caller passes constants
+// (/workspace/repo-cache, /workspace/verify-<id>) and refs that come from
+// GitHub (which enforces git's ref-name rules) or the factory's own slugs, so
+// none can carry shell metacharacters or a leading dash that git would read
+// as an option. The builders enforce those shapes anyway, so a future caller
+// cannot turn a path or a branch into shell or git options.
+const WORKSPACE_PATH = /^\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
+const GIT_REF = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9._-]+)*$/;
+
+export function assertWorkspacePath(value: string, label: string): string {
+  if (!WORKSPACE_PATH.test(value)) throw new Error(`${label} is not a workspace path: ${value}`);
+  return value;
+}
+
+export function assertGitRef(value: string, label: string): string {
+  if (!GIT_REF.test(value)) throw new Error(`${label} is not a plain git ref: ${value}`);
+  return value;
+}
+
 // The shell for refreshing (or bootstrapping) one repository cache. Pure so
 // the cold -> warm -> warm sequence can be proven against a real git remote
 // in a unit test instead of on the first production run after a rollout.
@@ -40,6 +59,8 @@ export function cacheSyncCommand({
   remote,
   branch,
 }: Pick<PrepareCachedWorktreeOptions, 'cacheDir' | 'remote' | 'branch'>): string {
+  assertWorkspacePath(cacheDir, 'cacheDir');
+  if (branch !== undefined) assertGitRef(branch, 'branch');
   const git = `git ${remote.configFlags}`;
   // The branchless path fetches straight into refs/heads/$BASE_REF, which git
   // refuses while that ref is the cache's checked-out branch — and a cold
@@ -73,6 +94,9 @@ export function worktreeCloneCommand({
   workDir,
   branch,
 }: Pick<PrepareCachedWorktreeOptions, 'cacheDir' | 'workDir' | 'branch'>): string {
+  assertWorkspacePath(cacheDir, 'cacheDir');
+  assertWorkspacePath(workDir, 'workDir');
+  if (branch !== undefined) assertGitRef(branch, 'branch');
   return branch
     ? `rm -rf ${workDir} && git clone --local ${cacheDir} ${workDir} && ` +
         `git -C ${workDir} checkout -q -b "$WORK_BRANCH" && ${botIdentity(workDir)}`
@@ -92,6 +116,7 @@ export async function prepareCachedWorktree({
   secrets = [],
 }: PrepareCachedWorktreeOptions): Promise<void> {
   const scrub = (s: string) => redactSecrets(s, [remote.token, ...secrets]);
+  assertGitRef(base, 'base');
   const sync = await sandbox.exec(cacheSyncCommand({ cacheDir, remote, branch }), {
     env: { ...remote.env, BASE_REF: base },
     timeout: 5 * 60_000,
