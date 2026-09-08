@@ -1,4 +1,4 @@
-import { readdir } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
@@ -7,6 +7,18 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 const db = new PGlite();
 const directory = path.resolve('db/migrations');
 const files = (await readdir(directory)).filter((file) => file.endsWith('.sql')).sort();
+const journal = JSON.parse(
+  await readFile(path.join(directory, 'meta', '_journal.json'), 'utf8'),
+);
+for (let index = 1; index < journal.entries.length; index += 1) {
+  const previous = journal.entries[index - 1];
+  const current = journal.entries[index];
+  if (current.when <= previous.when) {
+    throw new Error(
+      `Migration ${current.tag} timestamp must be newer than ${previous.tag}`,
+    );
+  }
+}
 
 try {
   await migrate(drizzle(db), {
