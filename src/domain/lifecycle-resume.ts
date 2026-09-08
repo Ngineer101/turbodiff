@@ -34,3 +34,22 @@ export function canResumeLifecycleRun(
     (latest?.status === 'failed' || isRepairBudgetPause(run, latest))
   );
 }
+
+// The stage a resume schedules. A failed repair is not retried as a repair:
+// the fixer already found nothing to do or the budget is spent, and what
+// the human did in the meantime (a manual fix, a config change, an
+// infrastructure fix) is proven by re-running the check the repair was
+// scheduled for — the last completed review or verify before it. Live
+// finding: a run parked on its third, empty repair offered only "Retry
+// repair", which could only fail on the exhausted budget.
+export function resumeTargetStage<S extends ResumableStage>(stages: readonly S[]): S | undefined {
+  const latest = stages.at(-1);
+  if (!latest || latest.stage !== 'repair' || latest.status !== 'failed') return latest;
+  for (let i = stages.length - 2; i >= 0; i--) {
+    const stage = stages[i];
+    if ((stage.stage === 'review' || stage.stage === 'verify') && stage.status === 'completed') {
+      return stage;
+    }
+  }
+  return latest;
+}

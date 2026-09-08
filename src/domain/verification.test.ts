@@ -5,6 +5,7 @@ import {
   PREMORTEM_CRITERION,
   verdictRecordedSince,
   verificationSkipReason,
+  verifyStageOutcome,
 } from './verification.ts';
 
 describe('verificationSkipReason', () => {
@@ -130,5 +131,24 @@ describe('formatUnmetCriteriaFindings', () => {
     expect(findings).toContain(`not met: ${PREMORTEM_CRITERION}`);
     expect(findings).toContain('Evidence: Surviving mechanism: X');
     expect(findings).not.toContain('undefined');
+  });
+});
+
+describe('verifyStageOutcome', () => {
+  it('completes the stage on a verdict and carries it as a fact', () => {
+    expect(verifyStageOutcome('passed')).toEqual({
+      success: true,
+      facts: { verificationPassed: true },
+    });
+    expect(verifyStageOutcome('failed')).toEqual({
+      success: true,
+      facts: { verificationPassed: false },
+    });
+  });
+
+  it('fails the stage without a verdict fact when the run errored or never recorded', () => {
+    for (const status of ['error', 'running', null, undefined]) {
+      expect(verifyStageOutcome(status)).toEqual({ success: false, facts: {} });
+    }
   });
 });

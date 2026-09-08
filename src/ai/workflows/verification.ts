@@ -1,7 +1,11 @@
 import { env, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { getFeature, latestVerificationForFeature } from '../../data/db.ts';
 import { runVerification } from '../runners/verifier.ts';
-import { verdictRecordedSince, verificationSkipReason } from '../../domain/verification.ts';
+import {
+  verdictRecordedSince,
+  verificationSkipReason,
+  verifyStageOutcome,
+} from '../../domain/verification.ts';
 import { notifyFeatureLive } from '../../services/live-updates.ts';
 import { completeLifecycleStage } from '../../services/lifecycle.ts';
 import type { VerifyQueueMessage } from '../../shared/factory-messages.ts';
@@ -52,13 +56,13 @@ export class VerificationWorkflow extends WorkflowEntrypoint<unknown, Verificati
       if (stageRunId) {
         await step.do('settle lifecycle verification', async () => {
           const result = await latestVerificationForFeature(featureId);
-          const passed = result?.status === 'passed';
+          const outcome = verifyStageOutcome(result?.status);
           await completeLifecycleStage(
             stageRunId,
             'verify',
-            result !== null,
+            outcome.success,
             { kind: 'verification_completed', featureId, status: result?.status ?? 'missing' },
-            { verificationPassed: passed },
+            outcome.facts,
           );
         });
       }

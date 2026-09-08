@@ -673,6 +673,24 @@ describe('composable feature delivery', () => {
     await expect(getStageRun(repair.stageRunId)).resolves.toMatchObject({
       output: { kind: 'repair_enqueued', source: 'verification' },
     });
+
+    // The repair finds nothing to change and fails; resuming re-runs the
+    // verify it was scheduled for rather than another repair.
+    queued.length = 0;
+    await completeLifecycleRepair(repair.stageRunId, false, { kind: 'no_changes' }, enqueue);
+    await expect(getFactoryRun(created.run.id)).resolves.toMatchObject({
+      status: 'awaiting_human',
+    });
+    expect(await resumeFailedStage(created.run.id, 'nico', enqueue)).toMatchObject({
+      kind: 'scheduled',
+      stage: 'verify',
+    });
+    expect(stageCommands(queued).map((command) => command.stage)).toEqual(['verify']);
+    await expect(listStageRuns(created.run.id)).resolves.toMatchObject([
+      { stage: 'verify', status: 'completed', attempt: 1 },
+      { stage: 'repair', status: 'failed', attempt: 1 },
+      { stage: 'verify', status: 'queued', attempt: 2 },
+    ]);
   });
 
   it.each(['review', 'verify'] as const)(

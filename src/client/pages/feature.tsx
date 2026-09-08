@@ -22,7 +22,11 @@ import type {
   ApiMe,
   ApiVerificationSummary,
 } from '../../shared/api-types.ts';
-import { canResumeLifecycleRun, isRepairBudgetPause } from '../../domain/lifecycle-resume.ts';
+import {
+  canResumeLifecycleRun,
+  isRepairBudgetPause,
+  resumeTargetStage,
+} from '../../domain/lifecycle-resume.ts';
 import { api, ApiError } from '../lib/api.ts';
 import { useDictation } from '../lib/dictation.ts';
 import { sentence } from '../lib/format.ts';
@@ -386,7 +390,7 @@ function LifecycleHistory({
                   >
                     {isRepairBudgetPause(run, run.stages.at(-1))
                       ? 'Resume checks'
-                      : `Retry ${sentence(run.stages.at(-1)?.stage ?? 'stage')}`}
+                      : `Retry ${sentence(resumeTargetStage(run.stages)?.stage ?? 'stage')}`}
                   </Button>
                   {isRepairBudgetPause(run, run.stages.at(-1)) ? (
                     <p className="mt-2 text-xs text-mute">
