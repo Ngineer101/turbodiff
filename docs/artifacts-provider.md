@@ -6,6 +6,11 @@ GitHub, with the whole runtime reaching them through one provider seam. The
 Phase-0/0.5 spikes that de-risked this live on the (unmerged) `artifacts-phase0-spike`
 branch; everything here is production code.
 
+Generation, repair, and verification use the same provider-neutral
+[sandbox coding harness](coding-harness.md) for GitHub and Artifacts repos.
+The selected AI model and its short-lived Gateway capability are independent
+of the git transport described here.
+
 ## What ships in Phase 1
 
 - **Provider seam** — `src/integrations/git/remotes.ts` (pure remote shapes)

@@ -128,7 +128,12 @@ import {
 } from '../services/connections.ts';
 import { notifyInstallationsLive } from '../services/live-updates.ts';
 import { transcriptKey } from '../ai/runtime/agent-runs.ts';
-import { getModelCatalog } from '../data/models.ts';
+import {
+  getModelCatalog,
+  getReviewerModelCatalog,
+  getRunnerModelCatalog,
+  ModelCatalogConfigurationError,
+} from '../data/models.ts';
 import { computeNextRunAt } from '../domain/automation-schedule.ts';
 import {
   githubTokenForUser,
@@ -567,6 +572,12 @@ function stageVerdict(output: JsonValue | null): string | null {
 
 export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   const app = new Hono<ApiEnv>();
+  app.onError((error, c) => {
+    if (error instanceof ModelCatalogConfigurationError) {
+      return c.json({ error: error.message }, 503);
+    }
+    throw error;
+  });
   const authenticate = dependencies.authenticate ?? requireUser;
   const canPushToRepo = dependencies.canPushToRepo ?? userCanPushToRepo;
   const orgAdmin = dependencies.orgAdmin ?? userIsGithubOrgAdmin;
@@ -1040,14 +1051,12 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (!requirements) {
       return c.json({ error: 'requirements are required' }, 400);
     }
-    // Per-task model for the sandboxed runs; unset rides as NULL (= default),
-    // so the picker's default choice doesn't pin future default changes.
+    // Resolve and snapshot the database-managed default now so this task stays
+    // reproducible if an operator changes the deployment default later.
     const model = body?.model?.trim() ?? '';
-    if (model) {
-      const catalog = await getModelCatalog();
-      if (!catalog.runner.options.some((o) => o.id === model)) {
-        return c.json({ error: 'unknown model' }, 400);
-      }
+    const catalog = await getRunnerModelCatalog();
+    if (model && !catalog.options.some((o) => o.id === model)) {
+      return c.json({ error: 'unknown model' }, 400);
     }
     const rawAtts = Array.isArray(body?.attachments) ? body.attachments : [];
     const attachments = rawAtts
@@ -1066,7 +1075,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       requirements,
       { login: session.login, id: session.userId },
       attachments.length > 0 ? attachments : undefined,
-      model || undefined,
+      model || catalog.defaultModel,
     );
     if (!started) return c.json({ error: 'todo could not be started' }, 409);
     if (!started.created) return c.json({ error: 'already started' }, 409);
@@ -1098,8 +1107,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (!plan) return c.json({ error: 'unknown task' }, 404);
     const body = await c.req.json<{ model?: string }>().catch(() => null);
     const model = body?.model?.trim() ?? '';
-    const catalog = await getModelCatalog();
-    if (!catalog.runner.options.some((o) => o.id === model)) {
+    const catalog = await getRunnerModelCatalog();
+    if (!catalog.options.some((o) => o.id === model)) {
       return c.json({ error: 'unknown model' }, 400);
     }
     await setTaskRunnerModel(plan.id, model);
@@ -1188,10 +1197,9 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     return c.json({ log: await object.text() });
   });
 
-  // Raw stream-json transcript for one run — every turn, not just the final
-  // result. Same JSONL schema as a local Claude Code session file
-  // (~/.claude/projects/<project>/<session>.jsonl), so a sandbox run can be
-  // diffed against a local one. Served raw (not JSON-wrapped): transcripts
+  // Raw OpenCode event transcript for one run — every completed tool, model
+  // step, and narrative part, not just the final result. Served raw (not
+  // JSON-wrapped): transcripts
   // are large and this is jq food, not UI copy. Same auth gate as the log.
   app.get('/factory/runs/:id/transcript', async (c) => {
     const id = Number(c.req.param('id'));
@@ -2416,7 +2424,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.get('/models', async (c) => {
     const catalog = await getModelCatalog();
     return c.json<ApiModels>({
-      runner: { options: catalog.runner.options, default_model: catalog.runner.defaultModel },
+      runner: {
+        options: catalog.runner.options,
+        default_model: catalog.runner.defaultModel,
+        fast_model: catalog.runner.fastModel,
+      },
       reviewer: {
         options: catalog.reviewer.options,
         default_model: catalog.reviewer.defaultModel,
@@ -2474,12 +2486,12 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     }
     const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
-    const catalog = await getModelCatalog();
-    const values = readAgentPayload(body, catalog.reviewer.defaultModel);
+    const catalog = await getReviewerModelCatalog();
+    const values = readAgentPayload(body, catalog.defaultModel);
     let error = validateAgent(
       values,
       true,
-      catalog.reviewer.options.map((o) => o.id),
+      catalog.options.map((o) => o.id),
     );
     if (!error) {
       const existing = await Promise.all(
@@ -2495,7 +2507,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.get('/agents/:id', async (c) => {
     const agent = await authorizedAgent(c);
     if (!agent) return c.json({ error: 'unknown agent' }, 404);
-    const catalog = await getModelCatalog();
+    const catalog = await getReviewerModelCatalog();
     return c.json<ApiAgentDetail>({
       agent: {
         id: agent.id,
@@ -2507,7 +2519,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         instructions: agent.instructions,
         installation_id: agent.installation_id,
       },
-      default_model: catalog.reviewer.defaultModel,
+      default_model: catalog.defaultModel,
     });
   });
 
@@ -2526,12 +2538,12 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     }
     const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
-    const catalog = await getModelCatalog();
-    const values = { ...readAgentPayload(body, catalog.reviewer.defaultModel), slug: agent.slug };
+    const catalog = await getReviewerModelCatalog();
+    const values = { ...readAgentPayload(body, catalog.defaultModel), slug: agent.slug };
     const error = validateAgent(
       values,
       false,
-      catalog.reviewer.options.map((o) => o.id),
+      catalog.options.map((o) => o.id),
       agent.model,
     );
     if (error) return c.json({ error }, 400);
@@ -2870,11 +2882,9 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const values = readAutomationPayload(body);
     const error = validateAutomation(values);
     if (error) return c.json({ error }, 400);
-    if (values.runner_model) {
-      const catalog = await getModelCatalog();
-      if (!catalog.runner.options.some((o) => o.id === values.runner_model)) {
-        return c.json({ error: 'unknown model' }, 400);
-      }
+    const runnerCatalog = await getRunnerModelCatalog();
+    if (values.runner_model && !runnerCatalog.options.some((o) => o.id === values.runner_model)) {
+      return c.json({ error: 'unknown model' }, 400);
     }
     const repositoryId = Number(body.repository_id);
     const repo = Number.isInteger(repositoryId) ? await getRepoById(repositoryId) : null;
@@ -2929,8 +2939,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     // Only a *changed* model must be in the catalog: a stored model that has
     // since dropped out may ride along, so unrelated edits still save.
     if (values.runner_model && values.runner_model !== automation.runner_model) {
-      const catalog = await getModelCatalog();
-      if (!catalog.runner.options.some((o) => o.id === values.runner_model)) {
+      const catalog = await getRunnerModelCatalog();
+      if (!catalog.options.some((o) => o.id === values.runner_model)) {
         return c.json({ error: 'unknown model' }, 400);
       }
     }

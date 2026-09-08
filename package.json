@@ -10,7 +10,7 @@
     "test": "vp test"
   },
   "dependencies": {
-    "@cloudflare/sandbox": "^0.12.4",
+    "@cloudflare/sandbox": "0.12.5",
     "@codemirror/commands": "^6.11.0",
     "@codemirror/language": "^6.11.3",
     "@codemirror/language-data": "^6.5.1",

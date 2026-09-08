@@ -1,12 +1,6 @@
 import { persistAgentLog } from '../runtime/agent-runs.ts';
 import { gitAuthorEnv } from '../../domain/attribution.ts';
-import {
-  addCliUsage,
-  claudeCliResultText,
-  claudeCliSessionId,
-  parseClaudeCliUsage,
-  type CliUsage,
-} from '../runtime/cli-usage.ts';
+import { addCliUsage, runCodingAgent, type CliUsage } from '../runtime/coding-agent.ts';
 import {
   addAssistantChatMessage,
   finishFixAttempt,
@@ -37,7 +31,7 @@ import {
   type ChatQueueMessage,
 } from '../../shared/factory-messages.ts';
 import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
-import { resolveRunnerAuth, runnerEnvironment } from '../runtime/runner-auth.ts';
+import { resolveRunnerAuth } from '../runtime/runner-auth.ts';
 import { runnerSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
 import {
@@ -55,7 +49,7 @@ import { fetchPushablePrHead, prTouchesWorkflowFiles } from '../runtime/pull-req
 // channel with a coding agent that has the PR head branch checked out, for
 // small iterative changes. Heavily reuses the fixer's plumbing — the SAME
 // per-PR sandbox id and clone dir (runs are serialized by the fix_attempts
-// single-flight guard; sharing keeps the container warm and Claude CLI
+// single-flight guard; sharing keeps the container warm and OpenCode
 // sessions resumable, since they are keyed by cwd), the same scoped git
 // tokens, secret redaction, check-command repair loop, and push mechanics.
 // Unlike fixes, chat turns are human-supervised: they record a fix_attempts
@@ -172,7 +166,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<ChatTurnResul
     throw new Error(`change request #${prNumber} is not open`);
   }
   const token = cr ? '' : await installationToken(params.installationId);
-  const auth = resolveRunnerAuth(undefined, params.runnerModel);
+  const auth = await resolveRunnerAuth(undefined, params.runnerModel);
 
   let remote: WorkspaceRemote;
   let headRef: string;
@@ -190,7 +184,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<ChatTurnResul
     headRef = head.headRef;
     remote = githubWorkspaceRemote(head.headRepo, gitToken);
   }
-  const scrub = (s: string) => redactSecrets(s, [token, remote.token]);
+  const scrub = (s: string) => redactSecrets(s, [token, remote.token, ...Object.values(auth.vars)]);
 
   // Same sandbox as the fixer — serialized by the single-flight guard, and
   // sharing the container keeps CLI sessions resumable across turns.
@@ -234,17 +228,14 @@ export async function runChatTurn(params: ChatTurnParams): Promise<ChatTurnResul
       params.testCommand,
     );
 
-    const baseEnv = runnerEnvironment(auth, NPM_CACHE_ENV);
     const runAgent = async (resumeId: string | null, promptFile: string) =>
-      sandbox.exec(
-        `claude -p ${resumeId ? '--resume "$RESUME_SESSION" ' : ''}` +
-          `--dangerously-skip-permissions --output-format stream-json --verbose < ${promptFile}`,
-        {
-          cwd: CLONE_DIR,
-          timeout: AGENT_TIMEOUT_MS,
-          env: resumeId ? { ...baseEnv, RESUME_SESSION: resumeId } : baseEnv,
-        },
-      );
+      runCodingAgent(sandbox, auth, {
+        promptFile,
+        cwd: CLONE_DIR,
+        timeout: AGENT_TIMEOUT_MS,
+        sessionId: resumeId,
+        env: NPM_CACHE_ENV,
+      });
 
     let sessionId = params.feature.chat_session_id;
     await sandbox.writeFile(
@@ -252,13 +243,13 @@ export async function runChatTurn(params: ChatTurnParams): Promise<ChatTurnResul
       sessionId ? resumeTurnPrompt(params.userMessage, params.testCommand) : freshPrompt,
     );
     let agent = await runAgent(sessionId, TASK_FILE);
-    let totalUsage = parseClaudeCliUsage(agent.stdout);
+    let totalUsage = agent.usage;
     if (sessionId && !agent.success) {
-      // A slept sandbox lost ~/.claude and the resumable session with it —
+      // A replaced sandbox lost OpenCode's local session database —
       // retry once as a fresh session primed with the chat history.
       await persistAgentLog(
         'chat',
-        scrub(`${claudeCliResultText(agent.stdout)}\n${agent.stderr}`.trim()),
+        scrub(`${agent.resultText}\n${agent.stderr}`.trim()),
         false,
         { fixAttemptId: params.attemptId },
         scrub(agent.stdout),
@@ -267,9 +258,9 @@ export async function runChatTurn(params: ChatTurnParams): Promise<ChatTurnResul
       await setChatSessionId(params.feature.id, null);
       await sandbox.writeFile(TASK_FILE, freshPrompt);
       agent = await runAgent(null, TASK_FILE);
-      totalUsage = addCliUsage(totalUsage, parseClaudeCliUsage(agent.stdout));
+      totalUsage = addCliUsage(totalUsage, agent.usage);
     }
-    const fullOutput = scrub(`${claudeCliResultText(agent.stdout)}\n${agent.stderr}`.trim());
+    const fullOutput = scrub(`${agent.resultText}\n${agent.stderr}`.trim());
     await persistAgentLog(
       'chat',
       fullOutput,
@@ -283,10 +274,10 @@ export async function runChatTurn(params: ChatTurnParams): Promise<ChatTurnResul
 
     // Persist the resumable session whenever the CLI printed one, so the
     // NEXT turn continues this conversation.
-    sessionId = claudeCliSessionId(agent.stdout) ?? sessionId;
+    sessionId = agent.codingSessionId ?? sessionId;
     if (sessionId) await setChatSessionId(params.feature.id, sessionId);
 
-    let reply = scrub(claudeCliResultText(agent.stdout)).trim().slice(0, REPLY_MAX_CHARS);
+    let reply = scrub(agent.resultText).trim().slice(0, REPLY_MAX_CHARS);
     if (!reply) reply = '(the agent finished without a reply)';
 
     const status = await sandbox.exec(`git -C ${CLONE_DIR} status --porcelain`);
@@ -338,19 +329,17 @@ Rules unchanged: no git commit or push, no scope creep.
 ${UNTRUSTED_CONTENT_RULES}
 `,
         );
-        const repair = await sandbox.exec(
-          `claude -p ${sessionId ? '--resume "$RESUME_SESSION" ' : ''}` +
-            `--dangerously-skip-permissions --output-format stream-json --verbose < ${repairFile(round)}`,
-          {
-            cwd: CLONE_DIR,
-            timeout: REPAIR_TIMEOUT_MS,
-            env: sessionId ? { ...baseEnv, RESUME_SESSION: sessionId } : baseEnv,
-          },
-        );
-        totalUsage = addCliUsage(totalUsage, parseClaudeCliUsage(repair.stdout));
+        const repair = await runCodingAgent(sandbox, auth, {
+          promptFile: repairFile(round),
+          cwd: CLONE_DIR,
+          timeout: REPAIR_TIMEOUT_MS,
+          sessionId,
+          env: NPM_CACHE_ENV,
+        });
+        totalUsage = addCliUsage(totalUsage, repair.usage);
         await persistAgentLog(
           'chat',
-          scrub(`${claudeCliResultText(repair.stdout)}\n${repair.stderr}`.trim()),
+          scrub(`${repair.resultText}\n${repair.stderr}`.trim()),
           repair.success,
           { fixAttemptId: params.attemptId },
           scrub(repair.stdout),
@@ -359,7 +348,7 @@ ${UNTRUSTED_CONTENT_RULES}
         // verdict is the recorded outcome either way.
         if (!repair.success) break;
         // Carry the session forward so the next turn resumes post-repair.
-        const repairSession = claudeCliSessionId(repair.stdout);
+        const repairSession = repair.codingSessionId;
         if (repairSession) {
           sessionId = repairSession;
           await setChatSessionId(params.feature.id, repairSession);

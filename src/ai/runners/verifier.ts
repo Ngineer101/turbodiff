@@ -8,7 +8,7 @@ import {
   type JsonValue,
 } from '../../shared/json.ts';
 import { githubRequest as gh } from '../../integrations/github/client.ts';
-import { claudeCliResultText, parseClaudeCliUsage, type CliUsage } from '../runtime/cli-usage.ts';
+import { runCodingAgent, type CliUsage } from '../runtime/coding-agent.ts';
 import {
   addCrComment,
   createVerification,
@@ -35,7 +35,7 @@ import { cockpitFeatureUrl } from '../../services/urls.ts';
 import { formatUnmetCriteriaFindings, type CriterionResult } from '../../domain/verification.ts';
 import { parseUtc } from '../../shared/time.ts';
 import { signArtifactKey } from '../../integrations/security/crypto.ts';
-import { resolveRunnerAuth, runnerEnvironment, type RunnerAuth } from '../runtime/runner-auth.ts';
+import { resolveRunnerAuth } from '../runtime/runner-auth.ts';
 import { generationSandbox, isSandboxTransportError } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
 import { prepareCachedWorktree } from '../runtime/repository-workspace.ts';
@@ -43,6 +43,7 @@ import { installationToken } from '../../integrations/github/app.ts';
 import { resolveWorkspaceRemote } from '../../integrations/git/provider.ts';
 import { NPM_CACHE_ENV } from '../runtime/sandbox-deps.ts';
 import { UNTRUSTED_CONTENT_RULES } from '../../domain/prompt-security.ts';
+import { resolveRunnerModel } from '../../data/models.ts';
 
 // Phase 4 (docs/software-factory-design.md): empirical verification of factory
 // PRs, doubling as the spec-conformance gate. A verifier agent checks each
@@ -260,10 +261,10 @@ async function verify(
   // Artifacts repos have no GitHub side; every GitHub call below is gated on
   // provider, and the empty token is inert in the scrub list.
   const token = repo.provider === 'github' ? await installationToken(repo.installation_id) : '';
-  const auth = resolveRunnerAuth();
+  const auth = await resolveRunnerAuth(undefined, feature.runner_model);
   // Verifier sandboxes never push: single-repo, contents READ-ONLY token.
   const remote = await resolveWorkspaceRemote(repo, 'read');
-  const scrub = (s: string) => redactSecrets(s, [token, remote.token]);
+  const scrub = (s: string) => redactSecrets(s, [token, remote.token, ...Object.values(auth.vars)]);
   const full = `${repo.owner}/${repo.name}`;
 
   // Same container id as generation: verify usually follows a generation on
@@ -287,16 +288,13 @@ async function verify(
     });
 
     await sandbox.writeFile(`${OUT}/task.md`, verifyPrompt(feature, repo, criteria));
-    const agent = await sandbox.exec(
-      `claude -p --dangerously-skip-permissions --output-format json < ${OUT}/task.md`,
-      {
-        cwd: WORK,
-        timeout: AGENT_TIMEOUT_MS,
-        env: runnerEnvironment(auth, NPM_CACHE_ENV),
-      },
-    );
-    const usage = parseClaudeCliUsage(agent.stdout);
-    const resultText = claudeCliResultText(agent.stdout);
+    const agent = await runCodingAgent(sandbox, auth, {
+      promptFile: `${OUT}/task.md`,
+      cwd: WORK,
+      timeout: AGENT_TIMEOUT_MS,
+      env: NPM_CACHE_ENV,
+    });
+    const resultText = agent.resultText;
     await persistAgentLog('verify', scrub(`${resultText}\n${agent.stderr}`.trim()), agent.success, {
       featureId: feature.id,
     });
@@ -401,7 +399,7 @@ async function verify(
           parseUtc(feature.acceptance_updated_at) < parseUtc(lastFixed.created_at));
       if (lastFixed && HUMAN_FIX_TRIGGERS.has(lastFixed.trigger) && criteriaPredateFix) {
         await setFeatureCriteriaConflict(feature.id, true);
-        await proposeUpdatedCriteria(sandbox, auth, feature, criteria, results).catch((err) =>
+        await proposeUpdatedCriteria(sandbox, feature, criteria, results).catch((err) =>
           console.warn('turbodiff: criteria proposal drafting failed (card falls back):', err),
         );
         await postCriteriaConflictNotice(token, repo, feature, criteria, results);
@@ -422,7 +420,13 @@ async function verify(
         });
       }
     }
-    return { status: failed.length > 0 ? 'failed' : 'passed', results, summary, demo, usage };
+    return {
+      status: failed.length > 0 ? 'failed' : 'passed',
+      results,
+      summary,
+      demo,
+      usage: agent.usage,
+    };
   } finally {
     // The working copy's origin is the local cache path (no credentials);
     // drop this feature's dirs to bound the warm container's disk.
@@ -572,7 +576,6 @@ async function postReport(
 // to the current criteria when this produces nothing usable.
 async function proposeUpdatedCriteria(
   sandbox: Sandbox,
-  auth: RunnerAuth,
   feature: FeatureRow,
   criteria: string[],
   results: CriterionResult[],
@@ -599,10 +602,12 @@ that conflict; each criterion must be empirically checkable against the
 running app. Write ONLY a JSON array of criterion strings to ${PROPOSAL_FILE}.
 `;
   await sandbox.writeFile(`/workspace/criteria-prompt-${feature.id}.md`, prompt);
-  const run = await sandbox.exec(
-    `claude -p --model haiku --dangerously-skip-permissions --output-format text < /workspace/criteria-prompt-${feature.id}.md`,
-    { timeout: 90_000, env: runnerEnvironment(auth) },
-  );
+  const auth = await resolveRunnerAuth(undefined, await resolveRunnerModel(null, 'fast'));
+  const run = await runCodingAgent(sandbox, auth, {
+    promptFile: `/workspace/criteria-prompt-${feature.id}.md`,
+    cwd: '/workspace',
+    timeout: 90_000,
+  });
   if (!run.success) throw new Error(`proposal agent exited ${run.exitCode}`);
   const raw = await sandbox.readFile(PROPOSAL_FILE).then((f) => f.content);
   const parsed = parseJson(raw);

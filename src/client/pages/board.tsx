@@ -18,7 +18,6 @@ import { useHotkeys } from 'react-hotkeys-hook';
 import { toast } from 'sonner';
 import type { ApiBoard, ApiPlan, ApiTodo } from '../../shared/api-types.ts';
 import { isJsonObject, isString } from '../../shared/json.ts';
-import { DEFAULT_RUNNER_MODEL, RUNNER_MODELS } from '../../shared/runner-models.ts';
 import { api, ApiError } from '../lib/api.ts';
 import { useDictation } from '../lib/dictation.ts';
 import { ago, fmtUsd } from '../lib/format.ts';
@@ -382,13 +381,11 @@ function StartDialog({
   const dictation = useDictation((text) =>
     setRequirements((prev) => (prev.trim() ? `${prev}\n\n${text}` : text)),
   );
-  // Catalog options with the static constants as the not-yet-loaded fallback,
-  // so the dialog never blocks on the fetch. An untouched picker keeps model
-  // as '' — the server treats unset as NULL (= default), so the preselected
-  // default doesn't pin future default changes.
-  const { data: models } = useQuery(modelsQuery);
-  const runnerOptions = models?.runner.options ?? RUNNER_MODELS;
-  const runnerDefault = models?.runner.default_model ?? DEFAULT_RUNNER_MODEL;
+  // app.models is authoritative; starting is unavailable until its catalog
+  // has loaded successfully.
+  const { data: models, error: modelsError } = useQuery(modelsQuery);
+  const runnerOptions = models?.runner.options ?? [];
+  const runnerDefault = models?.runner.default_model ?? '';
   const [model, setModel] = useState<string>('');
   const [files, setFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -439,7 +436,7 @@ function StartDialog({
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            if (requirements.trim() && todo.repos.length > 0) start.mutate();
+            if (models && requirements.trim() && todo.repos.length > 0) start.mutate();
           }}
         >
           <Field label="Repositories">
@@ -474,7 +471,13 @@ function StartDialog({
               value={model || runnerDefault}
               onChange={(e) => setModel(e.target.value)}
               aria-label="Model"
+              disabled={!models}
             >
+              {!models ? (
+                <option value="">
+                  {modelsError ? 'Model catalog unavailable' : 'Loading models…'}
+                </option>
+              ) : null}
               {runnerOptions.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.label}
@@ -534,8 +537,14 @@ function StartDialog({
             <Button
               type="submit"
               loading={start.isPending}
-              disabled={todo.repos.length === 0}
-              title={todo.repos.length === 0 ? 'Select at least one repository first' : undefined}
+              disabled={todo.repos.length === 0 || !models}
+              title={
+                todo.repos.length === 0
+                  ? 'Select at least one repository first'
+                  : !models
+                    ? 'The runner model catalog is unavailable'
+                    : undefined
+              }
             >
               Start planning
             </Button>

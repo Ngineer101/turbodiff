@@ -2,7 +2,6 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { ArrowLeft, Check } from 'lucide-react';
 import { useState, type FormEvent, type ReactNode } from 'react';
-import { DEFAULT_RUNNER_MODEL, RUNNER_MODELS } from '../../shared/runner-models.ts';
 import { modelsQuery } from '../lib/queries.ts';
 import { EntityFormLayout, FormSection } from './entity-form.tsx';
 import { Button } from './ui/button.tsx';
@@ -69,13 +68,11 @@ export function AutomationForm({
   const [values, setValues] = useState(initial);
   const set = (patch: Partial<AutomationFormValues>) => setValues((v) => ({ ...v, ...patch }));
 
-  // Catalog options with the static constants as the not-yet-loaded fallback,
-  // so the form never blocks on the fetch. An untouched picker keeps
-  // runner_model as '' — the server stores unset as NULL (= default), so the
-  // preselected default doesn't pin future default changes.
-  const { data: models } = useQuery(modelsQuery);
-  const runnerOptions = models?.runner.options ?? RUNNER_MODELS;
-  const runnerDefault = models?.runner.default_model ?? DEFAULT_RUNNER_MODEL;
+  // app.models is authoritative. Keep model-dependent actions disabled until
+  // the catalog arrives instead of presenting a stale source-code fallback.
+  const { data: models, error: modelsError } = useQuery(modelsQuery);
+  const runnerOptions = models?.runner.options ?? [];
+  const runnerDefault = models?.runner.default_model ?? '';
   // An automation whose stored model predates the catalog still shows (and
   // can re-save) its value.
   const modelOptions =
@@ -88,6 +85,7 @@ export function AutomationForm({
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
+    if (!models) return;
     onSubmit({
       name: values.name,
       repository_id: values.repository_id,
@@ -212,9 +210,14 @@ export function AutomationForm({
           <Select
             value={values.runner_model}
             onChange={(e) => set({ runner_model: e.target.value })}
+            disabled={!models}
           >
             <option value="">
-              Default ({runnerOptions.find((m) => m.id === runnerDefault)?.label ?? runnerDefault})
+              {models
+                ? `Default (${runnerOptions.find((m) => m.id === runnerDefault)?.label ?? runnerDefault})`
+                : modelsError
+                  ? 'Model catalog unavailable'
+                  : 'Loading models…'}
             </option>
             {modelOptions.map((m) => (
               <option key={m.id} value={m.id}>
@@ -225,9 +228,13 @@ export function AutomationForm({
         </Field>
       </FormSection>
 
-      {error ? <p className="text-[0.85rem] text-danger">{error}</p> : null}
+      {error || modelsError ? (
+        <p className="text-[0.85rem] text-danger">
+          {error ?? `Model catalog unavailable: ${modelsError?.message}`}
+        </p>
+      ) : null}
       <div className="flex items-center gap-2">
-        <Button type="submit" loading={busy}>
+        <Button type="submit" loading={busy} disabled={!models}>
           {busy ? null : <Check className="size-4" aria-hidden />}
           Save automation
         </Button>

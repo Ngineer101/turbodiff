@@ -429,23 +429,24 @@ export const skills = appSchema.table(
   ],
 );
 
-// Deployment-wide model catalog: drives the runner-model pickers (bare ids →
-// ANTHROPIC_MODEL) and the reviewer-agent model dropdown (gateway ids derived
-// as cloudflare/<provider>/<model_id>). Rows are managed by operators via SQL;
-// when the table is empty the code constants in src/shared/runner-models.ts and
-// src/domain/personas.ts take over.
+// Deployment-wide model catalog: drives the runner-model picker (ids derived
+// as provider/model_id) and reviewer dropdown (cloudflare/provider/model_id).
+// Rows are managed by operators via SQL. The runner catalog is required and
+// carries explicit default and fast-default roles; the reviewer retains its
+// built-in persona fallback.
 export const models = appSchema.table(
   'models',
   {
     id: bigint({ mode: 'number' })
       .primaryKey()
       .generatedByDefaultAsIdentity({ maxValue: '9007199254740991' }),
-    modelId: text('model_id').notNull(), // bare provider id, e.g. claude-fable-5
+    modelId: text('model_id').notNull(), // provider-local id, e.g. claude-fable-5.1
     provider: text().default('anthropic').notNull(),
     label: text().notNull(),
     forRunner: boolean('for_runner').default(true).notNull(),
     forReviewer: boolean('for_reviewer').default(true).notNull(),
     runnerDefault: boolean('runner_default').default(false).notNull(),
+    runnerFastDefault: boolean('runner_fast_default').default(false).notNull(),
     reviewerDefault: boolean('reviewer_default').default(false).notNull(),
     enabled: boolean().default(true).notNull(),
     sortOrder: integer('sort_order').default(0).notNull(),
@@ -459,6 +460,9 @@ export const models = appSchema.table(
     uniqueIndex('models_runner_default_unique')
       .on(table.runnerDefault)
       .where(sql`runner_default`),
+    uniqueIndex('models_runner_fast_default_unique')
+      .on(table.runnerFastDefault)
+      .where(sql`runner_fast_default`),
     uniqueIndex('models_reviewer_default_unique')
       .on(table.reviewerDefault)
       .where(sql`reviewer_default`),

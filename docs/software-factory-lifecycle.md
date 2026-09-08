@@ -207,6 +207,21 @@ behavior (changes, reviews, checks, comments, and merge). Missing capabilities
 cause a safe skip, wait, or handoff according to profile; they do not invalidate
 unrelated stages.
 
+## Execution runtimes
+
+Lifecycle stages share policy and persistence but may use one of two model
+execution paths. Hosted review and explanation agents run in Flue and reach the
+named AI Gateway through the Workers AI binding. Repository-changing stages
+run a pinned OpenCode CLI in the Cloudflare Sandbox through the Worker's
+capability-authenticated `/ai-proxy/v1/*` relay. The permanent Cloudflare
+account token remains in the Worker; each sandbox run receives only a
+two-hour capability bound to its snapshotted canonical model id.
+
+This runtime distinction does not leak into lifecycle policy. A stage selects
+an enabled, tool-capable model (`provider/model` or `@cf/author/model`), while
+repository transport and forge capabilities remain independent concerns. See
+[Sandbox coding harness](coding-harness.md) for the execution contract.
+
 ## Merge readiness
 
 Readiness evaluation is pure and separate from merge execution. Automatic merge
@@ -226,23 +241,30 @@ Unknown or stale facts decline automatic merge and leave the change open.
 
 ```mermaid
 flowchart TB
-  INPUT[UI / API / MCP / schedule] --> INTAKE[Authenticated intake]
-  PROVIDER[GitHub or Artifacts events] --> INTAKE
-  INTAKE --> NORMALIZE[Normalize and deduplicate]
-  NORMALIZE --> CHANGE[(Work items and changes)]
-  NORMALIZE --> COORD[Lifecycle coordinator]
-  PROFILE[(Profiles, runs, stage runs)] --> COORD
+  INPUT["UI / API / MCP / schedule"] --> INTAKE["Authenticated intake"]
+  PROVIDER["GitHub or Artifacts events"] --> INTAKE
+  INTAKE --> NORMALIZE["Normalize and deduplicate"]
+  NORMALIZE --> CHANGE[("Work items and changes")]
+  NORMALIZE --> COORD["Lifecycle coordinator"]
+  PROFILE[("Profiles, runs, stage runs")] --> COORD
   CHANGE --> COORD
-  COORD -->|claim stage| PROFILE
-  COORD -->|run-stage command| QUEUE[Factory queue]
-  QUEUE --> WF[Stage Workflow / reviewer]
-  WF --> SANDBOX[Sandbox and agents]
-  SANDBOX --> FORGE[Forge capability adapter]
+  COORD -->|"claim stage"| PROFILE
+  COORD -->|"run-stage command"| QUEUE["Factory queue"]
+  QUEUE --> CONSUMER["Worker queue consumer"]
+  CONSUMER --> HOSTED["Hosted Flue reviewer"]
+  CONSUMER --> WF["Durable stage Workflow"]
+  WF --> SANDBOX["Cloudflare Sandbox<br/>pinned OpenCode"]
+  HOSTED -->|"env.AI binding"| GATEWAY["Cloudflare AI Gateway"]
+  SANDBOX -->|"short-lived exact-model grant"| MODEL_PROXY["Worker /ai-proxy/v1/*"]
+  MODEL_PROXY -->|"Worker-only account token"| GATEWAY
+  SANDBOX --> FORGE["Forge capability adapter"]
+  HOSTED --> FORGE
   FORGE --> PROVIDER
-  WF --> RESULT[(Plans, reviews, fixes, verification)]
-  WF --> R2[(Logs and evidence in R2)]
-  RESULT -->|stage.completed or failed| COORD
-  COORD -->|wait, handoff, complete| LIVE[Live updates and provider checks]
+  HOSTED --> RESULT[("Plans, reviews, fixes, verification")]
+  WF --> RESULT
+  WF --> R2[("Logs and evidence in R2")]
+  RESULT -->|"stage.completed or failed"| COORD
+  COORD -->|"wait, handoff, complete"| LIVE["Live updates and provider checks"]
   LIVE --> INPUT
 ```
 
@@ -283,5 +305,6 @@ remain green in every intermediate PR.
 - A visual workflow/DAG editor.
 - Arbitrary user-defined stage types.
 - GitLab or Bitbucket support before GitHub partial-adoption paths are proven.
-- Replacing the current agent prompts, sandbox runtime, or native CR engine.
+- Replacing the current agent prompts, OpenCode sandbox runtime, or native CR
+  engine.
 - Bypassing provider branch protection or human approval requirements.

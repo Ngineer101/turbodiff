@@ -65,6 +65,10 @@ Artifacts has no contents REST API, so the same contracts are computed with
 real git in the warm per-repo sandbox — the pattern established by the CR
 engine (`src/ai/runtime/cr-engine.ts`).
 
+This path uses the sandbox only as a git execution environment. Browsing and
+saving do not start OpenCode, mint a model capability, or make an AI Gateway
+request.
+
 - **Workspace**: a full mirror in `/workspace/code-browse`, deliberately
   separate from the CR engine's `/workspace/cr-workspace` in the same
   container — the engine hard-resets its directory and the browser mutates

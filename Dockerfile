@@ -1,10 +1,11 @@
-# Fixer/codegen sandbox image (see docs/software-factory-design.md).
+# Factory sandbox image (see docs/coding-harness.md).
 # The tag must match the installed @cloudflare/sandbox SDK version.
-FROM docker.io/cloudflare/sandbox:0.12.4
+FROM docker.io/cloudflare/sandbox:0.12.5
 
-# Coding agent CLI used by the fix/generation runners, plus pnpm for repos
-# whose check_command installs dependencies. Preinstalled so runs don't pay
-RUN npm install -g @anthropic-ai/claude-code pnpm@12
+# Model-neutral coding harness used by every sandbox runner, plus pnpm for
+# repository dependency installs. Pin OpenCode: its JSON event and provider
+# contracts are parsed by the Worker and must not change between image builds.
+RUN npm install -g opencode-ai@1.18.29 pnpm@12
 
 # Headless browser for the verification step (Phase 4): the verifier agent
 # drives Chrome via puppeteer-core to capture screenshot evidence of the

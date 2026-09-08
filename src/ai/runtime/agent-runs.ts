@@ -11,7 +11,7 @@ export async function persistAgentLog(
   content: string,
   success: boolean,
   owner: { planId?: number; featureId?: number; fixAttemptId?: number; automationRunId?: number },
-  // Raw stream-json stdout (every turn, not just the final result) for
+  // Raw OpenCode JSON events (every turn, not just the final result) for
   // runners that capture it — stored as a sibling object addressed by the
   // same logKey (see transcriptKey), no extra DB row. Must be pre-scrubbed
   // like `content`.

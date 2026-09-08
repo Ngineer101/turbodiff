@@ -61,9 +61,12 @@ changes through on-demand or automatic repository intake):
   [MCP](https://modelcontextprotocol.io) tool connections (bearer tokens
   encrypted at rest; servers are treated as untrusted, like the PR itself).
 
-Agent runs execute inside Cloudflare Containers (the sandbox) and can spend
-either your existing Claude subscription (`claude setup-token`) or API credits
-through your AI Gateway.
+Coding runs execute inside Cloudflare Containers with a pinned OpenCode
+harness. Any tool-capable LLM in the Cloudflare AI Gateway catalog can be a
+runner model; authentication, billing, retries, and observability stay
+centralized in Cloudflare. The operator-managed `app.models` table is the sole
+runner catalog: its `runner_default` and `runner_fast_default` roles select the
+normal and low-cost models, with no hard-coded application fallback.
 
 ## Architecture
 
@@ -79,7 +82,7 @@ flowchart TB
     GH["GitHub<br/>App webhooks · REST API · pull requests"]
     BROWSER["Browser<br/>React SPA"]
     MCPS["External MCP servers"]
-    LLM["Anthropic API<br/>(subscription or AI Gateway)"]
+    LLM["Cloudflare AI Gateway<br/>OpenAI · Anthropic · Google · Workers AI · …"]
   end
 
   subgraph worker ["Cloudflare Worker (Hono — src/app.ts)"]
@@ -89,13 +92,14 @@ flowchart TB
     SHELL["/ SPA shell · landing"]
     ART["/artifacts · /b/:id<br/>signed capability URLs"]
     PROXY["/mcp-proxy/:id<br/>sealed-grant MCP relay"]
+    MODEL_PROXY["/ai-proxy/v1/*<br/>model-scoped AI relay"]
     CRON["cron (*/15)<br/>automation poll"]
     CONSUMER["queue consumer<br/>(src/cloudflare.ts)"]
   end
 
   subgraph durable ["Durable Objects"]
     REVIEWER["PrReviewer (Flue agent)<br/>one instance per PR"]
-    SANDBOX["Sandbox (container)<br/>runs Claude CLI"]
+    SANDBOX["Sandbox (container)<br/>runs pinned OpenCode"]
   end
 
   subgraph wf ["Cloudflare Workflows"]
@@ -123,11 +127,12 @@ flowchart TB
   CONSUMER -->|"creates instances"| wf
   wf -->|"exec: clone · edit · check"| SANDBOX
   SANDBOX -->|"git push · open PRs"| GH
-  SANDBOX -->|"Claude CLI"| LLM
+  SANDBOX -->|"JSON/SSE + short-lived model grant"| MODEL_PROXY
+  MODEL_PROXY -->|"Worker-only account token<br/>retry + streaming"| LLM
   SANDBOX -->|"JSON-RPC + sealed grant"| PROXY
   PROXY -->|"inject decrypted credential"| MCPS
   REVIEWER -->|"fetch PR · post review"| GH
-  REVIEWER --> LLM
+  REVIEWER -->|"env.AI binding"| LLM
   REVIEWER -->|"streamable HTTP<br/>per-request auth resolver"| MCPS
   VERIFY -->|"evidence"| R2
   ART --> R2
@@ -147,14 +152,14 @@ credentials (they execute repo-influenced code), so they get a relay instead:
 ```mermaid
 sequenceDiagram
   participant WF as Automation workflow
-  participant SB as Sandbox (Claude CLI)
+  participant SB as Sandbox (OpenCode)
   participant PX as Worker /mcp-proxy/:id
   participant PG as PostgreSQL
   participant MCP as External MCP server
 
   WF->>PG: listRepoConnections(repo, 'automations')
   WF->>WF: mint sealed grant (AES-GCM, 1 h TTL,<br/>bound to connection + repo)
-  WF->>SB: write --mcp-config (proxy URL + grant — no credentials)
+  WF->>SB: inject run config (proxy URL + grant — no credentials)
   SB->>PX: JSON-RPC request (Bearer grant)
   PX->>PX: verify grant · enforce tool allowlist on tools/call
   PX->>PG: resolve + decrypt connection credential
@@ -177,6 +182,9 @@ rejected at the proxy.
   [fixer.ts](src/ai/runners/fixer.ts) /
   [verifier.ts](src/ai/runners/verifier.ts) — the factory pipeline stages, each a
   sandboxed agent run.
+- [src/ai/runtime/coding-agent.ts](src/ai/runtime/coding-agent.ts) and
+  [src/services/ai-gateway-proxy.ts](src/services/ai-gateway-proxy.ts) — the
+  shared OpenCode execution seam and capability-authenticated model relay.
 - [src/cloudflare.ts](src/cloudflare.ts) — the factory queue consumer and the
   sandbox container export.
 - [src/http/webhooks.ts](src/http/webhooks.ts) and
@@ -187,6 +195,8 @@ rejected at the proxy.
 - [src/app.ts](src/app.ts) — the HTTP composition root; operator endpoints live
   in [src/http/internal.ts](src/http/internal.ts).
 - [docs/architecture.md](docs/architecture.md) — layer boundaries and dependency rules.
+- [docs/coding-harness.md](docs/coding-harness.md) — the model-neutral OpenCode
+  runtime, security boundary, compatibility rules, and benchmark plan.
 - [docs/code-editing.md](docs/code-editing.md) — the in-browser code viewer/editor
   and how the GitHub and Artifacts storage backends differ.
 - [db/migrations/](db/migrations/) — PostgreSQL schemas for identity,
@@ -203,9 +213,12 @@ GitHub App and deploy:
    vp install
    ```
 
-2. **AI Gateway** — set `AI_GATEWAY_ID` in [wrangler.jsonc](wrangler.jsonc) to
-   your gateway's name. It must serve Anthropic models (BYOK or unified
-   billing).
+2. **AI Gateway** — set `AI_GATEWAY_ID` and `AI_GATEWAY_ACCOUNT_ID` in
+   [wrangler.jsonc](wrangler.jsonc). Enable Unified Billing for third-party
+   models and ensure the account has sufficient credits. Runner model ids use
+   Cloudflare's canonical REST form: `provider/model` for third-party models
+   (for example `openai/gpt-5.5`) and `@cf/author/model` for Workers AI (for
+   example `@cf/moonshotai/kimi-k2.6`).
 
 3. **PostgreSQL + Hyperdrive** — provision PostgreSQL, create a Hyperdrive
    configuration with caching disabled, put its id in
@@ -262,9 +275,8 @@ GitHub App and deploy:
    npx wrangler secret put GITHUB_OAUTH_CLIENT_SECRET
    npx wrangler secret put SESSION_SECRET           # openssl rand -hex 32
    npx wrangler secret put REVIEW_SECRET            # openssl rand -hex 32 (operator endpoints)
-   # Factory agent runs — set at least one:
-   npx wrangler secret put CLAUDE_CODE_OAUTH_TOKEN  # from `claude setup-token` (Claude subscription)
-   npx wrangler secret put FIXER_ANTHROPIC_API_KEY  # gateway mode, with FIXER_ANTHROPIC_BASE_URL var
+   # Factory coding runs — Account / Workers AI / Read permission:
+   npx wrangler secret put AI_GATEWAY_API_TOKEN
    # Only if agents use authenticated external MCP connections:
    npx wrangler secret put TOKEN_ENCRYPTION_KEY     # openssl rand -hex 32
    # Only if you use org member invites (Settings > Members on an org installation):
@@ -302,6 +314,122 @@ GitHub App and deploy:
    in [wrangler.jsonc](wrangler.jsonc), and update the GitHub App's webhook +
    callback URLs.
 
+## Environment reference
+
+Turbodiff has three configuration scopes. Non-secret Worker variables belong
+in `wrangler.jsonc`; Worker secrets belong in the deployed secret store and in
+the ignored `.dev.vars` file for local development; database and deployment
+variables belong only in the shell or GitHub Actions. Cloudflare recommends
+using either `.dev.vars` or `.env`, not both—when `.dev.vars` exists, `.env`
+files are not merged into the local Worker environment. See Cloudflare's
+[environment-variable and secret documentation](https://developers.cloudflare.com/workers/local-development/environment-variables/).
+
+### Worker variables
+
+These are non-secret values under `vars` in `wrangler.jsonc`:
+
+| Name                    | Required                   | Purpose                                                                                                 |
+| ----------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `AI_GATEWAY_ID`         | Yes                        | Name of the AI Gateway used by hosted agents and the sandbox model relay.                               |
+| `AI_GATEWAY_ACCOUNT_ID` | For sandbox coding runs    | Cloudflare account containing the Gateway.                                                              |
+| `PUBLIC_BASE_URL`       | Yes                        | Canonical deployment origin used for OAuth callbacks, proxy URLs, task links, and signed artifact URLs. |
+| `GITHUB_APP_SLUG`       | For GitHub repos           | GitHub App URL slug and bot login prefix.                                                               |
+| `ARTIFACTS_REMOTE_BASE` | For hosted Artifacts repos | Git smart-HTTP base URL for the configured Artifacts namespace.                                         |
+| `RESEND_FROM_ADDRESS`   | With email invites         | Sender address on a Resend-verified domain.                                                             |
+| `REVIEW_DAILY_LIMIT`    | No; defaults to `50`       | Maximum automatic reviews per installation in a rolling 24-hour window.                                 |
+| `TRIVIAL_MODEL`         | No                         | Canonical model id used for trivial PRs; an empty value disables the override.                          |
+
+### Worker secrets
+
+Production values are created with `wrangler secret put <NAME>`. Local values
+go in `.dev.vars`, which is gitignored.
+
+| Name                         | Required                          | Purpose                                                                                                                         |
+| ---------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `GITHUB_APP_ID`              | For GitHub repos                  | Numeric GitHub App id used to issue installation tokens.                                                                        |
+| `GITHUB_APP_PRIVATE_KEY`     | For GitHub repos                  | PKCS#8 PEM private key used to sign GitHub App JWTs.                                                                            |
+| `GITHUB_WEBHOOK_SECRET`      | For GitHub repos                  | HMAC secret used to authenticate webhook deliveries.                                                                            |
+| `GITHUB_OAUTH_CLIENT_ID`     | For GitHub sign-in                | OAuth application client id.                                                                                                    |
+| `GITHUB_OAUTH_CLIENT_SECRET` | For GitHub sign-in                | OAuth application client secret.                                                                                                |
+| `SESSION_SECRET`             | Yes                               | Signs authentication state, MCP OAuth state, and artifact capabilities; use at least 32 random bytes.                           |
+| `REVIEW_SECRET`              | Yes for operator APIs             | Bearer secret protecting `/internal/*` and manual review endpoints.                                                             |
+| `AI_GATEWAY_API_TOKEN`       | For sandbox coding runs           | Worker-only Cloudflare token with `Account / Workers AI / Read`; it never enters the sandbox.                                   |
+| `TOKEN_ENCRYPTION_KEY`       | For authenticated MCP connections | Exactly 64 hexadecimal characters (`openssl rand -hex 32`) used for AES-GCM credential encryption and relay grants.             |
+| `RESEND_API_KEY`             | For email invites                 | Resend API key; pair it with `RESEND_FROM_ADDRESS`.                                                                             |
+| `SKILLS_SH_API_TOKEN`        | For catalog browsing              | Vercel OIDC token for the skills.sh catalog; direct GitHub imports work without it.                                             |
+| `VAPID_PUBLIC_KEY`           | For Web Push                      | Base64url uncompressed P-256 public point. Public by protocol, but stored as a secret so each deployment keeps its own keypair. |
+| `VAPID_PRIVATE_KEY`          | For Web Push                      | Base64url P-256 private scalar paired with `VAPID_PUBLIC_KEY`.                                                                  |
+| `VAPID_SUBJECT`              | For Web Push                      | Contact URI for the application server, normally `mailto:you@example.com`.                                                      |
+
+The three `VAPID_*` values are an optional set and must be configured together.
+Without `VAPID_PUBLIC_KEY`, the UI disables browser subscriptions; a partial
+configuration can fail later while sending. The rest of Turbodiff continues
+to work without Web Push. Generate the keypair with the command in the setup
+section above, keep it stable within an environment, and use distinct pairs
+between local, staging, and production environments.
+
+### Local `.dev.vars` template
+
+The current `.dev.vars` file is not generated, so optional keys do not appear
+until you add them. This template contains every Worker secret, the local-only
+login value, and the common local overrides. Leave an optional integration
+blank when you do not use it. Never commit this file.
+
+```dotenv
+# GitHub App and authentication
+GITHUB_APP_ID=""
+GITHUB_APP_PRIVATE_KEY=""
+GITHUB_WEBHOOK_SECRET=""
+GITHUB_OAUTH_CLIENT_ID=""
+GITHUB_OAUTH_CLIENT_SECRET=""
+SESSION_SECRET=""
+REVIEW_SECRET=""
+
+# Sandbox coding models
+AI_GATEWAY_API_TOKEN=""
+
+# Optional integrations
+TOKEN_ENCRYPTION_KEY=""
+RESEND_API_KEY=""
+SKILLS_SH_API_TOKEN=""
+
+# Optional Web Push — configure all three or none
+VAPID_PUBLIC_KEY=""
+VAPID_PRIVATE_KEY=""
+VAPID_SUBJECT="mailto:you@example.com"
+
+# Local-only login: comma-separated installation ids
+DEV_FAKE_INSTALLATIONS=""
+
+# Optional local overrides for values otherwise read from wrangler.jsonc
+AI_GATEWAY_ACCOUNT_ID=""
+PUBLIC_BASE_URL="http://localhost:5173"
+```
+
+`DEV_FAKE_INSTALLATIONS` must never be deployed. Use the URL printed by the
+development server if it differs from the example `PUBLIC_BASE_URL`.
+
+### Shell and CI variables
+
+These configure tooling, not the running Worker:
+
+| Name                      | Scope                 | Purpose                                                                                                 |
+| ------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`            | Local shell / CI job  | Direct PostgreSQL URL used by migration, schema verification, and Worker integration-test commands.     |
+| `HYPERDRIVE_DATABASE_URL` | Local shell helper    | Direct database URL passed to Wrangler while creating or updating Hyperdrive; the app does not read it. |
+| `POSTGRES_DATABASE_URL`   | GitHub Actions secret | Production migration-role URL, mapped to `DATABASE_URL` by the deploy workflow.                         |
+| `CLOUDFLARE_API_TOKEN`    | GitHub Actions secret | Credential used by Wrangler to validate and deploy the Worker and container.                            |
+| `CLOUDFLARE_ACCOUNT_ID`   | GitHub Actions secret | Cloudflare account targeted by the deployment workflow.                                                 |
+
+Cloudflare bindings—including `AI`, `HYPERDRIVE`, `ARTIFACTS`,
+`GIT_ARTIFACTS`, `FACTORY_QUEUE`, Durable Objects, Workflows, assets, and
+version metadata—are configured structurally in `wrangler.jsonc`; they are not
+`.dev.vars` entries. Likewise, `GIT_TOKEN`, `GIT_REMOTE`, and `TURBODIFF_*`
+values are short-lived variables injected internally into sandbox commands and
+must not be configured by an operator. `PUPPETEER_EXECUTABLE_PATH` and
+`NODE_PATH` are fixed inside the sandbox image for browser verification and are
+also not deployment inputs.
+
 ## Develop
 
 Local dev needs **Docker running** (the sandbox container image builds on
@@ -321,18 +449,14 @@ body in `x-hub-signature-256: sha256=<hex>`).
 ## Deploy
 
 Every commit to `main` deploys automatically via
-[GitHub Actions](.github/workflows/deploy.yml). The workflow applies and verifies migrations on
-the existing PlanetScale database, then deploys the Worker and sandbox container image. It does
-not provision PlanetScale or Hyperdrive. The workflow needs `POSTGRES_DATABASE_URL`,
-`CLOUDFLARE_API_TOKEN` (Workers Scripts:Edit, Containers:Edit), and `CLOUDFLARE_ACCOUNT_ID`.
-
-Pull requests from branches in this repository (not forks) also get a
-preview: [`preview.yml`](.github/workflows/preview.yml) uploads a Worker
-version via `wrangler versions upload` and comments the preview URL on the
-PR. The preview shares production's PostgreSQL database, queue, and sandbox
-container — it's for UI/API smoke-testing only, not for exercising
-webhook-triggered flows or destructive actions. The comment is updated on
-every push and marked closed when the PR closes.
+[GitHub Actions](.github/workflows/deploy.yml). The workflow applies and
+verifies migrations on the existing PlanetScale database, then deploys the
+Worker and sandbox container image. It does not provision PlanetScale or
+Hyperdrive. The workflow needs `POSTGRES_DATABASE_URL`,
+`CLOUDFLARE_API_TOKEN` (Workers Scripts:Edit, Containers:Edit), and
+`CLOUDFLARE_ACCOUNT_ID`. Pull requests run the same validation, integration,
+build, and Wrangler dry-run gates in [CI](.github/workflows/ci.yml), but are
+not deployed.
 
 To deploy manually (Docker required):
 

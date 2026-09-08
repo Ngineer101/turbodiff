@@ -13,8 +13,10 @@ import {
   type RepositoryRow,
 } from '../../data/db.ts';
 import { persistAgentLog } from '../runtime/agent-runs.ts';
-import { resolveRunnerAuth, runnerEnvironment } from '../runtime/runner-auth.ts';
+import { runCodingAgent } from '../runtime/coding-agent.ts';
+import { resolveRunnerAuth } from '../runtime/runner-auth.ts';
 import { runnerSandbox } from '../runtime/sandbox.ts';
+import { resolveRunnerModel } from '../../data/models.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
 import { installationToken } from '../../integrations/github/app.ts';
 import { resolveWorkspaceRemote } from '../../integrations/git/provider.ts';
@@ -148,25 +150,23 @@ async function runAgent(
   scrub: (s: string) => string,
   kind: 'plan_analyze' | 'plan_refine',
   planId: number,
-  // The task's requested model (plans.runner_model); null = default.
+  // The task's model snapshot (plans.runner_model); null is legacy-only.
   model: string | null,
 ): Promise<void> {
-  const auth = resolveRunnerAuth(undefined, model);
+  const auth = await resolveRunnerAuth(undefined, model);
+  const scrubRun = (value: string) => redactSecrets(scrub(value), Object.values(auth.vars));
   await sandbox.writeFile(`${OUT_DIR}/task.md`, prompt);
-  const res = await sandbox.exec(
-    `claude -p --dangerously-skip-permissions --output-format text < ${OUT_DIR}/task.md`,
-    {
-      cwd: CLONE_DIR,
-      timeout: AGENT_TIMEOUT_MS,
-      env: runnerEnvironment(auth),
-    },
-  );
-  await persistAgentLog(kind, scrub(`${res.stdout}\n${res.stderr}`.trim()), res.success, {
+  const res = await runCodingAgent(sandbox, auth, {
+    promptFile: `${OUT_DIR}/task.md`,
+    cwd: CLONE_DIR,
+    timeout: AGENT_TIMEOUT_MS,
+  });
+  await persistAgentLog(kind, scrubRun(`${res.resultText}\n${res.stderr}`.trim()), res.success, {
     planId,
   });
   if (!res.success) {
     throw new Error(
-      `planning agent exited ${res.exitCode}: ${scrub(`${res.stdout}\n${res.stderr}`).trim().slice(-1_000)}`,
+      `planning agent exited ${res.exitCode}: ${scrubRun(`${res.stdout}\n${res.stderr}`).trim().slice(-1_000)}`,
     );
   }
 }
@@ -180,7 +180,7 @@ async function classifyTier(
   plan: PlanRow,
   repos: RepositoryRow[],
 ): Promise<'trivial' | 'standard'> {
-  const auth = resolveRunnerAuth();
+  const auth = await resolveRunnerAuth(undefined, await resolveRunnerModel(null, 'fast'));
   const label = repos.map((r) => `${r.owner}/${r.name}`).join(', ');
   const prompt = `Classify this feature request for ${label}. Reply with EXACTLY one word: trivial or standard.
 
@@ -193,15 +193,12 @@ ${plan.requirements}
 `;
   try {
     await sandbox.writeFile(`${OUT_DIR}/classify.md`, prompt);
-    const res = await sandbox.exec(
-      `claude -p --model haiku --output-format text < ${OUT_DIR}/classify.md`,
-      {
-        cwd: CLONE_DIR,
-        timeout: 2 * 60_000,
-        env: runnerEnvironment(auth),
-      },
-    );
-    return res.success && /\btrivial\b/i.test(res.stdout) ? 'trivial' : 'standard';
+    const res = await runCodingAgent(sandbox, auth, {
+      promptFile: `${OUT_DIR}/classify.md`,
+      cwd: CLONE_DIR,
+      timeout: 2 * 60_000,
+    });
+    return res.success && /\btrivial\b/i.test(res.resultText) ? 'trivial' : 'standard';
   } catch {
     return 'standard';
   }

@@ -36,6 +36,24 @@ if (ledger.rows[0]?.count !== files.length) {
   throw new Error(`Expected ${files.length} Drizzle ledger rows, found ${ledger.rows[0]?.count}`);
 }
 
+const runnerRoles = await db.query(`
+  SELECT
+    COUNT(*) FILTER (WHERE enabled AND for_runner AND runner_default)::int AS defaults,
+    COUNT(*) FILTER (WHERE enabled AND for_runner AND runner_fast_default)::int AS fast_defaults,
+    MAX(model_id) FILTER (WHERE runner_fast_default) AS fast_model
+  FROM app.models
+`);
+if (runnerRoles.rows[0]?.defaults !== 1 || runnerRoles.rows[0]?.fast_defaults !== 1) {
+  throw new Error(
+    `Expected exactly one runner default and fast default: ${JSON.stringify(runnerRoles.rows[0])}`,
+  );
+}
+if (runnerRoles.rows[0]?.fast_model !== 'claude-haiku-4.5') {
+  throw new Error(
+    `Expected the migrated fast runner to be claude-haiku-4.5, found ${runnerRoles.rows[0]?.fast_model}`,
+  );
+}
+
 const missingForeignKeyIndexes = await db.query(`
   SELECT c.conrelid::regclass::text AS table_name, c.conname
   FROM pg_constraint c
