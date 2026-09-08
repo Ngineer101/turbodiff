@@ -105,8 +105,9 @@ export function reviewPublicationEvent(
   blockingReviews: boolean,
   hasP1: boolean,
   coverageComplete: boolean,
+  verificationComplete = true,
 ): ReviewPublicationEvent {
   if (!blockingReviews) return 'COMMENT';
   if (hasP1) return 'REQUEST_CHANGES';
-  return coverageComplete ? 'APPROVE' : 'COMMENT';
+  return coverageComplete && verificationComplete ? 'APPROVE' : 'COMMENT';
 }

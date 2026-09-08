@@ -101,6 +101,7 @@ flowchart TB
 
   subgraph durable ["Durable Objects"]
     REVIEWER["PrReviewer (Flue agent)<br/>one instance per PR"]
+    FINDING_VERIFIER["Isolated finding verifier<br/>fresh read-only model context"]
     SANDBOX["Sandbox (container)<br/>runs pinned OpenCode"]
   end
 
@@ -133,8 +134,11 @@ flowchart TB
   MODEL_PROXY -->|"Worker-only account token<br/>retry + streaming"| LLM
   SANDBOX -->|"JSON-RPC + sealed grant"| PROXY
   PROXY -->|"inject decrypted credential"| MCPS
-  REVIEWER -->|"manifest · bounded diff packets<br/>coverage-gated review"| GH
+  REVIEWER -->|"candidate batch"| FINDING_VERIFIER
+  FINDING_VERIFIER -->|"one consolidated,<br/>coverage-gated review"| GH
+  FINDING_VERIFIER -->|"re-fetch PR + files"| GH
   REVIEWER -->|"env.AI binding"| LLM
+  FINDING_VERIFIER -->|"env.AI binding"| LLM
   REVIEWER -->|"streamable HTTP<br/>per-request auth resolver"| MCPS
   VERIFY -->|"evidence"| R2
   ART --> R2
