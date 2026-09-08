@@ -1708,9 +1708,9 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
         caption: demo.caption ?? null,
       };
     }
-    // gradedCriteria re-derives the run-time premortem row the verifier
-    // appends beyond the stored criteria — zipping by index alone dropped the
-    // one failing row and painted N/N proven under a failed verdict.
+    // gradedCriteria keeps any result row beyond the stored criteria (older
+    // verifications carry one) — zipping by index alone dropped the one
+    // failing row and painted N/N proven under a failed verdict.
     base.criteria = await Promise.all(
       gradedCriteria(feature.acceptance ?? [], verification?.results ?? []).map(
         async ({ text, result: r }) => {

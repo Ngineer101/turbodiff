@@ -72,21 +72,13 @@ export interface CriterionResult {
   screenshot?: string;
 }
 
-// The premortem is an independent adversarial pass the verifier appends to
-// the feature's acceptance criteria at run time (only when those would pass).
-// Its verdict is stored with the results at index N, but the feature row
-// keeps only the N human criteria — so every reader of (acceptance, results)
-// must re-derive the appended row from here or silently drop the one
-// criterion that failed (live finding: the cockpit showed N/N proven while
-// the PR comment said 1 not met).
-export const PREMORTEM_CRITERION =
-  'Premortem: an independent adversarial pass found no mechanism by which the reported behavior survives this change';
-
 // Every criterion a verification graded, in result order: the feature's
 // stored acceptance criteria (verdict null when the run recorded nothing for
-// them) followed by any run-time criterion the results carry beyond them.
-// The first appended row is the premortem; anything further is labeled
-// generically rather than mis-attributed.
+// them) followed by any row the results carry beyond them. Verifications
+// recorded before 2026-09-08 carry one such row from a since-removed
+// adversarial "premortem" pass (8 of 8 runs failed it, no feature ever
+// cleared it); readers must still show it rather than paint N/N proven
+// under a failed verdict.
 export function gradedCriteria(
   acceptance: string[],
   results: CriterionResult[],
@@ -99,13 +91,7 @@ export function gradedCriteria(
     .filter((r) => r.index >= acceptance.length)
     .sort((a, b) => a.index - b.index);
   for (const result of appended) {
-    rows.push({
-      text:
-        result.index === acceptance.length
-          ? PREMORTEM_CRITERION
-          : `Verification check #${result.index + 1}`,
-      result,
-    });
+    rows.push({ text: `Verification check #${result.index + 1} (retired)`, result });
   }
   return rows;
 }
