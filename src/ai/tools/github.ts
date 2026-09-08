@@ -416,7 +416,7 @@ ${JSON.stringify(candidates)}
               thinkingLevel: 'high',
             },
           );
-          const decisions = result.data.decisions as FindingDecision[];
+          const decisions: FindingDecision[] = result.data.decisions;
           verificationComplete = decisionsCoverCandidates(candidates.length, decisions);
           verifiedFindings = verificationComplete
             ? applyFindingDecisions(candidates, decisions)
