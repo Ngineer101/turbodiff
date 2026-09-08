@@ -12,7 +12,7 @@ import {
 export interface ReviewWorkspace {
   sandbox: Sandbox;
   workDir: string;
-  scrub(text: string): string;
+  scrub: (text: string) => string;
 }
 
 export async function prepareReviewWorkspace(
