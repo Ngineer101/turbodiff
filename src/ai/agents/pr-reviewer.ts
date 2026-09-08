@@ -26,6 +26,7 @@ import {
   makePostCrReview,
   type CrPin,
 } from '../tools/change-requests.ts';
+import { makeRunRepositoryCheck, makeSearchRepository } from '../tools/repository-workspace.ts';
 
 // Turbodiff's one generic reviewer: every configured agent (built-in persona
 // or user-created) runs through this function. One instance per agent × PR
@@ -146,6 +147,8 @@ export function PrReviewer(props: AgentProps) {
     useTool(makeFetchDiff(cfg.pin));
     useTool(makeFetchFile(cfg.pin));
     useTool(makeFetchReviewThreads(cfg.pin));
+    useTool(makeSearchRepository(props.id, cfg.pin));
+    useTool(makeRunRepositoryCheck(props.id, cfg.pin));
     // post_review closes over the instance id so completing the PostgreSQL review row
     // can never hit another agent's concurrent review of the same PR.
     useTool(makePostReview(props.id, cfg.pin));
@@ -173,8 +176,9 @@ Process:
 1. Call fetch_pr to get the PR metadata, complete changed-file manifest, and initial whole-file diff packet. If remainingFiles is non-empty, use fetch_diff in batches until you have inspected every reviewable changed file. To approve, pass the complete set in reviewedFiles to post_review. Never infer that a category of change is absent from a truncated packet; decide from the complete manifest.
 2. Study the diff. When a hunk is hard to judge in isolation, call fetch_file (at headSha for the new version, or the base ref for the original) to see the surrounding code. Prefer fetching context over guessing.
 3. Cover interactions, not just the diff: shared state, not the diff, is the unit of failure. When the change touches state with more than one writer — a client-side cache, a database row, a global, an event or invalidation stream — fetch enough of the codebase to enumerate every OTHER code path that writes, invalidates, or refetches that state, and judge each one as if it fired at the worst possible moment relative to this change. A fix that only reasons about its own code path is a finding, even when that path is handled correctly: the bugs that survive plausible-looking fixes live in files the diff never touched.
-4. Verify before posting: actively try to disprove every candidate against the actual code. Trace existing guards and callers, distinguish a missing field from an unsafe access, and distinguish an error-cleanup catch from an operation that swallows failure. For external API behavior, do not invent header or runtime semantics: use an available authoritative tool or omit the claim. Drop any finding you cannot prove from concrete code in front of you — plausible is not enough.
-5. Submit exactly one candidate batch per request with post_review. The tool runs an isolated, read-only verifier, consolidates accepted findings, and publishes one GitHub review. Then confirm with a one-line summary of what it retained and posted.
+4. Use search_repository at headSha to enumerate relevant callers, definitions, tests, and competing writers across the checkout. Do not stop at fetch_file when correctness depends on code outside a known path.
+5. Verify before posting: actively try to disprove every candidate against the actual code. Trace existing guards and callers, distinguish a missing field from an unsafe access, and distinguish an error-cleanup catch from an operation that swallows failure. When a configured repository check can settle a concrete claim, run it with run_repository_check. For external API behavior, do not invent header or runtime semantics: use an available authoritative tool or omit the claim. Drop any finding you cannot prove from concrete code in front of you — plausible is not enough.
+6. Submit exactly one candidate batch per request with post_review. The tool runs an isolated, read-only verifier, consolidates accepted findings, and publishes one GitHub review. Then confirm with a one-line summary of what it retained and posted.
 
 The diff omits noise files (lockfiles, minified assets, source maps, generated code), each replaced with a "[turbodiff: ... omitted]" marker. Treat those files as changed but not reviewable: never speculate about their contents, and don't count them against the PR.
 
