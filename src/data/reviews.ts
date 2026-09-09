@@ -121,6 +121,20 @@ export async function recordReviewPatchDelivery(reviewId: number, paths: string[
   `);
 }
 
+export async function recordReviewPatchChunkDelivery(
+  reviewId: number,
+  path: string,
+  chunkIndex: number,
+  chunkCount: number,
+): Promise<void> {
+  await execute(sql`
+    INSERT INTO app.review_patch_deliveries
+      (review_id, path, chunk_index, chunk_count)
+    VALUES (${reviewId}, ${path}, ${chunkIndex}, ${chunkCount})
+    ON CONFLICT (review_id, path, chunk_index) DO NOTHING
+  `);
+}
+
 export async function recordReviewFileAcknowledgements(
   reviewId: number,
   acknowledgements: ReviewFileAcknowledgement[],
@@ -148,10 +162,22 @@ export async function recordReviewFileAcknowledgements(
 
 export async function listReviewFileEvidence(reviewId: number): Promise<ReviewFileEvidenceRow[]> {
   return queryRows<ReviewFileEvidenceRow>(sql`
-    SELECT path, patch_delivered, disposition, evidence
-    FROM app.review_file_evidence
-    WHERE review_id = ${reviewId}
-    ORDER BY path
+    SELECT e.path,
+      (
+        e.patch_delivered OR EXISTS (
+          SELECT 1 FROM app.review_patch_deliveries d
+          WHERE d.review_id = e.review_id AND d.path = e.path
+          GROUP BY d.review_id, d.path
+          HAVING COUNT(*) = MAX(d.chunk_count)
+            AND MIN(d.chunk_count) = MAX(d.chunk_count)
+            AND MIN(d.chunk_index) = 0
+            AND MAX(d.chunk_index) = MAX(d.chunk_count) - 1
+        )
+      ) AS patch_delivered,
+      e.disposition, e.evidence
+    FROM app.review_file_evidence e
+    WHERE e.review_id = ${reviewId}
+    ORDER BY e.path
   `);
 }
 

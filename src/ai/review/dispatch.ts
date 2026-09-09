@@ -79,6 +79,8 @@ export async function dispatchReviewAgent(
     agent_name: agent.name,
     model: assignment.scout,
     verifier_model: assignment.verifier,
+    diff_packet_chars: String(assignment.scoutPacketChars),
+    verifier_diff_packet_chars: String(assignment.verifierPacketChars),
     experiment_key: assignment.experimentKey ?? '',
     risk_tier: opts.riskTier ?? 'full',
     ...(opts.changeRequest

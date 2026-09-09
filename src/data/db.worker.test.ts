@@ -34,6 +34,7 @@ import {
   recordReviewQuality,
   recordReviewQualityById,
   recordReviewPatchDelivery,
+  recordReviewPatchChunkDelivery,
   recordReviewFileAcknowledgements,
   listReviewFileEvidence,
   reviewQualityDashboard,
@@ -105,6 +106,7 @@ beforeEach(async () => {
     'connections',
     'skills',
     'agents',
+    'review_patch_deliveries',
     'review_file_evidence',
     'review_findings',
     'reviews',
@@ -450,9 +452,13 @@ describe('review dispatch invariants', () => {
     );
     expect(reviewId).not.toBeNull();
     await recordReviewPatchDelivery(reviewId!, ['src/a.ts', 'src/a.ts']);
+    await recordReviewPatchChunkDelivery(reviewId!, 'src/b.ts', 1, 2);
+    await recordReviewPatchChunkDelivery(reviewId!, 'src/c.ts', 1, 2);
+    await recordReviewPatchChunkDelivery(reviewId!, 'src/c.ts', 0, 2);
     await recordReviewFileAcknowledgements(reviewId!, [
       { path: 'src/a.ts', disposition: 'reviewed', evidence: 'checked the mutation path' },
       { path: 'src/b.ts', disposition: 'blocked', evidence: 'patch exceeded the current packet' },
+      { path: 'src/c.ts', disposition: 'reviewed', evidence: 'checked both paged patch chunks' },
     ]);
 
     await expect(listReviewFileEvidence(reviewId!)).resolves.toEqual([
@@ -467,6 +473,12 @@ describe('review dispatch invariants', () => {
         patch_delivered: false,
         disposition: 'blocked',
         evidence: 'patch exceeded the current packet',
+      },
+      {
+        path: 'src/c.ts',
+        patch_delivered: true,
+        disposition: 'reviewed',
+        evidence: 'checked both paged patch chunks',
       },
     ]);
   });
@@ -583,6 +595,8 @@ describe('review dispatch invariants', () => {
       ).resolves.toEqual({
         scout: 'cloudflare/anthropic/claude-fable-5.1',
         verifier: 'cloudflare/anthropic/claude-fable-5.1',
+        scoutPacketChars: 192_000,
+        verifierPacketChars: 192_000,
         experimentKey:
           'weighted-v1:scout=cloudflare/anthropic/claude-fable-5.1:verifier=cloudflare/anthropic/claude-fable-5.1',
       });

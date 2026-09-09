@@ -450,6 +450,9 @@ export const models = appSchema.table(
     reviewerDefault: boolean('reviewer_default').default(false).notNull(),
     reviewerExperimentWeight: integer('reviewer_experiment_weight').default(0).notNull(),
     verifierExperimentWeight: integer('verifier_experiment_weight').default(0).notNull(),
+    // Input budget reserved for diff packets. Operator-managed because model
+    // context windows differ; tool output is derived from this, not a global cap.
+    reviewDiffTokens: integer('review_diff_tokens').default(64000).notNull(),
     enabled: boolean().default(true).notNull(),
     sortOrder: integer('sort_order').default(0).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
@@ -475,6 +478,10 @@ export const models = appSchema.table(
     check(
       'models_verifier_experiment_weight_check',
       sql`verifier_experiment_weight >= 0 AND verifier_experiment_weight <= 10000`,
+    ),
+    check(
+      'models_review_diff_tokens_check',
+      sql`review_diff_tokens >= 8000 AND review_diff_tokens <= 200000`,
     ),
   ],
 );
@@ -946,6 +953,35 @@ export const reviewFileEvidence = appSchema.table(
       sql`(disposition IS NULL AND evidence IS NULL AND acknowledged_at IS NULL) OR
         (disposition IS NOT NULL AND evidence IS NOT NULL AND acknowledged_at IS NOT NULL)`,
     ),
+  ],
+);
+
+export const reviewPatchDeliveries = appSchema.table(
+  'review_patch_deliveries',
+  {
+    id: bigint({ mode: 'number' })
+      .primaryKey()
+      .generatedByDefaultAsIdentity({ maxValue: '9007199254740991' }),
+    reviewId: bigint('review_id', { mode: 'number' })
+      .notNull()
+      .references(() => reviews.id, { onDelete: 'cascade' }),
+    path: text().notNull(),
+    chunkIndex: integer('chunk_index').notNull(),
+    chunkCount: integer('chunk_count').notNull(),
+    deliveredAt: timestamp('delivered_at', { withTimezone: true, mode: 'string' })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+  },
+  (table) => [
+    unique('review_patch_deliveries_review_path_chunk_unique').on(
+      table.reviewId,
+      table.path,
+      table.chunkIndex,
+    ),
+    index('review_patch_deliveries_review_idx').on(table.reviewId, table.path),
+    check('review_patch_deliveries_chunk_index_check', sql`chunk_index >= 0`),
+    check('review_patch_deliveries_chunk_count_check', sql`chunk_count > 0`),
+    check('review_patch_deliveries_chunk_range_check', sql`chunk_index < chunk_count`),
   ],
 );
 
