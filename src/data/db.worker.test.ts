@@ -147,8 +147,8 @@ describe('connection OAuth refresh claims', () => {
     await expect(tryClaimConnectionRefresh(5, expiredAt, claimUntil)).resolves.toBe(false);
     const row = await testDatabase()
       .prepare('SELECT oauth_token_expires_at FROM connections WHERE id = 5')
-      .first<{ oauth_token_expires_at: Date }>();
-    expect(row?.oauth_token_expires_at.toISOString()).toBe(claimUntil);
+      .first<{ oauth_token_expires_at: string }>();
+    expect(new Date(row?.oauth_token_expires_at ?? '').toISOString()).toBe(claimUntil);
   });
 });
 
