@@ -2,17 +2,16 @@
 
 <img src="public/logo-small.png" alt="Turbodiff logo" width="64" align="center" />
 
-Turbodiff is an open-source software factory for GitHub. Give it a task and it
+Turbodiff is an open-source software factory. Give it a task and it
 can plan the work, write the code, open a pull request, review the change, fix
 problems, and check the result. You decide where automation starts and stops,
-and which steps need a person to approve them.
+and which steps need a human input.
 
 You can also use the pull request reviewer on its own. Turbodiff works with
 your existing repositories and GitHub workflow rather than asking you to move
 your code or replace your tools.
 
-The project is self-hosted and licensed under the [MIT License](LICENSE.md).
-You can use, change, and share it, including as part of a commercial product.
+This project can be self-hosted and is licensed under the [MIT License](LICENSE.md).
 
 > [!WARNING]
 > Turbodiff is under active development. If you find a problem, please
@@ -26,7 +25,7 @@ Turbodiff covers the path from an idea to a finished pull request:
    with clear success checks.
 2. **Build** — write the code in an isolated container, run the repository's
    checks, and open a pull request.
-3. **Review** — inspect the whole change and publish one clear GitHub review.
+3. **Review** — inspect the whole change and publish clear GitHub reviews.
 4. **Repair** — try to fix important review findings, failed checks, and merge
    conflicts.
 5. **Verify** — compare the finished work with the approved plan. Turbodiff can
@@ -48,36 +47,21 @@ The reviewer also works with pull requests created outside Turbodiff. It can:
 - Run custom review agents for different areas of a codebase.
 - Track whether findings were useful, fixed, or dismissed.
 
-## Open source and self-hosted
-
-The application code is in this repository. Self-hosting gives you control
-over:
-
-- Which repositories Turbodiff can access.
-- Which AI models it uses.
-- Where its database and files are stored.
-- Which features are enabled.
-- How much of the factory runs automatically.
-
-Your GitHub App keys and model credentials stay in services you manage. Code
-writing and verification run in isolated Cloudflare Containers, and permanent
-model credentials are not passed into those containers.
+## Open source and self-hostable
 
 Turbodiff uses:
 
 - **Cloudflare Workers** for the web app and API.
 - **Cloudflare Containers** for code-writing and verification jobs.
 - **Cloudflare AI Gateway** to connect to AI models.
-- **PostgreSQL** for users, repositories, tasks, reviews, and settings.
+- **PostgreSQL** on Planetscale for users, repositories, tasks, reviews, and settings - connected via Hyperdrive.
 - **Cloudflare R2** for logs, screenshots, and other files.
 - **Cloudflare Queues and Workflows** for jobs that take longer than a web
   request.
 
 More detail is available in the [architecture guide](docs/architecture.md).
 
-## Self-hosting
-
-Turbodiff is built for Cloudflare. Before you start, you need:
+To get started with self-hosting you need:
 
 - A Cloudflare account with Workers, Containers, AI Gateway, Hyperdrive,
   Queues, and R2 available.
