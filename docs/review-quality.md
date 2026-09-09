@@ -13,11 +13,13 @@ context. `fetch_pr` returns two complementary artifacts:
   noisy files were deliberately excluded; and
 - an initial size-bounded packet containing only complete patches.
 
-The reviewer retrieves `remainingFiles` with `fetch_diff`. It passes every
-inspected path to `post_review`, which independently re-fetches the live diff
-and enforces the coverage claim. A partial review may comment or block on a
-proven P1, but can never approve. This makes context loss visible instead of
-silently treating the first 120,000 characters as the whole pull request.
+The reviewer retrieves `remainingFiles` with `fetch_diff`. Every returned
+patch is recorded against the exact review run. At publication the reviewer
+submits a per-file acknowledgement: `reviewed` with a code-specific evidence
+summary, or `blocked` with the concrete limitation. A path counts as covered
+only when both the server-observed patch delivery and the acknowledgement are
+present. A partial review may comment or block on a proven P1, but can never
+approve.
 
 ```mermaid
 flowchart LR
@@ -28,7 +30,7 @@ flowchart LR
   PACKET --> AGENT
   AGENT -->|"remaining paths"| MORE["fetch_diff packets"]
   MORE --> AGENT
-  AGENT -->|"findings + reviewedFiles"| GATE{"Coverage complete?"}
+  AGENT -->|"findings + file evidence"| GATE{"Delivered and acknowledged?"}
   GATE -->|"no"| COMMENT["COMMENT or proven P1 block"]
   GATE -->|"yes"| VERDICT["Normal verdict policy"]
 ```

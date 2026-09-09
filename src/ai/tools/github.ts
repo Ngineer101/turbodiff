@@ -6,6 +6,9 @@ import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
 import {
   getRepoByFullName,
   getReviewRunGuard,
+  listReviewFileEvidence,
+  recordReviewFileAcknowledgements,
+  recordReviewPatchDelivery,
   recordReviewQuality,
   recordReviewQualityById,
 } from '../../data/db.ts';
@@ -114,7 +117,7 @@ async function pullRequestDiff(token: string, owner: string, repo: string, numbe
 
 // Per-render factories (like makePostReview): each dispatch pins its tools
 // to the PR's own repository.
-export const makeFetchPr = (pin: RepoPin, name = 'fetch_pr') =>
+export const makeFetchPr = (pin: RepoPin, name = 'fetch_pr', trackDelivery = true) =>
   defineTool({
     name,
     description:
@@ -147,6 +150,9 @@ export const makeFetchPr = (pin: RepoPin, name = 'fetch_pr') =>
       ]);
       const snapshot = buildReviewDiffSnapshot(diff, MAX_DIFF_CHARS);
       assertHeadPinned(pin, meta.head.sha);
+      if (pin && trackDelivery) {
+        await recordReviewPatchDelivery(pin.reviewId, snapshot.includedFiles);
+      }
       return {
         output: {
           title: meta.title,
@@ -175,7 +181,7 @@ export const makeFetchPr = (pin: RepoPin, name = 'fetch_pr') =>
     },
   });
 
-export const makeFetchDiff = (pin: RepoPin, name = 'fetch_diff') =>
+export const makeFetchDiff = (pin: RepoPin, name = 'fetch_diff', trackDelivery = true) =>
   defineTool({
     name,
     description:
@@ -204,6 +210,9 @@ export const makeFetchDiff = (pin: RepoPin, name = 'fetch_diff') =>
         .map((entry) => entry.segment)
         .join('');
       const snapshot = buildReviewDiffSnapshot(selected, MAX_DIFF_CHARS);
+      if (pin && trackDelivery) {
+        await recordReviewPatchDelivery(pin.reviewId, snapshot.includedFiles);
+      }
       const found = new Set(snapshot.files.map((file) => file.path));
       return {
         output: {
@@ -366,6 +375,12 @@ export const findingSchema = v.object({
   failurePath: v.pipe(v.string(), v.minLength(1)),
 });
 
+export const reviewFileEvidenceSchema = v.object({
+  path: v.pipe(v.string(), v.minLength(1), v.maxLength(1_000)),
+  disposition: v.picklist(['reviewed', 'blocked']),
+  evidence: v.pipe(v.string(), v.minLength(1), v.maxLength(1_000)),
+});
+
 const findingDecisionSchema = v.object({
   candidate: v.pipe(v.number(), v.integer(), v.minValue(0)),
   accepted: v.boolean(),
@@ -410,8 +425,10 @@ export const makePostReview = (
       'of the same PR posts a new review). Each comment must anchor to ' +
       'a line that is part of the diff (use side RIGHT with new-file line numbers for added/context ' +
       'lines, side LEFT with old-file line numbers for deleted lines). Findings about code outside ' +
-      'the diff belong in the summary body instead. Pass every inspected reviewable path in ' +
-      'reviewedFiles; an incomplete review is never allowed to approve. Candidate findings are ' +
+      'the diff belong in the summary body instead. Return one fileEvidence item for every ' +
+      'reviewable path: disposition reviewed plus a concise code-specific summary, or blocked plus ' +
+      'the concrete limitation. A file counts as covered only if its patch was delivered by a fetch ' +
+      'tool and acknowledged here. Candidate findings are ' +
       'independently verified and consolidated before this tool publishes one GitHub review.',
     harness: true,
     input: v.object({
@@ -420,7 +437,7 @@ export const makePostReview = (
       number: v.number(),
       body: v.pipe(v.string(), v.minLength(1)),
       findings: v.optional(v.array(findingSchema), []),
-      reviewedFiles: v.optional(v.array(v.string()), []),
+      fileEvidence: v.optional(v.array(reviewFileEvidenceSchema), []),
     }),
     async run({ data, harness }) {
       assertPrPinned(pin, data.owner, data.repo, data.number);
@@ -507,8 +524,8 @@ ${JSON.stringify(candidates)}
               ? {
                   result: findingVerificationSchema,
                   tools: [
-                    makeFetchPr(pin, 'verify_fetch_pr'),
-                    makeFetchDiff(pin, 'verify_fetch_diff'),
+                    makeFetchPr(pin, 'verify_fetch_pr', false),
+                    makeFetchDiff(pin, 'verify_fetch_diff', false),
                     makeFetchFile(pin, 'verify_fetch_file'),
                   ],
                   model: verifierModel,
@@ -517,8 +534,8 @@ ${JSON.stringify(candidates)}
               : {
                   result: findingVerificationSchema,
                   tools: [
-                    makeFetchPr(pin, 'verify_fetch_pr'),
-                    makeFetchDiff(pin, 'verify_fetch_diff'),
+                    makeFetchPr(pin, 'verify_fetch_pr', false),
+                    makeFetchDiff(pin, 'verify_fetch_diff', false),
                     makeFetchFile(pin, 'verify_fetch_file'),
                   ],
                   thinkingLevel: 'high',
@@ -569,7 +586,30 @@ ${JSON.stringify(candidates)}
       };
       if (pin) await recordReviewQualityById(pin.reviewId, quality);
       else await recordReviewQuality(agentInstanceId, quality);
-      const missingFiles = missingReviewFiles(manifest, data.reviewedFiles);
+      const reviewablePaths = new Set(
+        manifest.filter((file) => file.reviewable).map((file) => file.path),
+      );
+      const submittedEvidence = data.fileEvidence.filter((item) => reviewablePaths.has(item.path));
+      let coveredPaths: string[];
+      let blockedEvidence: { path: string; evidence: string }[];
+      if (pin) {
+        await recordReviewFileAcknowledgements(pin.reviewId, submittedEvidence);
+        const evidence = await listReviewFileEvidence(pin.reviewId);
+        coveredPaths = evidence
+          .filter((item) => item.patch_delivered && item.disposition === 'reviewed')
+          .map((item) => item.path);
+        blockedEvidence = evidence
+          .filter((item) => item.disposition === 'blocked' && item.evidence)
+          .map((item) => ({ path: item.path, evidence: item.evidence! }));
+      } else {
+        coveredPaths = submittedEvidence
+          .filter((item) => item.disposition === 'reviewed')
+          .map((item) => item.path);
+        blockedEvidence = submittedEvidence
+          .filter((item) => item.disposition === 'blocked')
+          .map((item) => ({ path: item.path, evidence: item.evidence }));
+      }
+      const missingFiles = missingReviewFiles(manifest, coveredPaths);
       const hasP1 = verifiedFindings.map(findingSeverity).includes('P1');
       const hasP2 = verifiedFindings.map(findingSeverity).includes('P2');
       const coverageComplete = missingFiles.length === 0;
@@ -610,7 +650,21 @@ ${JSON.stringify(candidates)}
         : '\n\n_Independent finding verification did not complete; candidates were withheld and this review cannot approve._';
       let postBody = `${data.body}${verificationNote}`;
       if (!coverageComplete) {
-        postBody += `\n\n_Coverage incomplete: ${missingFiles.length} reviewable file(s) were not inspected; this review cannot approve the change._`;
+        const shown = missingFiles.slice(0, 20).map((path) => `\`${path}\``);
+        const remaining = missingFiles.length - shown.length;
+        postBody +=
+          `\n\n_Coverage incomplete: ${reviewableFileCount - missingFiles.length}/${reviewableFileCount} ` +
+          `reviewable file patch(es) were delivered and acknowledged. Missing: ${shown.join(', ')}` +
+          (remaining > 0 ? `, and ${remaining} more` : '') +
+          '. This review is inconclusive and cannot approve the change._';
+        if (blockedEvidence.length > 0) {
+          postBody +=
+            '\n\nBlocked-file evidence:\n' +
+            blockedEvidence
+              .slice(0, 20)
+              .map((item) => `- \`${item.path}\`: ${item.evidence}`)
+              .join('\n');
+        }
       }
       let postComments = comments;
       let fallback: string | null = null;
@@ -652,6 +706,8 @@ ${JSON.stringify(candidates)}
         candidates: candidates.length,
         verifiedFindings: verifiedFindings.length,
         missingFiles,
+        coveredFiles: reviewableFileCount - missingFiles.length,
+        fileEvidence: submittedEvidence.length,
       };
       // Flip this dispatch's row to completed so /reviews stops showing it
       // as running. The findings count feeds the noise metric on the

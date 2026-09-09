@@ -33,6 +33,9 @@ import {
   recentChatHistory,
   recordReviewQuality,
   recordReviewQualityById,
+  recordReviewPatchDelivery,
+  recordReviewFileAcknowledgements,
+  listReviewFileEvidence,
   reviewQualityDashboard,
   recordRepositoryRef,
   repositoryRef,
@@ -102,6 +105,7 @@ beforeEach(async () => {
     'connections',
     'skills',
     'agents',
+    'review_file_evidence',
     'review_findings',
     'reviews',
     'todo_repositories',
@@ -428,6 +432,41 @@ describe('review dispatch invariants', () => {
         candidate_count: null,
         input_tokens: 0,
         submission_id: 'submission-current',
+      },
+    ]);
+  });
+
+  it('requires server-observed patch delivery alongside per-file acknowledgement', async () => {
+    const reviewId = await tryRecordReview(
+      101,
+      1001,
+      17,
+      'opened',
+      'review',
+      'review--acme--api--17',
+      'full',
+      null,
+      'c'.repeat(40),
+    );
+    expect(reviewId).not.toBeNull();
+    await recordReviewPatchDelivery(reviewId!, ['src/a.ts', 'src/a.ts']);
+    await recordReviewFileAcknowledgements(reviewId!, [
+      { path: 'src/a.ts', disposition: 'reviewed', evidence: 'checked the mutation path' },
+      { path: 'src/b.ts', disposition: 'blocked', evidence: 'patch exceeded the current packet' },
+    ]);
+
+    await expect(listReviewFileEvidence(reviewId!)).resolves.toEqual([
+      {
+        path: 'src/a.ts',
+        patch_delivered: true,
+        disposition: 'reviewed',
+        evidence: 'checked the mutation path',
+      },
+      {
+        path: 'src/b.ts',
+        patch_delivered: false,
+        disposition: 'blocked',
+        evidence: 'patch exceeded the current packet',
       },
     ]);
   });

@@ -88,10 +88,70 @@ export interface ReviewRunGuard {
   submission_id: string | null;
 }
 
+export interface ReviewFileEvidenceRow {
+  path: string;
+  patch_delivered: boolean;
+  disposition: 'reviewed' | 'blocked' | null;
+  evidence: string | null;
+}
+
+export interface ReviewFileAcknowledgement {
+  path: string;
+  disposition: 'reviewed' | 'blocked';
+  evidence: string;
+}
+
 export async function getReviewRunGuard(reviewId: number): Promise<ReviewRunGuard | null> {
   return queryOne<ReviewRunGuard>(sql`
     SELECT id, repository_id, pr_number, status, head_sha, submission_id
     FROM app.reviews WHERE id = ${reviewId}
+  `);
+}
+
+export async function recordReviewPatchDelivery(reviewId: number, paths: string[]): Promise<void> {
+  const uniquePaths = [...new Set(paths)];
+  if (uniquePaths.length === 0) return;
+  const values = uniquePaths.map((path) => sql`(${reviewId}, ${path}, TRUE, CURRENT_TIMESTAMP)`);
+  await execute(sql`
+    INSERT INTO app.review_file_evidence (review_id, path, patch_delivered, delivered_at)
+    VALUES ${sql.join(values, sql`, `)}
+    ON CONFLICT (review_id, path) DO UPDATE SET
+      patch_delivered = TRUE,
+      delivered_at = COALESCE(app.review_file_evidence.delivered_at, EXCLUDED.delivered_at)
+  `);
+}
+
+export async function recordReviewFileAcknowledgements(
+  reviewId: number,
+  acknowledgements: ReviewFileAcknowledgement[],
+): Promise<void> {
+  const unique = [
+    ...new Map(
+      acknowledgements.map((acknowledgement) => [acknowledgement.path, acknowledgement]),
+    ).values(),
+  ];
+  if (unique.length === 0) return;
+  const values = unique.map(
+    (item) =>
+      sql`(${reviewId}, ${item.path}, ${item.disposition}, ${item.evidence}, CURRENT_TIMESTAMP)`,
+  );
+  await execute(sql`
+    INSERT INTO app.review_file_evidence
+      (review_id, path, disposition, evidence, acknowledged_at)
+    VALUES ${sql.join(values, sql`, `)}
+    ON CONFLICT (review_id, path) DO UPDATE SET
+      disposition = EXCLUDED.disposition,
+      evidence = EXCLUDED.evidence,
+      acknowledged_at = EXCLUDED.acknowledged_at
+  `);
+}
+
+export async function listReviewFileEvidence(reviewId: number): Promise<ReviewFileEvidenceRow[]> {
+  return queryRows<ReviewFileEvidenceRow>(sql`
+    SELECT path, patch_delivered, disposition, evidence
+    FROM app.review_file_evidence
+    WHERE review_id = ${reviewId}
+    ORDER BY path
   `);
 }
 
