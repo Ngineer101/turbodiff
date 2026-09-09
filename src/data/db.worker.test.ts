@@ -32,6 +32,7 @@ import {
   pipelineCostByMonth,
   recentChatHistory,
   recordReviewQuality,
+  recordReviewQualityById,
   reviewQualityDashboard,
   recordRepositoryRef,
   repositoryRef,
@@ -42,8 +43,13 @@ import {
   tryRecordAutomationRun,
   tryRecordFixAttempt,
   markReviewFailed,
+  markReviewFailedById,
+  markReviewFailedBySubmission,
+  bindReviewSubmission,
   tryRecordReview,
   completeReview,
+  completeReviewById,
+  addReviewUsageBySubmission,
   headHasCompletedReview,
   lastReviewedHead,
   latestCompletedReviewsByAgent,
@@ -334,6 +340,98 @@ describe('cockpit chat messages', () => {
 });
 
 describe('review dispatch invariants', () => {
+  it('never lets an older submission mutate its replacement review', async () => {
+    const instanceId = 'review--acme--api--16';
+    const oldId = await tryRecordReview(
+      101,
+      1001,
+      16,
+      'opened',
+      'review',
+      instanceId,
+      'full',
+      null,
+      'a'.repeat(40),
+    );
+    expect(oldId).not.toBeNull();
+    await bindReviewSubmission(oldId!, 'submission-old');
+    await markReviewFailedById(oldId!, 'replaced');
+
+    const currentId = await tryRecordReview(
+      101,
+      1001,
+      16,
+      'synchronize',
+      'review',
+      instanceId,
+      'full',
+      null,
+      'b'.repeat(40),
+    );
+    expect(currentId).not.toBeNull();
+    await bindReviewSubmission(currentId!, 'submission-current');
+
+    await expect(
+      completeReviewById(oldId!, 'https://example.test/stale', 3, 'approve'),
+    ).resolves.toBeNull();
+    await recordReviewQualityById(oldId!, {
+      candidates: [],
+      decisions: [],
+      publishedCandidateIndexes: [],
+      status: 'completed',
+      model: null,
+      inputTokens: 0,
+      outputTokens: 0,
+      costUsd: 0,
+      latencyMs: null,
+      experimentKey: null,
+    });
+    await expect(
+      markReviewFailedBySubmission('submission-old', 'late failure'),
+    ).resolves.toBeNull();
+    await addReviewUsageBySubmission('submission-old', {
+      inputTokens: 7,
+      outputTokens: 2,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      costUsd: 0.01,
+      model: 'cloudflare/openai/gpt-5.6-sol',
+    });
+
+    const rows = await testDatabase()
+      .prepare(
+        `SELECT id, status, findings_count, candidate_count, input_tokens, submission_id
+         FROM reviews WHERE agent_instance_id = ?1 ORDER BY id`,
+      )
+      .bind(instanceId)
+      .all<{
+        id: number;
+        status: string;
+        findings_count: number | null;
+        candidate_count: number | null;
+        input_tokens: number;
+        submission_id: string;
+      }>();
+    expect(rows.results).toEqual([
+      {
+        id: oldId,
+        status: 'failed',
+        findings_count: null,
+        candidate_count: null,
+        input_tokens: 7,
+        submission_id: 'submission-old',
+      },
+      {
+        id: currentId,
+        status: 'running',
+        findings_count: null,
+        candidate_count: null,
+        input_tokens: 0,
+        submission_id: 'submission-current',
+      },
+    ]);
+  });
+
   it('records verifier evidence and tenant-scoped finding feedback', async () => {
     await tryRecordReview(101, 1001, 15, 'opened', 'review', 'review--acme--api--15');
     const candidate = {

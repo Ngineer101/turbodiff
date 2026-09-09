@@ -5,7 +5,7 @@ import { runCheckCommand } from '../runtime/check-command.ts';
 import { installDependencies } from '../runtime/sandbox-deps.ts';
 import { assertRepositorySearchPath } from '../runtime/review-workspace-policy.ts';
 import { prepareReviewWorkspace, type ReviewWorkspace } from '../runtime/review-workspace.ts';
-import { assertPinned, type RepoPin } from './github.ts';
+import { assertHeadPinned, assertPrPinned, type RepoPin } from './github.ts';
 
 const MAX_TOOL_OUTPUT = 20_000;
 
@@ -24,7 +24,7 @@ async function resetWorkspace(workspace: ReviewWorkspace): Promise<void> {
 }
 
 async function pinnedRepo(pin: RepoPin, owner: string, repo: string) {
-  assertPinned(pin, owner, repo);
+  if (pin) assertPrPinned(pin, owner, repo, pin.number);
   const row = await getRepoByFullName(owner, repo);
   if (!row) throw new Error(`Turbodiff is not installed on ${owner}/${repo}`);
   return row;
@@ -46,6 +46,8 @@ export const makeSearchRepository = (agentInstanceId: string, pin: RepoPin) =>
       path: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(500)), '.'),
     }),
     async run({ data }) {
+      assertPrPinned(pin, data.owner, data.repo, data.number);
+      assertHeadPinned(pin, data.headSha);
       const repo = await pinnedRepo(pin, data.owner, data.repo);
       const path = assertRepositorySearchPath(data.path);
       const workspace = await prepareReviewWorkspace(
@@ -80,6 +82,8 @@ export const makeRunRepositoryCheck = (agentInstanceId: string, pin: RepoPin) =>
       headSha: v.pipe(v.string(), v.length(40)),
     }),
     async run({ data }) {
+      assertPrPinned(pin, data.owner, data.repo, data.number);
+      assertHeadPinned(pin, data.headSha);
       const repo = await pinnedRepo(pin, data.owner, data.repo);
       if (!repo.check_command) {
         return { output: { configured: false, ran: false, passed: null, output: '' } };

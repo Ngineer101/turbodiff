@@ -1,7 +1,8 @@
 import { dispatch } from '@flue/runtime';
 import {
+  bindReviewSubmission,
   listRepoConnections,
-  markReviewFailed,
+  markReviewFailedById,
   tryRecordReview,
   type AgentRow,
   type RepositoryRow,
@@ -72,6 +73,8 @@ export async function dispatchReviewAgent(
   if (reviewId === null) return false;
   const connections = (await listRepoConnections(repo.id, 'reviews')).map(connectionSnapshot);
   const baseAttributes = {
+    review_id: String(reviewId),
+    expected_head_sha: opts.headSha ?? '',
     agent_slug: agent.slug,
     agent_name: agent.name,
     model: assignment.scout,
@@ -92,8 +95,9 @@ export async function dispatchReviewAgent(
       : baseAttributes;
 
   try {
-    await dispatch(PrReviewer, {
+    const receipt = await dispatch(PrReviewer, {
       id: instanceId,
+      idempotencyKey: `review-${reviewId}`,
       message: {
         kind: 'signal',
         type: 'review.request',
@@ -107,13 +111,14 @@ export async function dispatchReviewAgent(
           (opts.delta ? pushFocus(opts.delta) : ''),
       },
     });
+    await bindReviewSubmission(reviewId, receipt.submissionId);
   } catch (error) {
     console.error(
       `turbodiff: dispatch failed for ${instanceId} (${agent.slug} on ${repo.owner}/${repo.name}#${prNumber}):`,
       error,
     );
-    await markReviewFailed(
-      instanceId,
+    await markReviewFailedById(
+      reviewId,
       `dispatch failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 1_000),
     );
     return false;

@@ -2,7 +2,7 @@ import { sql } from 'drizzle-orm';
 import { STALL_AFTER_MINUTES } from '../shared/time.ts';
 import type { CandidateFinding, FindingDecision } from '../domain/review-verification.ts';
 import type { ReviewConclusion } from '../domain/review-context.ts';
-import { queryOne, queryRows, withTransaction } from './database.ts';
+import { execute, queryOne, queryRows, withTransaction } from './database.ts';
 import { bigintArray, minutesAgo } from './sql.ts';
 
 export interface AgentUsageRow {
@@ -46,6 +46,7 @@ export interface ReviewActivityRow {
   model: string | null;
   agent_slug: string | null; // null on rows predating multi-agent support
   agent_instance_id: string | null;
+  submission_id: string | null;
   risk_tier: string | null; // null before tiering, and on mention/manual dispatch
   findings_count: number | null; // null until post_review completes the row
   stage_run_id: number | null;
@@ -78,6 +79,22 @@ export interface ReviewQualityRecord {
   experimentKey: string | null;
 }
 
+export interface ReviewRunGuard {
+  id: number;
+  repository_id: number;
+  pr_number: number;
+  status: string;
+  head_sha: string | null;
+  submission_id: string | null;
+}
+
+export async function getReviewRunGuard(reviewId: number): Promise<ReviewRunGuard | null> {
+  return queryOne<ReviewRunGuard>(sql`
+    SELECT id, repository_id, pr_number, status, head_sha, submission_id
+    FROM app.reviews WHERE id = ${reviewId}
+  `);
+}
+
 export async function recordReviewQuality(
   agentInstanceId: string,
   quality: ReviewQualityRecord,
@@ -101,6 +118,53 @@ export async function recordReviewQuality(
         verification_latency_ms = ${quality.latencyMs},
         experiment_key = ${quality.experimentKey}
       WHERE id = ${reviewId}
+    `);
+    await transaction.execute(sql`DELETE FROM app.review_findings WHERE review_id = ${reviewId}`);
+    if (quality.candidates.length === 0) return;
+    const published = new Set(quality.publishedCandidateIndexes);
+    const decisions = new Map(quality.decisions.map((decision) => [decision.candidate, decision]));
+    const values = quality.candidates.map((candidate, index) => {
+      const decision = decisions.get(index);
+      return sql`(
+        ${reviewId}, ${index}, ${candidate.path}, ${candidate.line}, ${candidate.side},
+        ${candidate.severity}, ${candidate.body}, ${candidate.evidence}, ${candidate.failurePath},
+        ${published.has(index)}, ${decision?.confidence ?? null}, ${decision?.severity ?? null},
+        ${decision?.reason ?? null}
+      )`;
+    });
+    await transaction.execute(sql`
+      INSERT INTO app.review_findings
+        (review_id, candidate_index, path, line, side, severity, body, evidence, failure_path,
+         published, verifier_confidence, verifier_severity, verification_reason)
+      VALUES ${sql.join(values, sql`, `)}
+    `);
+  });
+}
+
+// Exact-run variant used by dispatched reviews. Re-review conversations reuse
+// their agent instance id, so production writes must never select "latest".
+export async function recordReviewQualityById(
+  reviewId: number,
+  quality: ReviewQualityRecord,
+): Promise<void> {
+  await withTransaction(async (transaction) => {
+    const found = await transaction.execute<{ id: number }>(sql`
+      SELECT id FROM app.reviews
+      WHERE id = ${reviewId} AND status = 'running'
+      FOR UPDATE
+    `);
+    if (!found.rows[0]) return;
+    await transaction.execute(sql`
+      UPDATE app.reviews SET
+        candidate_count = ${quality.candidates.length},
+        verification_status = ${quality.status},
+        verification_model = ${quality.model},
+        verification_input_tokens = ${quality.inputTokens},
+        verification_output_tokens = ${quality.outputTokens},
+        verification_cost_usd = ${quality.costUsd},
+        verification_latency_ms = ${quality.latencyMs},
+        experiment_key = ${quality.experimentKey}
+      WHERE id = ${reviewId} AND status = 'running'
     `);
     await transaction.execute(sql`DELETE FROM app.review_findings WHERE review_id = ${reviewId}`);
     if (quality.candidates.length === 0) return;
@@ -385,6 +449,37 @@ export async function markReviewFailed(
       ORDER BY id DESC LIMIT 1
     )
     RETURNING stage_run_id
+  `);
+}
+
+export async function markReviewFailedById(
+  reviewId: number,
+  error: string | null = null,
+): Promise<{ stage_run_id: number | null } | null> {
+  return queryOne<{ stage_run_id: number | null }>(sql`
+    UPDATE app.reviews SET status = 'failed', completed_at = CURRENT_TIMESTAMP,
+      error = COALESCE(${error}::text, error)
+    WHERE id = ${reviewId} AND status = 'running'
+    RETURNING stage_run_id
+  `);
+}
+
+export async function markReviewFailedBySubmission(
+  submissionId: string,
+  error: string | null = null,
+): Promise<{ stage_run_id: number | null } | null> {
+  return queryOne<{ stage_run_id: number | null }>(sql`
+    UPDATE app.reviews SET status = 'failed', completed_at = CURRENT_TIMESTAMP,
+      error = COALESCE(${error}::text, error)
+    WHERE submission_id = ${submissionId} AND status = 'running'
+    RETURNING stage_run_id
+  `);
+}
+
+export async function bindReviewSubmission(reviewId: number, submissionId: string): Promise<void> {
+  await execute(sql`
+    UPDATE app.reviews SET submission_id = ${submissionId}
+    WHERE id = ${reviewId} AND status = 'running' AND submission_id IS NULL
   `);
 }
 

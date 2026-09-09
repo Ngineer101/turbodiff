@@ -62,18 +62,38 @@ function parseOwnerRepoNumber(
   return match ? { owner: match[1], repo: match[2], number: Number(match[3]) } : null;
 }
 
-function parsePin(raw: string | undefined): RepoPin {
+function parseReviewIdentity(
+  rawId: string | undefined,
+  expectedHeadSha: string | undefined,
+): { reviewId: number; expectedHeadSha: string } | null {
+  const reviewId = Number(rawId);
+  if (!Number.isSafeInteger(reviewId) || reviewId <= 0 || !expectedHeadSha) return null;
+  return { reviewId, expectedHeadSha };
+}
+
+function parsePin(
+  raw: string | undefined,
+  rawId: string | undefined,
+  expectedHeadSha: string | undefined,
+): RepoPin {
   const parsed = parseOwnerRepoNumber(raw);
-  return parsed ? { owner: parsed.owner, repo: parsed.repo } : null;
+  const identity = parseReviewIdentity(rawId, expectedHeadSha);
+  return parsed && identity ? { ...parsed, ...identity } : null;
 }
 
 // Native change-request dispatches ("owner/name#3" + a CR row id) swap the
 // GitHub tool set for the CR-backed one; the agent itself is identical.
-function parseCrPin(raw: string | undefined, rawId: string | undefined): CrPin | null {
+function parseCrPin(
+  raw: string | undefined,
+  rawCrId: string | undefined,
+  rawReviewId: string | undefined,
+  expectedHeadSha: string | undefined,
+): CrPin | null {
   const parsed = parseOwnerRepoNumber(raw);
-  const id = Number(rawId);
-  if (!parsed || !Number.isInteger(id) || id <= 0) return null;
-  return { ...parsed, changeRequestId: id };
+  const id = Number(rawCrId);
+  const identity = parseReviewIdentity(rawReviewId, expectedHeadSha);
+  if (!parsed || !identity || !Number.isInteger(id) || id <= 0) return null;
+  return { ...parsed, changeRequestId: id, ...identity };
 }
 
 function deliveryConfig() {
@@ -86,8 +106,17 @@ function deliveryConfig() {
       experimentKey: delivery.attributes.experiment_key || null,
       riskTier: delivery.attributes.risk_tier || 'full',
       connections: parseConnections(delivery.attributes.connections),
-      pin: parsePin(delivery.attributes.pull_request),
-      crPin: parseCrPin(delivery.attributes.change_request, delivery.attributes.change_request_id),
+      pin: parsePin(
+        delivery.attributes.pull_request,
+        delivery.attributes.review_id,
+        delivery.attributes.expected_head_sha,
+      ),
+      crPin: parseCrPin(
+        delivery.attributes.change_request,
+        delivery.attributes.change_request_id,
+        delivery.attributes.review_id,
+        delivery.attributes.expected_head_sha,
+      ),
     };
   }
   // Pre-multi-agent conversations and manual test prompts arrive as plain
@@ -145,7 +174,7 @@ export function PrReviewer(props: AgentProps) {
     useTool(makeFetchCr(cfg.crPin));
     useTool(makeFetchCrFile(cfg.crPin));
     useTool(makeFetchCrComments(cfg.crPin));
-    useTool(makePostCrReview(props.id, cfg.crPin));
+    useTool(makePostCrReview(cfg.crPin));
   } else {
     useTool(makeFetchPr(cfg.pin));
     useTool(makeFetchDiff(cfg.pin));

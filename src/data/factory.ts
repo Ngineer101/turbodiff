@@ -1153,6 +1153,38 @@ export async function completeReview(
   `);
 }
 
+export async function completeReviewById(
+  reviewId: number,
+  reviewUrl: string | null,
+  findingsCount: number | null = null,
+  verdict: 'approve' | 'comment' | 'request_changes' = 'comment',
+  findingPaths: string[] | null = null,
+  readiness?: {
+    conclusion: ReviewConclusion;
+    coverageStatus: 'complete' | 'incomplete' | 'stale';
+    reviewableFileCount: number;
+    coveredFileCount: number;
+    missingPaths: string[];
+    coverageHeadSha: string | null;
+    publishedHeadSha: string | null;
+  },
+): Promise<{ stage_run_id: number | null } | null> {
+  return queryOne<{ stage_run_id: number | null }>(sql`
+    UPDATE app.reviews SET status = 'completed', completed_at = CURRENT_TIMESTAMP,
+      review_url = ${reviewUrl}, findings_count = ${findingsCount}, verdict = ${verdict},
+      finding_paths = ${findingPaths === null ? null : JSON.stringify(findingPaths)}::jsonb,
+      conclusion = ${readiness?.conclusion ?? null},
+      coverage_status = ${readiness?.coverageStatus ?? null},
+      reviewable_file_count = ${readiness?.reviewableFileCount ?? null},
+      covered_file_count = ${readiness?.coveredFileCount ?? null},
+      missing_paths = ${readiness ? JSON.stringify(readiness.missingPaths) : null}::jsonb,
+      coverage_head_sha = ${readiness?.coverageHeadSha ?? null},
+      published_head_sha = ${readiness?.publishedHeadSha ?? null}
+    WHERE id = ${reviewId} AND status = 'running'
+    RETURNING stage_run_id
+  `);
+}
+
 // Accumulates one model turn's usage onto the latest review row for an agent
 // instance. Fired from the observe() metering subscriber.
 export async function addReviewUsage(
@@ -1177,5 +1209,27 @@ export async function addReviewUsage(
       SELECT id FROM app.reviews WHERE agent_instance_id = ${agentInstanceId}
       ORDER BY id DESC LIMIT 1
     )
+  `);
+}
+
+export async function addReviewUsageBySubmission(
+  submissionId: string,
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    costUsd: number;
+    model: string;
+  },
+): Promise<void> {
+  await execute(sql`
+    UPDATE app.reviews SET
+      input_tokens = input_tokens + ${usage.inputTokens},
+      output_tokens = output_tokens + ${usage.outputTokens},
+      cache_read_tokens = cache_read_tokens + ${usage.cacheReadTokens},
+      cache_write_tokens = cache_write_tokens + ${usage.cacheWriteTokens},
+      cost_usd = cost_usd + ${usage.costUsd}, model = ${usage.model}
+    WHERE submission_id = ${submissionId}
   `);
 }

@@ -1,0 +1,2 @@
+ALTER TABLE "app"."reviews" ADD COLUMN "submission_id" text;--> statement-breakpoint
+CREATE UNIQUE INDEX "reviews_submission_id_idx" ON "app"."reviews" USING btree ("submission_id") WHERE (submission_id IS NOT NULL);
