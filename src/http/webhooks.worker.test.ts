@@ -1630,7 +1630,7 @@ describe('push re-reviews', () => {
     });
     await expect(getFactoryRun(stage.factoryRunId)).resolves.toMatchObject({
       status: 'awaiting_human',
-      handoff_reason: 'review stage failed',
+      handoff_reason: 'stage failure requires retry policy evaluation',
     });
   });
 
