@@ -39,6 +39,7 @@ import {
   queryClient,
   repoCodeQuery,
   reviewQualityQuery,
+  reviewsQuery,
   settingsQuery,
   skillCatalogQuery,
   skillQuery,
@@ -168,7 +169,11 @@ const usageRoute = createRoute({
 const reviewQualityRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/review-quality',
-  loader: () => queryClient.ensureQueryData(reviewQualityQuery),
+  loader: () =>
+    Promise.all([
+      queryClient.ensureQueryData(reviewQualityQuery),
+      queryClient.ensureQueryData(reviewsQuery),
+    ]),
   component: lazyRouteComponent(() => import('./pages/review-quality.tsx'), 'ReviewQualityPage'),
 });
 

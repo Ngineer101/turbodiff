@@ -58,6 +58,7 @@ export interface ReviewActivityRow {
   missing_paths: string[] | null;
   coverage_head_sha: string | null;
   published_head_sha: string | null;
+  verification_status: ReviewVerificationStatus | null;
   error: string | null; // why a failed row failed
   repo_owner: string | null; // null if the repo was since removed
   repo_name: string | null;
@@ -93,6 +94,10 @@ export interface ReviewFileEvidenceRow {
   patch_delivered: boolean;
   disposition: 'reviewed' | 'blocked' | null;
   evidence: string | null;
+}
+
+export interface ReviewFileEvidenceDetail extends ReviewFileEvidenceRow {
+  review_id: number;
 }
 
 export interface ReviewFileAcknowledgement {
@@ -178,6 +183,30 @@ export async function listReviewFileEvidence(reviewId: number): Promise<ReviewFi
     FROM app.review_file_evidence e
     WHERE e.review_id = ${reviewId}
     ORDER BY e.path
+  `);
+}
+
+export async function listReviewFileEvidenceForReviews(
+  reviewIds: number[],
+): Promise<ReviewFileEvidenceDetail[]> {
+  if (reviewIds.length === 0) return [];
+  return queryRows<ReviewFileEvidenceDetail>(sql`
+    SELECT e.review_id, e.path,
+      (
+        e.patch_delivered OR EXISTS (
+          SELECT 1 FROM app.review_patch_deliveries d
+          WHERE d.review_id = e.review_id AND d.path = e.path
+          GROUP BY d.review_id, d.path
+          HAVING COUNT(*) = MAX(d.chunk_count)
+            AND MIN(d.chunk_count) = MAX(d.chunk_count)
+            AND MIN(d.chunk_index) = 0
+            AND MAX(d.chunk_index) = MAX(d.chunk_count) - 1
+        )
+      ) AS patch_delivered,
+      e.disposition, e.evidence
+    FROM app.review_file_evidence e
+    WHERE e.review_id = ANY(${bigintArray(reviewIds)})
+    ORDER BY e.review_id, e.path
   `);
 }
 

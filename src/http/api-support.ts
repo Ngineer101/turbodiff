@@ -17,6 +17,7 @@ import {
   type PlanWithRepo,
   type RepositoryRow,
   type ReviewActivityRow,
+  type ReviewFileEvidenceDetail,
   type SkillRow,
   type TaskRepoStatusRow,
   type VerificationRow,
@@ -59,7 +60,10 @@ export function totalTokens(row: {
   return row.input_tokens + row.output_tokens + row.cache_read_tokens + row.cache_write_tokens;
 }
 
-export function serializeReview(r: ReviewActivityRow): ApiReview {
+export function serializeReview(
+  r: ReviewActivityRow,
+  fileEvidence: ReviewFileEvidenceDetail[] = [],
+): ApiReview {
   const repo = r.repo_owner && r.repo_name ? `${r.repo_owner}/${r.repo_name}` : null;
   return {
     id: r.id,
@@ -70,6 +74,26 @@ export function serializeReview(r: ReviewActivityRow): ApiReview {
     trigger_event: r.trigger_event,
     risk_tier: r.risk_tier,
     findings_count: r.findings_count,
+    verdict:
+      r.verdict === 'approve' || r.verdict === 'comment' || r.verdict === 'request_changes'
+        ? r.verdict
+        : null,
+    conclusion: r.conclusion,
+    coverage_status: r.coverage_status,
+    reviewable_file_count: r.reviewable_file_count,
+    covered_file_count: r.covered_file_count,
+    missing_paths: r.missing_paths ?? [],
+    coverage_head_sha: r.coverage_head_sha,
+    published_head_sha: r.published_head_sha,
+    verification_status: r.verification_status,
+    file_evidence: fileEvidence
+      .filter((item) => item.review_id === r.id)
+      .map(({ path, patch_delivered, disposition, evidence }) => ({
+        path,
+        patch_delivered,
+        disposition,
+        evidence,
+      })),
     state: reviewState(r),
     error: r.error,
     review_url: r.review_url,

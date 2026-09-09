@@ -3,6 +3,7 @@
 // both the worker and client TypeScript programs.
 
 export type ReviewState = 'running' | 'completed' | 'stalled' | 'failed';
+export type ApiReviewConclusion = 'ready' | 'ready_with_warnings' | 'not_ready' | 'inconclusive';
 
 export type ApiProcessProfile =
   | 'review_on_demand'
@@ -25,6 +26,21 @@ export interface ApiReview {
   trigger_event: string;
   risk_tier: string | null;
   findings_count: number | null;
+  verdict: 'approve' | 'comment' | 'request_changes' | null;
+  conclusion: ApiReviewConclusion | null;
+  coverage_status: 'complete' | 'incomplete' | 'stale' | null;
+  reviewable_file_count: number | null;
+  covered_file_count: number | null;
+  missing_paths: string[];
+  coverage_head_sha: string | null;
+  published_head_sha: string | null;
+  verification_status: 'skipped' | 'completed' | 'failed' | 'incomplete' | null;
+  file_evidence: {
+    path: string;
+    patch_delivered: boolean;
+    disposition: 'reviewed' | 'blocked' | null;
+    evidence: string | null;
+  }[];
   state: ReviewState;
   error: string | null; // why a failed review failed
   review_url: string | null;

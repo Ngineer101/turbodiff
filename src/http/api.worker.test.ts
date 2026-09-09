@@ -13,6 +13,7 @@ import type {
   ApiFeatureDetail,
   ApiFeatureExplanation,
   ApiModels,
+  ApiReviewsPage,
   ApiSettings,
   ApiUsage,
   ExplanationDocument,
@@ -281,6 +282,59 @@ describe('review quality feedback', () => {
         )
         .first(),
     ).resolves.toMatchObject({ feedback: 'useful', feedback_by_github_id: 3001, stamped: true });
+  });
+
+  it('returns tenant-scoped readiness and complete per-file delivery evidence', async () => {
+    await testDatabase().batch([
+      testDatabase().prepare(
+        `INSERT INTO reviews
+          (id, repository_id, installation_id, pr_number, trigger_event, status, conclusion,
+           coverage_status, reviewable_file_count, covered_file_count, missing_paths,
+           coverage_head_sha, published_head_sha, verification_status)
+         VALUES
+          (9201, 101, 1001, 27, 'opened', 'completed', 'ready_with_warnings',
+           'complete', 2, 2, '[]', 'abc123', 'abc123', 'completed'),
+          (9202, 202, 2002, 28, 'opened', 'completed', 'ready',
+           'complete', 1, 1, '[]', 'private-sha', 'private-sha', 'completed')`,
+      ),
+      testDatabase().prepare(
+        `INSERT INTO review_file_evidence
+          (review_id, path, patch_delivered, disposition, evidence, delivered_at, acknowledged_at)
+         VALUES
+          (9201, 'src/complete.ts', true, 'reviewed', 'Checked the authorization branch.',
+           CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+          (9201, 'src/chunked.ts', false, 'reviewed', 'Checked all paged diff chunks.',
+           NULL, CURRENT_TIMESTAMP),
+          (9202, 'src/private.ts', true, 'reviewed', 'Must not cross the tenant boundary.',
+           CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      ),
+      testDatabase().prepare(
+        `INSERT INTO review_patch_deliveries (review_id, path, chunk_index, chunk_count)
+         VALUES (9201, 'src/chunked.ts', 0, 2), (9201, 'src/chunked.ts', 1, 2)`,
+      ),
+    ]);
+
+    const response = await authenticatedApi().request('https://turbodiff.test/api/reviews?page=1');
+    expect(response.status).toBe(200);
+    const payload = await response.json<ApiReviewsPage>();
+
+    expect(payload.reviews).toHaveLength(1);
+    expect(payload.reviews[0]).toMatchObject({
+      id: 9201,
+      repo: 'acme/api',
+      conclusion: 'ready_with_warnings',
+      coverage_status: 'complete',
+      reviewable_file_count: 2,
+      covered_file_count: 2,
+      coverage_head_sha: 'abc123',
+      published_head_sha: 'abc123',
+      verification_status: 'completed',
+      file_evidence: [
+        { path: 'src/chunked.ts', patch_delivered: true, disposition: 'reviewed' },
+        { path: 'src/complete.ts', patch_delivered: true, disposition: 'reviewed' },
+      ],
+    });
+    expect(JSON.stringify(payload)).not.toContain('private-sha');
   });
 });
 
