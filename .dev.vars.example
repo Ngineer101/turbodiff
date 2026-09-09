@@ -1,0 +1,38 @@
+# Copy this file to `.dev.vars` for local development. For production, set
+# non-secret variables and secrets in Cloudflare under Settings → Variables
+# and Secrets. Never put production secrets in a committed file.
+
+# Required Worker variables
+AI_GATEWAY_ID="default"
+AI_GATEWAY_ACCOUNT_ID=""
+PUBLIC_BASE_URL="http://localhost:5173"
+GITHUB_APP_SLUG=""
+
+# Optional Worker variables
+# Required only when the Cloudflare Artifacts integration is enabled. Get the
+# value from `wrangler artifacts repos get <name> --namespace <namespace>`.
+ARTIFACTS_REMOTE_BASE=""
+# Required only when invitation email is enabled.
+RESEND_FROM_ADDRESS=""
+REVIEW_DAILY_LIMIT="50"
+# Empty disables the cheap-model override for trivial reviews.
+TRIVIAL_MODEL=""
+
+# Required Worker secrets
+GITHUB_APP_ID=""
+GITHUB_APP_PRIVATE_KEY=""
+GITHUB_WEBHOOK_SECRET=""
+GITHUB_OAUTH_CLIENT_ID=""
+GITHUB_OAUTH_CLIENT_SECRET=""
+SESSION_SECRET=""
+AI_GATEWAY_API_TOKEN=""
+
+# Optional Worker secrets and local-only settings
+REVIEW_SECRET=""
+TOKEN_ENCRYPTION_KEY=""
+RESEND_API_KEY=""
+SKILLS_SH_API_TOKEN=""
+VAPID_PUBLIC_KEY=""
+VAPID_PRIVATE_KEY=""
+VAPID_SUBJECT=""
+DEV_FAKE_INSTALLATIONS=""

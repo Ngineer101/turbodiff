@@ -1,5 +1,15 @@
 declare namespace Cloudflare {
   interface Env {
+    // Deployment-specific Worker variables are managed in Cloudflare rather
+    // than declared in wrangler.jsonc. See `.dev.vars.example`.
+    AI_GATEWAY_ID: string;
+    AI_GATEWAY_ACCOUNT_ID: string;
+    PUBLIC_BASE_URL: string;
+    GITHUB_APP_SLUG: string;
+    ARTIFACTS_REMOTE_BASE: string;
+    RESEND_FROM_ADDRESS: string;
+    REVIEW_DAILY_LIMIT: string;
+    TRIVIAL_MODEL: string;
     AI_GATEWAY_API_TOKEN: string;
     GITHUB_APP_ID: string;
     GITHUB_APP_PRIVATE_KEY: string;

@@ -99,7 +99,7 @@ export async function computePushDelta(
 }
 
 // Optional cheap-model override for trivial reviews. TRIVIAL_MODEL is a
-// gateway model id in wrangler.jsonc vars; empty disables the downgrade and
+// dashboard-managed Worker variable; empty disables the downgrade and
 // trivial reviews run each agent's configured model.
 export function tierModelOverride(tier: RiskTier): string | undefined {
   return tier === 'trivial' && env.TRIVIAL_MODEL ? env.TRIVIAL_MODEL : undefined;

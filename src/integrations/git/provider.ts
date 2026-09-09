@@ -33,7 +33,7 @@ export function artifactsRemoteUrl(artifactsRepo: string): string {
   const base = (env.ARTIFACTS_REMOTE_BASE ?? '').trim().replace(/\/+$/, '');
   if (!base) {
     throw new Error(
-      'ARTIFACTS_REMOTE_BASE is not configured — set it in wrangler.jsonc vars ' +
+      'ARTIFACTS_REMOTE_BASE is not configured — set the Worker variable in Cloudflare ' +
         '(see: npx wrangler artifacts repos get)',
     );
   }

@@ -83,14 +83,18 @@ vp install
 ### 2. Set up Cloudflare
 
 Create an AI Gateway and enable billing for any third-party models you want to
-use. In [wrangler.jsonc](wrangler.jsonc), replace the existing deployment
-values with your own. The complete list is in
-[Environment variables](#environment-variables).
+use. The committed [wrangler.jsonc](wrangler.jsonc) defines shared Worker
+infrastructure but intentionally contains no deployment-specific environment
+values. Configure those for your Worker in Cloudflare under **Settings →
+Variables and Secrets**. Wrangler's `keep_vars` setting preserves them across
+future deployments. The complete list is in
+[Environment variables](#environment-variables), with local examples in
+[.dev.vars.example](.dev.vars.example).
 
 The optional Cloudflare Artifacts binding is for repositories created inside
 Turbodiff. It requires access to Cloudflare Artifacts. If you only use GitHub
 repositories, remove the `artifacts` binding, its event triggers, and the
-`ARTIFACTS_REMOTE_BASE` variable from `wrangler.jsonc`.
+`ARTIFACTS_REMOTE_BASE` variable from your Cloudflare Worker.
 
 ### 3. Set up PostgreSQL
 
@@ -146,13 +150,14 @@ openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt \
   -in app.pem -out app.pkcs8.pem
 ```
 
-Set `GITHUB_APP_SLUG` in `wrangler.jsonc` to the name from the app's GitHub URL.
+Set the `GITHUB_APP_SLUG` Worker variable to the name from the app's GitHub URL.
 
 ### 6. Configure the environment
 
-Set the required variables and secrets listed below. Put non-secret Worker
-values in `wrangler.jsonc`. For local development, put secrets in `.dev.vars`.
-For a deployed Worker, save each secret with:
+Set the required variables and secrets listed below. For local development,
+copy `.dev.vars.example` to `.dev.vars` and fill in your values. For a deployed
+Worker, add non-secret values under **Settings → Variables and Secrets** in
+Cloudflare, and save each secret with:
 
 ```sh
 vp exec wrangler secret put <NAME>
@@ -188,8 +193,9 @@ then sign in at your deployment URL.
 
 Turbodiff has three kinds of configuration:
 
-- **Worker variables** are non-secret values in the `vars` section of
-  `wrangler.jsonc`.
+- **Worker variables** are non-secret values in Cloudflare's **Variables and
+  Secrets** settings. They are preserved by `keep_vars` during Wrangler
+  deployments.
 - **Worker secrets** go in `.dev.vars` locally and in Cloudflare's secret store
   after deployment.
 - **Shell and CI variables** are used by setup and deployment commands. They
@@ -224,17 +230,7 @@ Generate `SESSION_SECRET` with `openssl rand -hex 32`.
 permission. Use a limited database account for `HYPERDRIVE_DATABASE_URL`, not
 the more powerful account used for migrations.
 
-Minimal local `.dev.vars` file:
-
-```dotenv
-GITHUB_APP_ID=""
-GITHUB_APP_PRIVATE_KEY=""
-GITHUB_WEBHOOK_SECRET=""
-GITHUB_OAUTH_CLIENT_ID=""
-GITHUB_OAUTH_CLIENT_SECRET=""
-SESSION_SECRET=""
-AI_GATEWAY_API_TOKEN=""
-```
+Use [.dev.vars.example](.dev.vars.example) as the local configuration template.
 
 ### Optional
 
@@ -265,9 +261,8 @@ save credentials for connected tools.
 The three `VAPID_*` values must be configured together. If they are absent,
 only browser notifications are disabled.
 
-When `.dev.vars` exists, you may also put local overrides for
-`AI_GATEWAY_ACCOUNT_ID` and `PUBLIC_BASE_URL` in it. Use the address printed by
-the development server for `PUBLIC_BASE_URL`.
+`.dev.vars` is local-only and is never a source for production Worker values.
+Use the address printed by the development server for its `PUBLIC_BASE_URL`.
 
 Variables such as `GIT_TOKEN`, `GIT_REMOTE`, `TURBODIFF_*`, `NODE_PATH`, and
 `PUPPETEER_EXECUTABLE_PATH` are created inside Turbodiff's containers. Do not

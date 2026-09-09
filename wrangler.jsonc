@@ -2,6 +2,10 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "turbodiff",
   "compatibility_date": "2026-08-08",
+  // Deployment-specific variables are managed in Cloudflare and retained
+  // across deploys. See `.dev.vars.example` for the self-hosting checklist.
+  // Keeping them out of this shared config prevents forks from inheriting
+  // values that only make sense for turbodiff.dev.
   "keep_vars": true,
   "assets": {
     "binding": "ASSETS",
@@ -40,40 +44,6 @@
   // and the triggers.events filters below. Requires the Artifacts closed beta
   // on this account.
   "artifacts": [{ "binding": "GIT_ARTIFACTS", "namespace": "turbodiff-repos" }],
-  "vars": {
-    // Git remote base for the GIT_ARTIFACTS namespace above — repo remotes
-    // are `<base>/<artifacts_repo>.git`. Read from config because the beta
-    // binding's repo handle does not implement the `remote` property over
-    // RPC despite the generated types declaring it ("The RPC receiver does
-    // not implement the method \"remote\""). Value from:
-    //   npx wrangler artifacts repos get <name> --namespace turbodiff-repos
-    "ARTIFACTS_REMOTE_BASE": "https://ecc47d4dfbdb95d267139b409e343a13.artifacts.cloudflare.net/git/turbodiff-repos",
-    // The name of your existing Cloudflare AI Gateway.
-    "AI_GATEWAY_ID": "default",
-    // Account containing that gateway. Sandbox coding runs use Cloudflare's
-    // model-neutral AI REST API; pair with the AI_GATEWAY_API_TOKEN secret
-    // (Account / Workers AI / Read). Third-party models use Unified Billing.
-    "AI_GATEWAY_ACCOUNT_ID": "",
-    // Public origin of this deployment — used to build absolute artifact URLs
-    // embedded in PR comments.
-    "PUBLIC_BASE_URL": "https://turbodiff.dev",
-    // URL slug of your GitHub App (github.com/apps/<slug>) — used for
-    // install/manage links in the settings UI.
-    "GITHUB_APP_SLUG": "turbodiff",
-    // "From" address for organization invite emails, sent via Resend
-    // (RESEND_API_KEY secret) — must be on a domain verified with Resend.
-    "RESEND_FROM_ADDRESS": "Turbodiff <noreply@mail.turbodiff.dev>",
-    // Max auto-triggered reviews per installation per rolling 24h.
-    "REVIEW_DAILY_LIMIT": "50",
-    // Optional gateway model id used instead of each agent's configured
-    // model on trivial-tier PRs (≤10 reviewable lines) — set a cheap model
-    // (e.g. a haiku-class id) to cut cost. Empty disables the downgrade.
-    "TRIVIAL_MODEL": "",
-    // Web Push keys are all three secrets (see src/env.d.ts), including the
-    // VAPID public key: it isn't confidential, but a committed one would ship
-    // this deployment's app server key to every fork's users, whose pushes
-    // would then be signed by a mismatched private key and rejected.
-  },
   "dev": { "enable_containers": false },
   // Factory sandbox (docs/coding-harness.md): repository-changing stages run
   // pinned OpenCode inside an isolated container. Local dev needs Docker.
