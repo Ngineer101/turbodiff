@@ -3,8 +3,13 @@ import * as v from 'valibot';
 import { maybeAutoMerge } from '../../services/auto-merge.ts';
 import { maybeResolveConflict } from '../../services/merge-conflicts.ts';
 import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
-import { getRepoByFullName, recordReviewQuality } from '../../data/db.ts';
-import { completeLifecycleReview } from '../../services/lifecycle.ts';
+import {
+  getRepoByFullName,
+  getReviewRunGuard,
+  recordReviewQuality,
+  recordReviewQualityById,
+} from '../../data/db.ts';
+import { completeLifecycleReview, completeLifecycleReviewById } from '../../services/lifecycle.ts';
 import { installationToken } from '../../integrations/github/app.ts';
 import {
   githubGraphql as ghGraphql,
@@ -31,9 +36,19 @@ import {
 // (or post reviews to) any other repo in the same installation. Null only on
 // the operator-driven plain-message path (REVIEW_SECRET-authed /internal),
 // which has no dispatch attributes to pin from.
-export type RepoPin = { owner: string; repo: string } | null;
+export type RepoPin = {
+  owner: string;
+  repo: string;
+  number: number;
+  reviewId: number;
+  expectedHeadSha: string;
+} | null;
 
-export function assertPinned(pin: RepoPin, owner: string, repo: string): void {
+export function assertPinned(
+  pin: Pick<NonNullable<RepoPin>, 'owner' | 'repo'> | null,
+  owner: string,
+  repo: string,
+): void {
   if (!pin) return;
   if (
     owner.toLowerCase() !== pin.owner.toLowerCase() ||
@@ -41,6 +56,23 @@ export function assertPinned(pin: RepoPin, owner: string, repo: string): void {
   ) {
     throw new Error(
       `this review is scoped to ${pin.owner}/${pin.repo} — refusing to access ${owner}/${repo}`,
+    );
+  }
+}
+
+export function assertPrPinned(pin: RepoPin, owner: string, repo: string, number: number): void {
+  assertPinned(pin, owner, repo);
+  if (pin && number !== pin.number) {
+    throw new Error(
+      `this review is scoped to ${pin.owner}/${pin.repo}#${pin.number} — refusing to access #${number}`,
+    );
+  }
+}
+
+export function assertHeadPinned(pin: RepoPin, headSha: string): void {
+  if (pin && headSha !== pin.expectedHeadSha) {
+    throw new Error(
+      `pull request head changed from ${pin.expectedHeadSha} to ${headSha}; this review is stale`,
     );
   }
 }
@@ -95,7 +127,7 @@ export const makeFetchPr = (pin: RepoPin, name = 'fetch_pr') =>
       number: v.number(),
     }),
     async run({ data }) {
-      assertPinned(pin, data.owner, data.repo);
+      assertPrPinned(pin, data.owner, data.repo, data.number);
       interface PrMeta {
         title: string;
         body: string | null;
@@ -114,6 +146,7 @@ export const makeFetchPr = (pin: RepoPin, name = 'fetch_pr') =>
         pullRequestDiff(token, data.owner, data.repo, data.number),
       ]);
       const snapshot = buildReviewDiffSnapshot(diff, MAX_DIFF_CHARS);
+      assertHeadPinned(pin, meta.head.sha);
       return {
         output: {
           title: meta.title,
@@ -156,9 +189,15 @@ export const makeFetchDiff = (pin: RepoPin, name = 'fetch_diff') =>
       paths: v.pipe(v.array(v.string()), v.minLength(1), v.maxLength(50)),
     }),
     async run({ data }) {
-      assertPinned(pin, data.owner, data.repo);
+      assertPrPinned(pin, data.owner, data.repo, data.number);
       const token = await tokenFor(data.owner, data.repo);
-      const diff = await pullRequestDiff(token, data.owner, data.repo, data.number);
+      const [diff, meta] = await Promise.all([
+        pullRequestDiff(token, data.owner, data.repo, data.number),
+        gh(token, `/repos/${data.owner}/${data.repo}/pulls/${data.number}`).then((response) =>
+          response.json<{ head: { sha: string } }>(),
+        ),
+      ]);
+      assertHeadPinned(pin, meta.head.sha);
       const requested = new Set(data.paths);
       const selected = splitDiffSegments(diff)
         .filter((entry) => requested.has(entry.path))
@@ -275,7 +314,7 @@ export const makeFetchReviewThreads = (pin: RepoPin) =>
       number: v.number(),
     }),
     async run({ data }) {
-      assertPinned(pin, data.owner, data.repo);
+      assertPrPinned(pin, data.owner, data.repo, data.number);
       const token = await tokenFor(data.owner, data.repo);
       const result = await ghGraphql<ThreadsQueryResult>(token, THREADS_QUERY, {
         owner: data.owner,
@@ -354,9 +393,9 @@ interface ReviewComment {
   start_side?: 'LEFT' | 'RIGHT';
 }
 
-// A per-render factory rather than a shared definition: the tool closes over
-// the agent instance id so completing the PostgreSQL review row targets exactly the
-// dispatch that ran it — concurrent agents on the same PR never collide.
+// A per-render factory rather than a shared definition: dispatched reviews
+// carry an exact review id and expected head SHA. The instance id is retained
+// only for the operator-only, unpinned compatibility path.
 export const makePostReview = (
   agentInstanceId: string,
   pin: RepoPin = null,
@@ -384,7 +423,7 @@ export const makePostReview = (
       reviewedFiles: v.optional(v.array(v.string()), []),
     }),
     async run({ data, harness }) {
-      assertPinned(pin, data.owner, data.repo);
+      assertPrPinned(pin, data.owner, data.repo, data.number);
       const row = await getRepoByFullName(data.owner, data.repo);
       if (!row) {
         throw new Error(
@@ -393,6 +432,50 @@ export const makePostReview = (
         );
       }
       const token = await installationToken(row.installation_id);
+      if (pin) {
+        const guard = await getReviewRunGuard(pin.reviewId);
+        if (
+          !guard ||
+          guard.status !== 'running' ||
+          guard.repository_id !== row.id ||
+          guard.pr_number !== pin.number ||
+          guard.head_sha !== pin.expectedHeadSha
+        ) {
+          return {
+            output: {
+              posted: false,
+              stale: true,
+              reason: 'the exact review run is no longer active',
+            },
+          };
+        }
+      }
+      const [liveDiff, livePr] = await Promise.all([
+        pullRequestDiff(token, data.owner, data.repo, data.number),
+        gh(token, `/repos/${data.owner}/${data.repo}/pulls/${data.number}`).then((response) =>
+          response.json<{ head: { sha: string } }>(),
+        ),
+      ]);
+      const manifest = buildReviewDiffSnapshot(liveDiff, 0).files;
+      if (pin && livePr.head.sha !== pin.expectedHeadSha) {
+        const reviewablePaths = manifest.filter((file) => file.reviewable).map((file) => file.path);
+        await completeLifecycleReviewById(pin.reviewId, null, 0, 'comment', [], undefined, {
+          conclusion: 'inconclusive',
+          coverageStatus: 'stale',
+          reviewableFileCount: reviewablePaths.length,
+          coveredFileCount: 0,
+          missingPaths: reviewablePaths,
+          coverageHeadSha: pin.expectedHeadSha,
+          publishedHeadSha: null,
+        });
+        return {
+          output: {
+            posted: false,
+            stale: true,
+            reason: `pull request head changed to ${livePr.head.sha}`,
+          },
+        };
+      }
       const candidates = consolidateCandidates(data.findings);
       let verificationComplete = true;
       let verifiedFindings = candidates;
@@ -472,7 +555,7 @@ ${JSON.stringify(candidates)}
             .filter((decision) => decision.accepted && decision.confidence === 'high')
             .map((decision) => decision.candidate)
         : [];
-      await recordReviewQuality(agentInstanceId, {
+      const quality = {
         candidates,
         decisions,
         publishedCandidateIndexes,
@@ -483,14 +566,9 @@ ${JSON.stringify(candidates)}
         costUsd: verificationCostUsd,
         latencyMs: verificationLatencyMs,
         experimentKey,
-      });
-      const [liveDiff, livePr] = await Promise.all([
-        pullRequestDiff(token, data.owner, data.repo, data.number),
-        gh(token, `/repos/${data.owner}/${data.repo}/pulls/${data.number}`).then((response) =>
-          response.json<{ head: { sha: string } }>(),
-        ),
-      ]);
-      const manifest = buildReviewDiffSnapshot(liveDiff, 0).files;
+      };
+      if (pin) await recordReviewQualityById(pin.reviewId, quality);
+      else await recordReviewQuality(agentInstanceId, quality);
       const missingFiles = missingReviewFiles(manifest, data.reviewedFiles);
       const hasP1 = verifiedFindings.map(findingSeverity).includes('P1');
       const hasP2 = verifiedFindings.map(findingSeverity).includes('P2');
@@ -586,23 +664,37 @@ ${JSON.stringify(candidates)}
             : intended === 'APPROVE'
               ? 'approve'
               : 'comment';
-      await completeLifecycleReview(
-        agentInstanceId,
-        output.url,
-        verifiedFindings.length,
-        verdict,
-        [...new Set(verifiedFindings.map((finding) => finding.path))],
-        undefined,
-        {
-          conclusion,
-          coverageStatus: coverageComplete ? 'complete' : 'incomplete',
-          reviewableFileCount,
-          coveredFileCount: reviewableFileCount - missingFiles.length,
-          missingPaths: missingFiles,
-          coverageHeadSha: livePr.head.sha,
-          publishedHeadSha: livePr.head.sha,
-        },
-      );
+      const readiness = {
+        conclusion,
+        coverageStatus: coverageComplete ? 'complete' : 'incomplete',
+        reviewableFileCount,
+        coveredFileCount: reviewableFileCount - missingFiles.length,
+        missingPaths: missingFiles,
+        coverageHeadSha: livePr.head.sha,
+        publishedHeadSha: livePr.head.sha,
+      } as const;
+      const findingPaths = [...new Set(verifiedFindings.map((finding) => finding.path))];
+      if (pin) {
+        await completeLifecycleReviewById(
+          pin.reviewId,
+          output.url,
+          verifiedFindings.length,
+          verdict,
+          findingPaths,
+          undefined,
+          readiness,
+        );
+      } else {
+        await completeLifecycleReview(
+          agentInstanceId,
+          output.url,
+          verifiedFindings.length,
+          verdict,
+          findingPaths,
+          undefined,
+          readiness,
+        );
+      }
       // Factory-PR gate: a blocking verdict on a self-authored PR never fires
       // the pull_request_review webhook trigger (the posted state is COMMENT),
       // so enqueue the fix directly. The consumer re-validates toggle and cap.

@@ -4,13 +4,14 @@ import {
   addCrComment,
   getChangeRequest,
   getRepoByFullName,
+  getReviewRunGuard,
   listCrComments,
   setChangeRequestReviewStatus,
   upsertCrCheck,
   type ChangeRequestRow,
   type RepositoryRow,
 } from '../../data/db.ts';
-import { completeLifecycleReview } from '../../services/lifecycle.ts';
+import { completeLifecycleReviewById } from '../../services/lifecycle.ts';
 import {
   CR_BOT_AUTHOR,
   getCrDiffPatch,
@@ -45,19 +46,32 @@ export interface CrPin {
   repo: string;
   number: number;
   changeRequestId: number;
+  reviewId: number;
+  expectedHeadSha: string;
 }
 
-function assertCrPinned(pin: CrPin, owner: string, repo: string): void {
+function assertCrPinned(pin: CrPin, owner: string, repo: string, number?: number): void {
   assertPinned({ owner: pin.owner, repo: pin.repo }, owner, repo);
+  if (number !== undefined && number !== pin.number) {
+    throw new Error(`this review is scoped to change request #${pin.number}`);
+  }
 }
 
-async function pinnedCr(pin: CrPin): Promise<{ cr: ChangeRequestRow; repo: RepositoryRow }> {
+async function pinnedCr(
+  pin: CrPin,
+  allowStale = false,
+): Promise<{ cr: ChangeRequestRow; repo: RepositoryRow }> {
   const cr = await getChangeRequest(pin.changeRequestId);
   if (!cr) throw new Error(`change request ${pin.changeRequestId} no longer exists`);
   const repo = await getRepoByFullName(pin.owner, pin.repo);
   if (!repo || repo.id !== cr.repository_id) {
     throw new Error(
       `change request ${pin.changeRequestId} does not belong to ${pin.owner}/${pin.repo}`,
+    );
+  }
+  if (!allowStale && cr.source_head !== pin.expectedHeadSha) {
+    throw new Error(
+      `change request head changed from ${pin.expectedHeadSha} to ${cr.source_head ?? 'unknown'}; this review is stale`,
     );
   }
   return { cr, repo };
@@ -77,7 +91,7 @@ export const makeFetchCr = (pin: CrPin) =>
       number: v.number(),
     }),
     async run({ data }) {
-      assertCrPinned(pin, data.owner, data.repo);
+      assertCrPinned(pin, data.owner, data.repo, data.number);
       const { cr } = await pinnedCr(pin);
       const comments = await listCrComments(cr.id);
       const summary = comments.find((c) => c.kind === 'summary' && c.author === CR_BOT_AUTHOR);
@@ -161,7 +175,7 @@ export const makeFetchCrComments = (pin: CrPin) =>
       number: v.number(),
     }),
     async run({ data }) {
-      assertCrPinned(pin, data.owner, data.repo);
+      assertCrPinned(pin, data.owner, data.repo, data.number);
       const { cr } = await pinnedCr(pin);
       const comments = await listCrComments(cr.id);
       return {
@@ -193,7 +207,7 @@ export const makeFetchCrComments = (pin: CrPin) =>
 // The native post_review: findings land as cr_comments, the verdict on the
 // CR row and its 'review' check, and the PostgreSQL review row completes — then the
 // auto-merge gate gets its chance, exactly like the GitHub tool's tail.
-export const makePostCrReview = (agentInstanceId: string, pin: CrPin) =>
+export const makePostCrReview = (pin: CrPin) =>
   defineTool({
     name: 'post_review',
     description:
@@ -210,10 +224,51 @@ export const makePostCrReview = (agentInstanceId: string, pin: CrPin) =>
       reviewedFiles: v.optional(v.array(v.string()), []),
     }),
     async run({ data }) {
-      assertCrPinned(pin, data.owner, data.repo);
-      const { cr, repo } = await pinnedCr(pin);
+      assertCrPinned(pin, data.owner, data.repo, data.number);
+      const { cr, repo } = await pinnedCr(pin, true);
+      const guard = await getReviewRunGuard(pin.reviewId);
+      if (
+        !guard ||
+        guard.status !== 'running' ||
+        guard.repository_id !== repo.id ||
+        guard.pr_number !== pin.number ||
+        guard.head_sha !== pin.expectedHeadSha
+      ) {
+        return {
+          output: {
+            posted: false,
+            stale: true,
+            reason: 'the exact review run is no longer active',
+            inline: 0,
+            url: null,
+            fallback: null,
+          },
+        };
+      }
       const liveDiff = await getCrDiffPatch(cr);
       const manifest = buildReviewDiffSnapshot(liveDiff, 0).files;
+      if (cr.source_head !== pin.expectedHeadSha) {
+        const reviewablePaths = manifest.filter((file) => file.reviewable).map((file) => file.path);
+        await completeLifecycleReviewById(pin.reviewId, null, 0, 'comment', [], undefined, {
+          conclusion: 'inconclusive',
+          coverageStatus: 'stale',
+          reviewableFileCount: reviewablePaths.length,
+          coveredFileCount: 0,
+          missingPaths: reviewablePaths,
+          coverageHeadSha: pin.expectedHeadSha,
+          publishedHeadSha: null,
+        });
+        return {
+          output: {
+            posted: false,
+            stale: true,
+            reason: `change request head changed to ${cr.source_head ?? 'unknown'}`,
+            inline: 0,
+            url: null,
+            fallback: null,
+          },
+        };
+      }
       const missingFiles = missingReviewFiles(manifest, data.reviewedFiles);
       const reviewableFileCount = manifest.filter((file) => file.reviewable).length;
       const hasP1 = data.findings.map(findingSeverity).includes('P1');
@@ -256,8 +311,8 @@ export const makePostCrReview = (agentInstanceId: string, pin: CrPin) =>
           : `${data.findings.length} finding(s)` + (blocking ? ' — P1 blocks merge' : ''),
       );
       const url = cr.feature_id ? cockpitFeatureUrl(cr.feature_id) : null;
-      await completeLifecycleReview(
-        agentInstanceId,
+      await completeLifecycleReviewById(
+        pin.reviewId,
         url,
         data.findings.length,
         (hasP1 && repo.process_profile !== 'legacy_factory') || blocking
@@ -286,6 +341,15 @@ export const makePostCrReview = (agentInstanceId: string, pin: CrPin) =>
         });
       }
       if (!blocking && conclusion !== 'inconclusive') await maybeAutoMergeCr(repo, cr.id);
-      return { output: { posted: true, inline: data.findings.length, url, fallback: null } };
+      return {
+        output: {
+          posted: true,
+          stale: false,
+          reason: null,
+          inline: data.findings.length,
+          url,
+          fallback: null,
+        },
+      };
     },
   });

@@ -717,6 +717,9 @@ export const reviews = appSchema.table(
     model: text(),
     agentSlug: text('agent_slug'),
     agentInstanceId: text('agent_instance_id'),
+    // Durable Flue delivery identity. The instance id is intentionally reused
+    // across re-reviews; this id binds metering and settlement to one run.
+    submissionId: text('submission_id'),
     riskTier: text('risk_tier'),
     findingsCount: integer('findings_count'),
     candidateCount: integer('candidate_count'),
@@ -767,6 +770,9 @@ export const reviews = appSchema.table(
   },
   (table) => [
     index('reviews_agent_instance_idx').using('btree', table.agentInstanceId),
+    uniqueIndex('reviews_submission_id_idx')
+      .using('btree', table.submissionId)
+      .where(sql`(submission_id IS NOT NULL)`),
     index('reviews_installation_time_idx').using(
       'btree',
       table.installationId,

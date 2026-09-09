@@ -4,6 +4,7 @@ import {
   cancelStageRun,
   claimStageRun,
   completeReview,
+  completeReviewById,
   countBudgetedFixAttempts,
   createAcceptanceContract,
   createFactoryRunWithStage,
@@ -20,6 +21,8 @@ import {
   listCrChecks,
   listStageRuns,
   markReviewFailed,
+  markReviewFailedById,
+  markReviewFailedBySubmission,
   recordLifecycleDecision,
   recordStageRunOutput,
   resumeFactoryRun,
@@ -547,12 +550,58 @@ export async function completeLifecycleReview(
   if (completed?.stage_run_id) await settleReviewStage(completed.stage_run_id, enqueue);
 }
 
+export async function completeLifecycleReviewById(
+  reviewId: number,
+  reviewUrl: string | null,
+  findingsCount: number,
+  verdict: 'approve' | 'comment' | 'request_changes',
+  findingPaths: string[] = [],
+  enqueue: typeof enqueueFactoryMessage = enqueueFactoryMessage,
+  readiness?: {
+    conclusion: ReviewConclusion;
+    coverageStatus: 'complete' | 'incomplete' | 'stale';
+    reviewableFileCount: number;
+    coveredFileCount: number;
+    missingPaths: string[];
+    coverageHeadSha: string | null;
+    publishedHeadSha: string | null;
+  },
+): Promise<void> {
+  const completed = await completeReviewById(
+    reviewId,
+    reviewUrl,
+    findingsCount,
+    verdict,
+    findingPaths,
+    readiness,
+  );
+  if (completed?.stage_run_id) await settleReviewStage(completed.stage_run_id, enqueue);
+}
+
 export async function failLifecycleReview(
   agentInstanceId: string,
   reason: string | null = null,
   enqueue: typeof enqueueFactoryMessage = enqueueFactoryMessage,
 ): Promise<void> {
   const failed = await markReviewFailed(agentInstanceId, reason);
+  if (failed?.stage_run_id) await settleReviewStage(failed.stage_run_id, enqueue);
+}
+
+export async function failLifecycleReviewById(
+  reviewId: number,
+  reason: string | null = null,
+  enqueue: typeof enqueueFactoryMessage = enqueueFactoryMessage,
+): Promise<void> {
+  const failed = await markReviewFailedById(reviewId, reason);
+  if (failed?.stage_run_id) await settleReviewStage(failed.stage_run_id, enqueue);
+}
+
+export async function failLifecycleReviewBySubmission(
+  submissionId: string,
+  reason: string | null = null,
+  enqueue: typeof enqueueFactoryMessage = enqueueFactoryMessage,
+): Promise<void> {
+  const failed = await markReviewFailedBySubmission(submissionId, reason);
   if (failed?.stage_run_id) await settleReviewStage(failed.stage_run_id, enqueue);
 }
 
