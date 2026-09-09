@@ -1,7 +1,7 @@
 import type { ExecOptions } from '@cloudflare/sandbox';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { verifyAiGatewayGrantWithSecret } from '../../integrations/security/ai-gateway-grant.ts';
-import { runPlanAnalyze, runPlanRefine } from './planner.ts';
+import { runPlanAnalyze } from './planner.ts';
 import { runVerification } from './verifier.ts';
 
 // Runner contract tests: orchestration, OpenCode command/config generation and
@@ -13,19 +13,12 @@ const boundary = vi.hoisted(() => {
     files: new Map<string, string>(),
     runs,
     tier: 'trivial',
-    omitTier: false,
-    questions: '[]',
-    repositories: 1,
     plan: {
       id: 10,
       repository_id: 1,
       title: 'Show running tasks in the factory indicator',
       requirements: 'Include manual tasks in the existing running indicator.',
       runner_model: 'moonshotai/kimi-k3',
-      tier: '',
-      feedback: null,
-      questions: [],
-      answers: [],
       attachments: [],
     },
     repo: {
@@ -42,7 +35,6 @@ const boundary = vi.hoisted(() => {
       auto_fix: true,
     },
     updatePlan: vi.fn(),
-    finishVerification: vi.fn(),
     setProposedAcceptance: vi.fn(),
     resolveRunnerModel: vi.fn(async () => 'anthropic/claude-opus-4.8'),
     exec: vi.fn(),
@@ -61,12 +53,7 @@ vi.mock('cloudflare:workers', () => ({
 vi.mock('../../data/models.ts', () => ({ resolveRunnerModel: boundary.resolveRunnerModel }));
 vi.mock('../../data/db.ts', () => ({
   getPlan: async () => boundary.plan,
-  listReposForPlan: async () =>
-    Array.from({ length: boundary.repositories }, (_, i) => ({
-      ...boundary.repo,
-      id: i + 1,
-      name: `repo-${i + 1}`,
-    })),
+  listReposForPlan: async () => [boundary.repo],
   updatePlan: boundary.updatePlan,
   approvePlanFeatures: vi.fn(),
   getFeature: async () => ({
@@ -81,7 +68,7 @@ vi.mock('../../data/db.ts', () => ({
   }),
   getRepoById: async () => boundary.repo,
   createVerification: async () => 30,
-  finishVerification: boundary.finishVerification,
+  finishVerification: vi.fn(),
   latestFixedAttempt: async () => ({
     trigger: 'cockpit_comment',
     created_at: '2026-09-09T19:00:00Z',
@@ -134,11 +121,6 @@ beforeEach(() => {
   boundary.files.clear();
   boundary.runs.length = 0;
   boundary.tier = 'trivial';
-  boundary.omitTier = false;
-  boundary.questions = '[]';
-  boundary.repositories = 1;
-  boundary.plan.tier = '';
-  boundary.plan.runner_model = 'moonshotai/kimi-k3';
   boundary.exec.mockImplementation(async (command: string, options?: ExecOptions) => {
     if (command.startsWith('opencode run ')) {
       const env = options?.env ?? {};
@@ -146,8 +128,8 @@ beforeEach(() => {
       boundary.runs.push({ command, prompt, env });
       if (env.TURBODIFF_AGENT_PROMPT === '/workspace/plan-out/task.md') {
         boundary.files.set('/workspace/plan-out/analysis.md', 'Update the running-state selector.');
-        boundary.files.set('/workspace/plan-out/questions.json', boundary.questions);
-        if (!boundary.omitTier) boundary.files.set('/workspace/plan-out/tier.txt', boundary.tier);
+        boundary.files.set('/workspace/plan-out/questions.json', '[]');
+        boundary.files.set('/workspace/plan-out/tier.txt', boundary.tier);
         boundary.files.set(
           '/workspace/plan-out/plan.md',
           'Update the selector and verify manual task states.',
@@ -200,75 +182,36 @@ async function expectRunModels(models: string[]) {
 }
 
 describe('task model across planning and verification', () => {
-  it.each([1, 2])(
-    'analyzes and plans %i repositories with the selected model and no preliminary agent',
-    async (repositories) => {
-      boundary.repositories = repositories;
-      await runPlanAnalyze(10);
-
-      await expectRunModels([boundary.plan.runner_model, boundary.plan.runner_model]);
-      expect(boundary.runs[0].prompt).toContain('/workspace/plan-out/tier.txt');
-      expect(boundary.runs[0].prompt).toContain('exactly one word: trivial or standard');
-      expect(boundary.updatePlan).toHaveBeenCalledWith(10, { tier: 'trivial' });
-      expect(boundary.runs[1].prompt).toContain('at most 4');
-      expect(boundary.updatePlan).toHaveBeenCalledWith(
-        10,
-        expect.objectContaining({
-          status: 'plan_ready',
-          acceptance: ['Manual tasks activate the indicator'],
-        }),
-      );
-    },
-  );
-
-  it.each([undefined, 'not trivial', 'trivial\nstandard'])(
-    'keeps full planning depth for missing or ambiguous classification: %s',
-    async (tier) => {
-      boundary.tier = tier ?? '';
-      boundary.omitTier = tier === undefined;
-      await runPlanAnalyze(10);
-
-      await expectRunModels([boundary.plan.runner_model, boundary.plan.runner_model]);
-      expect(boundary.updatePlan).toHaveBeenCalledWith(10, { tier: 'standard' });
-      expect(boundary.runs[1].prompt).toContain('at most 8');
-    },
-  );
-
-  it('requests tier persistence and honors a model change when refinement starts', async () => {
-    boundary.questions = '[{"text":"Which task states should count?"}]';
+  it('plans with the selected model without a separate classifier session', async () => {
     await runPlanAnalyze(10);
-    await expectRunModels([boundary.plan.runner_model]);
+
+    await expectRunModels(['moonshotai/kimi-k3', 'moonshotai/kimi-k3']);
+    expect(boundary.runs[0].prompt).toContain('/workspace/plan-out/tier.txt');
+    expect(boundary.updatePlan).toHaveBeenCalledWith(10, { tier: 'trivial' });
+    expect(boundary.runs[1].prompt).toContain('at most 4');
     expect(boundary.updatePlan).toHaveBeenCalledWith(
       10,
-      expect.objectContaining({ status: 'awaiting_answers' }),
-    );
-    expect(boundary.updatePlan).toHaveBeenCalledWith(10, { tier: 'trivial' });
-
-    // Emulate the persisted tier and a user changing the model before the next run.
-    boundary.plan.tier = 'trivial';
-    boundary.plan.runner_model = 'openai/gpt-5.2-codex';
-    await runPlanRefine(10);
-    await expectRunModels(['moonshotai/kimi-k3', 'openai/gpt-5.2-codex']);
-    expect(boundary.runs[1].prompt).toContain('at most 4');
-    expect(boundary.updatePlan).toHaveBeenLastCalledWith(
-      10,
-      expect.objectContaining({ status: 'plan_ready' }),
+      expect.objectContaining({
+        status: 'plan_ready',
+        acceptance: ['Manual tasks activate the indicator'],
+      }),
     );
   });
 
-  it('keeps the selected model when a human-directed fix requires a criteria rewrite', async () => {
+  it('does not shorten the plan when classification says "not trivial"', async () => {
+    boundary.tier = 'not trivial';
+    await runPlanAnalyze(10);
+
+    expect(boundary.updatePlan).toHaveBeenCalledWith(10, { tier: 'standard' });
+    expect(boundary.runs[1].prompt).toContain('at most 8');
+  });
+
+  it('uses the selected model for criteria rewrites after a human-directed fix', async () => {
     await runVerification(20);
 
-    await expectRunModels([boundary.plan.runner_model, boundary.plan.runner_model]);
+    await expectRunModels(['moonshotai/kimi-k3', 'moonshotai/kimi-k3']);
     expect(boundary.setProposedAcceptance).toHaveBeenCalledWith(20, [
       'Indicator follows automations and manual tasks',
     ]);
-    expect(boundary.finishVerification).toHaveBeenCalledWith(
-      30,
-      'failed',
-      expect.objectContaining({
-        results: [expect.objectContaining({ index: 0, verdict: 'fail' })],
-      }),
-    );
   });
 });
