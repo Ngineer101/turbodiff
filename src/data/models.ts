@@ -51,10 +51,12 @@ export class ModelCatalogConfigurationError extends Error {
   }
 }
 
-// Reviewer calls go through the AI Gateway, so the stored bare id is exposed
-// in its prefixed gateway form on that surface.
+// Reviewer calls go through the Cloudflare AI binding. Third-party models use
+// provider/model while Workers AI models retain their canonical @cf id.
 function gatewayId(row: ModelRow): string {
-  return `cloudflare/${row.provider}/${row.model_id}`;
+  return row.model_id.startsWith('@cf/')
+    ? `cloudflare/${row.model_id}`
+    : `cloudflare/${row.provider}/${row.model_id}`;
 }
 
 function runnerId(row: ModelRow): string {

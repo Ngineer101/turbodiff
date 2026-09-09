@@ -37,6 +37,7 @@ import {
   type LampTone,
 } from '../components/identity.tsx';
 import { MicButton } from '../components/mic-button.tsx';
+import { ModelCombobox } from '../components/model-combobox.tsx';
 import { Muted, PageTitle } from '../components/section.tsx';
 import { Button } from '../components/ui/button.tsx';
 import { Card } from '../components/ui/card.tsx';
@@ -467,23 +468,13 @@ function StartDialog({
             />
           </Field>
           <Field label="Model">
-            <Select
+            <ModelCombobox
               value={model || runnerDefault}
-              onChange={(e) => setModel(e.target.value)}
-              aria-label="Model"
+              onValueChange={setModel}
+              options={runnerOptions}
               disabled={!models}
-            >
-              {!models ? (
-                <option value="">
-                  {modelsError ? 'Model catalog unavailable' : 'Loading models…'}
-                </option>
-              ) : null}
-              {runnerOptions.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </Select>
+              placeholder={modelsError ? 'Model catalog unavailable' : 'Loading models…'}
+            />
           </Field>
           <div className="mt-3">
             <input

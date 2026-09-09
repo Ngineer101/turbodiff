@@ -3,8 +3,9 @@ import { ArrowLeft, Check } from 'lucide-react';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import type { ApiModelOption } from '../../shared/api-types.ts';
 import { EntityFormLayout, FormSection } from './entity-form.tsx';
+import { ModelCombobox } from './model-combobox.tsx';
 import { Button } from './ui/button.tsx';
-import { Field, Input, Select, Textarea } from './ui/input.tsx';
+import { Field, Input, Textarea } from './ui/input.tsx';
 
 export interface AgentFormValues {
   name: string;
@@ -117,18 +118,13 @@ export function AgentForm({
           />
         </Field>
         <Field label="Model" className="mt-0" hint={`default ${defaultModel}`}>
-          <Select
+          <ModelCombobox
             value={values.model}
-            onChange={(e) => set({ model: e.target.value })}
+            onValueChange={(model) => set({ model })}
+            options={modelOptions}
             required
             className="font-mono"
-          >
-            {modelOptions.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
-              </option>
-            ))}
-          </Select>
+          />
         </Field>
       </FormSection>
 

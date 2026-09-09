@@ -32,6 +32,7 @@
     "better-auth": "^1.6.27",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
     "codemirror": "^6.0.2",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.7.0",
