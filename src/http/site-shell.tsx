@@ -136,7 +136,7 @@ export function SiteFooter() {
     <footer>
       <div class="wrap">
         <span>
-          open source &mdash; <a href={REPO_URL}>Ngineer101/turbodiff</a> &middot; FSL-licensed
+          open source &mdash; <a href={REPO_URL}>Ngineer101/turbodiff</a> &middot; MIT-licensed
         </span>
         <span>fully built &amp; hosted on Cloudflare</span>
         <span>self-host it &mdash; your keys, your gateway</span>
