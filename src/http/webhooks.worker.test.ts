@@ -22,6 +22,7 @@ import {
   latestAcceptanceContractForChange,
   listFactoryRunsForFeature,
   listStageRuns,
+  reviewHeadReadiness,
   tryRecordFixAttempt,
   tryRecordReview,
   updateFeature,
@@ -1631,6 +1632,12 @@ describe('push re-reviews', () => {
     await expect(getFactoryRun(stage.factoryRunId)).resolves.toMatchObject({
       status: 'awaiting_human',
       handoff_reason: 'stage failure requires retry policy evaluation',
+    });
+    await expect(reviewHeadReadiness(101, 77, headA)).resolves.toMatchObject({
+      stage_status: 'failed',
+      running: 0,
+      failed: 0,
+      inconclusive: 1,
     });
   });
 

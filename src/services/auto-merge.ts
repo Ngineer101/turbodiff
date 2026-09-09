@@ -2,8 +2,8 @@ import { env } from 'cloudflare:workers';
 import { githubRequest as gh } from '../integrations/github/client.ts';
 import {
   getFeatureByRepoPr,
-  latestCompletedReviewsByAgent,
   latestVerificationForFeature,
+  reviewHeadReadiness,
   type RepositoryRow,
 } from '../data/db.ts';
 import { installationToken } from '../integrations/github/app.ts';
@@ -67,21 +67,23 @@ export async function maybeAutoMerge(repo: RepositoryRow, prNumber: number): Pro
     const mergeability = await checkMergeability(token, repo.owner, repo.name, prNumber, {
       retryOnUnknown: true,
     });
-    const recordedReviews = (await latestCompletedReviewsByAgent(repo.id, prNumber)).filter(
-      (review) => review.head_sha === mergeability.headSha,
+    const readiness = await reviewHeadReadiness(repo.id, prNumber, mergeability.headSha);
+    const reviewEvidenceConclusive = Boolean(
+      readiness &&
+      readiness.stage_status === 'completed' &&
+      readiness.total > 0 &&
+      readiness.running === 0 &&
+      readiness.failed === 0 &&
+      readiness.inconclusive === 0 &&
+      readiness.not_ready === 0,
     );
-    const reviewEvidenceConclusive =
-      recordedReviews.length > 0 &&
-      recordedReviews.every(
-        (review) => review.conclusion === 'ready' || review.conclusion === 'ready_with_warnings',
-      );
 
     const decline = autoMergeDecline({
       optedIn: repo.auto_merge,
       blockingReviews: repo.blocking_reviews,
       hasAcceptanceCriteria: Boolean(feature.acceptance),
       verificationPassed: verification?.status === 'passed',
-      reviewed: botReviews.length > 0 && recordedReviews.length > 0,
+      reviewed: botReviews.length > 0 && Boolean(readiness?.total),
       reviewEvidenceConclusive,
       anyBlockingReview: botReviews.some(
         (r) =>

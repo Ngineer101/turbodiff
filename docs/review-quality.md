@@ -72,6 +72,16 @@ withheld and the review is forced to `COMMENT`; it cannot accidentally approve
 or request changes from unverified output. The publisher then emits one
 consolidated GitHub review with the retained inline comments.
 
+When every required reviewer in the lifecycle stage settles, Turbodiff also
+publishes a head-SHA-bound `Turbodiff / Review readiness` Check Run. Its
+conclusion is successful only when every dispatched reviewer completed with
+full evidence and no P1 conclusion. Missing evidence, a failed reviewer, a
+stale head, or a blocking finding produces a failing check with per-reviewer
+coverage and diagnostic detail. Re-runs on the same head update the same
+logical check. Both lifecycle merges and legacy factory auto-merge consult the
+persisted stage result directly, so an absent or delayed GitHub check cannot
+accidentally weaken the internal gate.
+
 ```mermaid
 flowchart LR
   SCOUT["Persona scout"] -->|"candidates + causal evidence"| BOUNDARY["post_review boundary"]

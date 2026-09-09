@@ -27,6 +27,7 @@ import {
   recordStageRunOutput,
   resumeFactoryRun,
   reviewStageProgress,
+  reviewHeadReadiness,
   type FactoryRunRow,
   type StageRunRow,
 } from '../data/db.ts';
@@ -35,6 +36,7 @@ import type { ReviewConclusion } from '../domain/review-context.ts';
 import { canResumeLifecycleRun, resumeTargetStage } from '../domain/lifecycle-resume.ts';
 import { formatUnmetCriteriaFindings } from '../domain/verification.ts';
 import { isDeliveryProcessProfile, processProfile } from '../domain/process-profiles.ts';
+import { publishReviewReadinessCheckForStage } from './review-readiness-check.ts';
 import type {
   LifecycleDecision,
   LifecycleEventKind,
@@ -352,10 +354,22 @@ function scheduledHeadFromInput(input: JsonValue | null): string | null {
 
 async function assertGithubMergeReady(
   token: string,
-  repo: { owner: string; name: string },
+  repo: { id: number; owner: string; name: string },
   change: { number: number; source_head: string | null },
 ): Promise<void> {
   if (!change.source_head) throw new Error('change head is unknown');
+  const readiness = await reviewHeadReadiness(repo.id, change.number, change.source_head);
+  if (
+    !readiness ||
+    readiness.stage_status !== 'completed' ||
+    readiness.total === 0 ||
+    readiness.running > 0 ||
+    readiness.failed > 0 ||
+    readiness.inconclusive > 0 ||
+    readiness.not_ready > 0
+  ) {
+    throw new Error('Turbodiff review evidence is not conclusively ready for this head');
+  }
   const mergeability = await checkMergeability(token, repo.owner, repo.name, change.number, {
     retryOnUnknown: true,
   });
@@ -459,6 +473,12 @@ type ReviewStageOutput = {
   errors?: string[];
 };
 
+async function publishReviewReadiness(stageRunId: number): Promise<void> {
+  await publishReviewReadinessCheckForStage(stageRunId).catch((error) =>
+    console.error('turbodiff: publishing review readiness check failed', error),
+  );
+}
+
 async function settleReviewStage(
   stageRunId: number,
   enqueue: typeof enqueueFactoryMessage,
@@ -490,12 +510,14 @@ async function settleReviewStage(
     // 413 that explained it came second.
     const reasons = [...new Set(progress.errors.filter(Boolean))];
     const why = reasons.length > 0 ? `: ${reasons.join(' · ')}` : '';
-    await finishStageRun(
+    const finished = await finishStageRun(
       stageRun.id,
       'failed',
       output,
       `all review dispatches failed${why}`.slice(0, 1_000),
     );
+    if (!finished) return;
+    await publishReviewReadiness(stageRun.id);
     await coordinateStageOutcome(command, false, enqueue);
     return;
   }
@@ -505,16 +527,20 @@ async function settleReviewStage(
       reasons.push(`${progress.inconclusive} review(s) completed without conclusive evidence`);
     }
     const why = reasons.length > 0 ? `: ${reasons.join(' · ')}` : '';
-    await finishStageRun(
+    const finished = await finishStageRun(
       stageRun.id,
       'failed',
       output,
       `review stage is inconclusive${why}`.slice(0, 1_000),
     );
+    if (!finished) return;
+    await publishReviewReadiness(stageRun.id);
     await coordinateStageOutcome(command, false, enqueue);
     return;
   }
-  await finishStageRun(stageRun.id, 'completed', output);
+  const finished = await finishStageRun(stageRun.id, 'completed', output);
+  if (!finished) return;
+  await publishReviewReadiness(stageRun.id);
   await coordinateStageOutcome(command, true, enqueue, {
     blockingFindings: progress.blocking,
   });
