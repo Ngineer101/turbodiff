@@ -23,6 +23,7 @@ import type {
   ApiRepoFile,
   ApiRepoTree,
   ApiReviewQuality,
+  ApiReviewsPage,
   ApiSettings,
   ApiSkillCatalog,
   ApiSkillDetail,
@@ -117,6 +118,13 @@ export const usageQuery = queryOptions({
 export const reviewQualityQuery = queryOptions({
   queryKey: ['review-quality'],
   queryFn: () => api.get<ApiReviewQuality>('/api/review-quality'),
+});
+
+export const reviewsQuery = queryOptions({
+  queryKey: ['reviews', 1],
+  queryFn: () => api.get<ApiReviewsPage>('/api/reviews?page=1'),
+  refetchInterval: (query) =>
+    query.state.data?.reviews.some((review) => review.state === 'running') ? LIVE_POLL_MS : false,
 });
 
 // Terminal fix-run outcomes for a cockpit comment's linked batch — anything

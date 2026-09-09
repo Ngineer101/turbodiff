@@ -73,6 +73,7 @@ import {
   listPlansForInstallations,
   listRecentFeaturesForUsage,
   listRecentReviews,
+  listReviewFileEvidenceForReviews,
   reviewQualityDashboard,
   listRepoAgentOverrides,
   listRepoSkillOverrides,
@@ -867,7 +868,13 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const pages = Math.max(1, Math.ceil(total / PER_PAGE));
     const page = Math.min(pages, Math.max(1, Number(c.req.query('page')) || 1));
     const reviews = await listRecentReviews(installationIds, PER_PAGE, (page - 1) * PER_PAGE);
-    return c.json<ApiReviewsPage>({ total, page, pages, reviews: reviews.map(serializeReview) });
+    const evidence = await listReviewFileEvidenceForReviews(reviews.map((review) => review.id));
+    return c.json<ApiReviewsPage>({
+      total,
+      page,
+      pages,
+      reviews: reviews.map((review) => serializeReview(review, evidence)),
+    });
   });
 
   app.get('/review-quality', async (c) => {
