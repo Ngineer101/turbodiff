@@ -1,36 +1,79 @@
 # Turbodiff
 
-<img src="public/logo-small.png" alt="Turbodiff logo" width="64" align="right" />
+<img src="public/logo-small.png" alt="Turbodiff logo" width="64" align="center" />
 
-Turbodiff is an open-source GitHub app that uses AI to review pull requests
-and turn tasks into code. You can use the hosted version at
-[turbodiff.dev](https://turbodiff.dev) or run it in your own Cloudflare
-account.
+Turbodiff is an open-source software factory for GitHub. Give it a task and it
+can plan the work, write the code, open a pull request, review the change, fix
+problems, and check the result. You decide where automation starts and stops,
+and which steps need a person to approve them.
 
-Turbodiff is licensed under the [MIT License](LICENSE.md). You can use, change,
-and share it, including as part of a commercial product.
+You can also use the pull request reviewer on its own. Turbodiff works with
+your existing repositories and GitHub workflow rather than asking you to move
+your code or replace your tools.
+
+The project is self-hosted and licensed under the [MIT License](LICENSE.md).
+You can use, change, and share it, including as part of a commercial product.
 
 > [!WARNING]
-> Turbodiff is under active development. Expect bugs and breaking changes. If
-> you find a problem, please [open an issue](https://github.com/Ngineer101/turbodiff/issues).
+> Turbodiff is under active development. If you find a problem, please
+> [open an issue](https://github.com/Ngineer101/turbodiff/issues).
 
-## What it does
+## A software factory, not just a code generator
 
-- Reviews new and updated pull requests.
-- Turns a written task into a plan for you to approve.
-- Writes the code in an isolated container and opens a pull request.
-- Tries to fix review findings and failed checks.
-- Checks the finished work against the approved plan.
-- Lets you choose which steps run automatically and which need approval.
+Turbodiff covers the path from an idea to a finished pull request:
 
-## Why self-host
+1. **Plan** — read the repository, ask questions, and turn the task into a plan
+   with clear success checks.
+2. **Build** — write the code in an isolated container, run the repository's
+   checks, and open a pull request.
+3. **Review** — inspect the whole change and publish one clear GitHub review.
+4. **Repair** — try to fix important review findings, failed checks, and merge
+   conflicts.
+5. **Verify** — compare the finished work with the approved plan. Turbodiff can
+   run the app and attach screenshots when visual proof is useful.
+6. **Merge** — leave the pull request ready for a person, or merge it
+   automatically when the repository allows that.
 
-Self-hosting gives you control over where Turbodiff runs, which repositories it
-can access, and which AI models it uses. Your GitHub App keys, database, model
-credentials, and usage data stay in services you manage.
+Each step records its result, so a person can take over or let the next step
+continue. Repositories can use the full factory or only the parts they need.
 
-The application code is all in this repository. A deployment uses Cloudflare
-Workers and Containers, with PostgreSQL for stored data.
+### Pull request reviews
+
+The reviewer also works with pull requests created outside Turbodiff. It can:
+
+- Review automatically or only when asked.
+- Remember earlier findings when new commits are pushed.
+- Spend more time on large or sensitive changes and less on small ones.
+- Request changes for serious problems and approve clean pull requests.
+- Run custom review agents for different areas of a codebase.
+- Track whether findings were useful, fixed, or dismissed.
+
+## Open source and self-hosted
+
+The application code is in this repository. Self-hosting gives you control
+over:
+
+- Which repositories Turbodiff can access.
+- Which AI models it uses.
+- Where its database and files are stored.
+- Which features are enabled.
+- How much of the factory runs automatically.
+
+Your GitHub App keys and model credentials stay in services you manage. Code
+writing and verification run in isolated Cloudflare Containers, and permanent
+model credentials are not passed into those containers.
+
+Turbodiff uses:
+
+- **Cloudflare Workers** for the web app and API.
+- **Cloudflare Containers** for code-writing and verification jobs.
+- **Cloudflare AI Gateway** to connect to AI models.
+- **PostgreSQL** for users, repositories, tasks, reviews, and settings.
+- **Cloudflare R2** for logs, screenshots, and other files.
+- **Cloudflare Queues and Workflows** for jobs that take longer than a web
+  request.
+
+More detail is available in the [architecture guide](docs/architecture.md).
 
 ## Self-hosting
 
@@ -38,8 +81,8 @@ Turbodiff is built for Cloudflare. Before you start, you need:
 
 - A Cloudflare account with Workers, Containers, AI Gateway, Hyperdrive,
   Queues, and R2 available.
-- A PostgreSQL database. The production setup uses PlanetScale, but another
-  PostgreSQL provider can work.
+- A PostgreSQL database. The project uses PlanetScale in production, but other
+  PostgreSQL providers can work.
 - A GitHub account that can create a GitHub App.
 - Docker for building the container.
 - [Vite+](https://viteplus.dev) (`vp`) and the Node.js version in
@@ -57,17 +100,13 @@ vp install
 
 Create an AI Gateway and enable billing for any third-party models you want to
 use. In [wrangler.jsonc](wrangler.jsonc), replace the existing deployment
-values with your own:
+values with your own. The complete list is in
+[Environment variables](#environment-variables).
 
-- `AI_GATEWAY_ID`
-- `AI_GATEWAY_ACCOUNT_ID`
-- `PUBLIC_BASE_URL`
-- the Hyperdrive configuration ID
-- R2 bucket and queue names, if you changed them
-
-The optional Artifacts binding hosts repositories created inside Turbodiff and
-requires access to Cloudflare Artifacts. Remove that binding and its event
-triggers if you only plan to use GitHub repositories.
+The optional Cloudflare Artifacts binding is for repositories created inside
+Turbodiff. It requires access to Cloudflare Artifacts. If you only use GitHub
+repositories, remove the `artifacts` binding, its event triggers, and the
+`ARTIFACTS_REMOTE_BASE` variable from `wrangler.jsonc`.
 
 ### 3. Set up PostgreSQL
 
@@ -80,8 +119,8 @@ vp run db:migrate
 vp run db:verify
 ```
 
-Create a Hyperdrive connection to the database with query caching disabled,
-then copy its ID into `wrangler.jsonc`:
+Create a Hyperdrive connection with query caching disabled, then copy its ID
+into `wrangler.jsonc`:
 
 ```sh
 export HYPERDRIVE_DATABASE_URL='postgres://...'
@@ -125,38 +164,15 @@ openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt \
 
 Set `GITHUB_APP_SLUG` in `wrangler.jsonc` to the name from the app's GitHub URL.
 
-### 6. Add secrets
+### 6. Configure the environment
 
-Add these values to `.dev.vars` for local work. For production, save each one
-with `vp exec wrangler secret put <NAME>`.
+Set the required variables and secrets listed below. Put non-secret Worker
+values in `wrangler.jsonc`. For local development, put secrets in `.dev.vars`.
+For a deployed Worker, save each secret with:
 
-```dotenv
-GITHUB_APP_ID=""
-GITHUB_APP_PRIVATE_KEY=""
-GITHUB_WEBHOOK_SECRET=""
-GITHUB_OAUTH_CLIENT_ID=""
-GITHUB_OAUTH_CLIENT_SECRET=""
-SESSION_SECRET=""
-REVIEW_SECRET=""
-AI_GATEWAY_API_TOKEN=""
+```sh
+vp exec wrangler secret put <NAME>
 ```
-
-Generate `SESSION_SECRET` and `REVIEW_SECRET` with `openssl rand -hex 32`.
-`AI_GATEWAY_API_TOKEN` needs Cloudflare's **Account / Workers AI / Read**
-permission. It stays in the Worker and is not passed into the code-writing
-container.
-
-Optional features use these additional settings:
-
-| Feature               | Settings                                                     |
-| --------------------- | ------------------------------------------------------------ |
-| Connected tools       | `TOKEN_ENCRYPTION_KEY`                                       |
-| Email invitations     | `RESEND_API_KEY` and `RESEND_FROM_ADDRESS`                   |
-| Skills catalog        | `SKILLS_SH_API_TOKEN`                                        |
-| Browser notifications | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT` |
-
-Use `openssl rand -hex 32` for `TOKEN_ENCRYPTION_KEY`. Browser notifications
-need all three `VAPID_*` values; without them, only notifications are disabled.
 
 Never commit `.dev.vars` or any production secret.
 
@@ -165,7 +181,8 @@ Never commit `.dev.vars` or any production secret.
 Check the project before the first deployment:
 
 ```sh
-vp check
+vp lint
+vp run check:types
 vp test
 vp run build
 ```
@@ -182,6 +199,95 @@ vp run deploy
 After deployment, update the GitHub App's webhook and callback URLs if your
 public address changed. Install the app on the repositories Turbodiff may use,
 then sign in at your deployment URL.
+
+## Environment variables
+
+Turbodiff has three kinds of configuration:
+
+- **Worker variables** are non-secret values in the `vars` section of
+  `wrangler.jsonc`.
+- **Worker secrets** go in `.dev.vars` locally and in Cloudflare's secret store
+  after deployment.
+- **Shell and CI variables** are used by setup and deployment commands. They
+  are not read by the running Worker.
+
+Cloudflare bindings such as Hyperdrive, R2, Queues, Containers, and Workflows
+are also configured in `wrangler.jsonc`, but they are resources rather than
+environment variables.
+
+### Required
+
+These values are required for the full GitHub software factory:
+
+| Name                         | Where         | Purpose                                                      |
+| ---------------------------- | ------------- | ------------------------------------------------------------ |
+| `AI_GATEWAY_ID`              | Worker var    | Name of the Cloudflare AI Gateway used for model requests.   |
+| `AI_GATEWAY_ACCOUNT_ID`      | Worker var    | Cloudflare account that owns the AI Gateway.                 |
+| `PUBLIC_BASE_URL`            | Worker var    | Public address of your deployment, with no trailing slash.   |
+| `GITHUB_APP_SLUG`            | Worker var    | Name at the end of your GitHub App URL.                      |
+| `GITHUB_APP_ID`              | Worker secret | Numeric ID shown in the GitHub App settings.                 |
+| `GITHUB_APP_PRIVATE_KEY`     | Worker secret | Complete PKCS#8 private key for the GitHub App.              |
+| `GITHUB_WEBHOOK_SECRET`      | Worker secret | Checks that webhook calls came from GitHub.                  |
+| `GITHUB_OAUTH_CLIENT_ID`     | Worker secret | Client ID used for GitHub sign-in.                           |
+| `GITHUB_OAUTH_CLIENT_SECRET` | Worker secret | Client secret used for GitHub sign-in.                       |
+| `SESSION_SECRET`             | Worker secret | Signs login state and short-lived access links.              |
+| `AI_GATEWAY_API_TOKEN`       | Worker secret | Cloudflare token used by code-writing agents to call models. |
+| `DATABASE_URL`               | Shell or CI   | Direct PostgreSQL URL used for migrations and schema checks. |
+| `HYPERDRIVE_DATABASE_URL`    | Shell         | PostgreSQL URL used when creating or updating Hyperdrive.    |
+
+Generate `SESSION_SECRET` with `openssl rand -hex 32`.
+`AI_GATEWAY_API_TOKEN` needs Cloudflare's **Account / Workers AI / Read**
+permission. Use a limited database account for `HYPERDRIVE_DATABASE_URL`, not
+the more powerful account used for migrations.
+
+Minimal local `.dev.vars` file:
+
+```dotenv
+GITHUB_APP_ID=""
+GITHUB_APP_PRIVATE_KEY=""
+GITHUB_WEBHOOK_SECRET=""
+GITHUB_OAUTH_CLIENT_ID=""
+GITHUB_OAUTH_CLIENT_SECRET=""
+SESSION_SECRET=""
+AI_GATEWAY_API_TOKEN=""
+```
+
+### Optional
+
+Leave these out unless you use the related feature:
+
+| Name                     | Where         | Used for                                                                 |
+| ------------------------ | ------------- | ------------------------------------------------------------------------ |
+| `ARTIFACTS_REMOTE_BASE`  | Worker var    | Git address for repositories stored in Cloudflare Artifacts.             |
+| `RESEND_FROM_ADDRESS`    | Worker var    | Sender address for organization invitation emails.                       |
+| `REVIEW_DAILY_LIMIT`     | Worker var    | Maximum automatic reviews per installation in 24 hours; defaults to 50.  |
+| `TRIVIAL_MODEL`          | Worker var    | Cheaper model for very small pull requests; empty disables it.           |
+| `REVIEW_SECRET`          | Worker secret | Protects operator-only HTTP endpoints.                                   |
+| `TOKEN_ENCRYPTION_KEY`   | Worker secret | Encrypts credentials for connected tools.                                |
+| `RESEND_API_KEY`         | Worker secret | Sends organization invitation emails.                                    |
+| `SKILLS_SH_API_TOKEN`    | Worker secret | Enables browsing the skills.sh catalog.                                  |
+| `VAPID_PUBLIC_KEY`       | Worker secret | Enables browser notifications; set all three `VAPID_*` values.           |
+| `VAPID_PRIVATE_KEY`      | Worker secret | Enables browser notifications; set all three `VAPID_*` values.           |
+| `VAPID_SUBJECT`          | Worker secret | Contact URI for browser notifications, such as `mailto:you@example.com`. |
+| `DEV_FAKE_INSTALLATIONS` | Local only    | Comma-separated installation IDs for local sign-in without GitHub.       |
+| `POSTGRES_DATABASE_URL`  | CI secret     | Production migration URL used by the GitHub Actions deploy workflow.     |
+| `CLOUDFLARE_API_TOKEN`   | CI secret     | Lets the GitHub Actions deploy workflow publish to Cloudflare.           |
+| `CLOUDFLARE_ACCOUNT_ID`  | CI secret     | Selects the Cloudflare account used by the deploy workflow.              |
+
+Generate `REVIEW_SECRET` and `TOKEN_ENCRYPTION_KEY` with
+`openssl rand -hex 32`. `TOKEN_ENCRYPTION_KEY` is required before anyone can
+save credentials for connected tools.
+
+The three `VAPID_*` values must be configured together. If they are absent,
+only browser notifications are disabled.
+
+When `.dev.vars` exists, you may also put local overrides for
+`AI_GATEWAY_ACCOUNT_ID` and `PUBLIC_BASE_URL` in it. Use the address printed by
+the development server for `PUBLIC_BASE_URL`.
+
+Variables such as `GIT_TOKEN`, `GIT_REMOTE`, `TURBODIFF_*`, `NODE_PATH`, and
+`PUPPETEER_EXECUTABLE_PATH` are created inside Turbodiff's containers. Do not
+set them yourself.
 
 ## Local development
 
@@ -204,7 +310,8 @@ For GitHub webhooks, point a tunnel such as Cloudflare Tunnel or smee.io at
 `/webhooks/github`.
 
 Useful commands are listed in [AGENTS.md](AGENTS.md). Pull requests run lint,
-type checks, tests, a build, and a Cloudflare deployment check.
+type checks, tests, a build, database checks, and a Cloudflare deployment
+check.
 
 ## Learn more
 
@@ -212,7 +319,8 @@ type checks, tests, a build, and a Cloudflare deployment check.
 - [PostgreSQL setup](docs/postgres.md)
 - [How code-writing agents run](docs/coding-harness.md)
 - [How pull request reviews work](docs/review-quality.md)
-- [Software factory plans](docs/software-factory-lifecycle.md)
+- [Software factory lifecycle](docs/software-factory-lifecycle.md)
+- [Cloudflare Artifacts repositories](docs/artifacts-provider.md)
 
 ## Contributing
 
