@@ -2,6 +2,7 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "turbodiff",
   "compatibility_date": "2026-08-08",
+  "keep_vars": true,
   "assets": {
     "binding": "ASSETS",
   },
