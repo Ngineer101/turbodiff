@@ -364,7 +364,7 @@ function Landing() {
                 </div>
                 <span class="cta-note">
                   Anyone can generate code. We ship proof. &middot; open source &middot;
-                  FSL-licensed
+                  MIT-licensed
                 </span>
               </div>
 
