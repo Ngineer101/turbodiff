@@ -43,7 +43,6 @@ import { installationToken } from '../../integrations/github/app.ts';
 import { resolveWorkspaceRemote } from '../../integrations/git/provider.ts';
 import { NPM_CACHE_ENV } from '../runtime/sandbox-deps.ts';
 import { UNTRUSTED_CONTENT_RULES } from '../../domain/prompt-security.ts';
-import { resolveRunnerModel } from '../../data/models.ts';
 
 // Phase 4 (docs/software-factory-design.md): empirical verification of factory
 // PRs, doubling as the spec-conformance gate. A verifier agent checks each
@@ -602,7 +601,7 @@ that conflict; each criterion must be empirically checkable against the
 running app. Write ONLY a JSON array of criterion strings to ${PROPOSAL_FILE}.
 `;
   await sandbox.writeFile(`/workspace/criteria-prompt-${feature.id}.md`, prompt);
-  const auth = await resolveRunnerAuth(undefined, await resolveRunnerModel(null, 'fast'));
+  const auth = await resolveRunnerAuth(undefined, feature.runner_model);
   const run = await runCodingAgent(sandbox, auth, {
     promptFile: `/workspace/criteria-prompt-${feature.id}.md`,
     cwd: '/workspace',
