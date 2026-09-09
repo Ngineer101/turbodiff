@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
-import { Trash2 } from 'lucide-react';
+import { Play, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import type { ApiAutomationRunSummary } from '../../shared/api-types.ts';
@@ -136,6 +136,7 @@ export function AutomationEditPage() {
             loading={runNow.isPending}
             onClick={() => runNow.mutate()}
           >
+            {!runNow.isPending ? <Play className="size-3" aria-hidden /> : null}
             Run now
           </Button>
         }
