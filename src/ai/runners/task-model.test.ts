@@ -4,10 +4,11 @@ import { verifyAiGatewayGrantWithSecret } from '../../integrations/security/ai-g
 import { runPlanAnalyze, runPlanRefine } from './planner.ts';
 import { runVerification } from './verifier.ts';
 
-// Only external boundaries are replaced: the real runners, OpenCode adapter,
-// model configuration and signed capabilities all execute in these tests.
+// Runner contract tests: orchestration, OpenCode command/config generation and
+// capability signing are real. Sandbox execution, persistence and other services
+// are faked; these tests do not exercise the actual CLI, database or provider.
 const boundary = vi.hoisted(() => {
-  const runs: { prompt: string; env: Record<string, string | undefined> }[] = [];
+  const runs: { command: string; prompt: string; env: Record<string, string | undefined> }[] = [];
   return {
     files: new Map<string, string>(),
     runs,
@@ -137,11 +138,12 @@ beforeEach(() => {
   boundary.questions = '[]';
   boundary.repositories = 1;
   boundary.plan.tier = '';
+  boundary.plan.runner_model = 'moonshotai/kimi-k3';
   boundary.exec.mockImplementation(async (command: string, options?: ExecOptions) => {
     if (command.startsWith('opencode run ')) {
       const env = options?.env ?? {};
       const prompt = boundary.files.get(env.TURBODIFF_AGENT_PROMPT ?? '') ?? '';
-      boundary.runs.push({ prompt, env });
+      boundary.runs.push({ command, prompt, env });
       if (env.TURBODIFF_AGENT_PROMPT === '/workspace/plan-out/task.md') {
         boundary.files.set('/workspace/plan-out/analysis.md', 'Update the running-state selector.');
         boundary.files.set('/workspace/plan-out/questions.json', boundary.questions);
@@ -170,17 +172,30 @@ beforeEach(() => {
   });
 });
 
-async function expectSelectedModelOnEveryRun(count: number) {
-  expect(boundary.runs).toHaveLength(count);
-  expect(boundary.resolveRunnerModel).not.toHaveBeenCalled();
-  for (const { env } of boundary.runs) {
-    expect(env.TURBODIFF_RUNNER_MODEL).toBe('cloudflare-ai-gateway/moonshotai/kimi-k3');
+async function expectRunModels(models: string[]) {
+  expect(boundary.runs).toHaveLength(models.length);
+  for (const [index, model] of models.entries()) {
+    const { command, env } = boundary.runs[index];
+    expect(command).toContain(' --model "$TURBODIFF_RUNNER_MODEL"');
+    expect(env.TURBODIFF_RUNNER_MODEL).toBe(`cloudflare-ai-gateway/${model}`);
+    expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT ?? '{}')).toMatchObject({
+      enabled_providers: ['cloudflare-ai-gateway'],
+      provider: {
+        'cloudflare-ai-gateway': {
+          options: {
+            apiKey: '{env:TURBODIFF_AI_GATEWAY_GRANT}',
+            baseURL: 'https://turbodiff.test/ai-proxy/v1',
+          },
+          models: { [model]: { name: model } },
+        },
+      },
+    });
     expect(
       await verifyAiGatewayGrantWithSecret(
         'test-only-gateway-secret',
         env.TURBODIFF_AI_GATEWAY_GRANT ?? '',
       ),
-    ).toMatchObject({ model: 'moonshotai/kimi-k3' });
+    ).toMatchObject({ model });
   }
 }
 
@@ -191,7 +206,7 @@ describe('task model across planning and verification', () => {
       boundary.repositories = repositories;
       await runPlanAnalyze(10);
 
-      await expectSelectedModelOnEveryRun(2);
+      await expectRunModels([boundary.plan.runner_model, boundary.plan.runner_model]);
       expect(boundary.runs[0].prompt).toContain('/workspace/plan-out/tier.txt');
       expect(boundary.runs[0].prompt).toContain('exactly one word: trivial or standard');
       expect(boundary.updatePlan).toHaveBeenCalledWith(10, { tier: 'trivial' });
@@ -213,25 +228,27 @@ describe('task model across planning and verification', () => {
       boundary.omitTier = tier === undefined;
       await runPlanAnalyze(10);
 
-      await expectSelectedModelOnEveryRun(2);
+      await expectRunModels([boundary.plan.runner_model, boundary.plan.runner_model]);
       expect(boundary.updatePlan).toHaveBeenCalledWith(10, { tier: 'standard' });
       expect(boundary.runs[1].prompt).toContain('at most 8');
     },
   );
 
-  it('persists the tier while waiting for answers and uses it on the selected-model refinement', async () => {
+  it('requests tier persistence and honors a model change when refinement starts', async () => {
     boundary.questions = '[{"text":"Which task states should count?"}]';
     await runPlanAnalyze(10);
-    await expectSelectedModelOnEveryRun(1);
+    await expectRunModels([boundary.plan.runner_model]);
     expect(boundary.updatePlan).toHaveBeenCalledWith(
       10,
       expect.objectContaining({ status: 'awaiting_answers' }),
     );
     expect(boundary.updatePlan).toHaveBeenCalledWith(10, { tier: 'trivial' });
 
+    // Emulate the persisted tier and a user changing the model before the next run.
     boundary.plan.tier = 'trivial';
+    boundary.plan.runner_model = 'openai/gpt-5.2-codex';
     await runPlanRefine(10);
-    await expectSelectedModelOnEveryRun(2);
+    await expectRunModels(['moonshotai/kimi-k3', 'openai/gpt-5.2-codex']);
     expect(boundary.runs[1].prompt).toContain('at most 4');
     expect(boundary.updatePlan).toHaveBeenLastCalledWith(
       10,
@@ -242,7 +259,7 @@ describe('task model across planning and verification', () => {
   it('keeps the selected model when a human-directed fix requires a criteria rewrite', async () => {
     await runVerification(20);
 
-    await expectSelectedModelOnEveryRun(2);
+    await expectRunModels([boundary.plan.runner_model, boundary.plan.runner_model]);
     expect(boundary.setProposedAcceptance).toHaveBeenCalledWith(20, [
       'Indicator follows automations and manual tasks',
     ]);
