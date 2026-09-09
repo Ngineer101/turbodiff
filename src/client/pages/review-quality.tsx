@@ -1,9 +1,11 @@
 import { useMutation, useSuspenseQuery } from '@tanstack/react-query';
 import { Check, CircleX, Clock3, GitPullRequest, Wrench } from 'lucide-react';
 import type { ApiReviewFindingFeedback, ApiReviewQuality } from '../../shared/api-types.ts';
+import { Markdown } from '../components/markdown.tsx';
 import { EmptyState, Muted, PageTitle, SectionHeading } from '../components/section.tsx';
 import { StatTile } from '../components/stat-tile.tsx';
 import { Button } from '../components/ui/button.tsx';
+import { Card } from '../components/ui/card.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 import { api } from '../lib/api.ts';
 import { ago, fmtDuration, fmtUsd } from '../lib/format.ts';
@@ -49,11 +51,10 @@ export function ReviewQualityPage() {
 
   return (
     <>
-      <PageTitle
-        aside={<Muted>Rolling 30 days · labels become the regression-eval truth set</Muted>}
-      >
-        Review quality
-      </PageTitle>
+      <PageTitle aside={<Muted>Last 30 days</Muted>}>Review quality</PageTitle>
+      <p className="mt-1 text-[0.85rem] leading-relaxed text-mute">
+        Track verified findings and label their usefulness to improve future reviews.
+      </p>
 
       <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile
@@ -76,20 +77,20 @@ export function ReviewQualityPage() {
               ? '—'
               : fmtDuration(data.stats.avg_verification_latency_ms / 1000)
           }
-          sub="Average independent pass"
+          sub="Average verification time"
         />
         <StatTile
           index={3}
           label="Verifier cost"
           value={fmtUsd(data.stats.verification_cost_usd)}
-          sub="Separate from scout attribution"
+          sub="Verification only"
         />
       </div>
 
       <SectionHeading
         aside={
           <Muted>
-            {data.stats.labeled}/{data.stats.published} published findings labeled
+            {data.stats.labeled} of {data.stats.published} published findings labeled
           </Muted>
         }
       >
@@ -99,58 +100,77 @@ export function ReviewQualityPage() {
       {data.findings.length === 0 ? (
         <EmptyState>Verified findings will appear here after the next review.</EmptyState>
       ) : (
-        <div className="space-y-2.5">
+        <div className="space-y-3">
           {data.findings.map((finding) => (
-            <article
-              key={finding.id}
-              className="animate-rise rounded-xl border border-line bg-surface px-4 py-3 shadow-edge"
-            >
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                <Pill tone={finding.severity === 'P1' ? 'red' : 'warn'}>{finding.severity}</Pill>
-                {finding.repo ? (
-                  <a
-                    href={`https://github.com/${finding.repo}/pull/${finding.pr_number}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1 font-mono text-accent-bright hover:underline"
+            <article key={finding.id}>
+              <Card className="min-w-0 p-0">
+                <div className="space-y-2 border-b border-line px-4 py-3">
+                  <div className="flex items-start justify-between gap-3 text-xs">
+                    <div className="flex min-w-0 items-start gap-2">
+                      <Pill tone={finding.severity === 'P1' ? 'red' : 'warn'}>
+                        {finding.severity}
+                      </Pill>
+                      {finding.repo ? (
+                        <a
+                          href={`https://github.com/${finding.repo}/pull/${finding.pr_number}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex min-w-0 items-start gap-1.5 font-mono leading-5 text-accent-bright hover:underline"
+                        >
+                          <GitPullRequest className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+                          <span className="min-w-0 wrap-anywhere">
+                            {finding.repo}#{finding.pr_number}
+                          </span>
+                        </a>
+                      ) : (
+                        <Muted>Repository removed</Muted>
+                      )}
+                    </div>
+                    <span className="shrink-0 leading-5 text-mute">{ago(finding.created_at)}</span>
+                  </div>
+                  <div className="font-mono text-xs leading-relaxed wrap-anywhere text-mute">
+                    {finding.path}:{finding.line}
+                  </div>
+                </div>
+                <div className="px-4 py-3">
+                  <Markdown className="markdown-body--compact min-w-0 wrap-anywhere [&>:first-child]:mt-0! [&>:last-child]:mb-0!">
+                    {finding.body}
+                  </Markdown>
+                  {finding.verification_reason ? (
+                    <p className="mt-3 border-l-2 border-line-2 pl-3 text-xs leading-relaxed wrap-anywhere text-mute">
+                      <span className="font-medium text-ink-dim">Verifier: </span>
+                      {finding.verification_reason}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-b-lg border-t border-line bg-surface-2 px-4 py-3">
+                  <span className="font-mono text-[10px] tracking-[0.14em] text-mute uppercase">
+                    Finding feedback
+                  </span>
+                  <div
+                    className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap"
+                    role="group"
+                    aria-label="Finding feedback"
                   >
-                    <GitPullRequest className="size-3.5" aria-hidden />
-                    {finding.repo}#{finding.pr_number}
-                  </a>
-                ) : (
-                  <Muted>Repository removed</Muted>
-                )}
-                <span className="font-mono text-mute">
-                  {finding.path}:{finding.line}
-                </span>
-                <span className="ml-auto text-mute">{ago(finding.created_at)}</span>
-              </div>
-              <p className="mt-2 whitespace-pre-wrap text-[0.86rem] leading-relaxed text-ink-dim">
-                {finding.body}
-              </p>
-              {finding.verification_reason ? (
-                <p className="mt-2 border-l-2 border-accent/40 pl-2 text-xs text-mute">
-                  Verifier: {finding.verification_reason}
-                </p>
-              ) : null}
-              <div className="mt-3 flex flex-wrap gap-1.5" aria-label="Finding feedback">
-                {feedbackOptions.map((option) => {
-                  const Icon = option.icon;
-                  return (
-                    <Button
-                      key={option.value}
-                      size="sm"
-                      variant={finding.feedback === option.value ? 'default' : 'secondary'}
-                      aria-pressed={finding.feedback === option.value}
-                      loading={feedback.isPending && feedback.variables?.id === finding.id}
-                      onClick={() => feedback.mutate({ id: finding.id, value: option.value })}
-                    >
-                      <Icon className="size-3.5" aria-hidden />
-                      {option.label}
-                    </Button>
-                  );
-                })}
-              </div>
+                    {feedbackOptions.map((option) => {
+                      const Icon = option.icon;
+                      return (
+                        <Button
+                          key={option.value}
+                          size="sm"
+                          variant={finding.feedback === option.value ? 'default' : 'secondary'}
+                          aria-pressed={finding.feedback === option.value}
+                          loading={feedback.isPending && feedback.variables?.id === finding.id}
+                          onClick={() => feedback.mutate({ id: finding.id, value: option.value })}
+                        >
+                          <Icon className="size-3.5" aria-hidden />
+                          {option.label}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </Card>
             </article>
           ))}
         </div>
