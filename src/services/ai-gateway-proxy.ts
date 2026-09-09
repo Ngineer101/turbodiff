@@ -1,5 +1,6 @@
 import { requestUsesGrantedModel } from '../domain/ai-gateway-policy.ts';
 import { verifyAiGatewayGrantWithSecret } from '../integrations/security/ai-gateway-grant.ts';
+import { isJsonObject, isString, parseJson } from '../shared/json.ts';
 
 const MAX_REQUEST_BYTES = 16 * 1024 * 1024;
 const ALLOWED_ENDPOINTS = new Set(['chat/completions', 'responses', 'messages']);
@@ -52,9 +53,29 @@ export async function proxyAiGatewayRequest(
   }
   const bytes = await request.arrayBuffer();
   if (bytes.byteLength > MAX_REQUEST_BYTES) return error('request body too large', 413);
-  const body = new TextDecoder().decode(bytes);
+  let body = new TextDecoder().decode(bytes);
   if (!requestUsesGrantedModel(body, grant.model)) {
     return error('request model does not match the sandbox grant', 403);
+  }
+
+  if (endpoint === 'messages') {
+    // Cloudflare's /ai/v1/messages currently requires a system string, but
+    // Anthropic SDKs emit text blocks. Preserve all text in order; block-level
+    // metadata such as cache_control cannot be represented in this format.
+    // The model check above has already validated that the body is JSON.
+    const parsed = parseJson(body);
+    if (isJsonObject(parsed) && Array.isArray(parsed.system)) {
+      const parts: string[] = [];
+      for (const block of parsed.system) {
+        if (!isJsonObject(block) || block.type !== 'text' || !isString(block.text)) {
+          return error('system must contain only text blocks with string text', 400);
+        }
+        parts.push(block.text);
+      }
+      if (parts.length) parsed.system = parts.join('\n\n');
+      else delete parsed.system;
+      body = JSON.stringify(parsed);
+    }
   }
 
   const accountId = config.accountId.trim();
@@ -84,7 +105,14 @@ export async function proxyAiGatewayRequest(
     },
   );
   const headers = new Headers();
-  for (const name of ['content-type', 'cf-ray', 'request-id', 'x-request-id']) {
+  for (const name of [
+    'content-type',
+    'cf-ray',
+    'request-id',
+    'x-request-id',
+    'retry-after',
+    'retry-after-ms',
+  ]) {
     const value = upstream.headers.get(name);
     if (value) headers.set(name, value);
   }
