@@ -13,6 +13,7 @@ import {
 import {
   buildReviewDiffSnapshot,
   missingReviewFiles,
+  reviewConclusion,
   reviewPublicationEvent,
 } from '../../domain/review-context.ts';
 import { splitDiffSegments } from '../../domain/review-diff.ts';
@@ -483,11 +484,19 @@ ${JSON.stringify(candidates)}
         latencyMs: verificationLatencyMs,
         experimentKey,
       });
-      const liveDiff = await pullRequestDiff(token, data.owner, data.repo, data.number);
+      const [liveDiff, livePr] = await Promise.all([
+        pullRequestDiff(token, data.owner, data.repo, data.number),
+        gh(token, `/repos/${data.owner}/${data.repo}/pulls/${data.number}`).then((response) =>
+          response.json<{ head: { sha: string } }>(),
+        ),
+      ]);
       const manifest = buildReviewDiffSnapshot(liveDiff, 0).files;
       const missingFiles = missingReviewFiles(manifest, data.reviewedFiles);
       const hasP1 = verifiedFindings.map(findingSeverity).includes('P1');
+      const hasP2 = verifiedFindings.map(findingSeverity).includes('P2');
       const coverageComplete = missingFiles.length === 0;
+      const reviewableFileCount = manifest.filter((file) => file.reviewable).length;
+      const conclusion = reviewConclusion(hasP1, hasP2, coverageComplete, verificationComplete);
       // Verdict mapping (repo blocking mode, default off): a P1 requests
       // changes, and a fully-covered clean or P2-only review approves. A
       // partial review can comment, but absence of a finding is not approval
@@ -577,9 +586,23 @@ ${JSON.stringify(candidates)}
             : intended === 'APPROVE'
               ? 'approve'
               : 'comment';
-      await completeLifecycleReview(agentInstanceId, output.url, verifiedFindings.length, verdict, [
-        ...new Set(verifiedFindings.map((finding) => finding.path)),
-      ]);
+      await completeLifecycleReview(
+        agentInstanceId,
+        output.url,
+        verifiedFindings.length,
+        verdict,
+        [...new Set(verifiedFindings.map((finding) => finding.path))],
+        undefined,
+        {
+          conclusion,
+          coverageStatus: coverageComplete ? 'complete' : 'incomplete',
+          reviewableFileCount,
+          coveredFileCount: reviewableFileCount - missingFiles.length,
+          missingPaths: missingFiles,
+          coverageHeadSha: livePr.head.sha,
+          publishedHeadSha: livePr.head.sha,
+        },
+      );
       // Factory-PR gate: a blocking verdict on a self-authored PR never fires
       // the pull_request_review webhook trigger (the posted state is COMMENT),
       // so enqueue the fix directly. The consumer re-validates toggle and cap.

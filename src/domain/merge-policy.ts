@@ -19,6 +19,9 @@ export interface AutoMergeFacts {
   // At least one turbodiff review exists (another bot's approval never
   // stands in for ours having run).
   reviewed: boolean;
+  // Every required review carries current, complete evidence. A posted bot
+  // comment alone is not proof that the change was fully reviewed.
+  reviewEvidenceConclusive: boolean;
   // ANY blocking-intent review — even one superseded by a clean re-review —
   // declines in favor of a human look.
   anyBlockingReview: boolean;
@@ -33,6 +36,7 @@ export function autoMergeDecline(facts: AutoMergeFacts): string | null {
   if (!facts.hasAcceptanceCriteria) return 'no acceptance criteria to verify';
   if (!facts.verificationPassed) return 'verification not passed';
   if (!facts.reviewed) return 'no turbodiff review yet';
+  if (!facts.reviewEvidenceConclusive) return 'review evidence is incomplete or stale';
   if (facts.anyBlockingReview) return 'a review requested changes';
   if (!facts.checksGreen) return 'checks not green';
   if (facts.hasConflict) return 'merge conflict';

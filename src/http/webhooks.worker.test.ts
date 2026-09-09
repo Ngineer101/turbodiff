@@ -1600,6 +1600,40 @@ describe('push re-reviews', () => {
     h.calls.length = 0;
   }
 
+  it('fails the review stage when any required review is inconclusive', async () => {
+    await seedReviewedRepo();
+    const h = harness();
+    await postWebhook(h.app, 'pull_request', pullRequest('opened', headA));
+    const stage = h.lastCommand();
+    await runLifecycleStage(stage, h.dispatch, {
+      computeRisk: async () => 'full',
+      enqueue: h.enqueue,
+    });
+
+    for (const [index, call] of h.calls.entries()) {
+      const missingPaths = index === 0 ? ['src/unread.ts'] : [];
+      await completeLifecycleReview(instance(call.slug), null, 0, 'comment', [], h.enqueue, {
+        conclusion: missingPaths.length > 0 ? 'inconclusive' : 'ready',
+        coverageStatus: missingPaths.length > 0 ? 'incomplete' : 'complete',
+        reviewableFileCount: 2,
+        coveredFileCount: 2 - missingPaths.length,
+        missingPaths,
+        coverageHeadSha: headA,
+        publishedHeadSha: headA,
+      });
+    }
+
+    await expect(getStageRun(stage.stageRunId)).resolves.toMatchObject({
+      status: 'failed',
+      output: { inconclusive: 1 },
+      error: expect.stringContaining('inconclusive'),
+    });
+    await expect(getFactoryRun(stage.factoryRunId)).resolves.toMatchObject({
+      status: 'awaiting_human',
+      handoff_reason: 'stage failure requires retry policy evaluation',
+    });
+  });
+
   it('delays a push review by the repository window and records the scheduled head', async () => {
     await seedReviewedRepo();
     const h = harness();

@@ -7,6 +7,7 @@ const GREEN: AutoMergeFacts = {
   hasAcceptanceCriteria: true,
   verificationPassed: true,
   reviewed: true,
+  reviewEvidenceConclusive: true,
   anyBlockingReview: false,
   checksGreen: true,
   hasConflict: false,
@@ -23,6 +24,7 @@ describe('autoMergeDecline', () => {
     expect(autoMergeDecline({ ...GREEN, hasAcceptanceCriteria: false })).toContain('acceptance');
     expect(autoMergeDecline({ ...GREEN, verificationPassed: false })).toContain('verification');
     expect(autoMergeDecline({ ...GREEN, reviewed: false })).toContain('review');
+    expect(autoMergeDecline({ ...GREEN, reviewEvidenceConclusive: false })).toContain('incomplete');
     expect(autoMergeDecline({ ...GREEN, anyBlockingReview: true })).toContain('requested changes');
     expect(autoMergeDecline({ ...GREEN, checksGreen: false })).toContain('checks');
     expect(autoMergeDecline({ ...GREEN, hasConflict: true })).toContain('conflict');

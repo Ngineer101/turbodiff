@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { STALL_AFTER_MINUTES } from '../shared/time.ts';
 import type { CandidateFinding, FindingDecision } from '../domain/review-verification.ts';
+import type { ReviewConclusion } from '../domain/review-context.ts';
 import { queryOne, queryRows, withTransaction } from './database.ts';
 import { bigintArray, minutesAgo } from './sql.ts';
 
@@ -49,6 +50,13 @@ export interface ReviewActivityRow {
   findings_count: number | null; // null until post_review completes the row
   stage_run_id: number | null;
   verdict: string | null;
+  conclusion: ReviewConclusion | null;
+  coverage_status: 'complete' | 'incomplete' | 'stale' | null;
+  reviewable_file_count: number | null;
+  covered_file_count: number | null;
+  missing_paths: string[] | null;
+  coverage_head_sha: string | null;
+  published_head_sha: string | null;
   error: string | null; // why a failed row failed
   repo_owner: string | null; // null if the repo was since removed
   repo_name: string | null;
@@ -385,6 +393,7 @@ export interface ReviewStageProgress {
   completed: number;
   failed: number;
   blocking: boolean;
+  inconclusive: number;
   // Recorded reasons of the failed reviews, oldest first.
   errors: string[];
 }
@@ -395,14 +404,24 @@ export async function reviewStageProgress(stageRunId: number): Promise<ReviewSta
       COUNT(*) FILTER (WHERE status = 'running') AS running,
       COUNT(*) FILTER (WHERE status = 'completed') AS completed,
       COUNT(*) FILTER (WHERE status = 'failed') AS failed,
-      COALESCE(BOOL_OR(verdict = 'request_changes'), FALSE) AS blocking,
+      COALESCE(BOOL_OR(conclusion = 'not_ready' OR verdict = 'request_changes'), FALSE) AS blocking,
+      COUNT(*) FILTER (WHERE status = 'completed' AND conclusion = 'inconclusive') AS inconclusive,
       COALESCE(
         ARRAY_REMOVE(ARRAY_AGG(error ORDER BY id) FILTER (WHERE status = 'failed'), NULL),
         '{}'
       ) AS errors
     FROM app.reviews WHERE stage_run_id = ${stageRunId}
   `);
-  return row ?? { running: 0, completed: 0, failed: 0, blocking: false, errors: [] };
+  return (
+    row ?? {
+      running: 0,
+      completed: 0,
+      failed: 0,
+      blocking: false,
+      inconclusive: 0,
+      errors: [],
+    }
+  );
 }
 
 // True when this agent's review of this PR is running and young enough to
@@ -428,6 +447,7 @@ export interface PriorAgentReview {
   verdict: 'approve' | 'comment' | 'request_changes';
   head_sha: string | null;
   finding_paths: string[] | null; // null on rows recorded before the column existed
+  conclusion: ReviewConclusion | null;
 }
 
 // Each agent's most recent completed review of this PR — what a push
@@ -438,7 +458,7 @@ export async function latestCompletedReviewsByAgent(
   prNumber: number,
 ): Promise<PriorAgentReview[]> {
   return queryRows<PriorAgentReview>(sql`
-    SELECT DISTINCT ON (agent_slug) agent_slug, verdict, head_sha, finding_paths
+    SELECT DISTINCT ON (agent_slug) agent_slug, verdict, head_sha, finding_paths, conclusion
     FROM app.reviews
     WHERE repository_id = ${repositoryId} AND pr_number = ${prNumber}
       AND status = 'completed' AND agent_slug IS NOT NULL AND verdict IS NOT NULL

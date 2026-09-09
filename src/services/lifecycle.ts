@@ -28,6 +28,7 @@ import {
   type StageRunRow,
 } from '../data/db.ts';
 import { decideLifecycle, type LifecycleContext } from '../domain/lifecycle-coordinator.ts';
+import type { ReviewConclusion } from '../domain/review-context.ts';
 import { canResumeLifecycleRun, resumeTargetStage } from '../domain/lifecycle-resume.ts';
 import { formatUnmetCriteriaFindings } from '../domain/verification.ts';
 import { isDeliveryProcessProfile, processProfile } from '../domain/process-profiles.ts';
@@ -451,6 +452,7 @@ type ReviewStageOutput = {
   completed: number;
   failed: number;
   blocking: boolean;
+  inconclusive: number;
   errors?: string[];
 };
 
@@ -467,6 +469,7 @@ async function settleReviewStage(
     completed: progress.completed,
     failed: progress.failed,
     blocking: progress.blocking,
+    inconclusive: progress.inconclusive,
   };
   if (progress.errors.length > 0) output.errors = progress.errors;
   const command: RunStageCommand = {
@@ -493,6 +496,21 @@ async function settleReviewStage(
     await coordinateStageOutcome(command, false, enqueue);
     return;
   }
+  if (progress.failed > 0 || progress.inconclusive > 0) {
+    const reasons = [...new Set(progress.errors.filter(Boolean))];
+    if (progress.inconclusive > 0) {
+      reasons.push(`${progress.inconclusive} review(s) completed without conclusive evidence`);
+    }
+    const why = reasons.length > 0 ? `: ${reasons.join(' · ')}` : '';
+    await finishStageRun(
+      stageRun.id,
+      'failed',
+      output,
+      `review stage is inconclusive${why}`.slice(0, 1_000),
+    );
+    await coordinateStageOutcome(command, false, enqueue);
+    return;
+  }
   await finishStageRun(stageRun.id, 'completed', output);
   await coordinateStageOutcome(command, true, enqueue, {
     blockingFindings: progress.blocking,
@@ -508,6 +526,15 @@ export async function completeLifecycleReview(
   // before this agent is asked to look again.
   findingPaths: string[] = [],
   enqueue: typeof enqueueFactoryMessage = enqueueFactoryMessage,
+  readiness?: {
+    conclusion: ReviewConclusion;
+    coverageStatus: 'complete' | 'incomplete' | 'stale';
+    reviewableFileCount: number;
+    coveredFileCount: number;
+    missingPaths: string[];
+    coverageHeadSha: string | null;
+    publishedHeadSha: string | null;
+  },
 ): Promise<void> {
   const completed = await completeReview(
     agentInstanceId,
@@ -515,6 +542,7 @@ export async function completeLifecycleReview(
     findingsCount,
     verdict,
     findingPaths,
+    readiness,
   );
   if (completed?.stage_run_id) await settleReviewStage(completed.stage_run_id, enqueue);
 }

@@ -512,13 +512,62 @@ describe('review dispatch invariants', () => {
         verdict: 'request_changes',
         head_sha: null,
         finding_paths: ['src/x.ts'],
+        conclusion: null,
       },
-      { agent_slug: 'review', verdict: 'approve', head_sha: headB, finding_paths: [] },
+      {
+        agent_slug: 'review',
+        verdict: 'approve',
+        head_sha: headB,
+        finding_paths: [],
+        conclusion: null,
+      },
     ]);
     await expect(lastReviewedHead(101, 13)).resolves.toBe(headB);
     await expect(lastReviewedHead(101, 14)).resolves.toBeNull();
     await expect(headHasCompletedReview(101, 13, headA)).resolves.toBe(true);
     await expect(headHasCompletedReview(101, 13, 'c'.repeat(40))).resolves.toBe(false);
+  });
+
+  it('persists the evidence behind a conclusive review outcome', async () => {
+    const head = 'd'.repeat(40);
+    const id = await tryRecordReview(
+      101,
+      1001,
+      14,
+      'opened',
+      'review',
+      'review--acme--api--14',
+      'full',
+      null,
+      head,
+    );
+    await completeReview('review--acme--api--14', 'https://example.test/review', 0, 'comment', [], {
+      conclusion: 'inconclusive',
+      coverageStatus: 'incomplete',
+      reviewableFileCount: 3,
+      coveredFileCount: 2,
+      missingPaths: ['src/missed.ts'],
+      coverageHeadSha: head,
+      publishedHeadSha: head,
+    });
+
+    const row = await testDatabase()
+      .prepare(
+        `SELECT conclusion, coverage_status, reviewable_file_count, covered_file_count,
+                missing_paths, coverage_head_sha, published_head_sha
+         FROM reviews WHERE id = ?1`,
+      )
+      .bind(id)
+      .first();
+    expect(row).toEqual({
+      conclusion: 'inconclusive',
+      coverage_status: 'incomplete',
+      reviewable_file_count: 3,
+      covered_file_count: 2,
+      missing_paths: ['src/missed.ts'],
+      coverage_head_sha: head,
+      published_head_sha: head,
+    });
   });
 
   it('fails a stale running claim before admitting its replacement', async () => {
