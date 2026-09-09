@@ -15,6 +15,7 @@ export interface McpTestResult {
   ok: boolean;
   detail: string;
   tools?: string[];
+  status?: number;
 }
 
 // The JSON-RPC requests this probe sends.
@@ -88,6 +89,7 @@ export async function testMcpEndpoint(
     return {
       ok: false,
       detail: `HTTP ${initRes.status} ${initRes.statusText}: ${(await initRes.text()).slice(0, 300)}`,
+      status: initRes.status,
     };
   }
 
@@ -116,6 +118,13 @@ export async function testMcpEndpoint(
   try {
     await rpc({ jsonrpc: '2.0', method: 'notifications/initialized' }, session);
     const listRes = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list' }, session);
+    if (listRes.status === 401 || listRes.status === 403) {
+      return {
+        ok: false,
+        detail: `HTTP ${listRes.status} ${listRes.statusText}: ${(await listRes.text()).slice(0, 300)}`,
+        status: listRes.status,
+      };
+    }
     const list = parseRpcBody(await listRes.text());
     const listResult = list ? list['result'] : undefined;
     const rawTools = isJsonObject(listResult) ? listResult['tools'] : undefined;

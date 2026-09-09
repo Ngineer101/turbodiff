@@ -10,8 +10,10 @@ import type { AuthedUser } from '../services/auth.ts';
 import type {
   ApiAutomationDetail,
   ApiBoard,
+  ApiConnectionTest,
   ApiFeatureDetail,
   ApiFeatureExplanation,
+  ApiIntegrations,
   ApiModels,
   ApiReviewsPage,
   ApiSettings,
@@ -130,6 +132,8 @@ beforeEach(async () => {
     'plans',
     'review_findings',
     'reviews',
+    'repo_connections',
+    'connections',
     'repositories',
     'installations',
     'session',
@@ -141,6 +145,24 @@ beforeEach(async () => {
   );
   await seedTenants();
 });
+
+async function seedOAuthConnection(
+  id: number,
+  authConfig: string | null,
+  expiresAt: string | null,
+  hasRefreshToken: boolean,
+): Promise<void> {
+  await testDatabase()
+    .prepare(
+      `INSERT INTO connections
+         (id, installation_id, name, kind, url, auth_type, auth_config_ciphertext,
+          oauth_token_expires_at, oauth_has_refresh_token)
+       VALUES (?1, 1001, 'cloudflare', 'mcp', 'https://mcp.cloudflare.com/mcp',
+         'oauth', ?2, ?3, ?4)`,
+    )
+    .bind(id, authConfig, expiresAt, hasRefreshToken)
+    .run();
+}
 
 describe('API authentication and CSRF', () => {
   it('rejects a request without a durable session', async () => {
@@ -213,6 +235,89 @@ describe('API authentication and CSRF', () => {
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({ error: 'cross-origin request rejected' });
     expect(authenticate).not.toHaveBeenCalled();
+  });
+});
+
+describe('integration OAuth status and tests', () => {
+  it('does not call an abandoned OAuth draft connected', async () => {
+    await seedOAuthConnection(501, 'registered-client-draft', null, false);
+
+    const response = await authenticatedApi().request('https://turbodiff.test/api/integrations');
+    const payload = await response.json<ApiIntegrations>();
+
+    expect(payload.connections[0]?.oauth_status).toBe('not_connected');
+  });
+
+  it('never returns an internal credential-resolution error to the browser', async () => {
+    await seedOAuthConnection(502, 'sealed-config', '2026-09-07T15:11:04.232Z', true);
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const response = await apiApp({
+        authenticate: async () => acmeUser,
+        resolveConnectionAuth: async () => {
+          throw new Error(
+            'Failed query: UPDATE app.connections SET oauth_token_expires_at = $1; params: secret',
+          );
+        },
+      }).request('https://turbodiff.test/api/integrations/502/test', { method: 'POST' });
+      const payload = await response.json<ApiConnectionTest>();
+
+      expect(payload).toEqual({
+        ok: false,
+        detail: 'We could not verify this connection because of an internal error. Try again.',
+        tools: [],
+        reauth_required: false,
+      });
+      expect(payload.detail).not.toContain('UPDATE');
+      expect(payload.detail).not.toContain('secret');
+      expect(errorLog).toHaveBeenCalledOnce();
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
+
+  it('asks the client to reconnect when OAuth was never completed', async () => {
+    await seedOAuthConnection(504, null, null, false);
+    const response = await authenticatedApi().request(
+      'https://turbodiff.test/api/integrations/504/test',
+      { method: 'POST' },
+    );
+    const payload = await response.json<ApiConnectionTest>();
+
+    expect(payload).toEqual({
+      ok: false,
+      detail: 'OAuth is not connected. Reconnect this integration to continue.',
+      tools: [],
+      reauth_required: true,
+    });
+  });
+
+  it('marks rejected OAuth authorization for reconnect and returns the redirect signal', async () => {
+    await seedOAuthConnection(503, 'sealed-config', '2026-09-09T15:11:04.232Z', true);
+    const response = await apiApp({
+      authenticate: async () => acmeUser,
+      resolveConnectionAuth: async () => ({
+        headerName: 'authorization',
+        headerValue: 'Bearer access-token',
+      }),
+      testMcpEndpoint: async () => ({
+        ok: false,
+        detail: 'HTTP 401 Unauthorized: token rejected',
+        status: 401,
+      }),
+    }).request('https://turbodiff.test/api/integrations/503/test', { method: 'POST' });
+    const payload = await response.json<ApiConnectionTest>();
+
+    expect(payload).toEqual({
+      ok: false,
+      detail: 'The integration rejected its OAuth authorization. Reconnect it to continue.',
+      tools: [],
+      reauth_required: true,
+    });
+    const connection = await testDatabase()
+      .prepare('SELECT oauth_needs_reauth FROM connections WHERE id = 503')
+      .first<{ oauth_needs_reauth: boolean }>();
+    expect(connection?.oauth_needs_reauth).toBe(true);
   });
 });
 

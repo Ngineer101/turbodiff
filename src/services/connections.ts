@@ -49,6 +49,21 @@ const TOKEN_EXPIRY_MARGIN_MS = 60_000;
 const REFRESH_CLAIM_MS = 45_000;
 const DEFAULT_TOKEN_TTL_MS = 60 * 60_000;
 
+export type ConnectionAuthErrorReason = 'reauth_required' | 'temporarily_unavailable';
+
+// Only messages from this error may cross the HTTP boundary. Lower-level
+// failures can contain SQL, encrypted values, or provider response details
+// and are logged server-side instead.
+export class ConnectionAuthError extends Error {
+  constructor(
+    readonly reason: ConnectionAuthErrorReason,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ConnectionAuthError';
+  }
+}
+
 function stillFresh(expiresAt: string | null | undefined): boolean {
   return !!expiresAt && new Date(expiresAt).getTime() > Date.now() + TOKEN_EXPIRY_MARGIN_MS;
 }
@@ -118,8 +133,9 @@ async function resolveClientCredentials(conn: ConnectionRow): Promise<ResolvedAu
 
 async function resolveOAuthConnection(conn: ConnectionRow): Promise<ResolvedAuth> {
   if (!conn.auth_config_ciphertext) {
-    throw new Error(
-      `turbodiff: connection ${conn.id} has no OAuth credential yet — connect it from the integrations page`,
+    throw new ConnectionAuthError(
+      'reauth_required',
+      'OAuth is not connected. Reconnect this integration to continue.',
     );
   }
   const config = await openJson<OAuthConfig>(conn.auth_config_ciphertext);
@@ -128,8 +144,9 @@ async function resolveOAuthConnection(conn: ConnectionRow): Promise<ResolvedAuth
   }
   if (!config.refreshToken) {
     await updateConnectionAuth(conn.id, { oauthNeedsReauth: true, oauthHasRefreshToken: false });
-    throw new Error(
-      `turbodiff: connection ${conn.id}'s OAuth token expired and has no refresh token — reconnect it from the integrations page`,
+    throw new ConnectionAuthError(
+      'reauth_required',
+      'OAuth authorization expired and cannot be refreshed. Reconnect this integration to continue.',
     );
   }
 
@@ -146,7 +163,10 @@ async function resolveOAuthConnection(conn: ConnectionRow): Promise<ResolvedAuth
     if (freshConfig?.accessToken) {
       return { headerName: 'authorization', headerValue: `Bearer ${freshConfig.accessToken}` };
     }
-    throw new Error(`turbodiff: connection ${conn.id}'s OAuth refresh is in flight — retry`);
+    throw new ConnectionAuthError(
+      'temporarily_unavailable',
+      'OAuth credentials are already being refreshed. Try the connection again in a moment.',
+    );
   }
 
   const refreshed = await refreshOAuthToken(
@@ -159,12 +179,18 @@ async function resolveOAuthConnection(conn: ConnectionRow): Promise<ResolvedAuth
   if (!refreshed.ok) {
     if (refreshed.invalidGrant) {
       await updateConnectionAuth(conn.id, { oauthNeedsReauth: true });
-      throw new Error(
-        `turbodiff: connection ${conn.id}'s OAuth refresh token was revoked (${refreshed.detail}) — reconnect it from the integrations page`,
+      console.warn(
+        `turbodiff: OAuth refresh token was rejected for connection ${conn.id}: ${refreshed.detail}`,
+      );
+      throw new ConnectionAuthError(
+        'reauth_required',
+        'OAuth authorization expired or was revoked. Reconnect this integration to continue.',
       );
     }
-    throw new Error(
-      `turbodiff: connection ${conn.id}'s OAuth refresh failed (${refreshed.detail}) — will retry`,
+    console.warn(`turbodiff: OAuth refresh failed for connection ${conn.id}: ${refreshed.detail}`);
+    throw new ConnectionAuthError(
+      'temporarily_unavailable',
+      'The OAuth provider could not refresh this connection. Try again in a moment.',
     );
   }
 
@@ -325,7 +351,12 @@ export function oauthStatus(
 ): 'not_connected' | 'connected' | 'expired' | 'needs_reauth' | null {
   if (conn.auth_type !== 'oauth') return null;
   if (conn.oauth_needs_reauth) return 'needs_reauth';
-  if (conn.auth_config_ciphertext === null) return 'not_connected';
+  // /oauth/start persists a draft containing discovery/client-registration
+  // data before the user authorizes. Only the callback records an expiry, so
+  // a draft or abandoned flow must not render as connected.
+  if (conn.auth_config_ciphertext === null || conn.oauth_token_expires_at === null) {
+    return 'not_connected';
+  }
   if (
     !conn.oauth_has_refresh_token &&
     conn.oauth_token_expires_at &&

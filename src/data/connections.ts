@@ -171,8 +171,7 @@ export async function tryClaimConnectionRefresh(
   const changes = await execute(sql`
     UPDATE app.connections SET oauth_token_expires_at = ${claimUntil}
     WHERE id = ${id}
-      AND (oauth_token_expires_at = ${expectedExpiresAt}
-        OR (oauth_token_expires_at IS NULL AND ${expectedExpiresAt} IS NULL))
+      AND oauth_token_expires_at IS NOT DISTINCT FROM ${expectedExpiresAt}::timestamptz
   `);
   return changes > 0;
 }

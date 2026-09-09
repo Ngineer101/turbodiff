@@ -45,6 +45,7 @@ import {
   setChatSessionId,
   setReviewFindingFeedback,
   tryRecordAutomationRun,
+  tryClaimConnectionRefresh,
   tryRecordFixAttempt,
   markReviewFailed,
   markReviewFailedById,
@@ -127,6 +128,28 @@ beforeEach(async () => {
     tables.map((table) => testDatabase().prepare(`DELETE FROM "${table}"`)),
   );
   await seedTenant();
+});
+
+describe('connection OAuth refresh claims', () => {
+  it('atomically claims an expired timestamp, including PostgreSQL nullable comparison typing', async () => {
+    const expiredAt = '2026-09-07T15:11:04.232Z';
+    const claimUntil = '2026-09-09T12:10:52.587Z';
+    await testDatabase()
+      .prepare(
+        `INSERT INTO connections
+           (id, installation_id, name, kind, url, auth_type, oauth_token_expires_at)
+         VALUES (5, 1001, 'cloudflare', 'mcp', 'https://mcp.cloudflare.com/mcp', 'oauth', ?1)`,
+      )
+      .bind(expiredAt)
+      .run();
+
+    await expect(tryClaimConnectionRefresh(5, expiredAt, claimUntil)).resolves.toBe(true);
+    await expect(tryClaimConnectionRefresh(5, expiredAt, claimUntil)).resolves.toBe(false);
+    const row = await testDatabase()
+      .prepare('SELECT oauth_token_expires_at FROM connections WHERE id = 5')
+      .first<{ oauth_token_expires_at: string }>();
+    expect(new Date(row?.oauth_token_expires_at ?? '').toISOString()).toBe(claimUntil);
+  });
 });
 
 describe('installation mirroring', () => {
