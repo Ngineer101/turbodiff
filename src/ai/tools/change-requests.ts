@@ -5,7 +5,10 @@ import {
   getChangeRequest,
   getRepoByFullName,
   getReviewRunGuard,
+  listReviewFileEvidence,
   listCrComments,
+  recordReviewFileAcknowledgements,
+  recordReviewPatchDelivery,
   setChangeRequestReviewStatus,
   upsertCrCheck,
   type ChangeRequestRow,
@@ -22,7 +25,14 @@ import { CR_BRANCH_NAME, CR_DIR } from '../runtime/cr-engine.ts';
 import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
 import { generationSandbox } from '../runtime/sandbox.ts';
 import { cockpitFeatureUrl } from '../../services/urls.ts';
-import { assertPinned, findingSchema, MAX_DIFF_CHARS, MAX_FILE_CHARS, truncate } from './github.ts';
+import {
+  assertPinned,
+  findingSchema,
+  MAX_DIFF_CHARS,
+  MAX_FILE_CHARS,
+  reviewFileEvidenceSchema,
+  truncate,
+} from './github.ts';
 import { findingSeverity } from '../../domain/review-findings.ts';
 import {
   buildReviewDiffSnapshot,
@@ -98,6 +108,7 @@ export const makeFetchCr = (pin: CrPin) =>
       const diff = await getCrDiffPatch(cr);
       const files = changeRequestFiles(cr);
       const snapshot = buildReviewDiffSnapshot(diff, MAX_DIFF_CHARS);
+      await recordReviewPatchDelivery(pin.reviewId, snapshot.includedFiles);
       return {
         output: {
           title: cr.title,
@@ -221,7 +232,7 @@ export const makePostCrReview = (pin: CrPin) =>
       number: v.number(),
       body: v.pipe(v.string(), v.minLength(1)),
       findings: v.optional(v.array(findingSchema), []),
-      reviewedFiles: v.optional(v.array(v.string()), []),
+      fileEvidence: v.optional(v.array(reviewFileEvidenceSchema), []),
     }),
     async run({ data }) {
       assertCrPinned(pin, data.owner, data.repo, data.number);
@@ -269,7 +280,19 @@ export const makePostCrReview = (pin: CrPin) =>
           },
         };
       }
-      const missingFiles = missingReviewFiles(manifest, data.reviewedFiles);
+      const reviewablePaths = new Set(
+        manifest.filter((file) => file.reviewable).map((file) => file.path),
+      );
+      const submittedEvidence = data.fileEvidence.filter((item) => reviewablePaths.has(item.path));
+      await recordReviewFileAcknowledgements(pin.reviewId, submittedEvidence);
+      const evidence = await listReviewFileEvidence(pin.reviewId);
+      const coveredPaths = evidence
+        .filter((item) => item.patch_delivered && item.disposition === 'reviewed')
+        .map((item) => item.path);
+      const blockedEvidence = evidence
+        .filter((item) => item.disposition === 'blocked' && item.evidence)
+        .map((item) => ({ path: item.path, evidence: item.evidence! }));
+      const missingFiles = missingReviewFiles(manifest, coveredPaths);
       const reviewableFileCount = manifest.filter((file) => file.reviewable).length;
       const hasP1 = data.findings.map(findingSeverity).includes('P1');
       const hasP2 = data.findings.map(findingSeverity).includes('P2');
@@ -288,7 +311,22 @@ export const makePostCrReview = (pin: CrPin) =>
       }
       const coverageNote = coverageComplete
         ? ''
-        : `\n\n_Coverage incomplete: ${missingFiles.length} reviewable file(s) were not inspected; this review is inconclusive._`;
+        : `\n\n_Coverage incomplete: ${reviewableFileCount - missingFiles.length}/${reviewableFileCount} ` +
+          `reviewable file patch(es) were delivered and acknowledged. Missing: ${missingFiles
+            .slice(0, 20)
+            .map((path) => `\`${path}\``)
+            .join(
+              ', ',
+            )}${missingFiles.length > 20 ? `, and ${missingFiles.length - 20} more` : ''}. ` +
+          'This review is inconclusive.';
+      const blockedNote =
+        blockedEvidence.length === 0
+          ? ''
+          : '\n\nBlocked-file evidence:\n' +
+            blockedEvidence
+              .slice(0, 20)
+              .map((item) => `- \`${item.path}\`: ${item.evidence}`)
+              .join('\n');
       await addCrComment({
         changeRequestId: cr.id,
         file: null,
@@ -296,7 +334,7 @@ export const makePostCrReview = (pin: CrPin) =>
         author: CR_BOT_AUTHOR,
         kind: 'summary',
         severity: null,
-        body: `${data.body}${coverageNote}`,
+        body: `${data.body}${coverageNote}${blockedNote}`,
       });
       // Same verdict mapping as the GitHub tool: a P1 requests changes in
       // blocking mode; otherwise the review approves.

@@ -35,7 +35,7 @@ const schemas = await db.query(`
 `);
 
 const counts = new Map(schemas.rows.map((row) => [row.table_schema, row.count]));
-if (counts.get('app') !== 40) throw new Error(`Expected 40 app tables, found ${counts.get('app')}`);
+if (counts.get('app') !== 41) throw new Error(`Expected 41 app tables, found ${counts.get('app')}`);
 if (counts.get('auth') !== 10)
   throw new Error(`Expected 10 auth tables, found ${counts.get('auth')}`);
 
@@ -268,4 +268,4 @@ if (Number(versionAfterRollback.rows[0]?.version) !== versionBeforeRollback) {
 }
 
 await db.close();
-console.log(`Fresh PostgreSQL schema passed (${files.length} migrations, 50 tables)`);
+console.log(`Fresh PostgreSQL schema passed (${files.length} migrations, 51 tables)`);

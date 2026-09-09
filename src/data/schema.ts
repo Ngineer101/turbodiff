@@ -918,6 +918,37 @@ export const reviewFindings = appSchema.table(
   ],
 );
 
+export const reviewFileEvidence = appSchema.table(
+  'review_file_evidence',
+  {
+    id: bigint({ mode: 'number' })
+      .primaryKey()
+      .generatedByDefaultAsIdentity({ maxValue: '9007199254740991' }),
+    reviewId: bigint('review_id', { mode: 'number' })
+      .notNull()
+      .references(() => reviews.id, { onDelete: 'cascade' }),
+    path: text().notNull(),
+    patchDelivered: boolean('patch_delivered').default(false).notNull(),
+    disposition: text(),
+    evidence: text(),
+    deliveredAt: timestamp('delivered_at', { withTimezone: true, mode: 'string' }),
+    acknowledgedAt: timestamp('acknowledged_at', { withTimezone: true, mode: 'string' }),
+  },
+  (table) => [
+    unique('review_file_evidence_review_path_unique').on(table.reviewId, table.path),
+    index('review_file_evidence_review_idx').on(table.reviewId),
+    check(
+      'review_file_evidence_disposition_check',
+      sql`(disposition IS NULL) OR (disposition = ANY (ARRAY['reviewed'::text, 'blocked'::text]))`,
+    ),
+    check(
+      'review_file_evidence_ack_shape_check',
+      sql`(disposition IS NULL AND evidence IS NULL AND acknowledged_at IS NULL) OR
+        (disposition IS NOT NULL AND evidence IS NOT NULL AND acknowledged_at IS NOT NULL)`,
+    ),
+  ],
+);
+
 export const fixAttempts = appSchema.table(
   'fix_attempts',
   {
