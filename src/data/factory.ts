@@ -3,6 +3,7 @@ import type { CriterionResult } from '../domain/verification.ts';
 import type { ApiPlanQuestion } from '../shared/api-types.ts';
 import { STALL_AFTER_MINUTES, VERIFY_STALL_AFTER_MINUTES } from '../shared/time.ts';
 import type { CliUsage } from '../shared/usage.ts';
+import type { ReviewConclusion } from '../domain/review-context.ts';
 import { execute, queryOne, queryRows, withTransaction } from './database.ts';
 import { resolveRunnerModel } from './models.ts';
 import type { RepositoryRow } from './repositories.ts';
@@ -1122,11 +1123,27 @@ export async function completeReview(
   findingsCount: number | null = null,
   verdict: 'approve' | 'comment' | 'request_changes' = 'comment',
   findingPaths: string[] | null = null,
+  readiness?: {
+    conclusion: ReviewConclusion;
+    coverageStatus: 'complete' | 'incomplete' | 'stale';
+    reviewableFileCount: number;
+    coveredFileCount: number;
+    missingPaths: string[];
+    coverageHeadSha: string | null;
+    publishedHeadSha: string | null;
+  },
 ): Promise<{ stage_run_id: number | null } | null> {
   return queryOne<{ stage_run_id: number | null }>(sql`
     UPDATE app.reviews SET status = 'completed', completed_at = CURRENT_TIMESTAMP,
       review_url = ${reviewUrl}, findings_count = ${findingsCount}, verdict = ${verdict},
-      finding_paths = ${findingPaths === null ? null : JSON.stringify(findingPaths)}::jsonb
+      finding_paths = ${findingPaths === null ? null : JSON.stringify(findingPaths)}::jsonb,
+      conclusion = ${readiness?.conclusion ?? null},
+      coverage_status = ${readiness?.coverageStatus ?? null},
+      reviewable_file_count = ${readiness?.reviewableFileCount ?? null},
+      covered_file_count = ${readiness?.coveredFileCount ?? null},
+      missing_paths = ${readiness ? JSON.stringify(readiness.missingPaths) : null}::jsonb,
+      coverage_head_sha = ${readiness?.coverageHeadSha ?? null},
+      published_head_sha = ${readiness?.publishedHeadSha ?? null}
     WHERE id = (
       SELECT id FROM app.reviews
       WHERE agent_instance_id = ${agentInstanceId} AND status = 'running'

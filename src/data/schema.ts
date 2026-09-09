@@ -742,6 +742,15 @@ export const reviews = appSchema.table(
       { onDelete: 'set null' },
     ),
     verdict: text(),
+    // Durable trust result. GitHub's review event is presentation; lifecycle
+    // and merge gates consume this fail-closed conclusion instead.
+    conclusion: text(),
+    coverageStatus: text('coverage_status'),
+    reviewableFileCount: integer('reviewable_file_count'),
+    coveredFileCount: integer('covered_file_count'),
+    missingPaths: jsonb('missing_paths').$type<string[]>(),
+    coverageHeadSha: text('coverage_head_sha'),
+    publishedHeadSha: text('published_head_sha'),
     // Why a failed row failed: the dispatch error or the agent's settlement
     // error. Null on completed rows.
     error: text(),
@@ -821,6 +830,23 @@ export const reviews = appSchema.table(
     check(
       'reviews_verdict_check',
       sql`(verdict IS NULL) OR (verdict = ANY (ARRAY['approve'::text, 'comment'::text, 'request_changes'::text]))`,
+    ),
+    check(
+      'reviews_conclusion_check',
+      sql`(conclusion IS NULL) OR (conclusion = ANY (ARRAY['ready'::text, 'ready_with_warnings'::text, 'not_ready'::text, 'inconclusive'::text]))`,
+    ),
+    check(
+      'reviews_coverage_status_check',
+      sql`(coverage_status IS NULL) OR (coverage_status = ANY (ARRAY['complete'::text, 'incomplete'::text, 'stale'::text]))`,
+    ),
+    check(
+      'reviews_coverage_counts_check',
+      sql`(reviewable_file_count IS NULL AND covered_file_count IS NULL) OR
+        (reviewable_file_count >= 0 AND covered_file_count >= 0 AND covered_file_count <= reviewable_file_count)`,
+    ),
+    check(
+      'reviews_missing_paths_array_check',
+      sql`(missing_paths IS NULL) OR (jsonb_typeof(missing_paths) = 'array'::text)`,
     ),
     check(
       'reviews_completion_shape',

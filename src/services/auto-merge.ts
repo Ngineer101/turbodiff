@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers';
 import { githubRequest as gh } from '../integrations/github/client.ts';
 import {
   getFeatureByRepoPr,
+  latestCompletedReviewsByAgent,
   latestVerificationForFeature,
   type RepositoryRow,
 } from '../data/db.ts';
@@ -66,19 +67,28 @@ export async function maybeAutoMerge(repo: RepositoryRow, prNumber: number): Pro
     const mergeability = await checkMergeability(token, repo.owner, repo.name, prNumber, {
       retryOnUnknown: true,
     });
+    const recordedReviews = (await latestCompletedReviewsByAgent(repo.id, prNumber)).filter(
+      (review) => review.head_sha === mergeability.headSha,
+    );
+    const reviewEvidenceConclusive =
+      recordedReviews.length > 0 &&
+      recordedReviews.every(
+        (review) => review.conclusion === 'ready' || review.conclusion === 'ready_with_warnings',
+      );
 
     const decline = autoMergeDecline({
       optedIn: repo.auto_merge,
       blockingReviews: repo.blocking_reviews,
       hasAcceptanceCriteria: Boolean(feature.acceptance),
       verificationPassed: verification?.status === 'passed',
-      reviewed: botReviews.length > 0,
+      reviewed: botReviews.length > 0 && recordedReviews.length > 0,
+      reviewEvidenceConclusive,
       anyBlockingReview: botReviews.some(
         (r) =>
           r.state === 'CHANGES_REQUESTED' ||
           (r.state === 'COMMENTED' && r.body.startsWith('**Verdict: REQUEST_CHANGES**')),
       ),
-      checksGreen: true, // GitHub CI signals arrive via the fix loop, not this gate
+      checksGreen: mergeability.mergeableState === 'clean',
       hasConflict: mergeability.hasConflict,
     });
     if (decline) {

@@ -8,6 +8,7 @@ import {
   getOpenChangeRequest,
   getRepoById,
   latestVerificationForFeature,
+  latestCompletedReviewsByAgent,
   listChangeRequestsForRepo,
   listCrChecks,
   listCrComments,
@@ -184,6 +185,14 @@ export async function maybeAutoMergeCr(
   const feature = cr.feature_id ? await getFeature(cr.feature_id) : null;
   const verification = feature?.acceptance ? await latestVerificationForFeature(feature.id) : null;
   const checks = await listCrChecks(cr.id);
+  const recordedReviews = (await latestCompletedReviewsByAgent(repo.id, cr.number)).filter(
+    (review) => review.head_sha === cr.source_head,
+  );
+  const reviewEvidenceConclusive =
+    recordedReviews.length > 0 &&
+    recordedReviews.every(
+      (review) => review.conclusion === 'ready' || review.conclusion === 'ready_with_warnings',
+    );
 
   const decline = autoMergeDecline({
     optedIn: repo.auto_merge,
@@ -191,6 +200,7 @@ export async function maybeAutoMergeCr(
     hasAcceptanceCriteria: Boolean(feature?.acceptance),
     verificationPassed: verification?.status === 'passed',
     reviewed: cr.review_status !== null,
+    reviewEvidenceConclusive,
     anyBlockingReview: cr.review_status === 'changes_requested',
     checksGreen: checks.length > 0 && checks.every((check) => check.status === 'passed'),
     hasConflict: cr.mergeable !== true,

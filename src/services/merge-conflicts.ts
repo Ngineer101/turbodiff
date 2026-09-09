@@ -18,9 +18,15 @@ export interface PrMergeability {
   mergeableState: string; // GitHub's mergeable_state: dirty | clean | unstable | blocked | behind | unknown | draft
   hasConflict: boolean; // mergeableState === 'dirty'
   baseRef: string; // the branch this PR would merge into — needed to notify/resolve
+  headSha: string;
 }
 
-type PrPayload = { mergeable: boolean | null; mergeable_state: string; base: { ref: string } };
+type PrPayload = {
+  mergeable: boolean | null;
+  mergeable_state: string;
+  base: { ref: string };
+  head: { sha: string };
+};
 
 function toMergeability(pr: PrPayload): PrMergeability {
   return {
@@ -28,6 +34,7 @@ function toMergeability(pr: PrPayload): PrMergeability {
     mergeableState: pr.mergeable_state,
     hasConflict: pr.mergeable_state === 'dirty',
     baseRef: pr.base.ref,
+    headSha: pr.head.sha,
   };
 }
 

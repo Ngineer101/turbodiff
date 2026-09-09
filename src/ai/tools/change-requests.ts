@@ -21,15 +21,13 @@ import { CR_BRANCH_NAME, CR_DIR } from '../runtime/cr-engine.ts';
 import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
 import { generationSandbox } from '../runtime/sandbox.ts';
 import { cockpitFeatureUrl } from '../../services/urls.ts';
-import {
-  assertPinned,
-  filterDiffNoise,
-  findingSchema,
-  truncate,
-  MAX_DIFF_CHARS,
-  MAX_FILE_CHARS,
-} from './github.ts';
+import { assertPinned, findingSchema, MAX_DIFF_CHARS, MAX_FILE_CHARS, truncate } from './github.ts';
 import { findingSeverity } from '../../domain/review-findings.ts';
+import {
+  buildReviewDiffSnapshot,
+  missingReviewFiles,
+  reviewConclusion,
+} from '../../domain/review-context.ts';
 
 // Native change-request tools for the PrReviewer agent
 // (docs/artifacts-provider.md). Deliberately the SAME tool names and input
@@ -85,6 +83,7 @@ export const makeFetchCr = (pin: CrPin) =>
       const summary = comments.find((c) => c.kind === 'summary' && c.author === CR_BOT_AUTHOR);
       const diff = await getCrDiffPatch(cr);
       const files = changeRequestFiles(cr);
+      const snapshot = buildReviewDiffSnapshot(diff, MAX_DIFF_CHARS);
       return {
         output: {
           title: cr.title,
@@ -97,7 +96,17 @@ export const makeFetchCr = (pin: CrPin) =>
           changedFiles: files.length,
           additions: files.reduce((sum, f) => sum + (f.additions ?? 0), 0),
           deletions: files.reduce((sum, f) => sum + (f.deletions ?? 0), 0),
-          diff: truncate(filterDiffNoise(diff), MAX_DIFF_CHARS, 'diff'),
+          diff: snapshot.diff,
+          files: snapshot.files.map((file) => ({
+            path: file.path,
+            chars: file.chars,
+            reviewable: file.reviewable,
+            omittedReason: file.omittedReason,
+            included: file.included,
+          })),
+          includedFiles: snapshot.includedFiles,
+          remainingFiles: snapshot.remainingFiles,
+          coverageComplete: snapshot.complete,
         },
       };
     },
@@ -198,10 +207,19 @@ export const makePostCrReview = (agentInstanceId: string, pin: CrPin) =>
       number: v.number(),
       body: v.pipe(v.string(), v.minLength(1)),
       findings: v.optional(v.array(findingSchema), []),
+      reviewedFiles: v.optional(v.array(v.string()), []),
     }),
     async run({ data }) {
       assertCrPinned(pin, data.owner, data.repo);
       const { cr, repo } = await pinnedCr(pin);
+      const liveDiff = await getCrDiffPatch(cr);
+      const manifest = buildReviewDiffSnapshot(liveDiff, 0).files;
+      const missingFiles = missingReviewFiles(manifest, data.reviewedFiles);
+      const reviewableFileCount = manifest.filter((file) => file.reviewable).length;
+      const hasP1 = data.findings.map(findingSeverity).includes('P1');
+      const hasP2 = data.findings.map(findingSeverity).includes('P2');
+      const coverageComplete = missingFiles.length === 0;
+      const conclusion = reviewConclusion(hasP1, hasP2, coverageComplete);
       for (const finding of data.findings) {
         await addCrComment({
           changeRequestId: cr.id,
@@ -213,6 +231,9 @@ export const makePostCrReview = (agentInstanceId: string, pin: CrPin) =>
           body: finding.body,
         });
       }
+      const coverageNote = coverageComplete
+        ? ''
+        : `\n\n_Coverage incomplete: ${missingFiles.length} reviewable file(s) were not inspected; this review is inconclusive._`;
       await addCrComment({
         changeRequestId: cr.id,
         file: null,
@@ -220,18 +241,19 @@ export const makePostCrReview = (agentInstanceId: string, pin: CrPin) =>
         author: CR_BOT_AUTHOR,
         kind: 'summary',
         severity: null,
-        body: data.body,
+        body: `${data.body}${coverageNote}`,
       });
       // Same verdict mapping as the GitHub tool: a P1 requests changes in
       // blocking mode; otherwise the review approves.
-      const hasP1 = data.findings.map(findingSeverity).includes('P1');
       const blocking = repo.blocking_reviews && hasP1;
       await setChangeRequestReviewStatus(cr.id, blocking ? 'changes_requested' : 'approved');
       await upsertCrCheck(
         cr.id,
         'review',
-        blocking ? 'failed' : 'passed',
-        `${data.findings.length} finding(s)` + (blocking ? ' — P1 blocks merge' : ''),
+        blocking || conclusion === 'inconclusive' ? 'failed' : 'passed',
+        conclusion === 'inconclusive'
+          ? `inconclusive — ${missingFiles.length} reviewable file(s) missing`
+          : `${data.findings.length} finding(s)` + (blocking ? ' — P1 blocks merge' : ''),
       );
       const url = cr.feature_id ? cockpitFeatureUrl(cr.feature_id) : null;
       await completeLifecycleReview(
@@ -242,6 +264,16 @@ export const makePostCrReview = (agentInstanceId: string, pin: CrPin) =>
           ? 'request_changes'
           : 'approve',
         [...new Set(data.findings.map((finding) => finding.path))],
+        undefined,
+        {
+          conclusion,
+          coverageStatus: coverageComplete ? 'complete' : 'incomplete',
+          reviewableFileCount,
+          coveredFileCount: reviewableFileCount - missingFiles.length,
+          missingPaths: missingFiles,
+          coverageHeadSha: cr.source_head,
+          publishedHeadSha: cr.source_head,
+        },
       );
       if (blocking && repo.auto_fix && repo.process_profile === 'legacy_factory') {
         // Native verdicts fire no webhook, so the blocking-review fix
@@ -253,7 +285,7 @@ export const makePostCrReview = (agentInstanceId: string, pin: CrPin) =>
           trigger: 'blocking_review',
         });
       }
-      if (!blocking) await maybeAutoMergeCr(repo, cr.id);
+      if (!blocking && conclusion !== 'inconclusive') await maybeAutoMergeCr(repo, cr.id);
       return { output: { posted: true, inline: data.findings.length, url, fallback: null } };
     },
   });

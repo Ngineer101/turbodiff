@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vite-plus/test';
 import {
   buildReviewDiffSnapshot,
   missingReviewFiles,
+  reviewConclusion,
   reviewPublicationEvent,
 } from './review-context.ts';
 
@@ -56,5 +57,13 @@ describe('review context', () => {
     expect(reviewPublicationEvent(true, true, false)).toBe('REQUEST_CHANGES');
     expect(reviewPublicationEvent(false, true, true)).toBe('COMMENT');
     expect(reviewPublicationEvent(true, false, true, false)).toBe('COMMENT');
+  });
+
+  it('keeps uncertainty distinct from a clean or blocking conclusion', () => {
+    expect(reviewConclusion(false, false, true)).toBe('ready');
+    expect(reviewConclusion(false, true, true)).toBe('ready_with_warnings');
+    expect(reviewConclusion(true, true, true)).toBe('not_ready');
+    expect(reviewConclusion(false, false, false)).toBe('inconclusive');
+    expect(reviewConclusion(true, false, true, false)).toBe('inconclusive');
   });
 });
