@@ -16,7 +16,6 @@ import { persistAgentLog } from '../runtime/agent-runs.ts';
 import { runCodingAgent } from '../runtime/coding-agent.ts';
 import { resolveRunnerAuth } from '../runtime/runner-auth.ts';
 import { runnerSandbox } from '../runtime/sandbox.ts';
-import { resolveRunnerModel } from '../../data/models.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
 import { installationToken } from '../../integrations/github/app.ts';
 import { resolveWorkspaceRemote } from '../../integrations/git/provider.ts';
@@ -171,39 +170,6 @@ async function runAgent(
   }
 }
 
-// Cheap-model triage: is this request a small localized change or real
-// feature work? Drives plan depth, criteria count, and the generation
-// agent's budget. Fails open to 'standard' — misclassifying big work as
-// trivial is the only harmful direction.
-async function classifyTier(
-  sandbox: Sandbox,
-  plan: PlanRow,
-  repos: RepositoryRow[],
-): Promise<'trivial' | 'standard'> {
-  const auth = await resolveRunnerAuth(undefined, await resolveRunnerModel(null, 'fast'));
-  const label = repos.map((r) => `${r.owner}/${r.name}`).join(', ');
-  const prompt = `Classify this feature request for ${label}. Reply with EXACTLY one word: trivial or standard.
-
-trivial = a small, localized change: cosmetic/styling tweaks, copy changes, a config value, a small fix confined to a handful of files, no new subsystem, no schema or API changes.
-standard = everything else.
-
-## Request: ${plan.title}
-
-${plan.requirements}
-`;
-  try {
-    await sandbox.writeFile(`${OUT_DIR}/classify.md`, prompt);
-    const res = await runCodingAgent(sandbox, auth, {
-      promptFile: `${OUT_DIR}/classify.md`,
-      cwd: CLONE_DIR,
-      timeout: 2 * 60_000,
-    });
-    return res.success && /\btrivial\b/i.test(res.resultText) ? 'trivial' : 'standard';
-  } catch {
-    return 'standard';
-  }
-}
-
 const ATTACH_DIR = '/workspace/plan-attachments';
 
 // User-uploaded context files (R2) pulled into the sandbox with the same
@@ -245,18 +211,17 @@ function analyzePrompt(
   plan: PlanRow,
   repos: RepositoryRow[],
   dirs: { repo: RepositoryRow; dir: string }[],
-  tier: string,
   extra = '',
 ): string {
-  const trivial = tier === 'trivial';
   if (repos.length === 1) {
     const repo = repos[0];
     return `You are a planning agent for ${repo.owner}/${repo.name}. You are in a read-only checkout — study the code but do NOT modify it.
-${trivial ? '\nThis request is classified TRIVIAL: a small, localized change. Keep everything proportionate — a short analysis, and questions only for a genuine blocker.\n' : ''}
+Keep the analysis proportionate: for a small, localized change, use at most 10 lines and ask questions only for a genuine blocker.
 Analyze the feature requirements below against the actual codebase, then write these files (create the directory if needed):
 
-1. ${OUT_DIR}/analysis.md — a ${trivial ? 'brief (≤10 lines)' : 'short'} grounding analysis: which files/modules this touches, how it fits existing conventions, and any risks.
-2. ${OUT_DIR}/questions.json — a JSON array of clarifying questions. Each question is an object: \`{ "text": "...", "options": ["...", "...", "..."], "recommended": "<exact text of one of the options>" }\`. Give 2-3 concrete, mutually-exclusive options that a user could tap to answer, and mark the one you'd recommend by repeating its exact text in \`recommended\`. If a question genuinely has no small set of sensible choices (open-ended input needed), omit \`options\`/\`recommended\` and it will be shown as free text. Include ONLY genuine ambiguities or decisions that would change the implementation. If the requirements are clear enough to implement well, write an empty array [].${trivial ? ' For a trivial request the answer is almost always [].' : ''}
+1. ${OUT_DIR}/analysis.md — a short grounding analysis: which files/modules this touches, how it fits existing conventions, and any risks.
+2. ${OUT_DIR}/questions.json — a JSON array of clarifying questions. Each question is an object: \`{ "text": "...", "options": ["...", "...", "..."], "recommended": "<exact text of one of the options>" }\`. Give 2-3 concrete, mutually-exclusive options that a user could tap to answer, and mark the one you'd recommend by repeating its exact text in \`recommended\`. If a question genuinely has no small set of sensible choices (open-ended input needed), omit \`options\`/\`recommended\` and it will be shown as free text. Include ONLY genuine ambiguities or decisions that would change the implementation. If the requirements are clear enough to implement well, write an empty array [].
+3. ${OUT_DIR}/tier.txt — exactly one word: trivial or standard. Use trivial only for a small, localized change (cosmetic/styling, copy, a config value, or a small fix) with no new subsystem, schema, or API changes. Use standard for everything else, including uncertainty. Classify from the analysis you already performed; do not launch another agent for classification.
 
 ${UNTRUSTED_CONTENT_RULES}
 
@@ -267,14 +232,15 @@ ${plan.requirements}
 ${extra}`;
   }
   return `You are a planning agent for a feature spanning ${repos.length} repositories. You are in read-only checkouts — study the code but do NOT modify it.
-${trivial ? '\nThis request is classified TRIVIAL: a small, localized change. Keep everything proportionate — a short analysis, and questions only for a genuine blocker.\n' : ''}
+Keep the analysis proportionate: for a small, localized change, use at most 10 lines and ask questions only for a genuine blocker.
 ## Repositories
 ${reposList(dirs)}
 
 Analyze the feature requirements below against the actual code in EVERY repository above, as one coherent feature designed across all of them, then write these files (create the directory if needed):
 
-1. ${OUT_DIR}/analysis.md — a ${trivial ? 'brief (≤10 lines)' : 'short'} grounding analysis covering each repository: which files/modules it touches, how it fits existing conventions, and any risks.
-2. ${OUT_DIR}/questions.json — a JSON array of clarifying questions. Each question is an object: \`{ "text": "...", "options": ["...", "...", "..."], "recommended": "<exact text of one of the options>" }\`. Give 2-3 concrete, mutually-exclusive options that a user could tap to answer, and mark the one you'd recommend by repeating its exact text in \`recommended\`. If a question genuinely has no small set of sensible choices (open-ended input needed), omit \`options\`/\`recommended\` and it will be shown as free text. Include ONLY genuine ambiguities or decisions that would change the implementation. If the requirements are clear enough to implement well, write an empty array [].${trivial ? ' For a trivial request the answer is almost always [].' : ''}
+1. ${OUT_DIR}/analysis.md — a short grounding analysis covering each repository: which files/modules it touches, how it fits existing conventions, and any risks.
+2. ${OUT_DIR}/questions.json — a JSON array of clarifying questions. Each question is an object: \`{ "text": "...", "options": ["...", "...", "..."], "recommended": "<exact text of one of the options>" }\`. Give 2-3 concrete, mutually-exclusive options that a user could tap to answer, and mark the one you'd recommend by repeating its exact text in \`recommended\`. If a question genuinely has no small set of sensible choices (open-ended input needed), omit \`options\`/\`recommended\` and it will be shown as free text. Include ONLY genuine ambiguities or decisions that would change the implementation. If the requirements are clear enough to implement well, write an empty array [].
+3. ${OUT_DIR}/tier.txt — exactly one word: trivial or standard. Use trivial only for a small, localized change (cosmetic/styling, copy, a config value, or a small fix) with no new subsystem, schema, or API changes. Use standard for everything else, including uncertainty. Classify from the analysis you already performed; do not launch another agent for classification.
 
 ${UNTRUSTED_CONTENT_RULES}
 
@@ -366,18 +332,20 @@ export async function runPlanAnalyze(planId: number): Promise<void> {
     const booted = await clonePlanRepos(repos, planId);
     sandbox = booted.sandbox;
     dirs = booted.dirs;
-    // Cheap-model triage first: trivial requests get proportionate plans.
-    const tier = await classifyTier(sandbox, plan, repos);
-    await updatePlan(planId, { tier });
     const attachments = attachmentsSection(await fetchPlanAttachments(sandbox, plan));
     await runAgent(
       sandbox,
-      analyzePrompt(plan, repos, dirs, tier, attachments),
+      analyzePrompt(plan, repos, dirs, attachments),
       booted.scrub,
       'plan_analyze',
       planId,
       plan.runner_model,
     );
+    // Classification is an output of this task's analysis, never a separate
+    // agent using the global fast model. Missing/invalid output stays conservative.
+    const tier =
+      (await readText(sandbox, `${OUT_DIR}/tier.txt`)) === 'trivial' ? 'trivial' : 'standard';
+    await updatePlan(planId, { tier });
     const analysis = await readText(sandbox, `${OUT_DIR}/analysis.md`);
     const questions = await readQuestions(sandbox, `${OUT_DIR}/questions.json`);
 
