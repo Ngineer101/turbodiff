@@ -8,6 +8,7 @@ import {
   listReviewFileEvidence,
   listCrComments,
   recordReviewFileAcknowledgements,
+  recordReviewPatchChunkDelivery,
   recordReviewPatchDelivery,
   setChangeRequestReviewStatus,
   upsertCrCheck,
@@ -38,7 +39,9 @@ import {
   buildReviewDiffSnapshot,
   missingReviewFiles,
   reviewConclusion,
+  reviewDiffOmissionReason,
 } from '../../domain/review-context.ts';
+import { splitDiffSegmentChunks, splitDiffSegments } from '../../domain/review-diff.ts';
 
 // Native change-request tools for the PrReviewer agent
 // (docs/artifacts-provider.md). Deliberately the SAME tool names and input
@@ -87,7 +90,7 @@ async function pinnedCr(
   return { cr, repo };
 }
 
-export const makeFetchCr = (pin: CrPin) =>
+export const makeFetchCr = (pin: CrPin, maxChars = MAX_DIFF_CHARS) =>
   defineTool({
     name: 'fetch_pr',
     description:
@@ -107,7 +110,7 @@ export const makeFetchCr = (pin: CrPin) =>
       const summary = comments.find((c) => c.kind === 'summary' && c.author === CR_BOT_AUTHOR);
       const diff = await getCrDiffPatch(cr);
       const files = changeRequestFiles(cr);
-      const snapshot = buildReviewDiffSnapshot(diff, MAX_DIFF_CHARS);
+      const snapshot = buildReviewDiffSnapshot(diff, maxChars);
       await recordReviewPatchDelivery(pin.reviewId, snapshot.includedFiles);
       return {
         output: {
@@ -132,6 +135,48 @@ export const makeFetchCr = (pin: CrPin) =>
           includedFiles: snapshot.includedFiles,
           remainingFiles: snapshot.remainingFiles,
           coverageComplete: snapshot.complete,
+        },
+      };
+    },
+  });
+
+export const makeFetchCrDiff = (pin: CrPin, maxChars = MAX_DIFF_CHARS) =>
+  defineTool({
+    name: 'fetch_diff',
+    description:
+      'Fetch one deterministic page of a reviewable patch omitted from fetch_pr. Start at chunk 0 ' +
+      'and request nextChunk until it is null.',
+    input: v.object({
+      owner: v.string(),
+      repo: v.string(),
+      number: v.number(),
+      path: v.pipe(v.string(), v.minLength(1), v.maxLength(1_000)),
+      chunk: v.optional(v.pipe(v.number(), v.integer(), v.minValue(0)), 0),
+    }),
+    async run({ data }) {
+      assertCrPinned(pin, data.owner, data.repo, data.number);
+      const { cr } = await pinnedCr(pin);
+      const diff = await getCrDiffPatch(cr);
+      const selected = splitDiffSegments(diff).find((entry) => entry.path === data.path);
+      if (!selected) throw new Error(`changed path ${data.path} was not found in the current diff`);
+      const omittedReason = reviewDiffOmissionReason(selected.path, selected.segment);
+      if (omittedReason) {
+        throw new Error(`changed path ${data.path} is not reviewable: ${omittedReason}`);
+      }
+      const chunks = splitDiffSegmentChunks(selected.segment, maxChars);
+      if (data.chunk >= chunks.length) {
+        throw new Error(`chunk ${data.chunk} is outside the 0-${chunks.length - 1} range`);
+      }
+      await recordReviewPatchChunkDelivery(pin.reviewId, selected.path, data.chunk, chunks.length);
+      const nextChunk = data.chunk + 1 < chunks.length ? data.chunk + 1 : null;
+      return {
+        output: {
+          path: selected.path,
+          diff: chunks[data.chunk],
+          chunk: data.chunk,
+          chunkCount: chunks.length,
+          nextChunk,
+          complete: nextChunk === null,
         },
       };
     },

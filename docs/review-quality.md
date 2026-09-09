@@ -11,10 +11,16 @@ context. `fetch_pr` returns two complementary artifacts:
 
 - a complete manifest of every changed path, including whether generated or
   noisy files were deliberately excluded; and
-- an initial size-bounded packet containing only complete patches.
+- an initial model-budgeted packet containing only complete patches.
 
-The reviewer retrieves `remainingFiles` with `fetch_diff`. Every returned
-patch is recorded against the exact review run. At publication the reviewer
+The reviewer retrieves each `remainingFiles` path with paged `fetch_diff`
+calls until `nextChunk` is null. The packet budget comes from the selected
+model's operator-managed catalog metadata (64k diff tokens by default, about
+192k characters), rather than one global 120k-character ceiling. Oversized
+single-file patches are split at line boundaries with explicit old/new line
+counters, so they no longer become permanently unreviewable. Every returned
+chunk is recorded against the exact review run; all expected chunks must be
+present before the patch is considered delivered. At publication the reviewer
 submits a per-file acknowledgement: `reviewed` with a code-specific evidence
 summary, or `blocked` with the concrete limitation. A path counts as covered
 only when both the server-observed patch delivery and the acknowledgement are
@@ -28,7 +34,7 @@ flowchart LR
   SPLIT --> PACKET["Bounded initial packet"]
   MANIFEST --> AGENT["Reviewer"]
   PACKET --> AGENT
-  AGENT -->|"remaining paths"| MORE["fetch_diff packets"]
+  AGENT -->|"path + next chunk"| MORE["model-budgeted fetch_diff page"]
   MORE --> AGENT
   AGENT -->|"findings + file evidence"| GATE{"Delivered and acknowledged?"}
   GATE -->|"no"| COMMENT["COMMENT or proven P1 block"]
