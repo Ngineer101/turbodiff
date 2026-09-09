@@ -39,9 +39,8 @@ try {
       (model_id, provider, label, for_runner, for_reviewer, runner_default,
        runner_fast_default, reviewer_default, sort_order)
     VALUES
-      ('claude-fable-5.1', 'anthropic', 'Fable 5.1', true, false, true, false, false, 0),
-      ('claude-opus-5', 'anthropic', 'Opus 5', true, false, false, false, false, 1),
-      ('claude-haiku-4.5', 'anthropic', 'Haiku 4.5', true, false, false, true, false, 2)
+      ('gpt-5.6-sol', 'openai', 'GPT-5.6 Sol', true, false, true, false, false, 0),
+      ('claude-opus-4.8', 'anthropic', 'Opus 4.8', true, false, false, true, false, 1)
   `);
   console.log('Local PostgreSQL test data reset');
 } finally {

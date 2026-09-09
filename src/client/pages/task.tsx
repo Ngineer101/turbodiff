@@ -31,6 +31,7 @@ import { ConfirmButton } from '../components/confirm-button.tsx';
 import { Serial, StageLights, Stamp } from '../components/identity.tsx';
 import { Markdown } from '../components/markdown.tsx';
 import { MicButton } from '../components/mic-button.tsx';
+import { ModelCombobox } from '../components/model-combobox.tsx';
 import {
   Accordion,
   AccordionContent,
@@ -39,7 +40,7 @@ import {
 } from '../components/ui/accordion.tsx';
 import { QuestionsCarousel } from '../components/questions-carousel.tsx';
 import { Button, buttonVariants } from '../components/ui/button.tsx';
-import { Select, Textarea } from '../components/ui/input.tsx';
+import { Textarea } from '../components/ui/input.tsx';
 import { BlockLabel, Panel } from '../components/ui/panel.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 
@@ -550,19 +551,14 @@ export function TaskPage() {
         <aside className="space-y-5 lg:sticky lg:top-6">
           <div>
             <BlockLabel className="mb-2">Model</BlockLabel>
-            <Select
+            <ModelCombobox
               id="task-model"
               value={task.model}
-              onChange={(e) => setModel.mutate(e.target.value)}
+              onValueChange={(value) => setModel.mutate(value)}
+              options={modelOptions}
               disabled={setModel.isPending || !models}
               className="w-full text-xs"
-            >
-              {modelOptions.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </Select>
+            />
           </div>
 
           {task.attachments.length > 0 ? (

@@ -7,16 +7,12 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 const db = new PGlite();
 const directory = path.resolve('db/migrations');
 const files = (await readdir(directory)).filter((file) => file.endsWith('.sql')).sort();
-const journal = JSON.parse(
-  await readFile(path.join(directory, 'meta', '_journal.json'), 'utf8'),
-);
+const journal = JSON.parse(await readFile(path.join(directory, 'meta', '_journal.json'), 'utf8'));
 for (let index = 1; index < journal.entries.length; index += 1) {
   const previous = journal.entries[index - 1];
   const current = journal.entries[index];
   if (current.when <= previous.when) {
-    throw new Error(
-      `Migration ${current.tag} timestamp must be newer than ${previous.tag}`,
-    );
+    throw new Error(`Migration ${current.tag} timestamp must be newer than ${previous.tag}`);
   }
 }
 
@@ -52,7 +48,8 @@ const runnerRoles = await db.query(`
   SELECT
     COUNT(*) FILTER (WHERE enabled AND for_runner AND runner_default)::int AS defaults,
     COUNT(*) FILTER (WHERE enabled AND for_runner AND runner_fast_default)::int AS fast_defaults,
-    MAX(model_id) FILTER (WHERE runner_fast_default) AS fast_model
+    MAX(provider || '/' || model_id) FILTER (WHERE runner_default) AS default_model,
+    MAX(provider || '/' || model_id) FILTER (WHERE runner_fast_default) AS fast_model
   FROM app.models
 `);
 if (runnerRoles.rows[0]?.defaults !== 1 || runnerRoles.rows[0]?.fast_defaults !== 1) {
@@ -60,10 +57,48 @@ if (runnerRoles.rows[0]?.defaults !== 1 || runnerRoles.rows[0]?.fast_defaults !=
     `Expected exactly one runner default and fast default: ${JSON.stringify(runnerRoles.rows[0])}`,
   );
 }
-if (runnerRoles.rows[0]?.fast_model !== 'claude-haiku-4.5') {
+if (runnerRoles.rows[0]?.default_model !== 'openai/gpt-5.6-sol') {
   throw new Error(
-    `Expected the migrated fast runner to be claude-haiku-4.5, found ${runnerRoles.rows[0]?.fast_model}`,
+    `Expected the migrated default runner to be openai/gpt-5.6-sol, found ${runnerRoles.rows[0]?.default_model}`,
   );
+}
+if (runnerRoles.rows[0]?.fast_model !== 'anthropic/claude-opus-4.8') {
+  throw new Error(
+    `Expected the migrated fast runner to be anthropic/claude-opus-4.8, found ${runnerRoles.rows[0]?.fast_model}`,
+  );
+}
+
+const modelCatalog = await db.query(`
+  SELECT provider, model_id, label, for_reviewer
+  FROM app.models
+  WHERE enabled AND for_runner
+  ORDER BY sort_order, label
+`);
+if (modelCatalog.rows.length !== 77) {
+  throw new Error(`Expected 77 seeded runner models, found ${modelCatalog.rows.length}`);
+}
+const leadingModels = modelCatalog.rows.slice(0, 5).map((row) => `${row.provider}/${row.model_id}`);
+const expectedLeadingModels = [
+  'anthropic/claude-fable-5.1',
+  'anthropic/claude-fable-5',
+  'anthropic/claude-opus-5',
+  'anthropic/claude-sonnet-5',
+  'anthropic/claude-haiku-4.5',
+];
+if (JSON.stringify(leadingModels) !== JSON.stringify(expectedLeadingModels)) {
+  throw new Error(`Unexpected leading model order: ${JSON.stringify(leadingModels)}`);
+}
+const openAiFrontier = modelCatalog.rows.find(
+  (row) => row.provider === 'openai' && row.model_id === 'gpt-5.6-sol',
+);
+const workersAiCoding = modelCatalog.rows.find(
+  (row) => row.provider === 'workers-ai' && row.model_id === '@cf/moonshotai/kimi-k2.7-code',
+);
+if (!openAiFrontier || !workersAiCoding) {
+  throw new Error('Seeded catalog is missing a frontier third-party or Workers AI coding model');
+}
+if (modelCatalog.rows.some((row) => !row.for_reviewer)) {
+  throw new Error('A seeded runner model is unavailable to reviewer model selectors');
 }
 
 const missingForeignKeyIndexes = await db.query(`

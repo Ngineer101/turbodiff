@@ -4,6 +4,7 @@ import { ArrowLeft, Check } from 'lucide-react';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { modelsQuery } from '../lib/queries.ts';
 import { EntityFormLayout, FormSection } from './entity-form.tsx';
+import { ModelCombobox } from './model-combobox.tsx';
 import { Button } from './ui/button.tsx';
 import { Field, Input, Select, Textarea } from './ui/input.tsx';
 import { Switch } from './ui/switch.tsx';
@@ -207,24 +208,18 @@ export function AutomationForm({
           />
         </Field>
         <Field label="Model" className="mt-0">
-          <Select
+          <ModelCombobox
             value={values.runner_model}
-            onChange={(e) => set({ runner_model: e.target.value })}
+            onValueChange={(runner_model) => set({ runner_model })}
+            options={modelOptions}
             disabled={!models}
-          >
-            <option value="">
-              {models
+            defaultLabel={
+              models
                 ? `Default (${runnerOptions.find((m) => m.id === runnerDefault)?.label ?? runnerDefault})`
-                : modelsError
-                  ? 'Model catalog unavailable'
-                  : 'Loading models…'}
-            </option>
-            {modelOptions.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
-              </option>
-            ))}
-          </Select>
+                : undefined
+            }
+            placeholder={modelsError ? 'Model catalog unavailable' : 'Loading models…'}
+          />
         </Field>
       </FormSection>
 

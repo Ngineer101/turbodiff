@@ -457,6 +457,27 @@ describe('API constraint validation', () => {
     expect(response.status).toBe(200);
   });
 
+  it('serves a Workers AI reviewer with its canonical Cloudflare model id', async () => {
+    await testDatabase()
+      .prepare(
+        `INSERT INTO models (model_id, provider, label, for_runner, for_reviewer)
+         VALUES ('@cf/zai-org/glm-5.3', 'workers-ai', 'GLM-5.3', true, true)`,
+      )
+      .run();
+    const response = await authenticatedApi().request('https://turbodiff.test/api/models');
+    expect(response.status).toBe(200);
+    // SAFETY: a successful /api/models response is validated against the ApiModels contract below.
+    const catalog = (await response.json()) as ApiModels;
+    expect(catalog.runner.options).toContainEqual({
+      id: '@cf/zai-org/glm-5.3',
+      label: 'GLM-5.3',
+    });
+    expect(catalog.reviewer.options).toContainEqual({
+      id: 'cloudflare/@cf/zai-org/glm-5.3',
+      label: 'GLM-5.3',
+    });
+  });
+
   it('returns a service error from /api/models while the runner catalog is empty', async () => {
     await testDatabase().prepare('DELETE FROM models').run();
     const response = await authenticatedApi().request('https://turbodiff.test/api/models');
