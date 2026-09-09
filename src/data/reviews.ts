@@ -579,6 +579,66 @@ export interface ReviewStageProgress {
   errors: string[];
 }
 
+export interface ReviewStageEvidenceRow {
+  agent_slug: string | null;
+  status: string;
+  conclusion: ReviewConclusion | null;
+  covered_file_count: number | null;
+  reviewable_file_count: number | null;
+  missing_paths: string[] | null;
+  findings_count: number | null;
+  error: string | null;
+  review_url: string | null;
+  head_sha: string | null;
+}
+
+export async function reviewStageEvidence(stageRunId: number): Promise<ReviewStageEvidenceRow[]> {
+  return queryRows<ReviewStageEvidenceRow>(sql`
+    SELECT agent_slug, status, conclusion, covered_file_count, reviewable_file_count,
+      missing_paths, findings_count, error, review_url, head_sha
+    FROM app.reviews
+    WHERE stage_run_id = ${stageRunId}
+    ORDER BY agent_slug, id
+  `);
+}
+
+export interface ReviewHeadReadiness {
+  stage_status: string;
+  total: number;
+  running: number;
+  failed: number;
+  inconclusive: number;
+  not_ready: number;
+}
+
+export async function reviewHeadReadiness(
+  repositoryId: number,
+  prNumber: number,
+  headSha: string,
+): Promise<ReviewHeadReadiness | null> {
+  return queryOne<ReviewHeadReadiness>(sql`
+    WITH latest_stage AS (
+      SELECT stage_run_id
+      FROM app.reviews
+      WHERE repository_id = ${repositoryId} AND pr_number = ${prNumber}
+        AND head_sha = ${headSha} AND stage_run_id IS NOT NULL
+      ORDER BY id DESC LIMIT 1
+    )
+    SELECT s.status AS stage_status,
+      COUNT(r.id) AS total,
+      COUNT(r.id) FILTER (WHERE r.status = 'running') AS running,
+      COUNT(r.id) FILTER (WHERE r.status = 'failed') AS failed,
+      COUNT(r.id) FILTER (
+        WHERE r.conclusion = 'inconclusive' OR r.conclusion IS NULL
+      ) AS inconclusive,
+      COUNT(r.id) FILTER (WHERE r.conclusion = 'not_ready') AS not_ready
+    FROM latest_stage l
+    JOIN app.stage_runs s ON s.id = l.stage_run_id
+    JOIN app.reviews r ON r.stage_run_id = l.stage_run_id
+    GROUP BY s.status
+  `);
+}
+
 export async function reviewStageProgress(stageRunId: number): Promise<ReviewStageProgress> {
   const row = await queryOne<ReviewStageProgress>(sql`
     SELECT
@@ -586,7 +646,10 @@ export async function reviewStageProgress(stageRunId: number): Promise<ReviewSta
       COUNT(*) FILTER (WHERE status = 'completed') AS completed,
       COUNT(*) FILTER (WHERE status = 'failed') AS failed,
       COALESCE(BOOL_OR(conclusion = 'not_ready' OR verdict = 'request_changes'), FALSE) AS blocking,
-      COUNT(*) FILTER (WHERE status = 'completed' AND conclusion = 'inconclusive') AS inconclusive,
+      COUNT(*) FILTER (
+        WHERE status = 'completed'
+          AND (conclusion = 'inconclusive' OR (conclusion IS NULL AND submission_id IS NOT NULL))
+      ) AS inconclusive,
       COALESCE(
         ARRAY_REMOVE(ARRAY_AGG(error ORDER BY id) FILTER (WHERE status = 'failed'), NULL),
         '{}'

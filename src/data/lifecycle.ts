@@ -212,13 +212,15 @@ export async function finishStageRun(
   status: 'completed' | 'failed',
   output?: JsonValue,
   error?: string,
-): Promise<void> {
-  await execute(sql`
+): Promise<boolean> {
+  const finished = await queryOne<{ id: number }>(sql`
     UPDATE app.stage_runs SET status = ${status},
       output = ${output === undefined ? null : JSON.stringify(output)}::jsonb,
       error = ${error ?? null}, completed_at = CURRENT_TIMESTAMP
     WHERE id = ${id} AND status = 'running'
+    RETURNING id
   `);
+  return finished !== null;
 }
 
 // A claimed stage whose work was overtaken before it ran (a push review
