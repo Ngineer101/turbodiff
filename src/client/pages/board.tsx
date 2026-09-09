@@ -1167,6 +1167,9 @@ export function BoardPage() {
       : data.tasks.filter((t) => t.repos.some((r) => r.repository_id === repoFilter));
   const inProgress = tasks.filter((t) => taskColumn(t) === 'in_progress');
   const done = tasks.filter((t) => taskColumn(t) === 'done');
+  // The strip is a global readout like stats.running — derive the lamp from
+  // the unfiltered payload so an active repo filter never darkens it.
+  const anyTaskInProgress = data.tasks.some((t) => taskColumn(t) === 'in_progress');
 
   const show = (key: ColumnKey) => filter === 'all' || filter === key;
   // Generic empty copy misleads while a repo filter is active — the backlog
@@ -1231,6 +1234,7 @@ export function BoardPage() {
       <TelemetryStrip
         className="mt-3"
         running={data.stats.running}
+        tasksLive={anyTaskInProgress}
         items={[
           { label: 'Active runs', value: data.stats.running },
           { label: 'Pipeline (month)', value: fmtUsd(data.stats.month_pipeline_cost_usd) },
