@@ -544,6 +544,7 @@ export interface ApiConnectionTest {
   ok: boolean;
   detail: string;
   tools: string[];
+  reauth_required: boolean;
 }
 
 export interface ApiRepoSettings {

@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { isJsonObject, isNumber, isString, parseJson, type JsonValue } from '../shared/json.ts';
 import { encryptionConfigured, openJson, sealJson } from '../integrations/security/crypto.ts';
 import { getConnection, type ConnectionRow } from '../data/db.ts';
-import { connectionSnapshot, resolveConnectionAuth } from './connections.ts';
+import { ConnectionAuthError, connectionSnapshot, resolveConnectionAuth } from './connections.ts';
 
 // MCP relay for sandbox runs: the sandbox agent's MCP config points every
 // server at /mcp-proxy/:id with a short-lived sealed grant as its bearer
@@ -116,7 +116,13 @@ export async function proxyMcpRequest(connectionId: number, request: Request): P
   try {
     auth = await resolveConnectionAuth(conn);
   } catch (err) {
-    const detail = err instanceof Error ? err.message : 'could not resolve credentials';
+    const detail =
+      err instanceof ConnectionAuthError
+        ? err.message
+        : 'The connection credential could not be resolved because of an internal error.';
+    if (!(err instanceof ConnectionAuthError)) {
+      console.error(`turbodiff: MCP proxy auth failed for connection ${conn.id}:`, err);
+    }
     return Response.json({ error: detail }, { status: 502 });
   }
 

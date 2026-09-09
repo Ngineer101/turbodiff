@@ -156,7 +156,14 @@ function IntegrationCard({ conn, repos }: { conn: ApiIntegration; repos: ApiInte
 
   const runTest = useMutation({
     mutationFn: () => api.post<ApiConnectionTest>(`/api/integrations/${conn.id}/test`),
-    onSuccess: setTest,
+    onSuccess: (result) => {
+      if (result.reauth_required && conn.auth_type === 'oauth') {
+        refresh();
+        window.location.href = `/api/integrations/${conn.id}/oauth/start`;
+        return;
+      }
+      setTest(result);
+    },
     onError: onApiError,
   });
   const remove = useMutation({

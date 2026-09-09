@@ -113,6 +113,7 @@ import {
   setTodoRepositories,
   updateAgent,
   updateAutomation,
+  updateConnectionAuth,
   updateFeature,
   updatePlan,
   updateSkill,
@@ -124,6 +125,7 @@ import {
   updateFeatureAcceptance,
 } from '../data/db.ts';
 import {
+  ConnectionAuthError,
   completeOAuthConnect,
   connectionSnapshot,
   oauthStatus,
@@ -529,6 +531,9 @@ export interface ApiRouteDependencies {
   skillsSh?: SkillsShClient;
   // Injectable for tests (no agent runtime in the worker pool).
   dispatchExplain?: typeof dispatchExplain;
+  // Injectable for connection-test transport coverage.
+  resolveConnectionAuth?: typeof resolveConnectionAuth;
+  testMcpEndpoint?: typeof testMcpEndpoint;
 }
 
 // POST /factory/features/:id/explain — the head to explain and whether to
@@ -588,6 +593,8 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   const enqueueFactory = dependencies.enqueueFactory ?? enqueueFactoryMessage;
   const skillsSh = dependencies.skillsSh ?? createSkillsShClient(env.SKILLS_SH_API_TOKEN);
   const explain = dependencies.dispatchExplain ?? dispatchExplain;
+  const resolveAuth = dependencies.resolveConnectionAuth ?? resolveConnectionAuth;
+  const testMcp = dependencies.testMcpEndpoint ?? testMcpEndpoint;
 
   // Every API response exposes its Worker time to DevTools. Slow paths emit a
   // structured event into Workers Observability with a stable 250ms budget.
@@ -3250,12 +3257,22 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     if (!conn) return c.json({ error: 'unknown integration' }, 404);
     let auth: { headerName: string; headerValue: string } | null;
     try {
-      auth = await resolveConnectionAuth(conn);
+      auth = await resolveAuth(conn);
     } catch (err) {
+      if (err instanceof ConnectionAuthError) {
+        return c.json<ApiConnectionTest>({
+          ok: false,
+          detail: err.message,
+          tools: [],
+          reauth_required: err.reason === 'reauth_required',
+        });
+      }
+      console.error(`turbodiff: could not resolve credentials for connection ${conn.id}:`, err);
       return c.json<ApiConnectionTest>({
         ok: false,
-        detail: err instanceof Error ? err.message : 'could not resolve credentials',
+        detail: 'We could not verify this connection because of an internal error. Try again.',
         tools: [],
+        reauth_required: false,
       });
     }
     if (conn.kind === 'api') {
@@ -3267,20 +3284,39 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
           ok: res.ok,
           detail: `HTTP ${res.status} ${res.statusText}`,
           tools: [],
+          reauth_required: false,
         });
       } catch (err) {
+        console.error(`turbodiff: API connection test failed for connection ${conn.id}:`, err);
         return c.json<ApiConnectionTest>({
           ok: false,
-          detail: err instanceof Error ? err.message : 'request failed',
+          detail: 'We could not reach this integration. Check its URL and try again.',
           tools: [],
+          reauth_required: false,
         });
       }
     }
-    const result = await testMcpEndpoint(conn.url, auth ?? undefined);
+    const result = await testMcp(conn.url, auth ?? undefined);
+    if (conn.auth_type === 'oauth' && (result.status === 401 || result.status === 403)) {
+      try {
+        await updateConnectionAuth(conn.id, { oauthNeedsReauth: true });
+      } catch (err) {
+        // The reconnect flow can still repair the credential even if this
+        // best-effort status update fails. Keep persistence details server-side.
+        console.error(`turbodiff: could not mark connection ${conn.id} for OAuth re-auth:`, err);
+      }
+      return c.json<ApiConnectionTest>({
+        ok: false,
+        detail: 'The integration rejected its OAuth authorization. Reconnect it to continue.',
+        tools: [],
+        reauth_required: true,
+      });
+    }
     return c.json<ApiConnectionTest>({
       ok: result.ok,
       detail: result.detail,
       tools: result.tools ?? [],
+      reauth_required: false,
     });
   });
 
