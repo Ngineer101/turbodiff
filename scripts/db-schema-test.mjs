@@ -48,7 +48,8 @@ const runnerRoles = await db.query(`
   SELECT
     COUNT(*) FILTER (WHERE enabled AND for_runner AND runner_default)::int AS defaults,
     COUNT(*) FILTER (WHERE enabled AND for_runner AND runner_fast_default)::int AS fast_defaults,
-    MAX(model_id) FILTER (WHERE runner_fast_default) AS fast_model
+    MAX(provider || '/' || model_id) FILTER (WHERE runner_default) AS default_model,
+    MAX(provider || '/' || model_id) FILTER (WHERE runner_fast_default) AS fast_model
   FROM app.models
 `);
 if (runnerRoles.rows[0]?.defaults !== 1 || runnerRoles.rows[0]?.fast_defaults !== 1) {
@@ -56,9 +57,14 @@ if (runnerRoles.rows[0]?.defaults !== 1 || runnerRoles.rows[0]?.fast_defaults !=
     `Expected exactly one runner default and fast default: ${JSON.stringify(runnerRoles.rows[0])}`,
   );
 }
-if (runnerRoles.rows[0]?.fast_model !== 'claude-haiku-4.5') {
+if (runnerRoles.rows[0]?.default_model !== 'openai/gpt-5.6-sol') {
   throw new Error(
-    `Expected the migrated fast runner to be claude-haiku-4.5, found ${runnerRoles.rows[0]?.fast_model}`,
+    `Expected the migrated default runner to be openai/gpt-5.6-sol, found ${runnerRoles.rows[0]?.default_model}`,
+  );
+}
+if (runnerRoles.rows[0]?.fast_model !== 'anthropic/claude-opus-4.8') {
+  throw new Error(
+    `Expected the migrated fast runner to be anthropic/claude-opus-4.8, found ${runnerRoles.rows[0]?.fast_model}`,
   );
 }
 

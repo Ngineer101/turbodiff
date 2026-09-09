@@ -2,8 +2,9 @@
 -- Cloudflare AI as of 2026-09-09. Third-party entries come from the AI model
 -- catalog's Text Generation surface; Workers AI entries additionally require
 -- the catalog's Function calling capability. Provider groups and model
--- families are ordered newest/most capable first while retaining the existing
--- Fable 5.1 and Haiku 4.5 normal/fast defaults.
+-- families are ordered newest/most capable first. GPT-5.6 Sol is the normal
+-- planning/task fallback and Opus 4.8 owns the secondary runner role; Fable
+-- 5.1 and Haiku 4.5 remain selectable but are no longer fallback roles.
 WITH seeded (provider, model_id, label, sort_order) AS (
   VALUES
     -- Anthropic
@@ -106,3 +107,20 @@ ON CONFLICT (provider, model_id) DO UPDATE SET
   for_runner = true,
   for_reviewer = true,
   sort_order = excluded.sort_order;
+--> statement-breakpoint
+-- Clear the old roles first because their partial unique indexes are
+-- non-deferrable. The target rows are guaranteed by the seed above.
+UPDATE "app"."models"
+SET runner_default = false,
+    runner_fast_default = false
+WHERE runner_default OR runner_fast_default;
+--> statement-breakpoint
+UPDATE "app"."models"
+SET runner_default = true,
+    enabled = true
+WHERE provider = 'openai' AND model_id = 'gpt-5.6-sol';
+--> statement-breakpoint
+UPDATE "app"."models"
+SET runner_fast_default = true,
+    enabled = true
+WHERE provider = 'anthropic' AND model_id = 'claude-opus-4.8';
