@@ -213,6 +213,7 @@ function IntegrationCard({ conn, repos }: { conn: ApiIntegration; repos: ApiInte
   const attachedCount = repos.filter((r) =>
     conn.repo_links.some((l) => l.repository_id === r.id),
   ).length;
+  const readOnly = !conn.can_edit;
 
   return (
     <Card className="p-4">
@@ -226,6 +227,9 @@ function IntegrationCard({ conn, repos }: { conn: ApiIntegration; repos: ApiInte
               <span className="font-medium break-all">{conn.name}</span>
               <Pill>{conn.kind === 'mcp' ? 'MCP' : 'API'}</Pill>
               <AuthPill conn={conn} />
+              <Pill tone={readOnly ? 'warn' : 'neutral'}>
+                {readOnly ? 'Read-only' : conn.created_by_login ? `@${conn.created_by_login}` : 'Legacy'}
+              </Pill>
             </div>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 font-mono text-[11px] leading-none text-mute">
               <span className="inline-flex min-w-0 items-center gap-1.5">
@@ -257,7 +261,7 @@ function IntegrationCard({ conn, repos }: { conn: ApiIntegration; repos: ApiInte
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          {needsOAuthConnect ? (
+          {!readOnly && needsOAuthConnect ? (
             <Button
               size="sm"
               onClick={() => {
@@ -267,7 +271,7 @@ function IntegrationCard({ conn, repos }: { conn: ApiIntegration; repos: ApiInte
               Connect via OAuth
             </Button>
           ) : null}
-          <Tooltip label="Test connection">
+          {!readOnly ? <Tooltip label="Test connection">
             <Button
               size="icon"
               variant="secondary"
@@ -277,8 +281,8 @@ function IntegrationCard({ conn, repos }: { conn: ApiIntegration; repos: ApiInte
             >
               <PlugZap className="size-3.5" aria-hidden />
             </Button>
-          </Tooltip>
-          <Tooltip label="Remove integration">
+          </Tooltip> : null}
+          {!readOnly ? <Tooltip label="Remove integration">
             <ConfirmButton
               size="icon"
               variant="danger"
@@ -291,7 +295,7 @@ function IntegrationCard({ conn, repos }: { conn: ApiIntegration; repos: ApiInte
             >
               <Trash2 className="size-3.5" aria-hidden />
             </ConfirmButton>
-          </Tooltip>
+          </Tooltip> : null}
         </div>
       </div>
 
@@ -326,7 +330,8 @@ function IntegrationCard({ conn, repos }: { conn: ApiIntegration; repos: ApiInte
                   <label className="flex min-w-0 cursor-pointer items-center gap-2 text-xs">
                     <Switch
                       checked={attached}
-                      onCheckedChange={(v) => toggleRepo.mutate({ repoId: r.id, attached: v })}
+                       disabled={readOnly}
+                       onCheckedChange={(v) => toggleRepo.mutate({ repoId: r.id, attached: v })}
                       aria-label={`Attach ${repoLabel}`}
                     />
                     <FolderGit2 className="size-3.5 shrink-0 text-mute" aria-hidden />
@@ -338,7 +343,7 @@ function IntegrationCard({ conn, repos }: { conn: ApiIntegration; repos: ApiInte
                   <div className="flex justify-center">
                     <Switch
                       checked={attached && !!link?.reviews}
-                      disabled={!attached}
+                       disabled={readOnly || !attached}
                       onCheckedChange={(v) =>
                         toggleRepo.mutate({
                           repoId: r.id,
@@ -353,7 +358,7 @@ function IntegrationCard({ conn, repos }: { conn: ApiIntegration; repos: ApiInte
                   <div className="flex justify-center">
                     <Switch
                       checked={attached && !!link?.automations}
-                      disabled={!attached}
+                       disabled={readOnly || !attached}
                       onCheckedChange={(v) =>
                         toggleRepo.mutate({
                           repoId: r.id,

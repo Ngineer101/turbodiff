@@ -12,6 +12,8 @@ import { bigintArray } from './sql.ts';
 export interface ConnectionRow {
   id: number;
   installation_id: number;
+  created_by_login: string | null;
+  created_by_id: number | null;
   name: string;
   kind: string; // 'mcp' (agent-mountable) | 'api' (stored bearer integration)
   url: string;
@@ -63,13 +65,14 @@ export async function createConnection(fields: {
   authCiphertext: string | null;
   authType: string;
   authConfigCiphertext: string | null;
+  createdBy: { login: string; id: number };
 }): Promise<void> {
   await execute(sql`
     INSERT INTO app.connections
-      (installation_id, name, kind, url, tool_allowlist, auth_ciphertext, optional,
+       (installation_id, created_by_login, created_by_id, name, kind, url, tool_allowlist, auth_ciphertext, optional,
        auth_type, auth_config_ciphertext)
     VALUES (
-      ${fields.installationId}, ${fields.name}, ${fields.kind}, ${fields.url},
+      ${fields.installationId}, ${fields.createdBy.login}, ${fields.createdBy.id}, ${fields.name}, ${fields.kind}, ${fields.url},
       ${fields.toolAllowlist ? JSON.stringify(fields.toolAllowlist) : null}::jsonb,
       ${fields.authCiphertext}, TRUE, ${fields.authType}, ${fields.authConfigCiphertext}
     )

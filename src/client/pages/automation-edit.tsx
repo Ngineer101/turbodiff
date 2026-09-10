@@ -92,6 +92,7 @@ export function AutomationEditPage() {
   });
 
   const repo = `${data.automation.repository.owner}/${data.automation.repository.name}`;
+  const readOnly = !data.automation.can_edit;
 
   return (
     <div className="max-w-3xl">
@@ -114,6 +115,14 @@ export function AutomationEditPage() {
         busy={save.isPending}
         onSubmit={(values) => save.mutate(values)}
         onCancel={() => navigate({ to: '/automations' })}
+        readOnly={readOnly}
+        readOnlyNotice={
+          readOnly ? (
+            <p className="rounded-lg border border-line bg-surface-2 px-3 py-2 text-sm text-mute">
+              Read-only. Created by {data.automation.created_by_login ? `@${data.automation.created_by_login}` : 'a legacy installation administrator'}.
+            </p>
+          ) : null
+        }
         footerAction={
           <ConfirmButton
             variant="danger"
@@ -130,7 +139,7 @@ export function AutomationEditPage() {
 
       <SectionHeading
         aside={
-          <Button
+          !readOnly ? <Button
             size="sm"
             variant="secondary"
             loading={runNow.isPending}
@@ -138,7 +147,7 @@ export function AutomationEditPage() {
           >
             {!runNow.isPending ? <Play className="size-3" aria-hidden /> : null}
             Run now
-          </Button>
+          </Button> : null
         }
       >
         Runs

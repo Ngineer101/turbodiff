@@ -493,6 +493,8 @@ export const connections = appSchema.table(
       .primaryKey()
       .generatedByDefaultAsIdentity({ maxValue: '9007199254740991' }),
     installationId: bigint('installation_id', { mode: 'number' }).notNull(),
+    createdByLogin: text('created_by_login'),
+    createdById: bigint('created_by_id', { mode: 'number' }),
     name: text().notNull(),
     kind: text().default('mcp').notNull(),
     url: text().notNull(),
@@ -1236,6 +1238,8 @@ export const automations = appSchema.table(
       .primaryKey()
       .generatedByDefaultAsIdentity({ maxValue: '9007199254740991' }),
     repositoryId: bigint('repository_id', { mode: 'number' }).notNull(),
+    createdByLogin: text('created_by_login'),
+    createdById: bigint('created_by_id', { mode: 'number' }),
     name: text().notNull(),
     prompt: text().notNull(),
     scheduleKind: text('schedule_kind').notNull(),

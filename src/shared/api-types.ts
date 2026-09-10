@@ -679,6 +679,8 @@ export interface ApiBoard {
 export interface ApiIntegration {
   id: number;
   installation_id: number;
+  created_by_login: string | null;
+  can_edit: boolean;
   name: string;
   kind: string; // 'mcp' | 'api'
   url: string;
@@ -715,6 +717,9 @@ export interface ApiIntegrations {
 
 export interface ApiAutomationSummary {
   id: number;
+  installation_id: number;
+  created_by_login: string | null;
+  can_edit: boolean;
   name: string;
   repository: { id: number; owner: string; name: string };
   schedule_kind: 'hourly' | 'daily' | 'weekly';

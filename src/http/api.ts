@@ -336,6 +336,8 @@ import {
   authorizedAutomation,
   authorizedOrg,
   authorizedPlan,
+  authorizedFeature,
+  canEditSharedResource,
   authorizedRepo,
   authorizedSkill,
   capableInstallationIds,
@@ -928,7 +930,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   // --- Kanban board: todos (backlog) + started tasks (plans) ---
 
   app.get('/board', async (c) => {
-    const { installationIds } = c.get('user');
+    const { installationIds, session } = c.get('user');
     const version = await factoryVersion();
     const tenantKey = installationIds
       .slice()
@@ -936,19 +938,19 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       .join(',');
     const board = await immutableRepoJson(
       deferredExecution(c),
-      `board/${encodeURIComponent(tenantKey)}/${version}`,
+      `board/${encodeURIComponent(tenantKey)}/${session.userId}/${version}`,
       async (): Promise<ApiBoard> => {
         // All PostgreSQL rollups start in one wave. The repo-link queries are scoped
         // directly by installation rather than waiting for plan/todo ids.
         const [groups, plans, todos, stats, pipelineCost, repoStatuses, todoRepos] =
           await Promise.all([
             listInstallationsWithRepos(installationIds),
-            listPlansForInstallations(installationIds),
-            listTodos(installationIds),
+            listPlansForInstallations(installationIds, session.userId),
+            listTodos(installationIds, session.userId),
             dashboardStats(installationIds),
             pipelineCostForMonth(installationIds, currentMonth()),
-            boardTaskRepoStatuses(installationIds),
-            boardTodoRepositories(installationIds),
+            boardTaskRepoStatuses(installationIds, session.userId),
+            boardTodoRepositories(installationIds, session.userId),
           ]);
         const statusesByPlan = new Map<number, typeof repoStatuses>();
         for (const status of repoStatuses) {
@@ -1045,7 +1047,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   // plan (archive that instead).
   app.delete('/todos/:id', async (c) => {
     const id = Number(c.req.param('id'));
-    const todo = Number.isInteger(id) ? await getTodo(id) : null;
+    const todo = Number.isInteger(id) ? await getTodo(id, c.get('user').session.userId) : null;
     if (!todo || !c.get('user').installationIds.includes(todo.installation_id)) {
       return c.json({ error: 'unknown todo' }, 404);
     }
@@ -1059,7 +1061,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   // once the todo is linked to a plan the list is frozen.
   app.post('/todos/:id/repos', async (c) => {
     const id = Number(c.req.param('id'));
-    const todo = Number.isInteger(id) ? await getTodo(id) : null;
+    const todo = Number.isInteger(id) ? await getTodo(id, c.get('user').session.userId) : null;
     if (!todo || !c.get('user').installationIds.includes(todo.installation_id)) {
       return c.json({ error: 'unknown todo' }, 404);
     }
@@ -1080,7 +1082,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   // the To Do column.
   app.post('/todos/:id/start', async (c) => {
     const id = Number(c.req.param('id'));
-    const todo = Number.isInteger(id) ? await getTodo(id) : null;
+    const todo = Number.isInteger(id) ? await getTodo(id, c.get('user').session.userId) : null;
     if (!todo || !c.get('user').installationIds.includes(todo.installation_id)) {
       return c.json({ error: 'unknown todo' }, 404);
     }
@@ -1137,7 +1139,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   // Task detail for the board's compact cards.
   app.get('/tasks/:id', async (c) => {
     const id = Number(c.req.param('id'));
-    const plan = Number.isInteger(id) ? await getPlanWithRepoById(id) : null;
+    const plan = Number.isInteger(id) ? await getPlanWithRepoById(id, c.get('user').session.userId) : null;
     if (!plan || !c.get('user').installationIds.includes(plan.installation_id)) {
       return c.json({ error: 'unknown task' }, 404);
     }
@@ -1240,7 +1242,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.get('/factory/runs/:id/log', async (c) => {
     const id = Number(c.req.param('id'));
     const run = Number.isInteger(id) ? await getAgentRunForAuth(id) : null;
-    if (!run || !c.get('user').installationIds.includes(run.installationId)) {
+    if (
+      !run ||
+      !c.get('user').installationIds.includes(run.installationId) ||
+      (run.privateLifecycle && run.creatorId !== c.get('user').session.userId)
+    ) {
       return c.json({ error: 'unknown run' }, 404);
     }
     const object = await env.ARTIFACTS.get(run.logKey);
@@ -1255,7 +1261,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.get('/factory/runs/:id/transcript', async (c) => {
     const id = Number(c.req.param('id'));
     const run = Number.isInteger(id) ? await getAgentRunForAuth(id) : null;
-    if (!run || !c.get('user').installationIds.includes(run.installationId)) {
+    if (
+      !run ||
+      !c.get('user').installationIds.includes(run.installationId) ||
+      (run.privateLifecycle && run.creatorId !== c.get('user').session.userId)
+    ) {
       return c.json({ error: 'unknown run' }, 404);
     }
     const object = await env.ARTIFACTS.get(transcriptKey(run.logKey));
@@ -1579,12 +1589,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   });
 
   app.get('/factory/features/:id', async (c) => {
-    const id = Number(c.req.param('id'));
-    const feature = Number.isInteger(id) ? await getFeature(id) : null;
-    const repo = feature ? await getRepoById(feature.repository_id) : null;
-    if (!feature || !repo || !c.get('user').installationIds.includes(repo.installation_id)) {
+    const ownership = await authorizedFeature(c);
+    if (!ownership) {
       return c.json({ error: 'unknown feature' }, 404);
     }
+    const { feature, repo } = ownership;
 
     const base: ApiFeatureDetail = {
       feature: {
@@ -1800,12 +1809,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   // re-parsing hundreds of kilobytes of patches. This endpoint is loaded only
   // after the summary has painted.
   app.get('/factory/features/:id/diff', async (c) => {
-    const id = Number(c.req.param('id'));
-    const feature = Number.isInteger(id) ? await getFeature(id) : null;
-    const repo = feature ? await getRepoById(feature.repository_id) : null;
-    if (!feature || !repo || !c.get('user').installationIds.includes(repo.installation_id)) {
+    const ownership = await authorizedFeature(c);
+    if (!ownership) {
       return c.json({ error: 'unknown feature' }, 404);
     }
+    const { feature, repo } = ownership;
     const rawVersion = c.req.query('v');
     // Versioned snapshots are immutable, but only accept commit-like client
     // versions so an authenticated caller cannot create unbounded cache keys.
@@ -1835,12 +1843,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   // the newest finished document for an earlier head — shown, marked stale,
   // while the current one is written.
   app.get('/factory/features/:id/explain', async (c) => {
-    const id = Number(c.req.param('id'));
-    const feature = Number.isInteger(id) ? await getFeature(id) : null;
-    const repo = feature ? await getRepoById(feature.repository_id) : null;
-    if (!feature || !repo || !c.get('user').installationIds.includes(repo.installation_id)) {
+    const ownership = await authorizedFeature(c);
+    if (!ownership) {
       return c.json({ error: 'unknown feature' }, 404);
     }
+    const { feature } = ownership;
     const version = explainVersion(c.req.query('v'));
     const current = version ? await latestExplanation(feature.id, version) : null;
     const body = serializeExplanation(version, current);
@@ -1996,12 +2003,11 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   // durable chat workflow. The reply lands as an assistant row the panel
   // picks up by polling.
   app.post('/factory/features/:id/chat', async (c) => {
-    const id = Number(c.req.param('id'));
-    const feature = Number.isInteger(id) ? await getFeature(id) : null;
-    const repo = feature ? await getRepoById(feature.repository_id) : null;
-    if (!feature || !repo || !c.get('user').installationIds.includes(repo.installation_id)) {
+    const ownership = await authorizedFeature(c);
+    if (!ownership) {
       return c.json({ error: 'unknown feature' }, 404);
     }
+    const { feature, repo } = ownership;
     const payload = await c.req.json<{ body?: string }>().catch(() => null);
     const body = payload?.body?.trim();
     if (!body) return c.json({ error: 'body must be {body}' }, 400);
@@ -2901,17 +2907,20 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   // --- Automations: recurring per-repo prompt runs ---
 
   app.get('/automations', async (c) => {
-    const { installationIds } = c.get('user');
+    const { installationIds, session } = c.get('user');
     const [automations, groups] = await Promise.all([
       listAutomationsForInstallations(installationIds),
       listInstallationsWithRepos(installationIds),
     ]);
+    const capable = new Set(await capableInstallationIds(c, installationIds, orgAdmin));
     return c.json<ApiAutomationsList>({
       automations: automations.map((a) =>
         serializeAutomation(
           a,
           { id: a.repository_id, owner: a.owner, name: a.name_repo },
           a.last_run,
+          a.installation_id,
+          canEditSharedResource(a.created_by_id, session.userId, capable.has(a.installation_id)),
         ),
       ),
       repos: groups
@@ -2927,7 +2936,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   });
 
   app.post('/automations', async (c) => {
-    const { installationIds } = c.get('user');
+    const { installationIds, session } = c.get('user');
     const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
     const values = readAutomationPayload(body);
@@ -2956,7 +2965,10 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       },
       new Date(),
     );
-    const id = await createAutomation(repo.id, values, nextRunAt);
+    const id = await createAutomation(repo.id, values, nextRunAt, {
+      login: session.login,
+      id: session.userId,
+    });
     return c.json({ ok: true, automation_id: id });
   });
 
@@ -2970,7 +2982,20 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       ? { id: runs[0].id, status: runs[0].status, created_at: runs[0].created_at }
       : null;
     return c.json<ApiAutomationDetail>({
-      automation: { ...serializeAutomation(automation, repo, lastRun), prompt: automation.prompt },
+      automation: {
+        ...serializeAutomation(
+          automation,
+          repo,
+          lastRun,
+          repo.installation_id,
+          canEditSharedResource(
+            automation.created_by_id,
+            c.get('user').session.userId,
+            (await capableInstallationIds(c, [repo.installation_id], orgAdmin)).length > 0,
+          ),
+        ),
+        prompt: automation.prompt,
+      },
     });
   });
 
@@ -2978,10 +3003,14 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const automation = await authorizedAutomation(c);
     if (!automation) return c.json({ error: 'unknown automation' }, 404);
     const repoForCapability = await getRepoById(automation.repository_id);
-    const deniedCapability =
-      repoForCapability &&
-      (await requireCapability(c, repoForCapability.installation_id, 'settings', orgAdmin));
-    if (deniedCapability) return deniedCapability;
+    if (
+      !repoForCapability ||
+      !canEditSharedResource(
+        automation.created_by_id,
+        c.get('user').session.userId,
+        (await capableInstallationIds(c, [repoForCapability.installation_id], orgAdmin)).length > 0,
+      )
+    ) return c.json({ error: 'forbidden' }, 403);
     const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
     const values = readAutomationPayload(body);
@@ -3022,10 +3051,14 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     const automation = await authorizedAutomation(c);
     if (!automation) return c.json({ error: 'unknown automation' }, 404);
     const repoForCapability = await getRepoById(automation.repository_id);
-    const deniedCapability =
-      repoForCapability &&
-      (await requireCapability(c, repoForCapability.installation_id, 'settings', orgAdmin));
-    if (deniedCapability) return deniedCapability;
+    if (
+      !repoForCapability ||
+      !canEditSharedResource(
+        automation.created_by_id,
+        c.get('user').session.userId,
+        (await capableInstallationIds(c, [repoForCapability.installation_id], orgAdmin)).length > 0,
+      )
+    ) return c.json({ error: 'forbidden' }, 403);
     await deleteAutomation(automation.id);
     return c.json({ ok: true });
   });
@@ -3036,6 +3069,15 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.post('/automations/:id/run', async (c) => {
     const automation = await authorizedAutomation(c);
     if (!automation) return c.json({ error: 'unknown automation' }, 404);
+    const repo = await getRepoById(automation.repository_id);
+    if (
+      !repo ||
+      !canEditSharedResource(
+        automation.created_by_id,
+        c.get('user').session.userId,
+        (await capableInstallationIds(c, [repo.installation_id], orgAdmin)).length > 0,
+      )
+    ) return c.json({ error: 'forbidden' }, 403);
     await enqueueFactoryMessage({ kind: 'automation', automationId: automation.id });
     return c.json({ ok: true });
   });
@@ -3100,6 +3142,14 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
     return conn;
   }
 
+  async function connectionCanEdit(c: Context<ApiEnv>, conn: ConnectionRow): Promise<boolean> {
+    return canEditSharedResource(
+      conn.created_by_id,
+      c.get('user').session.userId,
+      (await capableInstallationIds(c, [conn.installation_id], orgAdmin)).length > 0,
+    );
+  }
+
   app.get('/integrations', async (c) => {
     const { installationIds } = c.get('user');
     const [groups, connections, links] = await Promise.all([
@@ -3125,7 +3175,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
             name: r.name,
           })),
       ),
-      connections: connections.map((conn) => {
+      connections: await Promise.all(connections.map(async (conn) => {
         const snap = connectionSnapshot(conn);
         return {
           id: conn.id,
@@ -3136,7 +3186,9 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
           tools: snap.tools ?? null,
           has_auth: conn.auth_type !== 'none',
           auth_type: conn.auth_type,
-          oauth_status: oauthStatus(conn),
+           oauth_status: oauthStatus(conn),
+           created_by_login: conn.created_by_login,
+           can_edit: await connectionCanEdit(c, conn),
           repo_links: links
             .filter((l) => l.connection_id === conn.id)
             .map((l) => ({
@@ -3145,14 +3197,14 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
               automations: l.automations,
             })),
         };
-      }),
+      })),
     });
   });
 
   const AUTH_TYPES = ['none', 'bearer', 'api_key', 'client_credentials', 'oauth'];
 
   app.post('/integrations', async (c) => {
-    const { installationIds } = c.get('user');
+    const { installationIds, session } = c.get('user');
     const body = await c.req.json<JsonObject>().catch(() => null);
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
     const get = (k: string) => {
@@ -3236,6 +3288,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
       authCiphertext,
       authType,
       authConfigCiphertext,
+      createdBy: { login: session.login, id: session.userId },
     });
     return c.json({ ok: true });
   });
@@ -3243,8 +3296,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.delete('/integrations/:id', async (c) => {
     const conn = await authorizedConnection(c);
     if (!conn) return c.json({ error: 'unknown integration' }, 404);
-    const deniedCapability = await requireCapability(c, conn.installation_id, 'settings', orgAdmin);
-    if (deniedCapability) return deniedCapability;
+    if (!(await connectionCanEdit(c, conn))) return c.json({ error: 'forbidden' }, 403);
     await deleteConnection(conn.id);
     return c.json({ ok: true });
   });
@@ -3255,6 +3307,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.post('/integrations/:id/test', async (c) => {
     const conn = await authorizedConnection(c);
     if (!conn) return c.json({ error: 'unknown integration' }, 404);
+    if (!(await connectionCanEdit(c, conn))) return c.json({ error: 'forbidden' }, 403);
     let auth: { headerName: string; headerValue: string } | null;
     try {
       auth = await resolveAuth(conn);
@@ -3328,6 +3381,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.get('/integrations/:id/oauth/start', async (c) => {
     const conn = await authorizedConnection(c);
     if (!conn) return c.json({ error: 'unknown integration' }, 404);
+    if (!(await connectionCanEdit(c, conn))) return c.json({ error: 'forbidden' }, 403);
     if (conn.kind !== 'mcp') {
       return c.json({ error: 'OAuth connect is only available for MCP-kind integrations' }, 400);
     }
@@ -3342,6 +3396,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.get('/integrations/:id/oauth/callback', async (c) => {
     const conn = await authorizedConnection(c);
     if (!conn) return c.json({ error: 'unknown integration' }, 404);
+    if (!(await connectionCanEdit(c, conn))) return c.json({ error: 'forbidden' }, 403);
 
     const oauthError = c.req.query('error');
     if (oauthError) {
@@ -3360,8 +3415,7 @@ export function createApiRoutes(dependencies: ApiRouteDependencies = {}) {
   app.put('/integrations/:id/repos/:repoId', async (c) => {
     const conn = await authorizedConnection(c);
     if (!conn) return c.json({ error: 'unknown integration' }, 404);
-    const deniedCapability = await requireCapability(c, conn.installation_id, 'settings', orgAdmin);
-    if (deniedCapability) return deniedCapability;
+    if (!(await connectionCanEdit(c, conn))) return c.json({ error: 'forbidden' }, 403);
     if (conn.kind !== 'mcp') return c.json({ error: 'only MCP integrations attach to repos' }, 400);
     const repoId = Number(c.req.param('repoId'));
     const repo = Number.isInteger(repoId) ? await getRepoById(repoId) : null;

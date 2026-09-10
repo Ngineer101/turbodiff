@@ -39,8 +39,6 @@ function LastRunPill({ lastRun }: { lastRun: ApiAutomationSummary['last_run'] })
   );
 }
 
-// One flat list — an automation belongs to exactly one repo, but the page
-// spans every repo the caller can manage, like the board.
 export function AutomationsPage() {
   const { data } = useSuspenseQuery(automationsQuery);
 
@@ -78,7 +76,7 @@ export function AutomationsPage() {
                 slug={a.name}
                 name={a.name}
                 interactive
-                chips={a.enabled ? undefined : <Pill tone="warn">Disabled</Pill>}
+                chips={<>{a.enabled ? null : <Pill tone="warn">Disabled</Pill>}{!a.can_edit ? <Pill>Read-only</Pill> : null}</>}
                 meta={
                   <>
                     <Pill>
@@ -89,6 +87,9 @@ export function AutomationsPage() {
                       {scheduleSummary(a)}
                     </span>
                     <LastRunPill lastRun={a.last_run} />
+                    <span className="text-xs text-mute">
+                      {a.created_by_login ? `Created by @${a.created_by_login}` : 'Legacy automation'}
+                    </span>
                   </>
                 }
               />

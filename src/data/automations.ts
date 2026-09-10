@@ -10,6 +10,8 @@ import type { AgentRunRow } from './factory.ts';
 export interface AutomationRow {
   id: number;
   repository_id: number;
+  created_by_login: string | null;
+  created_by_id: number | null;
   name: string;
   prompt: string;
   schedule_kind: string; // 'hourly' | 'daily' | 'weekly'
@@ -47,6 +49,7 @@ export interface AutomationFields {
 }
 
 export interface AutomationWithRepo extends AutomationRow {
+  installation_id: number;
   owner: string;
   name_repo: string;
   last_run: { id: number; status: string; created_at: string } | null;
@@ -60,6 +63,7 @@ export async function listAutomationsForInstallations(
   if (installationIds.length === 0) return [];
   const rows = await queryRows<
     AutomationRow & {
+      installation_id: number;
       owner: string;
       name_repo: string;
       last_run_id: number | null;
@@ -67,7 +71,7 @@ export async function listAutomationsForInstallations(
       last_run_created_at: string | null;
     }
   >(sql`
-    SELECT a.*, r.owner, r.name AS name_repo,
+       SELECT a.*, r.installation_id, r.owner, r.name AS name_repo,
       lr.id AS last_run_id, lr.status AS last_run_status,
       lr.created_at AS last_run_created_at
     FROM app.automations a
@@ -100,13 +104,14 @@ export async function createAutomation(
   repositoryId: number,
   fields: AutomationFields,
   nextRunAt: string,
+  createdBy?: { login: string; id: number },
 ): Promise<number> {
   const row = await queryOne<{ id: number }>(sql`
     INSERT INTO app.automations
-      (repository_id, name, prompt, schedule_kind, time_of_day, day_of_week, runner_model,
+      (repository_id, created_by_login, created_by_id, name, prompt, schedule_kind, time_of_day, day_of_week, runner_model,
        next_run_at)
     VALUES (
-      ${repositoryId}, ${fields.name}, ${fields.prompt}, ${fields.schedule_kind},
+      ${repositoryId}, ${createdBy?.login ?? null}, ${createdBy?.id ?? null}, ${fields.name}, ${fields.prompt}, ${fields.schedule_kind},
       ${fields.time_of_day}, ${fields.day_of_week}, ${fields.runner_model}, ${nextRunAt}
     )
     RETURNING id

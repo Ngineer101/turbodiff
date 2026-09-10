@@ -3,6 +3,8 @@ import {
   getAgentById,
   getAutomationById,
   getPlan,
+  getPlanByFeatureId,
+  getFeature,
   getRepoById,
   getSkillById,
   type AgentRow,
@@ -453,9 +455,14 @@ export function serializeAutomation(
   a: AutomationRow,
   repo: { id: number; owner: string; name: string },
   lastRun: { id: number; status: string; created_at: string } | null,
+  installationId: number,
+  canEdit: boolean,
 ): ApiAutomationSummary {
   return {
     id: a.id,
+    installation_id: installationId,
+    created_by_login: a.created_by_login,
+    can_edit: canEdit,
     name: a.name,
     repository: { id: repo.id, owner: repo.owner, name: repo.name },
     // SAFETY: automations.schedule_kind passes validateAutomation's SCHEDULE_KINDS
@@ -497,7 +504,31 @@ export async function authorizedPlan(c: Context<ApiEnv>): Promise<PlanRow | null
   if (!plan) return null;
   const repo = await getRepoById(plan.repository_id);
   if (!repo || !c.get('user').installationIds.includes(repo.installation_id)) return null;
+  if (plan.created_by_id !== c.get('user').session.userId) return null;
   return plan;
+}
+
+export async function authorizedFeature(c: Context<ApiEnv>) {
+  const id = Number(c.req.param('id'));
+  const feature = Number.isInteger(id) ? await getFeature(id) : null;
+  if (!feature) return null;
+  const plan = await getPlanByFeatureId(feature.id);
+  const repo = await getRepoById(feature.repository_id);
+  if (
+    !repo ||
+    !c.get('user').installationIds.includes(repo.installation_id) ||
+    !plan ||
+    plan.created_by_id !== c.get('user').session.userId
+  ) return null;
+  return { feature, repo, plan };
+}
+
+export function canEditSharedResource(
+  creatorId: number | null,
+  callerId: number,
+  legacySettings: boolean,
+): boolean {
+  return creatorId === null ? legacySettings : creatorId === callerId;
 }
 
 export async function authorizedAgent(c: Context<ApiEnv>): Promise<AgentRow | null> {
