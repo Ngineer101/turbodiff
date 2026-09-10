@@ -197,16 +197,20 @@ function stagesAlt(stages: { label: string; state: StageState }[]): string {
 
 // TelemetryStrip: the page-top readout. Data-bearing pages (board, usage)
 // render it from figures they already fetch — it never adds a request.
+// The lamp is on when review runs are active or any board task is in
+// progress (`tasksLive`).
 export function TelemetryStrip({
   running,
+  tasksLive = false,
   items,
   className,
   ...props
 }: {
   running: number;
+  tasksLive?: boolean;
   items: { label: string; value: ReactNode }[];
 } & HTMLAttributes<HTMLDivElement>) {
-  const live = running > 0;
+  const live = running > 0 || tasksLive;
   return (
     <div
       className={cn(
