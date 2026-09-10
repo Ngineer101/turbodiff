@@ -19,11 +19,10 @@ import type { FactoryMessage } from './shared/factory-messages.ts';
 import { startGeneration } from './ai/workflows/generation.ts';
 import { failStrandedGeneration, failStrandedVerifications } from './data/factory.ts';
 import { sweepFactoryPrConflicts } from './services/merge-conflicts.ts';
-import { runPlanAnalyze, runPlanRefine } from './ai/runners/planner.ts';
+import { startPlanning, PlanningWorkflow } from './ai/workflows/planning.ts';
 import { dispatchNativeCrReviews } from './ai/review/native-dispatch.ts';
 import { mergeNativeChangeRequest, runQueuedCrMerge } from './services/change-requests.ts';
 import { startVerification, VerificationWorkflow } from './ai/workflows/verification.ts';
-import { notifyPlanLive } from './services/live-updates.ts';
 import { withDatabaseScope } from './data/database.ts';
 import { runLifecycleStage, scheduleFeatureDelivery } from './services/lifecycle.ts';
 import { dispatchReviewAgent } from './ai/review/dispatch.ts';
@@ -41,6 +40,7 @@ export { GenerationWorkflow } from './ai/workflows/generation.ts';
 // `triggers.events` entries in wrangler.jsonc (docs/artifacts-provider.md).
 export { ArtifactsEventsWorkflow } from './ai/workflows/artifacts-events.ts';
 export { VerificationWorkflow };
+export { PlanningWorkflow };
 export { FixWorkflow };
 export { ChatWorkflow };
 export { AutomationWorkflow };
@@ -72,12 +72,8 @@ export default {
             }
             break;
           case 'plan_analyze':
-            await runPlanAnalyze(body.planId);
-            await notifyPlanLive(body.planId);
-            break;
           case 'plan_refine':
-            await runPlanRefine(body.planId);
-            await notifyPlanLive(body.planId);
+            await startPlanning(body, message.id);
             break;
           case 'verify':
             // Just creates a durable workflow instance — verify runs exceed

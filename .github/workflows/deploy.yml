@@ -59,6 +59,9 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
+      - name: Runner process lifecycle (real Linux processes)
+        run: pnpm vp run test:runner
+
       - name: Validate Drizzle migrations
         run: pnpm vp run db:check
 

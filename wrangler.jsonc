@@ -74,6 +74,11 @@
   // silently re-run. The queue message only creates the instance.
   "workflows": [
     {
+      "binding": "PLAN_WORKFLOW",
+      "name": "turbodiff-planning",
+      "class_name": "PlanningWorkflow",
+    },
+    {
       "binding": "GEN_WORKFLOW",
       "name": "turbodiff-generation",
       "class_name": "GenerationWorkflow",

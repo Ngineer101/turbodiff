@@ -94,6 +94,7 @@ export default defineConfig({
         dependsOn: ['db:migrate'],
         cache: false,
       },
+      'test:runner': { command: 'node --test scripts/managed-command.test.mjs', cache: false },
       'test:schema': { command: 'node scripts/db-schema-test.mjs' },
       'test:worker': {
         command: 'vp test --config vitest.worker.config.ts',

@@ -94,6 +94,29 @@ or provider configuration independently. The command contract is
 OpenCode config and plugins are disabled, while `AGENTS.md` instructions and
 mounted skills remain available.
 
+## Planning process lifetime
+
+Planning queue deliveries start `PlanningWorkflow` instead of running the agent
+inside the queue consumer's 15-minute wall clock. A delivery ID identifies one
+Workflow instance, so redelivery does not start another paid run. The paid step
+has no automatic retries; the task remains available for an explicit retry after
+failure.
+
+Each planning stage uses `startProcess` and waits for its exit, then saves the
+output and full OpenCode transcript. A GNU `timeout` supervisor inside the Linux
+container enforces a 30-minute limit and stops the process group, even if the
+Worker disappears. A monitoring error explicitly stops the process before
+returning a failed result. The Workflow's 75-minute budget covers analysis,
+optional immediate planning, and repository setup. The sandbox stays awake for
+45 minutes between requests. This replaces an eight-minute SDK `exec` timeout
+that abandoned the result while the agent continued running.
+
+Run `vp run test:runner` on Linux to test completion, deadline enforcement and
+cancellation using real subprocesses, without model calls. CI runs these tests;
+on macOS they can also run in the existing Linux sandbox image with the repository
+mounted read-only and networking disabled. They test the process supervisor, not
+Cloudflare's remote Sandbox transport or the live model provider.
+
 ## Performance and reliability choices
 
 - OpenCode is installed once in the sandbox image, not downloaded during a

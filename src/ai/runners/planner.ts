@@ -14,6 +14,7 @@ import {
 } from '../../data/db.ts';
 import { persistAgentLog } from '../runtime/agent-runs.ts';
 import { runCodingAgent } from '../runtime/coding-agent.ts';
+import { runManagedCommand } from '../runtime/managed-command.ts';
 import { resolveRunnerAuth } from '../runtime/runner-auth.ts';
 import { runnerSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
@@ -30,7 +31,8 @@ import { notifyPlanUsers } from '../../services/push-notifications.ts';
 
 const CLONE_DIR = '/workspace/plan-repo';
 const OUT_DIR = '/workspace/plan-out';
-const AGENT_TIMEOUT_MS = 8 * 60_000;
+// Each stage has a container-enforced deadline; the Workflow covers both stages.
+const AGENT_TIMEOUT_MS = 30 * 60_000;
 
 // Boot one read-only sandbox for the whole plan (not one per repo — a
 // multi-repo task is designed as a single coherent feature) and clone every
@@ -49,7 +51,7 @@ async function clonePlanRepos(
   const tokens: string[] = [];
   const scrub = (s: string) => redactSecrets(s, tokens);
 
-  const sandbox = runnerSandbox(`plan--${planId}`, { sleepAfter: '10m' });
+  const sandbox = runnerSandbox(`plan--${planId}`, { sleepAfter: '45m' });
   await sandbox.exec(`rm -rf ${CLONE_DIR} ${OUT_DIR} && mkdir -p ${OUT_DIR}`);
 
   const dirs: { repo: RepositoryRow; dir: string; cleanUrl: string }[] = [];
@@ -155,17 +157,27 @@ async function runAgent(
   const auth = await resolveRunnerAuth(undefined, model);
   const scrubRun = (value: string) => redactSecrets(scrub(value), Object.values(auth.vars));
   await sandbox.writeFile(`${OUT_DIR}/task.md`, prompt);
-  const res = await runCodingAgent(sandbox, auth, {
-    promptFile: `${OUT_DIR}/task.md`,
-    cwd: CLONE_DIR,
-    timeout: AGENT_TIMEOUT_MS,
-  });
-  await persistAgentLog(kind, scrubRun(`${res.resultText}\n${res.stderr}`.trim()), res.success, {
-    planId,
-  });
+  const res = await runCodingAgent(
+    { exec: (command, options) => runManagedCommand(sandbox, command, options) },
+    auth,
+    {
+      promptFile: `${OUT_DIR}/task.md`,
+      cwd: CLONE_DIR,
+      timeout: AGENT_TIMEOUT_MS,
+    },
+  );
+  await persistAgentLog(
+    kind,
+    scrubRun(`${res.resultText}\n${res.stderr}`.trim()),
+    res.success,
+    {
+      planId,
+    },
+    scrubRun(res.stdout),
+  );
   if (!res.success) {
     throw new Error(
-      `planning agent exited ${res.exitCode}: ${scrubRun(`${res.stdout}\n${res.stderr}`).trim().slice(-1_000)}`,
+      `planning agent exited ${res.exitCode}: ${scrubRun(`${res.stderr}\n${res.resultText}`).trim().slice(0, 1_000)}`,
     );
   }
 }

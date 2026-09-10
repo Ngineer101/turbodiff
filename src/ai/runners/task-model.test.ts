@@ -82,6 +82,13 @@ vi.mock('../../data/db.ts', () => ({
 vi.mock('../runtime/sandbox.ts', () => {
   const sandbox = {
     exec: boundary.exec,
+    startProcess: async (command: string, options: ExecOptions) => {
+      const result = await boundary.exec(command, options);
+      return {
+        waitForExit: async () => ({ exitCode: result.exitCode }),
+        getLogs: async () => ({ stdout: result.stdout, stderr: result.stderr }),
+      };
+    },
     writeFile: async (path: string, content: string) => {
       boundary.files.set(path, content);
     },
@@ -122,7 +129,7 @@ beforeEach(() => {
   boundary.runs.length = 0;
   boundary.tier = 'trivial';
   boundary.exec.mockImplementation(async (command: string, options?: ExecOptions) => {
-    if (command.startsWith('opencode run ')) {
+    if (command.includes('opencode run ')) {
       const env = options?.env ?? {};
       const prompt = boundary.files.get(env.TURBODIFF_AGENT_PROMPT ?? '') ?? '';
       boundary.runs.push({ command, prompt, env });
