@@ -41,7 +41,6 @@ const ciMessage: FixQueueMessage = {
 
 const noChanges: FixOutcome = {
   status: 'no_changes',
-  authMode: 'gateway',
   branch: 'factory/feature-42',
   agentOutput: '',
   usage: null,

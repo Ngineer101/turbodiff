@@ -260,7 +260,7 @@ async function verify(
   // Artifacts repos have no GitHub side; every GitHub call below is gated on
   // provider, and the empty token is inert in the scrub list.
   const token = repo.provider === 'github' ? await installationToken(repo.installation_id) : '';
-  const auth = await resolveRunnerAuth(undefined, feature.runner_model);
+  const auth = await resolveRunnerAuth(feature.runner_model);
   // Verifier sandboxes never push: single-repo, contents READ-ONLY token.
   const remote = await resolveWorkspaceRemote(repo, 'read');
   const scrub = (s: string) => redactSecrets(s, [token, remote.token, ...Object.values(auth.vars)]);
@@ -601,7 +601,7 @@ that conflict; each criterion must be empirically checkable against the
 running app. Write ONLY a JSON array of criterion strings to ${PROPOSAL_FILE}.
 `;
   await sandbox.writeFile(`/workspace/criteria-prompt-${feature.id}.md`, prompt);
-  const auth = await resolveRunnerAuth(undefined, feature.runner_model);
+  const auth = await resolveRunnerAuth(feature.runner_model);
   const run = await runCodingAgent(sandbox, auth, {
     promptFile: `/workspace/criteria-prompt-${feature.id}.md`,
     cwd: '/workspace',

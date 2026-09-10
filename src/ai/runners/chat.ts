@@ -166,7 +166,7 @@ export async function runChatTurn(params: ChatTurnParams): Promise<ChatTurnResul
     throw new Error(`change request #${prNumber} is not open`);
   }
   const token = cr ? '' : await installationToken(params.installationId);
-  const auth = await resolveRunnerAuth(undefined, params.runnerModel);
+  const auth = await resolveRunnerAuth(params.runnerModel);
 
   let remote: WorkspaceRemote;
   let headRef: string;

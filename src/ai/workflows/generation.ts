@@ -376,7 +376,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
           { retries: { limit: 1, delay: '1 minute' }, timeout: '15 minutes' },
           async (): Promise<{ ok: boolean; output: string }> => {
             await updateFeature(featureId, { runStartedAt: 'now' });
-            const auth = await resolveRunnerAuth(undefined, ctx.runnerModel);
+            const auth = await resolveRunnerAuth(ctx.runnerModel);
             const scrub = (s: string) => redactSecrets(s, Object.values(auth.vars));
             const res = await runCheckCommand(
               sandboxFor(ctx),
@@ -437,7 +437,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
           sessionId: string | null;
         }> => {
           await updateFeature(featureId, { runStartedAt: 'now' });
-          const auth = await resolveRunnerAuth(undefined, ctx.runnerModel);
+          const auth = await resolveRunnerAuth(ctx.runnerModel);
           // The git/installation tokens live in other steps' scopes, not this
           // one — only the runner credential can appear in this step's output.
           const scrub = (s: string) => redactSecrets(s, Object.values(auth.vars));
@@ -540,7 +540,7 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
               sessionId: string | null;
             }> => {
               await updateFeature(featureId, { runStartedAt: 'now' });
-              const auth = await resolveRunnerAuth(undefined, ctx.runnerModel);
+              const auth = await resolveRunnerAuth(ctx.runnerModel);
               const scrub = (s: string) => redactSecrets(s, Object.values(auth.vars));
               const sandbox = sandboxFor(ctx);
               // Drop check-command working-tree mutations before the agent

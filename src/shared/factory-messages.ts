@@ -15,8 +15,6 @@ export interface GenerateQueueMessage {
   featureId: number;
   factoryRunId?: number;
   stageRunId?: number;
-  // Legacy field from the pre-workflow retry loop; ignored.
-  attempt?: number;
 }
 
 export type PlanQueueMessage =

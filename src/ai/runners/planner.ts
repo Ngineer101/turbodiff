@@ -1,7 +1,7 @@
 import type { Sandbox } from '@cloudflare/sandbox';
 import { env } from 'cloudflare:workers';
 import type { ApiPlanQuestion as Question } from '../../shared/api-types.ts';
-import { isJsonArray, isJsonObject, isString, parseJson } from '../../shared/json.ts';
+import { isJsonObject, isString, parseJson } from '../../shared/json.ts';
 import { githubRequest as gh } from '../../integrations/github/client.ts';
 import { signArtifactKey } from '../../integrations/security/crypto.ts';
 import {
@@ -26,12 +26,6 @@ import { installationToken } from '../../integrations/github/app.ts';
 import { resolveWorkspaceRemote } from '../../integrations/git/provider.ts';
 import { UNTRUSTED_CONTENT_RULES } from '../../domain/prompt-security.ts';
 import { notifyPlanUsers } from '../../services/push-notifications.ts';
-
-// Phase 3 of the software factory (docs/software-factory-design.md): the
-// planning front half. A planning agent clones the repo (read-only), analyzes
-// the requirements against the real code, asks clarifying questions, and — once
-// answered — produces an implementation plan plus machine-checkable acceptance
-// criteria. On approval the plan becomes a feature and flows into generation.
 
 const CLONE_DIR = '/workspace/plan-repo';
 const OUT_DIR = '/workspace/plan-out';
@@ -78,6 +72,7 @@ async function clonePlanRepos(
       };
       base = info.default_branch;
     }
+
     const dir = repos.length === 1 ? CLONE_DIR : `${CLONE_DIR}/${repo.owner}--${repo.name}`;
     if (repos.length > 1) await sandbox.exec(`mkdir -p ${dir}`);
     const clone = await sandbox.exec(
@@ -88,6 +83,7 @@ async function clonePlanRepos(
     if (!clone.success) {
       throw new Error(`git clone failed for ${full}: ${scrub(clone.stderr).slice(0, 500)}`);
     }
+
     dirs.push({ repo, dir, cleanUrl: remote.cleanUrl });
   }
   return { sandbox, scrub, dirs };
@@ -109,7 +105,7 @@ async function readJsonArray(sandbox: Sandbox, path: string): Promise<string[]> 
 async function readQuestions(sandbox: Sandbox, path: string): Promise<Question[]> {
   try {
     const parsed = parseJson((await sandbox.readFile(path)).content);
-    if (!isJsonArray(parsed)) return [];
+    if (!Array.isArray(parsed)) return [];
     return parsed
       .map((raw): Question | null => {
         if (isString(raw)) {
@@ -119,7 +115,7 @@ async function readQuestions(sandbox: Sandbox, path: string): Promise<Question[]
         if (!isJsonObject(raw)) return null;
         const text = isString(raw.text) ? raw.text.trim() : '';
         if (!text) return null;
-        const rawOptions = isJsonArray(raw.options) ? raw.options : [];
+        const rawOptions = Array.isArray(raw.options) ? raw.options : [];
         const options = [
           ...new Set(
             rawOptions
@@ -158,14 +154,16 @@ async function runAgent(
   model: string | null,
   resume = false,
 ): Promise<void> {
-  const auth = await resolveRunnerAuth(undefined, model);
+  const auth = await resolveRunnerAuth(model);
   const scrubRun = (value: string) => redactSecrets(scrub(value), Object.values(auth.vars));
   const sessionKey = `planning-sessions/${planId}.json`;
   const saved = resume ? await env.ARTIFACTS.get(sessionKey) : null;
   const sessionId = saved
     ? await importPlanningSession(sandbox, auth, CLONE_DIR, await saved.text())
     : null;
+
   await sandbox.writeFile(`${OUT_DIR}/task.md`, prompt);
+
   const res = await runCodingAgent(sandbox, auth, {
     promptFile: `${OUT_DIR}/task.md`,
     cwd: CLONE_DIR,
@@ -173,6 +171,7 @@ async function runAgent(
     sessionId,
     configExtensionJson: PLANNING_CONFIG,
   });
+
   await persistAgentLog(
     kind,
     scrubRun(`${res.resultText}\n${res.stderr}`.trim()),
@@ -180,11 +179,13 @@ async function runAgent(
     { planId },
     scrubRun(res.stdout),
   );
+
   if (!res.success) {
     throw new Error(
       `planning agent exited ${res.exitCode}: ${scrubRun(`${res.stdout}\n${res.stderr}`).trim().slice(-1_000)}`,
     );
   }
+
   if (!res.codingSessionId) throw new Error('Planning agent did not return a session');
   const snapshot = await exportPlanningSession(sandbox, auth, CLONE_DIR, res.codingSessionId);
   await env.ARTIFACTS.put(sessionKey, scrubRun(snapshot), {
@@ -205,6 +206,7 @@ async function fetchPlanAttachments(sandbox: Sandbox, plan: PlanRow): Promise<st
   if (atts.length === 0) return [];
   await sandbox.exec(`rm -rf ${ATTACH_DIR} && mkdir -p ${ATTACH_DIR}`);
   const paths: string[] = [];
+
   for (const [i, att] of atts.entries()) {
     const safe = `${i + 1}-${att.name.replace(/[^\w.-]/g, '_').slice(-60)}`;
     const url = `${env.PUBLIC_BASE_URL}/artifacts/${att.key}?sig=${await signArtifactKey(att.key)}`;
@@ -215,6 +217,7 @@ async function fetchPlanAttachments(sandbox: Sandbox, plan: PlanRow): Promise<st
     if (res.success) paths.push(`${ATTACH_DIR}/${safe}`);
     else console.warn(`turbodiff: attachment download failed for plan ${plan.id}: ${att.name}`);
   }
+
   return paths;
 }
 
@@ -344,6 +347,7 @@ ${qa}${extra}`;
 export async function runPlanAnalyze(planId: number): Promise<void> {
   const plan = await getPlan(planId);
   if (!plan) return;
+
   const repos = await listReposForPlan(planId);
   const disabled = repos.find((r) => !r.enabled);
   if (repos.length === 0 || disabled) {
@@ -355,14 +359,18 @@ export async function runPlanAnalyze(planId: number): Promise<void> {
     });
     return;
   }
+
   const full = repos.map((r) => `${r.owner}/${r.name}`).join(', ');
   let sandbox: Sandbox | undefined;
   let dirs: { repo: RepositoryRow; dir: string; cleanUrl: string }[] = [];
+
   try {
     const booted = await clonePlanRepos(repos, planId);
     sandbox = booted.sandbox;
     dirs = booted.dirs;
+
     const attachments = attachmentsSection(await fetchPlanAttachments(sandbox, plan));
+
     await runAgent(
       sandbox,
       analyzePrompt(plan, repos, dirs, attachments),
@@ -371,11 +379,14 @@ export async function runPlanAnalyze(planId: number): Promise<void> {
       planId,
       plan.runner_model,
     );
+
     // Classification is an output of this task's analysis, never a separate
     // agent using the global fast model. Missing/invalid output stays conservative.
     const tier =
       (await readText(sandbox, `${OUT_DIR}/tier.txt`)) === 'trivial' ? 'trivial' : 'standard';
+
     await updatePlan(planId, { tier });
+
     const analysis = await readText(sandbox, `${OUT_DIR}/analysis.md`);
     const questions = await readQuestions(sandbox, `${OUT_DIR}/questions.json`);
 
@@ -390,9 +401,11 @@ export async function runPlanAnalyze(planId: number): Promise<void> {
         plan.runner_model,
         true,
       );
+
       const planMd = await readText(sandbox, `${OUT_DIR}/plan.md`);
       const summary = await readText(sandbox, `${OUT_DIR}/summary.md`);
       const acceptance = await readJsonArray(sandbox, `${OUT_DIR}/acceptance.json`);
+
       await updatePlan(planId, {
         status: 'plan_ready',
         analysis,
@@ -401,6 +414,7 @@ export async function runPlanAnalyze(planId: number): Promise<void> {
         summary,
         acceptance,
       });
+
       await notifyPlanUsers(planId, {
         title: plan.title,
         body: 'Turbodiff finished a plan — ready for your review.',
@@ -412,12 +426,14 @@ export async function runPlanAnalyze(planId: number): Promise<void> {
         analysis,
         questions,
       });
+
       await notifyPlanUsers(planId, {
         title: plan.title,
         body: 'Turbodiff has questions before it can plan this.',
         url: `${env.PUBLIC_BASE_URL}/tasks/${planId}`,
       });
     }
+
     console.log(`turbodiff: plan ${planId} analyzed for ${full} (${questions.length} questions)`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

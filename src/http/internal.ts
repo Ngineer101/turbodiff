@@ -3,7 +3,7 @@ import { env } from 'cloudflare:workers';
 import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { PrReviewer } from '../ai/agents/pr-reviewer.ts';
-import { runFix, sandboxSmoke, type FixAuthMode } from '../ai/runners/fixer.ts';
+import { runFix, sandboxSmoke } from '../ai/runners/fixer.ts';
 import { approvePlan } from '../ai/runners/planner.ts';
 import {
   createFeature,
@@ -332,7 +332,6 @@ export function createInternalRoutes() {
       .json<{
         pr_url?: string;
         findings?: string;
-        auth_mode?: FixAuthMode;
         test_command?: string;
       }>()
       .catch(() => null);
@@ -360,7 +359,6 @@ export function createInternalRoutes() {
         installationId: repo.installation_id,
         repositoryId: repo.id,
         findings: payload?.findings,
-        authMode: payload?.auth_mode,
         testCommand: payload?.test_command ?? repo.check_command ?? undefined,
       });
       return c.json(outcome);

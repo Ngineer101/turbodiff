@@ -186,7 +186,7 @@ async function runConflictResolve(
   runnerModel?: string | null,
 ): Promise<ConflictResolveOutcome> {
   const token = await installationToken(repo.installation_id);
-  const auth = await resolveRunnerAuth(undefined, runnerModel);
+  const auth = await resolveRunnerAuth(runnerModel);
   // Any surfaced output must never leak a token — same scrub discipline as
   // the fixer's sandbox output.
   // A conflicted workflow file resolves to new blob content, which GitHub

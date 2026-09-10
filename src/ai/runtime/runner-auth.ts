@@ -7,18 +7,9 @@ import {
 
 import type { RunnerAuth } from './runner-config.ts';
 
-export type RunnerAuthMode = 'claude_subscription' | 'gateway';
 export type { RunnerAuth } from './runner-config.ts';
 
-export async function resolveRunnerAuth(
-  requested?: RunnerAuthMode,
-  model?: string | null,
-): Promise<RunnerAuth> {
-  if (requested === 'claude_subscription') {
-    throw new Error(
-      'claude_subscription runner mode is no longer supported; configure the model-neutral AI Gateway runner',
-    );
-  }
+export async function resolveRunnerAuth(model?: string | null): Promise<RunnerAuth> {
   const accountId = (env.AI_GATEWAY_ACCOUNT_ID ?? '').trim();
   const gatewayId = (env.AI_GATEWAY_ID ?? '').trim();
   if (!accountId || !(env.AI_GATEWAY_API_TOKEN ?? '').trim() || !gatewayId) {
@@ -26,6 +17,7 @@ export async function resolveRunnerAuth(
       'gateway runner requires AI_GATEWAY_ACCOUNT_ID, AI_GATEWAY_ID, and the AI_GATEWAY_API_TOKEN secret',
     );
   }
+
   const normalizedModel = normalizeRunnerModel(model ?? (await resolveRunnerModel()));
   return {
     mode: 'gateway',

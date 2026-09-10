@@ -194,8 +194,7 @@ export function registerBoardRoutes(app: Hono<ApiEnv>) {
       return c.json({ error: 'unknown todo' }, 404);
     }
 
-    if (todo.plan_id !== null)
-      return c.json({ error: 'already started' }, 409);
+    if (todo.plan_id !== null) return c.json({ error: 'already started' }, 409);
 
     const repos = await listReposForTodo(todo.id);
     if (repos.length === 0) {

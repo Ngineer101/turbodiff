@@ -27,7 +27,7 @@ import { checkCommandUnrunnable, runCheckCommand } from '../runtime/check-comman
 import { FIX_MAX_ATTEMPTS, type FixQueueMessage } from '../../shared/factory-messages.ts';
 import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
 import { completeLifecycleRepair } from '../../services/lifecycle.ts';
-import { resolveRunnerAuth, type RunnerAuthMode } from '../runtime/runner-auth.ts';
+import { resolveRunnerAuth } from '../runtime/runner-auth.ts';
 import { runnerSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
 import { prepareFreshClone, pushHeadCommand } from '../runtime/repository-workspace.ts';
@@ -52,8 +52,6 @@ import {
 // All coding models route through Cloudflare AI Gateway. The authMode field is
 // retained on the operator endpoint for a clear error to legacy callers.
 
-export type FixAuthMode = RunnerAuthMode;
-
 export interface FixParams {
   owner: string;
   repo: string;
@@ -63,7 +61,6 @@ export interface FixParams {
   // Markdown work order. When omitted, the latest blocking (CHANGES_REQUESTED)
   // bot review on the PR — i.e. turbodiff's own — is used instead.
   findings?: string;
-  authMode?: FixAuthMode;
   // e.g. "npm test". When set, a failing run blocks the push.
   testCommand?: string;
   // The instructing user (e.g. a cockpit commenter) — becomes the git author
@@ -101,7 +98,6 @@ export function fixLabel(trigger?: string): string {
 
 export interface FixOutcome {
   status: 'fixed' | 'no_changes' | 'tests_failed';
-  authMode: FixAuthMode;
   branch: string;
   commit?: string;
   // Findings the agent declined to fix, with its reasons (from fix-notes.md).
@@ -264,7 +260,7 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
     throw new Error(`change request #${prNumber} is not open`);
   }
   const token = cr ? '' : await installationToken(params.installationId);
-  const auth = await resolveRunnerAuth(params.authMode, params.runnerModel);
+  const auth = await resolveRunnerAuth(params.runnerModel);
 
   const findings =
     params.findings?.trim() ||
@@ -376,7 +372,6 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
       await postFixComment(token, params, { changed: false, notes, crId: cr?.id });
       return {
         status: 'no_changes',
-        authMode: auth.mode,
         branch: headRef,
         notes,
         agentOutput,
@@ -456,7 +451,6 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
       if (!tests.ok) {
         return {
           status: 'tests_failed',
-          authMode: auth.mode,
           branch: headRef,
           notes,
           testOutput,
@@ -492,7 +486,6 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
     }
     return {
       status: 'fixed',
-      authMode: auth.mode,
       branch: headRef,
       commit,
       notes,
