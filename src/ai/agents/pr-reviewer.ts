@@ -7,7 +7,8 @@ import {
   type AgentProps,
   type McpConnectionDefinition,
 } from '@flue/runtime';
-import { getConnection } from '../../data/db.ts';
+import { getConnection, getReviewRunGuard } from '../../data/db.ts';
+import { useReviewSubmissionGuard } from '../review/submission-guard.ts';
 import type { ConnectionSnapshot } from '../../shared/connections.ts';
 import { resolveConnectionAuth } from '../../services/connections.ts';
 import { DEFAULT_MODEL } from '../../domain/personas.ts';
@@ -170,6 +171,13 @@ async function resolveMountAuth(connectionId: number): Promise<string> {
 
 export function PrReviewer(props: AgentProps) {
   const cfg = deliveryConfig();
+  const reviewId = cfg.crPin?.reviewId ?? cfg.pin?.reviewId;
+  if (reviewId !== undefined) {
+    useReviewSubmissionGuard(
+      reviewId,
+      async () => (await getReviewRunGuard(reviewId))?.status ?? null,
+    );
+  }
 
   // The current Flue Gateway provider maps this onto each model's native
   // reasoning protocol, including adaptive thinking for Claude 5. Review is

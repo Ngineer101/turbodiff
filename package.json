@@ -51,6 +51,7 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.39.2",
     "@cloudflare/vitest-pool-workers": "^0.21.3",
+    "@earendil-works/pi-ai": "0.83.0",
     "@electric-sql/pglite": "^0.3.14",
     "@flue/cli": "^2.0.1",
     "@flue/vite": "^2.0.1",
