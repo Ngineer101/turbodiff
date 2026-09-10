@@ -239,7 +239,7 @@ export async function sandboxSmoke(checkAuth = false): Promise<Record<string, st
       timeout: 2 * 60_000,
     });
     const scrub = (value: string) => redactSecrets(value, Object.values(auth.vars));
-    out[`agent auth (${auth.mode})`] = ping.success
+    out['agent auth (gateway)'] = ping.success
       ? scrub(ping.resultText).trim()
       : `exit ${ping.exitCode}: ${scrub(`${ping.stdout}\n${ping.stderr}`).trim().slice(-500)}`;
   }

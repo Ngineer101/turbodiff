@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { PrReviewer } from '../ai/agents/pr-reviewer.ts';
 import { runFix, sandboxSmoke } from '../ai/runners/fixer.ts';
-import { approvePlan } from '../ai/runners/planner.ts';
+import { approvePlan } from '../services/plans.ts';
 import {
   createFeature,
   createPlan,

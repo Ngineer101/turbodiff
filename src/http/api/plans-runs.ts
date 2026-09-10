@@ -2,7 +2,7 @@ import type { Hono } from 'hono';
 import { env } from 'cloudflare:workers';
 import { getAgentRunForAuth, updatePlan } from '../../data/db.ts';
 import { transcriptKey } from '../../ai/runtime/agent-runs.ts';
-import { approvePlan } from '../../ai/runners/planner.ts';
+import { approvePlan } from '../../services/plans.ts';
 import { enqueueFactoryMessage, enqueueFactoryMessages } from '../../services/factory-queue.ts';
 import { isJsonArray, isString, type JsonValue } from '../../shared/json.ts';
 import { type ApiPlanQuestion } from '../../shared/api-types.ts';

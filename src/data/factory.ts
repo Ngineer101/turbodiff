@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import type { CriterionResult } from '../domain/verification.ts';
-import type { ApiPlanQuestion } from '../shared/api-types.ts';
+import type { PlanQuestion } from '../artifacts/plan.ts';
 import { STALL_AFTER_MINUTES, VERIFY_STALL_AFTER_MINUTES } from '../shared/time.ts';
 import type { CliUsage } from '../shared/usage.ts';
 import type { ReviewConclusion } from '../domain/review-context.ts';
@@ -770,7 +770,7 @@ export interface PlanRow {
   title: string;
   requirements: string;
   analysis: string | null;
-  questions: ApiPlanQuestion[] | null;
+  questions: PlanQuestion[] | null;
   answers: string[] | null;
   plan: string | null;
   summary: string | null; // reader-facing short summary; null = trivial tier or pre-summary plan
@@ -971,7 +971,7 @@ export async function updatePlan(
   fields: {
     status?: string;
     analysis?: string;
-    questions?: ApiPlanQuestion[];
+    questions?: PlanQuestion[];
     answers?: string[];
     plan?: string;
     summary?: string;

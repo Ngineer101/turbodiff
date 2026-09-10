@@ -20,7 +20,6 @@ export async function resolveRunnerAuth(model?: string | null): Promise<RunnerAu
 
   const normalizedModel = normalizeRunnerModel(model ?? (await resolveRunnerModel()));
   return {
-    mode: 'gateway',
     baseURL: `${env.PUBLIC_BASE_URL}/ai-proxy/v1`,
     vars: {
       TURBODIFF_AI_GATEWAY_GRANT: await createAiGatewayGrant(

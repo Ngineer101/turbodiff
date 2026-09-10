@@ -1,7 +1,6 @@
 import { isJsonObject, parseJson, type JsonObject } from '../../shared/json.ts';
 
 export interface RunnerAuth {
-  mode: 'gateway';
   baseURL: string;
   // Secrets: callers must redact these from surfaced output.
   vars: Record<string, string>;
