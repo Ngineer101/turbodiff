@@ -3,6 +3,7 @@ import {
   createPlanForTodo,
   createUserChatMessage,
   getFeature as getFeatureRow,
+  getPlanByFeatureId,
   getPlanWithRepoById,
   getRepoById,
   getTaskRepoStatuses,
@@ -88,8 +89,8 @@ function verificationSummary(
 export async function listBoard(user: AuthedUser) {
   const [groups, plans, todos] = await Promise.all([
     listInstallationsWithRepos(user.installationIds),
-    listPlansForInstallations(user.installationIds),
-    listTodos(user.installationIds),
+    listPlansForInstallations(user.installationIds, user.session.userId),
+    listTodos(user.installationIds, user.session.userId),
   ]);
   const active = plans.filter((p) => !p.archived);
   const [repoStatuses, todoRepos] = await Promise.all([
@@ -138,7 +139,9 @@ export async function listBoard(user: AuthedUser) {
 }
 
 export async function getTask(user: AuthedUser, taskId: number) {
-  const plan = Number.isInteger(taskId) ? await getPlanWithRepoById(taskId) : null;
+  const plan = Number.isInteger(taskId)
+    ? await getPlanWithRepoById(taskId, user.session.userId)
+    : null;
   if (!plan || !user.installationIds.includes(plan.installation_id)) {
     throw new McpToolError('unknown task');
   }
@@ -175,7 +178,8 @@ export async function getTask(user: AuthedUser, taskId: number) {
 export async function getFeature(user: AuthedUser, featureId: number) {
   const feature = Number.isInteger(featureId) ? await getFeatureRow(featureId) : null;
   const repo = feature ? await getRepoById(feature.repository_id) : null;
-  if (!feature || !repo || !user.installationIds.includes(repo.installation_id)) {
+  const plan = feature ? await getPlanByFeatureId(feature.id) : null;
+  if (!feature || !repo || !plan || plan.created_by_id !== user.session.userId || !user.installationIds.includes(repo.installation_id)) {
     throw new McpToolError('unknown feature');
   }
   const [verification, messages] = await Promise.all([
@@ -285,7 +289,9 @@ export async function startTask(
   input: { todo_id: number; requirements: string; title?: string },
   enqueue: typeof enqueueFactoryMessage,
 ): Promise<{ task_id: number }> {
-  const todo = Number.isInteger(input.todo_id) ? await getTodo(input.todo_id) : null;
+  const todo = Number.isInteger(input.todo_id)
+    ? await getTodo(input.todo_id, user.session.userId)
+    : null;
   if (!todo || !user.installationIds.includes(todo.installation_id)) {
     throw new McpToolError('unknown todo');
   }
@@ -314,7 +320,8 @@ export async function sendChatMessage(
 ): Promise<{ message_id: number }> {
   const feature = Number.isInteger(input.feature_id) ? await getFeatureRow(input.feature_id) : null;
   const repo = feature ? await getRepoById(feature.repository_id) : null;
-  if (!feature || !repo || !user.installationIds.includes(repo.installation_id)) {
+  const plan = feature ? await getPlanByFeatureId(feature.id) : null;
+  if (!feature || !repo || !plan || plan.created_by_id !== user.session.userId || !user.installationIds.includes(repo.installation_id)) {
     throw new McpToolError('unknown feature');
   }
   const body = input.message.trim();

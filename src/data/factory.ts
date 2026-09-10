@@ -157,14 +157,18 @@ export async function todoRepositoriesForTodos(todoIds: number[]): Promise<TodoR
 
 // Board rollup form: installation-scoped so it can run in parallel with the
 // todo list instead of waiting for its ids and starting a second PostgreSQL phase.
-export async function boardTodoRepositories(installationIds: number[]): Promise<TodoRepoRow[]> {
+export async function boardTodoRepositories(
+  installationIds: number[],
+  createdById: number,
+): Promise<TodoRepoRow[]> {
   if (installationIds.length === 0) return [];
   return queryRows<TodoRepoRow>(sql`
     SELECT tr.todo_id, tr.repository_id, r.owner, r.name
     FROM app.todo_repositories tr
     JOIN app.todos t ON t.id = tr.todo_id
     JOIN app.repositories r ON r.id = tr.repository_id
-    WHERE t.installation_id = ANY(${bigintArray(installationIds)}) AND t.plan_id IS NULL
+    WHERE t.installation_id = ANY(${bigintArray(installationIds)})
+      AND t.plan_id IS NULL AND t.created_by_id = ${createdById}
     ORDER BY tr.todo_id, tr.position
   `);
 }
@@ -219,6 +223,7 @@ export async function getTaskRepoStatuses(planIds: number[]): Promise<TaskRepoSt
 // the first PostgreSQL wave. The id-scoped variant remains for the task detail route.
 export async function boardTaskRepoStatuses(
   installationIds: number[],
+  createdById: number,
 ): Promise<TaskRepoStatusRow[]> {
   if (installationIds.length === 0) return [];
   return queryRows<TaskRepoStatusRow>(sql`
@@ -234,7 +239,8 @@ export async function boardTaskRepoStatuses(
     LEFT JOIN app.verifications v ON v.id = (
       SELECT MAX(id) FROM app.verifications WHERE feature_id = f.id
     )
-    WHERE r.installation_id = ANY(${bigintArray(installationIds)}) AND NOT p.archived
+    WHERE r.installation_id = ANY(${bigintArray(installationIds)})
+      AND NOT p.archived AND p.created_by_id = ${createdById}
     ORDER BY pr.plan_id, pr.position
   `);
 }
@@ -489,14 +495,18 @@ export async function listAgentRunsForFeature(featureId: number): Promise<AgentR
 // mutually exclusive.
 export async function getAgentRunForAuth(
   id: number,
-): Promise<{ logKey: string; installationId: number } | null> {
-  return queryOne<{ logKey: string; installationId: number }>(sql`
+): Promise<{ logKey: string; installationId: number; creatorId: number | null; privateLifecycle: boolean } | null> {
+  return queryOne<{ logKey: string; installationId: number; creatorId: number | null; privateLifecycle: boolean }>(sql`
     SELECT ar.log_key AS "logKey",
+      COALESCE(p.created_by_id, pf.created_by_id) AS "creatorId",
+      (ar.plan_id IS NOT NULL OR ar.feature_id IS NOT NULL OR ar.fix_attempt_id IS NOT NULL) AS "privateLifecycle",
       COALESCE(
         rp.installation_id, rf.installation_id, rx.installation_id, ra.installation_id
       ) AS "installationId"
     FROM app.agent_runs ar
     LEFT JOIN app.plans p ON p.id = ar.plan_id
+    LEFT JOIN app.features af ON af.id = ar.feature_id
+    LEFT JOIN app.plans pf ON pf.id = af.plan_id
     LEFT JOIN app.repositories rp ON rp.id = p.repository_id
     LEFT JOIN app.features f ON f.id = ar.feature_id
     LEFT JOIN app.repositories rf ON rf.id = f.repository_id
@@ -928,6 +938,7 @@ export interface PlanWithRepo extends PlanRow {
 // context for the dashboard.
 export async function listPlansForInstallations(
   installationIds: number[],
+  createdById: number,
   limit = 50,
 ): Promise<PlanWithRepo[]> {
   if (installationIds.length === 0) return [];
@@ -942,7 +953,7 @@ export async function listPlansForInstallations(
     LEFT JOIN app.verifications v ON v.id = (
       SELECT MAX(id) FROM app.verifications WHERE feature_id = p.feature_id
     )
-    WHERE r.installation_id = ANY(${bigintArray(installationIds)})
+    WHERE r.installation_id = ANY(${bigintArray(installationIds)}) AND p.created_by_id = ${createdById}
     ORDER BY p.id DESC
     LIMIT ${limit}
   `);
@@ -950,7 +961,7 @@ export async function listPlansForInstallations(
 
 // One plan with the same repo/feature/verification context as the list query
 // (the board's task-detail view).
-export async function getPlanWithRepoById(id: number): Promise<PlanWithRepo | null> {
+export async function getPlanWithRepoById(id: number, createdById: number): Promise<PlanWithRepo | null> {
   return queryOne<PlanWithRepo>(sql`
     SELECT p.*, r.owner, r.name, r.installation_id, f.pr_number,
       f.status AS feature_status, f.error AS feature_error,
@@ -962,7 +973,7 @@ export async function getPlanWithRepoById(id: number): Promise<PlanWithRepo | nu
     LEFT JOIN app.verifications v ON v.id = (
       SELECT MAX(id) FROM app.verifications WHERE feature_id = p.feature_id
     )
-    WHERE p.id = ${id}
+    WHERE p.id = ${id} AND p.created_by_id = ${createdById}
   `);
 }
 

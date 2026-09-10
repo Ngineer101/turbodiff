@@ -15,12 +15,13 @@ export interface TodoRow {
   created_at: string;
 }
 
-export async function listTodos(installationIds: number[]): Promise<TodoRow[]> {
+export async function listTodos(installationIds: number[], createdById: number): Promise<TodoRow[]> {
   if (installationIds.length === 0) return [];
   return queryRows<TodoRow>(sql`
     SELECT * FROM app.todos
     WHERE installation_id = ANY(${bigintArray(installationIds)})
       AND plan_id IS NULL
+      AND created_by_id = ${createdById}
     ORDER BY id DESC
   `);
 }
@@ -42,8 +43,8 @@ export async function createTodo(
   return row!.id;
 }
 
-export async function getTodo(id: number): Promise<TodoRow | null> {
-  return queryOne<TodoRow>(sql`SELECT * FROM app.todos WHERE id = ${id}`);
+export async function getTodo(id: number, createdById: number): Promise<TodoRow | null> {
+  return queryOne<TodoRow>(sql`SELECT * FROM app.todos WHERE id = ${id} AND created_by_id = ${createdById}`);
 }
 
 export async function deleteTodo(id: number): Promise<void> {

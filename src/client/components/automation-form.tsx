@@ -53,6 +53,8 @@ export function AutomationForm({
   onSubmit,
   onCancel,
   footerAction,
+  readOnly = false,
+  readOnlyNotice,
 }: {
   mode: 'new' | 'edit';
   initial: AutomationFormValues;
@@ -65,6 +67,8 @@ export function AutomationForm({
   onCancel: () => void;
   // Optional trailing action (e.g. Delete on edit), pushed to the far right.
   footerAction?: ReactNode;
+  readOnly?: boolean;
+  readOnlyNotice?: ReactNode;
 }) {
   const [values, setValues] = useState(initial);
   const set = (patch: Partial<AutomationFormValues>) => setValues((v) => ({ ...v, ...patch }));
@@ -114,12 +118,14 @@ export function AutomationForm({
       }
       onSubmit={submit}
     >
+      {readOnlyNotice}
       <FormSection label="Identity">
         <Field label="Name" className="mt-0">
           <Input
             value={values.name}
             onChange={(e) => set({ name: e.target.value })}
             required
+            disabled={readOnly}
             maxLength={80}
           />
         </Field>
@@ -156,6 +162,7 @@ export function AutomationForm({
               onChange={(e) => {
                 if (isScheduleKind(e.target.value)) set({ schedule_kind: e.target.value });
               }}
+              disabled={readOnly}
             >
               <option value="hourly">Hourly</option>
               <option value="daily">Daily</option>
@@ -168,6 +175,7 @@ export function AutomationForm({
                 type="time"
                 value={values.time_of_day}
                 onChange={(e) => set({ time_of_day: e.target.value })}
+                disabled={readOnly}
                 required
               />
             </Field>
@@ -177,6 +185,7 @@ export function AutomationForm({
               <Select
                 value={values.day_of_week}
                 onChange={(e) => set({ day_of_week: Number(e.target.value) })}
+                disabled={readOnly}
               >
                 {DAY_NAMES.map((label, i) => (
                   <option key={i} value={i}>
@@ -189,7 +198,7 @@ export function AutomationForm({
         </div>
         {showEnabled ? (
           <label className="flex items-center gap-2.5 text-xs text-mute">
-            <Switch checked={values.enabled} onCheckedChange={(v) => set({ enabled: v })} />
+             <Switch disabled={readOnly} checked={values.enabled} onCheckedChange={(v) => set({ enabled: v })} />
             Enabled — the schedule fires while this is on
           </label>
         ) : null}
@@ -205,6 +214,7 @@ export function AutomationForm({
             value={values.prompt}
             onChange={(e) => set({ prompt: e.target.value })}
             required
+            disabled={readOnly}
           />
         </Field>
         <Field label="Model" className="mt-0">
@@ -212,14 +222,14 @@ export function AutomationForm({
             value={values.runner_model}
             onValueChange={(runner_model) => set({ runner_model })}
             options={modelOptions}
-            disabled={!models}
+            disabled={!models || readOnly}
             defaultLabel={
               models
                 ? `Default (${runnerOptions.find((m) => m.id === runnerDefault)?.label ?? runnerDefault})`
                 : undefined
             }
             placeholder={modelsError ? 'Model catalog unavailable' : 'Loading models…'}
-          />
+            />
         </Field>
       </FormSection>
 
@@ -229,14 +239,14 @@ export function AutomationForm({
         </p>
       ) : null}
       <div className="flex items-center gap-2">
-        <Button type="submit" loading={busy} disabled={!models}>
+        {!readOnly ? <Button type="submit" loading={busy} disabled={!models}>
           {busy ? null : <Check className="size-4" aria-hidden />}
           Save automation
-        </Button>
+        </Button> : null}
         <Button type="button" variant="secondary" onClick={onCancel}>
           Cancel
         </Button>
-        {footerAction ? <div className="ml-auto">{footerAction}</div> : null}
+        {!readOnly && footerAction ? <div className="ml-auto">{footerAction}</div> : null}
       </div>
     </EntityFormLayout>
   );
