@@ -475,7 +475,10 @@ type ReviewStageOutput = {
 
 async function publishReviewReadiness(stageRunId: number): Promise<void> {
   await publishReviewReadinessCheckForStage(stageRunId).catch((error) =>
-    console.error('turbodiff: publishing review readiness check failed', error),
+    console.error('turbodiff: publishing review readiness check failed', {
+      stageRunId,
+      error: error instanceof Error ? error.message : String(error),
+    }),
   );
 }
 
