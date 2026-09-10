@@ -44,6 +44,13 @@ const boundary = vi.hoisted(() => {
 vi.mock('@cloudflare/sandbox', () => ({ collectFile: vi.fn() }));
 vi.mock('cloudflare:workers', () => ({
   env: {
+    ARTIFACTS: {
+      get: async (key: string) =>
+        boundary.files.has(key) ? { text: async () => boundary.files.get(key)! } : null,
+      put: async (key: string, content: string) => {
+        boundary.files.set(key, content);
+      },
+    },
     AI_GATEWAY_ACCOUNT_ID: 'test-account',
     AI_GATEWAY_ID: 'test-gateway',
     AI_GATEWAY_API_TOKEN: 'test-only-gateway-secret',
@@ -122,6 +129,20 @@ beforeEach(() => {
   boundary.runs.length = 0;
   boundary.tier = 'trivial';
   boundary.exec.mockImplementation(async (command: string, options?: ExecOptions) => {
+    if (command.startsWith('opencode export ')) {
+      boundary.files.set(
+        options!.env!.TURBODIFF_SESSION_FILE!,
+        JSON.stringify({ info: { id: 'ses_testplanning123' }, messages: [] }),
+      );
+    }
+    if (command.startsWith('opencode import ')) {
+      return {
+        success: true,
+        exitCode: 0,
+        stdout: 'Imported session: ses_testplanning123',
+        stderr: '',
+      };
+    }
     if (command.startsWith('opencode run ')) {
       const env = options?.env ?? {};
       const prompt = boundary.files.get(env.TURBODIFF_AGENT_PROMPT ?? '') ?? '';
@@ -150,7 +171,12 @@ beforeEach(() => {
         );
       }
     }
-    return { success: true, exitCode: 0, stdout: '', stderr: '' };
+    return {
+      success: true,
+      exitCode: 0,
+      stdout: '{"type":"text","sessionID":"ses_testplanning123","part":{"text":"Done"}}',
+      stderr: '',
+    };
   });
 });
 
@@ -189,6 +215,7 @@ describe('task model across planning and verification', () => {
     expect(boundary.runs[0].prompt).toContain('/workspace/plan-out/tier.txt');
     expect(boundary.updatePlan).toHaveBeenCalledWith(10, { tier: 'trivial' });
     expect(boundary.runs[1].prompt).toContain('at most 4');
+    expect(boundary.runs[1].env.TURBODIFF_AGENT_SESSION).toBe('ses_testplanning123');
     expect(boundary.updatePlan).toHaveBeenCalledWith(
       10,
       expect.objectContaining({

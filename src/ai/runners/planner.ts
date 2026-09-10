@@ -14,6 +14,11 @@ import {
 } from '../../data/db.ts';
 import { persistAgentLog } from '../runtime/agent-runs.ts';
 import { runCodingAgent } from '../runtime/coding-agent.ts';
+import {
+  exportPlanningSession,
+  importPlanningSession,
+  PLANNING_CONFIG,
+} from '../runtime/planning-session.ts';
 import { resolveRunnerAuth } from '../runtime/runner-auth.ts';
 import { runnerSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
@@ -151,26 +156,47 @@ async function runAgent(
   planId: number,
   // The task's model snapshot (plans.runner_model); null is legacy-only.
   model: string | null,
+  resume = false,
 ): Promise<void> {
   const auth = await resolveRunnerAuth(undefined, model);
   const scrubRun = (value: string) => redactSecrets(scrub(value), Object.values(auth.vars));
+  const sessionKey = `planning-sessions/${planId}.json`;
+  const saved = resume ? await env.ARTIFACTS.get(sessionKey) : null;
+  const sessionId = saved
+    ? await importPlanningSession(sandbox, auth, CLONE_DIR, await saved.text())
+    : null;
   await sandbox.writeFile(`${OUT_DIR}/task.md`, prompt);
   const res = await runCodingAgent(sandbox, auth, {
     promptFile: `${OUT_DIR}/task.md`,
     cwd: CLONE_DIR,
     timeout: AGENT_TIMEOUT_MS,
+    sessionId,
+    configExtensionJson: PLANNING_CONFIG,
   });
-  await persistAgentLog(kind, scrubRun(`${res.resultText}\n${res.stderr}`.trim()), res.success, {
-    planId,
-  });
+  await persistAgentLog(
+    kind,
+    scrubRun(`${res.resultText}\n${res.stderr}`.trim()),
+    res.success,
+    { planId },
+    scrubRun(res.stdout),
+  );
   if (!res.success) {
     throw new Error(
       `planning agent exited ${res.exitCode}: ${scrubRun(`${res.stdout}\n${res.stderr}`).trim().slice(-1_000)}`,
     );
   }
+  if (!res.codingSessionId) throw new Error('Planning agent did not return a session');
+  const snapshot = await exportPlanningSession(sandbox, auth, CLONE_DIR, res.codingSessionId);
+  await env.ARTIFACTS.put(sessionKey, scrubRun(snapshot), {
+    httpMetadata: { contentType: 'application/json' },
+  });
 }
 
 const ATTACH_DIR = '/workspace/plan-attachments';
+const PLANNING_RESEARCH_RULES = `Work directly in this session; delegation is disabled for planning.
+Use targeted searches and bounded file reads to resolve the implementation decisions. Stop exploring once the affected files and behavior are established; do not survey unrelated modules or audit the whole repository.
+Reuse the prior analysis and tool results. On a resumed turn the checkout may have been refreshed, so verify relevant facts that may have changed, then address the new answers or feedback. Do not repeat the initial discovery pass.
+Write the requested outputs as soon as the decisions are resolved. Validate their structure once, then finish.`;
 
 // User-uploaded context files (R2) pulled into the sandbox with the same
 // signed /artifacts capability URLs verification uses. Returns sandbox paths.
@@ -217,6 +243,7 @@ function analyzePrompt(
     const repo = repos[0];
     return `You are a planning agent for ${repo.owner}/${repo.name}. You are in a read-only checkout — study the code but do NOT modify it.
 Keep the analysis proportionate: for a small, localized change, use at most 10 lines and ask questions only for a genuine blocker.
+${PLANNING_RESEARCH_RULES}
 Analyze the feature requirements below against the actual codebase, then write these files (create the directory if needed):
 
 1. ${OUT_DIR}/analysis.md — a short grounding analysis: which files/modules this touches, how it fits existing conventions, and any risks.
@@ -233,6 +260,7 @@ ${extra}`;
   }
   return `You are a planning agent for a feature spanning ${repos.length} repositories. You are in read-only checkouts — study the code but do NOT modify it.
 Keep the analysis proportionate: for a small, localized change, use at most 10 lines and ask questions only for a genuine blocker.
+${PLANNING_RESEARCH_RULES}
 ## Repositories
 ${reposList(dirs)}
 
@@ -265,6 +293,7 @@ function planPrompt(
     return `You are a planning agent for ${repo.owner}/${repo.name}. You are in a read-only checkout — study the code but do NOT modify it.
 ${trivial ? '\nThis request is classified TRIVIAL: a small, localized change. The plan must be proportionate — a reader should grasp it in seconds.\n' : ''}
 Produce an implementation plan for the feature below, grounded in the real code, then write these files:
+${PLANNING_RESEARCH_RULES}
 
 1. ${OUT_DIR}/plan.md — ${trivial ? 'a brief plan (≤15 lines): the exact files to edit and what changes in each. No background essays, no scope-decision narratives.' : 'a file-level implementation plan: what changes in which files, in what order, and why. Concrete enough for an implementation agent to follow without further questions. Constraint: no preamble, no background essays, no surveys of options you rejected; do NOT copy code from the repo or write out full implementations — when logic genuinely needs showing, a few lines of pseudocode or a signature is the ceiling. Prefer naming the file/function and saying what changes over showing how the code will look.'}
 2. ${OUT_DIR}/acceptance.json — a JSON array of at most ${trivial ? 4 : 8} machine-checkable acceptance criteria (strings), each about the observable behavior of the change itself. Rules:
@@ -289,6 +318,7 @@ ${trivial ? '\nThis request is classified TRIVIAL: a small, localized change. Th
 ${reposList(dirs)}
 
 Produce ONE implementation plan for the feature below, grounded in the real code across ALL repositories above, designed as a single coherent feature — not one plan per repo. Then write these files:
+${PLANNING_RESEARCH_RULES}
 
 1. ${OUT_DIR}/plan.md — a file-level implementation plan: what changes in which files, in what order, and why. Concrete enough for an implementation agent to follow without further questions.${trivial ? '' : ' Constraint: no preamble, no background essays, no surveys of options you rejected; do NOT copy code from the repo or write out full implementations — when logic genuinely needs showing, a few lines of pseudocode or a signature is the ceiling. Prefer naming the file/function and saying what changes over showing how the code will look.'} Write one "## <owner>/<name>" section per repository listed above, so each repo's slice of the plan is identifiable.
 2. ${OUT_DIR}/acceptance.json — a JSON array of at most ${trivial ? 4 : 8} machine-checkable acceptance criteria (strings), each about the observable behavior of the change itself. Rules:
@@ -358,6 +388,7 @@ export async function runPlanAnalyze(planId: number): Promise<void> {
         'plan_analyze',
         planId,
         plan.runner_model,
+        true,
       );
       const planMd = await readText(sandbox, `${OUT_DIR}/plan.md`);
       const summary = await readText(sandbox, `${OUT_DIR}/summary.md`);
@@ -451,6 +482,7 @@ export async function runPlanRefine(planId: number): Promise<void> {
       'plan_refine',
       planId,
       plan.runner_model,
+      true,
     );
     const planMd = await readText(sandbox, `${OUT_DIR}/plan.md`);
     const summary = await readText(sandbox, `${OUT_DIR}/summary.md`);

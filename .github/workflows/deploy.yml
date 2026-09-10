@@ -59,6 +59,9 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
+      - name: Planning runtime (pinned OpenCode)
+        run: pnpm vp run test:planning
+
       - name: Validate Drizzle migrations
         run: pnpm vp run db:check
 
