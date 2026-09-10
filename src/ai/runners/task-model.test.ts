@@ -159,6 +159,12 @@ beforeEach(() => {
           '/workspace/plan-out/acceptance.json',
           '["Manual tasks activate the indicator"]',
         );
+        if (boundary.tier !== 'trivial') {
+          boundary.files.set(
+            '/workspace/plan-out/summary.md',
+            'Update the running indicator to include manual tasks.',
+          );
+        }
       } else if (env.TURBODIFF_AGENT_PROMPT === '/workspace/verify-out-20/task.md') {
         boundary.files.set(
           '/workspace/verify-out-20/results.json',
@@ -231,6 +237,10 @@ describe('task model across planning and verification', () => {
 
     expect(boundary.updatePlan).toHaveBeenCalledWith(10, { tier: 'standard' });
     expect(boundary.runs[1].prompt).toContain('at most 8');
+    expect(boundary.updatePlan).toHaveBeenCalledWith(
+      10,
+      expect.objectContaining({ status: 'plan_ready' }),
+    );
   });
 
   it('uses the selected model for criteria rewrites after a human-directed fix', async () => {
