@@ -7,3 +7,4 @@ worker-configuration.d.ts
 *.pem
 public/cockpit/
 public/app/
+.DS_Store

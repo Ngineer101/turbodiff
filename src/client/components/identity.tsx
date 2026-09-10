@@ -234,8 +234,8 @@ export function TelemetryStrip({
 }
 
 // CertStrip: the sealed paper object a merged, verified feature earns.
-// `ceremony` plays the seal-pop entrance — set it only on a live
-// transition to sealed, never on an already-sealed page load.
+// `ceremony` plays a quiet seal fade-in — set it only on a live transition
+// to sealed, never on an already-sealed page load.
 export function CertStrip({
   sealed,
   ceremony = false,
