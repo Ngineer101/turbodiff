@@ -89,7 +89,7 @@ const CSS = `
 	.author { display: flex; align-items: center; gap: 0.9rem; font-style: normal; }
 	.author img {
 		width: 48px; height: 48px; border-radius: 50%; flex-shrink: 0;
-		border: 1px solid var(--line-2); box-shadow: 1px 1px 0 var(--line); background: var(--raised);
+		border: 1px solid var(--line-2); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28); background: var(--raised);
 	}
 	.author b { display: block; font-size: 0.95rem; font-weight: 600; line-height: 1.3; }
 	.author span { font-family: var(--mono); font-size: 0.75rem; color: var(--mute); }

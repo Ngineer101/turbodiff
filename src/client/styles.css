@@ -36,20 +36,20 @@
      the accent on purpose — the app is yellow where it is busy. */
   --color-warn: #d9a521;
   --color-hold: #ffc72c;
-  /* Paper edges: 1px for cards, controls and stamps; 2px for media and
-     popovers; 3px for dialogs. Hover keeps the same offset. --shadow-sticker*
-     sit under dark surfaces; --shadow-edge* sit under yellow fills. */
+  /* Soft depth (Linear): low-opacity blurred shadows instead of hard paper
+     offsets. Larger tokens sit under larger surfaces (controls → cards →
+     popovers → dialogs). --shadow-*-live is a quiet accent ring for busy. */
   --color-shadow: var(--color-line);
   --color-shadow-live: var(--color-accent);
   --color-sticker-edge: var(--color-ink);
-  --shadow-sticker: 1px 1px 0 var(--color-shadow);
-  --shadow-sticker-lg: 2px 2px 0 var(--color-shadow);
-  --shadow-sticker-live: 1px 1px 0 var(--color-shadow-live);
-  --shadow-sticker-xl: 3px 3px 0 var(--color-shadow);
-  --shadow-edge: 1px 1px 0 var(--color-sticker-edge);
-  --shadow-edge-lg: 2px 2px 0 var(--color-sticker-edge);
-  --shadow-edge-sm: 1px 1px 0 var(--color-sticker-edge);
-  --shadow-edge-xs: 1px 1px 0 var(--color-sticker-edge);
+  --shadow-sticker: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --shadow-sticker-lg: 0 4px 12px rgba(0, 0, 0, 0.32);
+  --shadow-sticker-live: 0 0 0 1px color-mix(in srgb, var(--color-accent) 45%, transparent);
+  --shadow-sticker-xl: 0 12px 32px rgba(0, 0, 0, 0.42);
+  --shadow-edge: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --shadow-edge-lg: 0 4px 12px rgba(0, 0, 0, 0.32);
+  --shadow-edge-sm: 0 1px 2px rgba(0, 0, 0, 0.24);
+  --shadow-edge-xs: 0 1px 1px rgba(0, 0, 0, 0.22);
 
   /* Syntax-highlight hues (rendered markdown only). The UI chrome stays
      bone and yellow; code gets a real multi-hue palette so tokens are
@@ -68,6 +68,11 @@
   --animate-overlay-in: overlay-in 0.2s ease-out;
   --animate-dialog-in: dialog-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   --animate-sheet-in: sheet-in 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Motion: one snappy standard curve for hovers and menus, one emphasized
+     curve for panel entrances. Interactive elements share --ease-standard. */
+  --ease-standard: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @layer base {
@@ -77,19 +82,6 @@
   body {
     @apply bg-bg font-sans text-sm text-ink antialiased;
   }
-  /* Paper tooth: a fixed fractal-noise layer over everything. It's what
-     separates a painted sign from flat dark gray — clearly visible grain,
-     but neutral so it never fights the text. */
-  body::after {
-    content: '';
-    position: fixed;
-    inset: 0;
-    z-index: 9999;
-    pointer-events: none;
-    opacity: 0.85;
-    mix-blend-mode: overlay;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3'/%3E%3CfeColorMatrix values='0 0 0 0 0.5 0 0 0 0 0.52 0 0 0 0 0.56 0 0 0 0.3 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
-  }
   ::selection {
     background: color-mix(in srgb, var(--color-accent) 35%, transparent);
   }
@@ -97,6 +89,12 @@
     outline: 2px solid color-mix(in srgb, var(--color-accent) 70%, transparent);
     outline-offset: 2px;
   }
+}
+
+/* Line icons: Linear's thinner, even stroke across the whole Lucide set,
+   applied once via the class Lucide renders on every glyph. */
+svg.lucide {
+  stroke-width: 1.5px;
 }
 
 @keyframes pulse-dot {
@@ -195,31 +193,25 @@
 
 /* --- B+A identity: Control Room signals + Job Ticket artifacts --- */
 
-/* Status sticker (Job Ticket): a tilted mono word. Outlined by default, with
-   a worn-ink noise mask so it reads as stamped rather than printed; colour
+/* Status sticker (Job Ticket): a flat mono chip that names an outcome. Colour
    comes from the caller (text + border share currentColor). `.stamp-seal` is
-   the filled yellow sticker reserved for the sealed outcome. */
+   the filled yellow chip reserved for the sealed outcome. Calmed from the old
+   tilted, worn-ink sticker to a clean Linear pill. */
 .stamp {
   display: inline-block;
-  transform: rotate(-6deg);
   font-family: var(--font-mono);
-  font-weight: 700;
-  letter-spacing: 0.16em;
-  border: 2px solid currentColor;
-  border-radius: 4px;
-  padding: 0 0.5em;
-  opacity: 0.85;
-  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='40'%3E%3Cfilter id='r'%3E%3CfeTurbulence baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.5 0.5'/%3E%3C/filter%3E%3Crect width='120' height='40' filter='url(%23r)'/%3E%3C/svg%3E");
-  mask-size: cover;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+  border-radius: 9999px;
+  padding: 0.05em 0.6em;
 }
 .stamp-seal {
   border: 0;
-  padding: 2px 0.7em;
+  padding: 0.1em 0.7em;
   background: var(--color-accent);
   color: var(--color-accent-ink);
-  box-shadow: var(--shadow-edge-xs);
-  opacity: 1;
-  mask-image: none;
+  box-shadow: none;
 }
 
 /* Indicator lamp glow (Control Room). The dot itself is sized/tinted by the
@@ -234,64 +226,15 @@
   box-shadow: 0 0 9px 2px color-mix(in srgb, var(--color-danger) 40%, transparent);
 }
 
-/* Guarded control (launch-console merge): a hazard band along the button's
-   own top edge — clipped by the button's radius so it reads as part of the
-   control, not a sticker floating above it. */
-.guarded {
-  overflow: hidden;
-}
-.guarded::before {
-  content: '';
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 4px;
-  background: repeating-linear-gradient(
-    -45deg,
-    rgba(19, 18, 16, 0.65),
-    rgba(19, 18, 16, 0.65) 4px,
-    var(--color-hold) 4px,
-    var(--color-hold) 8px
-  );
-}
-
-/* The merge ceremony: the sticker slams down (oversized and light, then a
-   hard settle into the .stamp resting pose) and the certificate seal pops
-   in once the sticker has landed. Applied only when the merge happens while
-   the user is watching — see the cockpit's justMerged transition guard. */
-@keyframes stamp-slam {
-  0% {
-    opacity: 0;
-    transform: rotate(-14deg) scale(2.4);
-  }
-  55% {
-    opacity: 1;
-    transform: rotate(-5deg) scale(0.92);
-  }
-  75% {
-    transform: rotate(-6.5deg) scale(1.06);
-  }
-  100% {
-    opacity: 1;
-    transform: rotate(-6deg) scale(1);
-  }
-}
+/* The merge ceremony, calmed to a Linear-quiet settle: the sticker fades up
+   and the seal fades in a beat later — no slam, tilt, or overshoot. Applied
+   only when the merge happens while the user is watching — see the cockpit's
+   justMerged transition guard. */
 .stamp-ceremony {
-  animation: stamp-slam 0.5s cubic-bezier(0.34, 1.3, 0.5, 1) both;
-}
-
-@keyframes seal-pop {
-  0% {
-    transform: scale(0);
-  }
-  70% {
-    transform: scale(1.3);
-  }
-  100% {
-    transform: scale(1);
-  }
+  animation: rise-in 0.3s var(--ease-standard) both;
 }
 .seal-ceremony {
-  animation: seal-pop 0.35s 0.45s ease-out both;
+  animation: overlay-in 0.25s 0.15s var(--ease-standard) both;
 }
 
 @media (prefers-reduced-motion: reduce) {

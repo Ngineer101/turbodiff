@@ -4,18 +4,19 @@ import { Loader2 } from 'lucide-react';
 import { cn } from '../../lib/utils.ts';
 
 export const buttonVariants = cva(
-  'inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-md font-medium whitespace-nowrap transition-[color,background-color,border-color,transform,translate,box-shadow] duration-120 ease-out disabled:pointer-events-none disabled:opacity-50',
+  'inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-md font-medium whitespace-nowrap transition-[color,background-color,border-color,transform,box-shadow,filter] duration-120 ease-standard disabled:pointer-events-none disabled:opacity-50',
   {
     variants: {
       variant: {
-        // Keep the 1px paper edge steady on hover; pressing travels into it.
+        // Filled accent with a soft shadow; a press dims it a hair instead of
+        // travelling into a paper edge.
         default:
-          'bg-accent font-semibold text-accent-ink shadow-edge hover:bg-accent-bright active:translate-x-px active:translate-y-px active:shadow-none',
+          'bg-accent font-semibold text-accent-ink shadow-edge-sm hover:bg-accent-bright active:brightness-95',
         secondary:
-          'border border-line-2 bg-transparent text-ink hover:border-accent hover:bg-raised active:scale-[0.97]',
+          'border border-line-2 bg-transparent text-ink hover:border-accent hover:bg-raised active:brightness-95',
         danger:
-          'border border-danger/40 bg-transparent text-danger hover:bg-danger/10 active:scale-[0.97]',
-        ghost: 'text-mute hover:bg-raised hover:text-ink active:scale-[0.97]',
+          'border border-danger/40 bg-transparent text-danger hover:bg-danger/10 active:brightness-95',
+        ghost: 'text-mute hover:bg-raised hover:text-ink active:brightness-95',
       },
       // Mobile floors: every button reaches a comfortable thumb target on
       // touch widths without changing the compact desktop density.

@@ -39,7 +39,7 @@ const CSS = `
 			radial-gradient(120% 90% at 30% 0%, rgba(255,255,255,0.5), transparent 60%),
 			var(--paper);
 		border-radius: 6px;
-		box-shadow: 3px 3px 0 var(--accent);
+		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 	}
 	.cert::after {
 		content: ""; position: absolute; inset: 0; border-radius: 6px; pointer-events: none;
@@ -173,7 +173,7 @@ const CSS = `
 	.colophon a { color: var(--accent); text-decoration: none; }
 	.colophon a:hover { text-decoration: underline; }
 	@media (max-width: 860px) {
-		.cert { grid-template-columns: 1fr; box-shadow: 2px 2px 0 var(--accent); }
+		.cert { grid-template-columns: 1fr; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); }
 		.stub { border-left: 0; border-top: 2px dashed rgba(36,42,50,0.5); }
 		.stub::before { top: -12px; left: -12px; }
 		.stub::after { top: -12px; left: auto; right: -12px; bottom: auto; }
