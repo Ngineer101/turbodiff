@@ -105,6 +105,17 @@ export async function proxyAiGatewayRequest(
     },
   );
   const headers = new Headers();
+  if (!upstream.ok) {
+    // Gateway analytics can omit rejected wholesale requests. Record failures
+    // at our actual HTTP boundary without logging prompts or credentials.
+    console.warn('turbodiff: AI Gateway request failed', {
+      model: grant.model,
+      endpoint,
+      status: upstream.status,
+      ray: upstream.headers.get('cf-ray'),
+      retryAfter: upstream.headers.get('retry-after'),
+    });
+  }
   for (const name of [
     'content-type',
     'cf-ray',

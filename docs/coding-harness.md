@@ -96,6 +96,23 @@ mounted skills remain available.
 
 ## Performance and reliability choices
 
+Planning disables OpenCode's `task` tool through an explicit permission, including
+under `--auto`. This prevents parallel exploration sessions from multiplying
+gateway retries and losing their research on failure. The planner reuses one
+conversation: it exports the completed session to private R2 task data and imports
+it before refinement, so tool results survive a replaced sandbox. Legacy tasks
+without a saved session still start with their recorded analysis. A saved session
+that cannot be imported fails explicitly rather than silently repeating paid work.
+The checkout is refreshed on refinement; the prompt tells the agent to verify
+relevant changed facts and focus on the new answers or feedback. The eight-minute
+agent timeout is unchanged.
+
+`vp run test:planning` runs the pinned OpenCode executable against a local scripted
+Responses provider through the real model-grant proxy. It verifies a 429 retry,
+tool execution, disabled delegation, and context recovery after deleting the CLI's
+local database. Only the provider is scripted; no production resources are used.
+The check does not measure live model speed or guarantee a planning duration.
+
 - OpenCode is installed once in the sandbox image, not downloaded during a
   run. Its version is pinned, and the Sandbox base image exactly matches the
   resolved SDK version.

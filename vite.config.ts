@@ -94,6 +94,11 @@ export default defineConfig({
         dependsOn: ['db:migrate'],
         cache: false,
       },
+      'test:planning': {
+        command:
+          "pnpm --package=opencode-ai@1.18.29 dlx -c 'node --test scripts/planning-runtime.test.mjs'",
+        cache: false,
+      },
       'test:schema': { command: 'node scripts/db-schema-test.mjs' },
       'test:worker': {
         command: 'vp test --config vitest.worker.config.ts',

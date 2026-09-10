@@ -1,6 +1,6 @@
 import type { ExecOptions, ExecResult } from '@cloudflare/sandbox';
 import type { CliUsage } from '../../shared/usage.ts';
-import { runnerEnvironment, type RunnerAuth } from './runner-auth.ts';
+import { runnerEnvironment, type RunnerAuth } from './runner-config.ts';
 import {
   codingAgentResultText,
   codingAgentSessionId,

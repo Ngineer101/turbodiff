@@ -1,20 +1,14 @@
 import { env } from 'cloudflare:workers';
 import { resolveRunnerModel } from '../../data/models.ts';
-import { isJsonObject, parseJson, type JsonObject } from '../../shared/json.ts';
 import {
   AI_GATEWAY_GRANT_TTL_MS,
   createAiGatewayGrant,
 } from '../../integrations/security/ai-gateway-grant.ts';
 
-export type RunnerAuthMode = 'claude_subscription' | 'gateway';
+import type { RunnerAuth } from './runner-config.ts';
 
-export interface RunnerAuth {
-  mode: 'gateway';
-  // Secrets: callers must redact these from surfaced output.
-  vars: Record<string, string>;
-  // Provider/model id understood by Cloudflare AI Gateway's unified catalog.
-  model: string;
-}
+export type RunnerAuthMode = 'claude_subscription' | 'gateway';
+export type { RunnerAuth } from './runner-config.ts';
 
 export async function resolveRunnerAuth(
   requested?: RunnerAuthMode,
@@ -35,6 +29,7 @@ export async function resolveRunnerAuth(
   const normalizedModel = normalizeRunnerModel(model ?? (await resolveRunnerModel()));
   return {
     mode: 'gateway',
+    baseURL: `${env.PUBLIC_BASE_URL}/ai-proxy/v1`,
     vars: {
       TURBODIFF_AI_GATEWAY_GRANT: await createAiGatewayGrant(
         env.AI_GATEWAY_API_TOKEN,
@@ -60,68 +55,4 @@ export function normalizeRunnerModel(model: string): string {
   if (selected === 'anthropic/claude-fable-5-1') return 'anthropic/claude-fable-5.1';
   if (selected === 'anthropic/claude-haiku-4-5-20251001') return 'anthropic/claude-haiku-4.5';
   return selected;
-}
-
-function runnerConfig(auth: RunnerAuth, extensionJson?: string): string {
-  let extension: JsonObject = {};
-  if (extensionJson) {
-    const parsed = parseJson(extensionJson);
-    if (!isJsonObject(parsed)) throw new Error('runner config extension must be a JSON object');
-    extension = parsed;
-  }
-  const existingProvider = isJsonObject(extension.provider) ? extension.provider : {};
-  const configuredGateway = isJsonObject(existingProvider['cloudflare-ai-gateway'])
-    ? existingProvider['cloudflare-ai-gateway']
-    : {};
-  const existingModels = isJsonObject(configuredGateway.models) ? configuredGateway.models : {};
-  const existingOptions = isJsonObject(configuredGateway.options) ? configuredGateway.options : {};
-  const modelProvider = auth.model.startsWith('openai/')
-    ? '@ai-sdk/openai'
-    : auth.model.startsWith('anthropic/')
-      ? '@ai-sdk/anthropic'
-      : '@ai-sdk/openai-compatible';
-  return JSON.stringify({
-    ...extension,
-    $schema: 'https://opencode.ai/config.json',
-    share: 'disabled',
-    enabled_providers: ['cloudflare-ai-gateway'],
-    provider: {
-      ...existingProvider,
-      'cloudflare-ai-gateway': {
-        ...configuredGateway,
-        options: {
-          ...existingOptions,
-          apiKey: '{env:TURBODIFF_AI_GATEWAY_GRANT}',
-          baseURL: `${env.PUBLIC_BASE_URL}/ai-proxy/v1`,
-        },
-        models: {
-          ...existingModels,
-          [auth.model]: { name: auth.model, provider: { npm: modelProvider } },
-        },
-      },
-    },
-  });
-}
-
-export function runnerEnvironment(
-  auth: RunnerAuth,
-  extra: Record<string, string> = {},
-  configExtensionJson?: string,
-) {
-  return {
-    ...auth.vars,
-    TURBODIFF_RUNNER_MODEL: `cloudflare-ai-gateway/${auth.model}`,
-    OPENCODE_CONFIG_CONTENT: runnerConfig(auth, configExtensionJson),
-    OPENCODE_DISABLE_AUTOUPDATE: 'true',
-    OPENCODE_DISABLE_LSP_DOWNLOAD: 'true',
-    OPENCODE_DISABLE_TERMINAL_TITLE: 'true',
-    OPENCODE_DISABLE_MODELS_FETCH: 'true',
-    // Repository-owned OpenCode config/plugins are untrusted harness code.
-    // AGENTS.md and mounted Agent Skills remain discoverable independently.
-    OPENCODE_DISABLE_PROJECT_CONFIG: 'true',
-    OPENCODE_DISABLE_DEFAULT_PLUGINS: 'true',
-    OPENCODE_CLIENT: 'turbodiff',
-    CI: 'true',
-    ...extra,
-  };
 }
