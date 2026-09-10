@@ -163,14 +163,12 @@ function SidebarNav({ collapsed }: { collapsed: boolean }) {
             title={collapsed ? `${label} (${i + 1})` : undefined}
             aria-label={collapsed ? label : undefined}
             className={cn(
-              'flex items-center border-l-2 font-mono text-[11px] tracking-[0.14em] uppercase transition-colors',
-              collapsed ? 'justify-center px-0 py-2' : 'gap-2.5 px-3 py-[7px]',
-              active
-                ? 'border-accent bg-accent/8 text-accent'
-                : 'border-transparent text-mute hover:bg-raised/60 hover:text-ink',
+              'flex items-center rounded-md font-mono text-[11px] tracking-[0.14em] uppercase transition-colors duration-120 ease-standard',
+              collapsed ? 'justify-center px-0 py-2' : 'gap-2.5 px-2.5 py-[7px]',
+              active ? 'bg-raised text-ink' : 'text-mute hover:bg-raised/60 hover:text-ink',
             )}
           >
-            <Icon className="size-3.5" aria-hidden />
+            <Icon className={cn('size-3.5', active && 'text-accent')} aria-hidden />
             <span className={cn(collapsed && 'hidden')}>{label}</span>
             <Kbd className={cn('ml-auto', collapsed && 'hidden')}>{i + 1}</Kbd>
           </Link>
@@ -201,11 +199,11 @@ function BottomTabs() {
               aria-label={label}
               aria-current={active ? 'page' : undefined}
               className={cn(
-                'flex min-w-0 flex-1 flex-col items-center gap-1.5 border-t-2 py-2.5 font-mono text-[9px] tracking-[0.08em] uppercase transition-colors active:scale-95',
-                active ? 'border-accent text-accent' : 'border-transparent text-mute',
+                'flex min-w-0 flex-1 flex-col items-center gap-1.5 py-2.5 font-mono text-[9px] tracking-[0.08em] uppercase transition-colors active:scale-95',
+                active ? 'text-ink' : 'text-mute',
               )}
             >
-              <Icon className="size-3.5" aria-hidden />
+              <Icon className={cn('size-3.5', active && 'text-accent')} aria-hidden />
               <span className="max-w-full truncate px-0.5">{short}</span>
             </Link>
           );

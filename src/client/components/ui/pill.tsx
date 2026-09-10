@@ -11,12 +11,12 @@ const pillVariants = cva(
   {
     variants: {
       tone: {
-        neutral: 'border-line-2 text-mute',
-        on: 'border-go/40 text-go-bright',
-        running: 'border-hold/40 text-hold',
-        accent: 'border-accent/40 text-accent',
-        red: 'border-danger/40 text-danger',
-        warn: 'border-warn/40 text-warn',
+        neutral: 'border-line-2 bg-raised/50 text-mute',
+        on: 'border-go/30 bg-go/10 text-go-bright',
+        running: 'border-hold/30 bg-hold/10 text-hold',
+        accent: 'border-accent/30 bg-accent/10 text-accent',
+        red: 'border-danger/30 bg-danger/10 text-danger',
+        warn: 'border-warn/30 bg-warn/10 text-warn',
       },
     },
     defaultVariants: { tone: 'neutral' },
