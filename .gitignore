@@ -8,3 +8,4 @@ worker-configuration.d.ts
 public/cockpit/
 public/app/
 .vercel
+.DS_Store

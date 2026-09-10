@@ -333,9 +333,11 @@ function stageResultOutput(result: Awaited<ReturnType<typeof dispatchChangeRevie
     if (result.skipped.length > 0) output.skipped = result.skipped;
     return output;
   }
+
   if (result.kind === 'nothing_to_do') {
     return { kind: result.kind, reason: result.reason, tier: result.tier, skipped: result.skipped };
   }
+
   return { kind: result.kind, reason: result.reason };
 }
 

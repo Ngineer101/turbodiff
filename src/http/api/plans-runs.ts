@@ -53,10 +53,12 @@ export function registerPlanRunRoutes(app: Hono<ApiEnv>) {
   app.post('/factory/plans/:id/approve', async (c) => {
     const plan = await authorizedPlan(c);
     if (!plan) return c.json({ error: 'unknown plan' }, 404);
+
     const { session } = c.get('user');
     // The approver authors the generated commit (src/domain/attribution.ts).
     const featureIds = await approvePlan(plan.id, { login: session.login, id: session.userId });
     if (featureIds === null) return c.json({ error: 'plan is not ready for approval' }, 409);
+
     // One independent feature per repo — generation runs fully in parallel.
     await enqueueFactoryMessages(featureIds.map((featureId) => ({ kind: 'generate', featureId })));
     return c.json({ ok: true, feature_ids: featureIds });
