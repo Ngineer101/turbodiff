@@ -34,10 +34,8 @@ export interface ApiReview {
   missing_paths: string[];
   coverage_head_sha: string | null;
   published_head_sha: string | null;
-  verification_status: 'skipped' | 'completed' | 'failed' | 'incomplete' | null;
   file_evidence: {
     path: string;
-    patch_delivered: boolean;
     disposition: 'reviewed' | 'blocked' | null;
     evidence: string | null;
   }[];
@@ -131,13 +129,10 @@ export type ApiReviewFindingFeedback = 'useful' | 'false_positive' | 'fixed' | '
 
 export interface ApiReviewQuality {
   stats: {
-    candidates: number;
     published: number;
     labeled: number;
     true_positives: number;
     false_positives: number;
-    avg_verification_latency_ms: number | null;
-    verification_cost_usd: number;
   };
   findings: {
     id: number;
@@ -149,7 +144,6 @@ export interface ApiReviewQuality {
     line: number;
     severity: 'P1' | 'P2';
     body: string;
-    verification_reason: string | null;
     feedback: ApiReviewFindingFeedback | null;
     created_at: string;
   }[];

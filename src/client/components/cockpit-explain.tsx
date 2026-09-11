@@ -13,8 +13,7 @@ import { cn } from '../lib/utils.ts';
 import { Lamp } from './identity.tsx';
 import { Button } from './ui/button.tsx';
 
-// The Explain tab of the cockpit review workspace (docs/explain-tab.md): a
-// show-me document beside the raw diff. One
+// A show-me document beside the raw diff. One
 // sentence per block, then the smallest code-shape sketch that makes the
 // point, each with jump refs back into the Diff tab. Mirrors the diff
 // layout — a sticky outline where the file tree sits, the document where

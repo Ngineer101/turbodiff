@@ -169,6 +169,13 @@
       "when": 1789004826423,
       "tag": "0023_review_chunk_budgets",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1789118209358,
+      "tag": "0024_simplify-review-foundation",
+      "breakpoints": true
     }
   ]
 }

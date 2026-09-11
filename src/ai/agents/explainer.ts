@@ -29,8 +29,8 @@ function deliveryConfig() {
 
 export function Explainer(props: AgentProps) {
   const cfg = deliveryConfig();
-  // Same gateway path as the reviewer (see PrReviewer): thinking stays off
-  // until the gateway accepts the adaptive thinking parameter.
+  // This legacy Flue adapter keeps thinking off until its gateway path accepts
+  // the adaptive thinking parameter.
   useModel(cfg.model, { thinkingLevel: 'off' });
   useTool(makeSubmitExplanation(props.id, cfg.featureId, cfg.changedPaths));
 

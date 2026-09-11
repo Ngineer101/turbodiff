@@ -1,6 +1,9 @@
 import type { Sandbox } from '@cloudflare/sandbox';
 import { env, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
+import { implementerAgent, type ImplementInput } from '../../agents/implementer.ts';
+import { runAgent } from '../../agents/run.ts';
+import type { RepositoryChangeArtifact } from '../../artifacts/change.ts';
 import { githubRequest as gh } from '../../integrations/github/client.ts';
 import { persistAgentLog } from '../runtime/agent-runs.ts';
 import { runCodingAgent, type CliUsage } from '../runtime/coding-agent.ts';
@@ -19,11 +22,7 @@ import { resolveRunnerAuth } from '../runtime/runner-auth.ts';
 import { runnerSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
 import { mountSkills } from '../runtime/skills.ts';
-import {
-  prepareCachedWorktree,
-  pushHeadCommand,
-  worktreeChanged,
-} from '../runtime/repository-workspace.ts';
+import { prepareCachedWorktree, pushHeadCommand } from '../runtime/repository-workspace.ts';
 import {
   remoteSourceOf,
   resolveWorkspaceRemote,
@@ -36,8 +35,8 @@ import {
   describePushFailure,
   installationToken,
 } from '../../integrations/github/app.ts';
-import { UNTRUSTED_CONTENT_RULES } from '../../domain/prompt-security.ts';
 import { notifyAutomationLive } from '../../services/live-updates.ts';
+import { readRepositoryChangeArtifact } from '../runtime/repository-change-artifact.ts';
 
 // A recurring, clock-driven counterpart to the generation workflow: a
 // user-authored prompt runs on a schedule (src/services/automation-poll.ts) against
@@ -55,6 +54,7 @@ const CACHE_DIR = '/workspace/repo-cache';
 const workDir = (runId: number) => `/workspace/automation-${runId}`;
 const specFile = (runId: number) => `/workspace/automation-spec-${runId}.md`;
 const prFile = (runId: number) => `/workspace/automation-pr-${runId}.md`;
+const notesFile = (runId: number) => `/workspace/automation-notes-${runId}.md`;
 const AGENT_TIMEOUT_MS = 20 * 60_000;
 const CHECK_TIMEOUT_MS = 12 * 60_000;
 
@@ -69,28 +69,6 @@ function branchName(automation: AutomationRow, runId: number): string {
     .replace(/^-+|-+$/g, '')
     .slice(0, 40);
   return `turbodiff/automation-${automation.id}-${runId}-${slug}`;
-}
-
-function automationPrompt(ctx: RunContext): string {
-  return `You are an automation agent running a scheduled task in a fresh checkout of ${ctx.owner}/${ctx.name}.
-
-Follow the instructions below. Rules:
-- Investigate and make only the minimal changes needed to accomplish the task.
-- Match the repository's existing conventions: style, structure, naming, idioms.
-- Do NOT run dependency installs, builds, or test suites unless the task itself
-  requires it — the harness runs the repository's check command after you finish.
-- Do NOT run git commit or git push; the harness handles git.
-- If nothing needs to change, make no edits — a clean working tree is a valid
-  "no changes needed" outcome, not a failure.
-- When you do make changes, write ${prFile(ctx.runId)}: a concise pull-request
-  description — 1-4 bullet points covering what changed and why.
-
-${UNTRUSTED_CONTENT_RULES}
-
-## Automation: ${ctx.automationName}
-
-${ctx.prompt}
-`;
 }
 
 function sandboxFor(repo: { owner: string; name: string }): Sandbox {
@@ -123,6 +101,23 @@ type RunContext = {
   // run-scoped credentials without re-reading the repo row.
   remoteSource: RemoteSource;
 };
+
+function implementationInput(ctx: RunContext): ImplementInput {
+  return {
+    operation: 'implement',
+    repository: `${ctx.owner}/${ctx.name}`,
+    title: ctx.automationName,
+    instructions: ctx.prompt,
+    scope: 'standard',
+    testing: 'harness-only',
+    noChangeOutcome: 'allowed',
+    check: { kind: 'harness', command: ctx.checkCommand },
+    outputFiles: {
+      summary: prFile(ctx.runId),
+      notes: notesFile(ctx.runId),
+    },
+  };
+}
 
 const QUICK = {
   retries: { limit: 3, delay: '30 seconds', backoff: 'exponential' },
@@ -198,47 +193,69 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
       );
 
       // THE paid step. retries.limit 1 = at most two agent runs per instance.
+      const implementInput = implementationInput(ctx);
       const agentRan = await step.do(
         'run coding agent',
         { retries: { limit: 1, delay: '5 minutes' }, timeout: '23 minutes' },
-        async (): Promise<{ changed: boolean; usage: CliUsage | null }> => {
-          const auth = await resolveRunnerAuth(ctx.runnerModel);
-          const sandbox = sandboxFor(ctx);
-          await mountSkills(sandbox, WORK, await listEnabledSkillsForRepo(ctx.repositoryId));
-          // Mount the repo's MCP connections through the Worker's relay:
-          // the sandbox only ever holds run-scoped grants, never connection
-          // credentials (see lib/mcp-proxy.ts).
-          const connections = await listRepoConnections(ctx.repositoryId, 'automations');
-          const mcp = await buildSandboxMcpConfig(connections, ctx.repositoryId);
-          const scrubValues = [...Object.values(auth.vars), ...(mcp?.secrets ?? [])];
-          const scrub = (s: string) => redactSecrets(s, scrubValues);
-          await sandbox.writeFile(specFile(ctx.runId), automationPrompt(ctx));
-          const agent = await runCodingAgent(sandbox, auth, {
-            promptFile: specFile(ctx.runId),
-            cwd: WORK,
-            timeout: AGENT_TIMEOUT_MS,
-            env: NPM_CACHE_ENV,
-            configExtensionJson: mcp?.configJson,
+        async (): Promise<{ artifact: RepositoryChangeArtifact; usage: CliUsage | null }> => {
+          let usage: CliUsage | null = null;
+          const artifact = await runAgent(implementerAgent, implementInput, {
+            model: ctx.runnerModel,
+            execute: async (request, output) => {
+              if (request.agentId !== implementerAgent.id || request.repositoryAccess !== 'write') {
+                throw new Error('automation executor only accepts the write-capable implementer');
+              }
+
+              const auth = await resolveRunnerAuth(request.model);
+              const sandbox = sandboxFor(ctx);
+              await mountSkills(sandbox, WORK, await listEnabledSkillsForRepo(ctx.repositoryId));
+              // Mount the repo's MCP connections through the Worker's relay:
+              // the sandbox only ever holds run-scoped grants, never connection
+              // credentials (see lib/mcp-proxy.ts).
+              const connections = await listRepoConnections(ctx.repositoryId, 'automations');
+              const mcp = await buildSandboxMcpConfig(connections, ctx.repositoryId);
+              const scrubValues = [...Object.values(auth.vars), ...(mcp?.secrets ?? [])];
+              const scrub = (s: string) => redactSecrets(s, scrubValues);
+              await sandbox.exec(
+                `rm -f ${implementInput.outputFiles.summary} ${implementInput.outputFiles.notes}`,
+              );
+              await sandbox.writeFile(specFile(ctx.runId), request.prompt);
+              const agent = await runCodingAgent(sandbox, auth, {
+                promptFile: specFile(ctx.runId),
+                cwd: WORK,
+                timeout: AGENT_TIMEOUT_MS,
+                env: NPM_CACHE_ENV,
+                configExtensionJson: mcp?.configJson,
+              });
+              usage = agent.usage;
+              const resultText = agent.resultText;
+              await persistAgentLog(
+                'automation',
+                scrub(`${resultText}\n${agent.stderr}`.trim()),
+                agent.success,
+                { automationRunId: ctx.runId },
+              );
+              if (!agent.success) {
+                // Scrubbed: this message persists to automation_runs.error and
+                // renders in the dashboard for every installation member.
+                throw new Error(
+                  `automation agent exited ${agent.exitCode}: ${scrub(`${resultText}\n${agent.stderr}`.trim()).slice(-1_000)}`,
+                );
+              }
+              return readRepositoryChangeArtifact(
+                sandbox,
+                WORK,
+                output,
+                implementInput.outputFiles,
+                `${ctx.automationName} — automated change; see the diff.`,
+              );
+            },
           });
-          const resultText = agent.resultText;
-          await persistAgentLog(
-            'automation',
-            scrub(`${resultText}\n${agent.stderr}`.trim()),
-            agent.success,
-            { automationRunId: ctx.runId },
-          );
-          if (!agent.success) {
-            // Scrubbed: this message persists to automation_runs.error and
-            // renders in the dashboard for every installation member.
-            throw new Error(
-              `automation agent exited ${agent.exitCode}: ${scrub(`${resultText}\n${agent.stderr}`.trim()).slice(-1_000)}`,
-            );
-          }
-          return { changed: await worktreeChanged(sandbox, WORK), usage: agent.usage };
+          return { artifact, usage };
         },
       );
 
-      if (!agentRan.changed) {
+      if (agentRan.artifact.kind === 'no-change') {
         await step.do('record no_changes', QUICK, async () => {
           await finishAutomationRun(
             ctx.runId,
@@ -252,6 +269,7 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
         });
         return 'no_changes';
       }
+      const changeArtifact = agentRan.artifact;
 
       await step.do('commit', QUICK, async () => {
         const sandbox = sandboxFor(ctx);
@@ -328,10 +346,7 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
         async (): Promise<{ prNumber: number; commitSha: string }> => {
           const sandbox = sandboxFor(ctx);
           const commitSha = (await sandbox.exec(`git -C ${WORK} rev-parse HEAD`)).stdout.trim();
-          const summary = await sandbox
-            .readFile(prFile(ctx.runId))
-            .then((f) => f.content.trim() || undefined)
-            .catch(() => undefined);
+          const { summary, notes } = changeArtifact;
           const token = await installationToken(ctx.installationId);
           // SAFETY: GitHub's create-pull-request endpoint returns the created
           // PR object, which always carries its number.
@@ -343,7 +358,10 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
                 head: ctx.branch,
                 base: ctx.base,
                 body:
-                  (summary ?? `${ctx.automationName} — automated change; see the diff.`) +
+                  summary +
+                  (notes
+                    ? `\n\n<details><summary>Implementation notes</summary>\n\n${notes}\n\n</details>`
+                    : '') +
                   `\n\n---\n_opened by the "${ctx.automationName}" automation · turbodiff_`,
               }),
             })
@@ -369,7 +387,9 @@ export class AutomationWorkflow extends WorkflowEntrypoint<unknown, AutomationPa
         { retries: { limit: 1, delay: '10 seconds' }, timeout: '2 minutes' },
         async () => {
           await sandboxFor(ctx)
-            .exec(`rm -rf ${WORK} ${specFile(ctx.runId)} ${prFile(ctx.runId)}`)
+            .exec(
+              `rm -rf ${WORK} ${specFile(ctx.runId)} ${prFile(ctx.runId)} ${notesFile(ctx.runId)}`,
+            )
             .catch(() => {});
         },
       );

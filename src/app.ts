@@ -5,7 +5,6 @@ import { sql } from 'drizzle-orm';
 import { execute, withDatabaseScope } from './data/database.ts';
 import { Hono } from 'hono';
 import { registerExplainMetering } from './ai/explain/metering.ts';
-import { registerReviewMetering } from './ai/review/metering.ts';
 import { createApiRoutes } from './http/api.ts';
 import { handleEmailSignUp } from './http/auth-email.ts';
 import { renderCertificatePage } from './http/certificate-page.tsx';
@@ -30,8 +29,7 @@ setProvider(
   }),
 );
 
-// Accumulate per-turn token usage and cost onto review rows in PostgreSQL.
-registerReviewMetering();
+// The explainer still uses Flue; generic agent Workflows meter themselves.
 registerExplainMetering();
 
 const startedAt = Date.now();

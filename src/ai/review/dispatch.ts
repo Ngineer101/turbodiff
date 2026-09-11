@@ -1,64 +1,33 @@
-import { dispatch } from '@flue/runtime';
-import {
-  bindReviewSubmission,
-  listRepoConnections,
-  markReviewFailedById,
-  tryRecordReview,
-  type AgentRow,
-  type RepositoryRow,
-} from '../../data/db.ts';
-import { assignReviewModels } from '../../data/models.ts';
-import { connectionSnapshot } from '../../services/connections.ts';
-import { PrReviewer } from '../agents/pr-reviewer.ts';
+import { tryRecordReview, type AgentRow, type RepositoryRow } from '../../data/db.ts';
+import { failLifecycleReviewById } from '../../services/lifecycle.ts';
+import { startReviewWorkflow, type ReviewWorkflowParams } from '../workflows/review.ts';
 
-// How many changed paths a push re-review names outright; past this the
-// agent gets a count and works from the diff.
-const FOCUS_PATH_CAP = 50;
-
-// The re-review focus appended to a push dispatch: what moved since the
-// agent's last look, so it reconciles rather than re-reads the whole change.
-function pushFocus(delta: { sinceHead: string; files: string[] }): string {
-  const shown = delta.files.slice(0, FOCUS_PATH_CAP);
-  const more = delta.files.length - shown.length;
-  return (
-    `\n\nRe-review after a push. Files changed since your last review (head ${delta.sinceHead.slice(0, 7)}) — ` +
-    'prioritise these and reconcile your earlier findings; revisit other files only where these changes affect them:\n' +
-    shown.map((path) => `- ${path}`).join('\n') +
-    (more > 0 ? `\n- …and ${more} more` : '')
-  );
-}
-
-// Application boundary between webhook policy and the durable reviewer agent.
-// It owns admission, the non-secret delivery snapshot, and dispatch failure
-// cleanup; HTTP routes only call this use case.
+// Admits one exact review run and starts the generic review Workflow. The
+// database row is the idempotency boundary; the model receives typed input and
+// returns a typed artifact inside the Workflow.
 export async function dispatchReviewAgent(
   agent: AgentRow,
   repo: RepositoryRow,
   prNumber: number,
-  prUrl: string,
   trigger: string,
   opts: {
     riskTier?: string;
     modelOverride?: string;
     stageRunId?: number;
-    // The change head under review; recorded so a later push can diff from it.
     headSha?: string;
-    // Push re-review: what changed since this agent's last completed review.
     delta?: { sinceHead: string; files: string[] };
-    // Present for native change requests (docs/artifacts-provider.md): the
-    // same agent runs, with CR-backed tools swapped in by the pin.
     changeRequest?: { id: number; number: number };
   } = {},
 ): Promise<boolean> {
+  if (!opts.headSha) {
+    console.error(`turbodiff: refusing to start ${agent.slug} review without an exact head`);
+    return false;
+  }
   const instanceId = (
     opts.changeRequest
       ? `${agent.slug}--${repo.owner}--${repo.name}--cr-${opts.changeRequest.number}`
       : `${agent.slug}--${repo.owner}--${repo.name}--${prNumber}`
   ).toLowerCase();
-  const assignment = await assignReviewModels(
-    `${repo.id}:${prNumber}:${opts.headSha ?? 'unknown'}:${agent.slug}`,
-    opts.modelOverride ?? agent.model,
-  );
   const reviewId = await tryRecordReview(
     repo.id,
     repo.installation_id,
@@ -68,62 +37,38 @@ export async function dispatchReviewAgent(
     instanceId,
     opts.riskTier ?? null,
     opts.stageRunId ?? null,
-    opts.headSha ?? null,
+    opts.headSha,
   );
   if (reviewId === null) return false;
-  const connections = (await listRepoConnections(repo.id, 'reviews')).map(connectionSnapshot);
-  const baseAttributes = {
-    review_id: String(reviewId),
-    expected_head_sha: opts.headSha ?? '',
-    agent_slug: agent.slug,
-    agent_name: agent.name,
-    model: assignment.scout,
-    verifier_model: assignment.verifier,
-    diff_packet_chars: String(assignment.scoutPacketChars),
-    verifier_diff_packet_chars: String(assignment.verifierPacketChars),
-    experiment_key: assignment.experimentKey ?? '',
-    risk_tier: opts.riskTier ?? 'full',
-    ...(opts.changeRequest
+
+  const params: ReviewWorkflowParams = {
+    reviewId,
+    repositoryId: repo.id,
+    expectedRevision: opts.headSha,
+    model: opts.modelOverride ?? agent.model,
+    focus: { name: agent.name, instructions: agent.instructions },
+    changedSincePreviousReview: opts.delta
+      ? { revision: opts.delta.sinceHead, paths: opts.delta.files }
+      : null,
+    target: opts.changeRequest
       ? {
-          change_request: `${repo.owner}/${repo.name}#${opts.changeRequest.number}`,
-          change_request_id: String(opts.changeRequest.id),
+          kind: 'artifacts',
+          number: opts.changeRequest.number,
+          changeRequestId: opts.changeRequest.id,
         }
-      : { pull_request: `${repo.owner}/${repo.name}#${prNumber}` }),
-    trigger,
+      : { kind: 'github', number: prNumber },
   };
-  const attributes =
-    connections.length > 0
-      ? { ...baseAttributes, connections: JSON.stringify(connections) }
-      : baseAttributes;
 
   try {
-    const receipt = await dispatch(PrReviewer, {
-      id: instanceId,
-      idempotencyKey: `review-${reviewId}`,
-      message: {
-        kind: 'signal',
-        type: 'review.request',
-        tagName: 'review-request',
-        attributes,
-        body:
-          (opts.changeRequest
-            ? `Review change request #${opts.changeRequest.number} in ${repo.owner}/${repo.name} (${prUrl}) and post your review with the post_review tool.\n\n`
-            : `Review pull request #${prNumber} in ${repo.owner}/${repo.name} (${prUrl}) and post your review to GitHub.\n\n`) +
-          `Agent focus — ${agent.name}:\n${agent.instructions}` +
-          (opts.delta ? pushFocus(opts.delta) : ''),
-      },
-    });
-    await bindReviewSubmission(reviewId, receipt.submissionId);
+    await startReviewWorkflow(params);
+    return true;
   } catch (error) {
+    const reason = `workflow start failed: ${error instanceof Error ? error.message : String(error)}`;
     console.error(
-      `turbodiff: dispatch failed for ${instanceId} (${agent.slug} on ${repo.owner}/${repo.name}#${prNumber}):`,
+      `turbodiff: review workflow start failed for ${agent.slug} on ${repo.owner}/${repo.name}#${prNumber}:`,
       error,
     );
-    await markReviewFailedById(
-      reviewId,
-      `dispatch failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 1_000),
-    );
+    await failLifecycleReviewById(reviewId, reason.slice(0, 1_000));
     return false;
   }
-  return true;
 }

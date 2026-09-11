@@ -1,7 +1,6 @@
-// Domain policy: built-in review personas, seeded as per-installation agent rows (so users
-// can edit them like any custom agent). The generic reviewer scaffold in
-// src/ai/agents/pr-reviewer.ts owns process and posting rules; a persona's
-// instructions only steer WHAT the review hunts for.
+// Domain policy: built-in review focuses, seeded as per-installation agent rows so users
+// can edit them like custom definitions. The generic reviewer specification owns HOW to
+// review; these instructions only steer WHAT each invocation hunts for.
 
 export const DEFAULT_MODEL = 'cloudflare/anthropic/claude-sonnet-5';
 export const DEFAULT_AGENT_SLUG = 'review';

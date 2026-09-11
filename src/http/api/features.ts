@@ -292,9 +292,8 @@ export function registerFeatureCockpitRoutes(
         }
         const REVIEW_STALL_MS = 15 * 60_000;
         base.checks = (await listCrChecks(cr.id)).map((check) => {
-          // Only post_review resolves the review check; an agent that died
-          // mid-processing (e.g. model-gateway failure) leaves it 'running'
-          // forever — surface that honestly instead of eternal polling.
+          // A Workflow that dies before settlement can leave this check
+          // running; surface the shared stall cutoff instead of polling forever.
           const stalled =
             check.name === 'review' &&
             check.status === 'running' &&

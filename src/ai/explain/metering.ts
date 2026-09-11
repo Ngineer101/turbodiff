@@ -1,7 +1,7 @@
 import { observe } from '@flue/runtime';
 import { addExplanationUsage, failExplanation } from '../../data/db.ts';
 import { isExplainInstanceId } from '../../domain/explain.ts';
-import { settlementReason } from '../review/metering.ts';
+import { settlementReason } from '../runtime/flue-settlement.ts';
 
 // Explain-tab counterpart of registerReviewMetering: attributes model usage
 // to the explanation row by instance id, and fails a row whose run settled

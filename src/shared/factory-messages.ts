@@ -63,10 +63,6 @@ export interface ConflictResolveQueueMessage {
   prNumber: number;
 }
 
-export interface CrReviewQueueMessage {
-  kind: 'cr_review';
-  changeRequestId: number;
-}
 
 export interface CrMergeQueueMessage {
   kind: 'cr_merge';
@@ -83,5 +79,4 @@ export type FactoryMessage =
   | FixQueueMessage
   | ChatQueueMessage
   | ConflictResolveQueueMessage
-  | CrReviewQueueMessage
   | CrMergeQueueMessage;

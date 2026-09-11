@@ -18,7 +18,7 @@ import { Button } from '../components/ui/button.tsx';
 import { Card } from '../components/ui/card.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 import { api } from '../lib/api.ts';
-import { ago, fmtDuration, fmtUsd } from '../lib/format.ts';
+import { ago } from '../lib/format.ts';
 import { queryClient, reviewQualityQuery, reviewsQuery } from '../lib/queries.ts';
 
 const feedbackOptions = [
@@ -75,7 +75,7 @@ function ReviewReadinessCard({ review }: { review: ApiReview }) {
       </AccordionTrigger>
       <AccordionContent>
         <div className="space-y-4 pt-1 text-[0.82rem] text-ink-dim">
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <div className="font-mono text-[10px] tracking-[0.12em] text-mute uppercase">
                 Coverage
@@ -101,14 +101,7 @@ function ReviewReadinessCard({ review }: { review: ApiReview }) {
                 </div>
               ) : null}
             </div>
-            <div>
-              <div className="font-mono text-[10px] tracking-[0.12em] text-mute uppercase">
-                Verification
-              </div>
-              <div className="mt-1 font-mono text-sm text-ink">
-                {review.verification_status?.replaceAll('_', ' ') ?? 'Not recorded'}
-              </div>
-            </div>
+
             <div>
               <div className="font-mono text-[10px] tracking-[0.12em] text-mute uppercase">
                 Evidence head
@@ -151,14 +144,8 @@ function ReviewReadinessCard({ review }: { review: ApiReview }) {
                   <li key={item.path} className="rounded-lg border border-line/70 px-3 py-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <code className="text-[11px] text-ink">{item.path}</code>
-                      <Pill
-                        tone={
-                          item.patch_delivered && item.disposition === 'reviewed' ? 'on' : 'red'
-                        }
-                      >
-                        {item.patch_delivered
-                          ? (item.disposition ?? 'unacknowledged')
-                          : 'not delivered'}
+                      <Pill tone={item.disposition === 'reviewed' ? 'on' : 'red'}>
+                        {item.disposition ?? 'unacknowledged'}
                       </Pill>
                     </div>
                     {item.evidence ? (
@@ -234,7 +221,7 @@ export function ReviewQualityPage() {
     <>
       <PageTitle aside={<Muted>Last 30 days</Muted>}>Review quality</PageTitle>
       <p className="mt-1 text-[0.85rem] leading-relaxed text-mute">
-        Track verified findings and label their usefulness to improve future reviews.
+        Track published findings and label their usefulness to improve future reviews.
       </p>
 
       <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -246,25 +233,21 @@ export function ReviewQualityPage() {
         />
         <StatTile
           index={1}
-          label="Verifier retention"
-          value={percentage(data.stats.published, data.stats.candidates)}
-          sub={`${data.stats.published} of ${data.stats.candidates} candidates`}
+          label="Published findings"
+          value={String(data.stats.published)}
+          sub="Across completed reviews"
         />
         <StatTile
           index={2}
-          label="Verifier latency"
-          value={
-            data.stats.avg_verification_latency_ms === null
-              ? '—'
-              : fmtDuration(data.stats.avg_verification_latency_ms / 1000)
-          }
-          sub="Average verification time"
+          label="Feedback coverage"
+          value={percentage(data.stats.labeled, data.stats.published)}
+          sub={`${data.stats.labeled} findings labeled`}
         />
         <StatTile
           index={3}
-          label="Verifier cost"
-          value={fmtUsd(data.stats.verification_cost_usd)}
-          sub="Verification only"
+          label="False positives"
+          value={String(data.stats.false_positives)}
+          sub="Marked by reviewers"
         />
       </div>
 
@@ -295,7 +278,7 @@ export function ReviewQualityPage() {
       </SectionHeading>
 
       {data.findings.length === 0 ? (
-        <EmptyState>Verified findings will appear here after the next review.</EmptyState>
+        <EmptyState>Published findings will appear here after the next review.</EmptyState>
       ) : (
         <div className="space-y-3">
           {data.findings.map((finding) => (
@@ -333,12 +316,7 @@ export function ReviewQualityPage() {
                   <Markdown className="markdown-body--compact min-w-0 wrap-anywhere [&>:first-child]:mt-0! [&>:last-child]:mb-0!">
                     {finding.body}
                   </Markdown>
-                  {finding.verification_reason ? (
-                    <p className="mt-3 border-l-2 border-line-2 pl-3 text-xs leading-relaxed wrap-anywhere text-mute">
-                      <span className="font-medium text-ink-dim">Verifier: </span>
-                      {finding.verification_reason}
-                    </p>
-                  ) : null}
+
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-b-lg border-t border-line bg-surface-2 px-4 py-3">
                   <span className="font-mono text-[10px] tracking-[0.14em] text-mute uppercase">

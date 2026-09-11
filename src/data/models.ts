@@ -1,7 +1,5 @@
 import { sql } from 'drizzle-orm';
 import { DEFAULT_MODEL } from '../domain/personas.ts';
-import { weightedReviewModel } from '../domain/review-experiment.ts';
-import { reviewPacketChars } from '../domain/review-budget.ts';
 import { queryRows } from './database.ts';
 
 // --- Model catalog (deployment-wide, operator-managed via SQL) ---
@@ -19,9 +17,6 @@ export interface ModelRow {
   runner_default: boolean;
   runner_fast_default: boolean;
   reviewer_default: boolean;
-  reviewer_experiment_weight: number;
-  verifier_experiment_weight: number;
-  review_diff_tokens: number;
   enabled: boolean;
   sort_order: number;
   created_at: string;
@@ -122,44 +117,6 @@ export async function getReviewerModelCatalog(): Promise<SurfaceCatalog> {
   return reviewerCatalog(await enabledModelRows());
 }
 
-export async function assignReviewModels(
-  key: string,
-  scoutFallback: string,
-): Promise<{
-  scout: string;
-  verifier: string;
-  scoutPacketChars: number;
-  verifierPacketChars: number;
-  experimentKey: string | null;
-}> {
-  const rows = (await enabledModelRows()).filter((row) => row.for_reviewer);
-  const fallbackVerifier = reviewerCatalog(rows).defaultModel;
-  const scout = weightedReviewModel(
-    key,
-    'scout',
-    rows.map((row) => ({ model: gatewayId(row), weight: row.reviewer_experiment_weight })),
-    scoutFallback,
-  );
-  const verifier = weightedReviewModel(
-    key,
-    'verifier',
-    rows.map((row) => ({ model: gatewayId(row), weight: row.verifier_experiment_weight })),
-    fallbackVerifier,
-  );
-  const experimentKey =
-    scout.experimental || verifier.experimental
-      ? `weighted-v1:scout=${scout.model}:verifier=${verifier.model}`
-      : null;
-  const diffTokens = (model: string) =>
-    rows.find((row) => gatewayId(row) === model)?.review_diff_tokens ?? 64_000;
-  return {
-    scout: scout.model,
-    verifier: verifier.model,
-    scoutPacketChars: reviewPacketChars(diffTokens(scout.model)),
-    verifierPacketChars: reviewPacketChars(diffTokens(verifier.model)),
-    experimentKey,
-  };
-}
 
 export async function resolveRunnerModel(
   requested?: string | null,

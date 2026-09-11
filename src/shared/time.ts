@@ -17,8 +17,8 @@ export function parseUtc(ts: string): number {
   return Date.parse(hasZone ? normalized : `${normalized}Z`);
 }
 
-// A dispatched review that never completed and is older than this is presumed
-// dead (agent error before post_review) rather than still running. The UI's
+// A review Workflow that never completed and is older than this is presumed
+// dead rather than still running. The UI's
 // 'stalled' state, the dispatch sweep in tryRecordReview, and the dashboard
 // running counts must all agree on this cutoff, so they all derive from here.
 export const STALL_AFTER_MINUTES = 20;

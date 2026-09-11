@@ -35,7 +35,7 @@ const schemas = await db.query(`
 `);
 
 const counts = new Map(schemas.rows.map((row) => [row.table_schema, row.count]));
-if (counts.get('app') !== 42) throw new Error(`Expected 42 app tables, found ${counts.get('app')}`);
+if (counts.get('app') !== 41) throw new Error(`Expected 41 app tables, found ${counts.get('app')}`);
 if (counts.get('auth') !== 10)
   throw new Error(`Expected 10 auth tables, found ${counts.get('auth')}`);
 
@@ -131,14 +131,11 @@ await db.exec(`
     (repository_id, installation_id, pr_number, trigger_event, status, agent_instance_id)
   VALUES (3001, 1001, 42, 'opened', 'running', 'review--acme--rocket--42');
   INSERT INTO review_findings
-    (
-      review_id, candidate_index, path, line, side, severity, body, evidence,
-      failure_path, published, verifier_confidence, verifier_severity
-    )
+    (review_id, candidate_index, path, line, side, severity, body, evidence, failure_path)
   SELECT
     id, 0, 'src/index.ts', 12, 'RIGHT', 'P1', 'The guard is bypassed.',
     'The request reaches the mutation before authorization.',
-    'An unauthenticated request can mutate state.', true, 'high', 'P1'
+    'An unauthenticated request can mutate state.'
   FROM reviews WHERE agent_instance_id = 'review--acme--rocket--42';
   INSERT INTO auth."user"
     ("id", "name", "email", "createdAt", "updatedAt")

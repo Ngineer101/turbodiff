@@ -40,9 +40,9 @@ import { createWebhookRoutes, type WebhookRouteDependencies } from './webhooks.t
 import type { ReviewDispatcher } from '../services/change-review.ts';
 import {
   completeLifecycleRepair,
-  completeLifecycleReview,
+  completeLifecycleReviewById,
   completeLifecycleStage,
-  failLifecycleReview,
+  failLifecycleReviewById,
   resumeFailedStage,
   runLifecycleStage,
   scheduleFeatureDelivery,
@@ -64,6 +64,38 @@ function webhookApp(dependencies: WebhookRouteDependencies = {}) {
 
 function stageCommands(messages: FactoryMessage[]): RunStageCommand[] {
   return messages.filter((message): message is RunStageCommand => message.kind === 'run_stage');
+}
+
+async function activeReviewId(agentInstanceId: string): Promise<number> {
+  const row = await testDatabase()
+    .prepare(
+      `SELECT id FROM reviews
+       WHERE agent_instance_id = ?1 AND status = 'running'
+       ORDER BY id DESC LIMIT 1`,
+    )
+    .bind(agentInstanceId)
+    .first<{ id: number }>();
+  if (!row) throw new Error(`active review not found for ${agentInstanceId}`);
+  return row.id;
+}
+
+type CompleteReviewArgs = Parameters<typeof completeLifecycleReviewById> extends [number, ...infer R]
+  ? R
+  : never;
+
+async function completeLifecycleReview(
+  agentInstanceId: string,
+  ...args: CompleteReviewArgs
+): Promise<void> {
+  await completeLifecycleReviewById(await activeReviewId(agentInstanceId), ...args);
+}
+
+type FailReviewArgs = Parameters<typeof failLifecycleReviewById> extends [number, ...infer R]
+  ? R
+  : never;
+
+async function failLifecycleReview(agentInstanceId: string, ...args: FailReviewArgs): Promise<void> {
+  await failLifecycleReviewById(await activeReviewId(agentInstanceId), ...args);
 }
 
 async function signature(body: string): Promise<string> {
@@ -536,7 +568,7 @@ describe('composable feature delivery', () => {
     });
     const queued: FactoryMessage[] = [];
     const enqueue = async (message: FactoryMessage) => void queued.push(message);
-    const dispatch: ReviewDispatcher = async (agent, repo, prNumber, _url, trigger, options) => {
+    const dispatch: ReviewDispatcher = async (agent, repo, prNumber, trigger, options) => {
       await tryRecordReview(
         repo.id,
         repo.installation_id,
@@ -744,7 +776,7 @@ describe('composable feature delivery', () => {
       const queued: FactoryMessage[] = [];
       const enqueue = async (message: FactoryMessage) => void queued.push(message);
       const heads: (string | null)[] = [];
-      const dispatch: ReviewDispatcher = async (agent, repo, prNumber, _url, trigger, options) => {
+      const dispatch: ReviewDispatcher = async (agent, repo, prNumber, trigger, options) => {
         heads.push(options?.headSha ?? null);
         return (
           (await tryRecordReview(
@@ -919,7 +951,7 @@ describe('composable feature delivery', () => {
     });
     const queued: FactoryMessage[] = [];
     const enqueue = async (message: FactoryMessage) => void queued.push(message);
-    const dispatch: ReviewDispatcher = async (agent, repo, prNumber, _url, trigger, options) => {
+    const dispatch: ReviewDispatcher = async (agent, repo, prNumber, trigger, options) => {
       return (
         (await tryRecordReview(
           repo.id,
@@ -1056,7 +1088,7 @@ describe('composable feature delivery', () => {
     });
     const queued: FactoryMessage[] = [];
     const enqueue = async (message: FactoryMessage) => void queued.push(message);
-    const dispatch: ReviewDispatcher = async (agent, repo, prNumber, _url, trigger, options) =>
+    const dispatch: ReviewDispatcher = async (agent, repo, prNumber, trigger, options) =>
       (await tryRecordReview(
         repo.id,
         repo.installation_id,
@@ -1402,7 +1434,7 @@ describe('factory PR webhook decisions', () => {
     await updateFeature(featureId, { status: 'pr_opened', prNumber: 42 });
 
     const calls: { trigger: string }[] = [];
-    const dispatch: ReviewDispatcher = async (agent, repo, prNumber, _url, trigger, options) => {
+    const dispatch: ReviewDispatcher = async (agent, repo, prNumber, trigger, options) => {
       calls.push({ trigger });
       await tryRecordReview(
         repo.id,
@@ -1548,7 +1580,7 @@ describe('push re-reviews', () => {
       queued.push(options ? { message, options } : { message });
     };
     const calls: { slug: string; trigger: string; headSha?: string; delta?: unknown }[] = [];
-    const dispatch: ReviewDispatcher = async (agent, repo, prNumber, _url, trigger, options) => {
+    const dispatch: ReviewDispatcher = async (agent, repo, prNumber, trigger, options) => {
       const call: (typeof calls)[number] = { slug: agent.slug, trigger };
       if (options?.headSha) call.headSha = options.headSha;
       if (options?.delta) call.delta = options.delta;

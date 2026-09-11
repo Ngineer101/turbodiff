@@ -108,6 +108,11 @@
       "name": "turbodiff-artifacts-events",
       "class_name": "ArtifactsEventsWorkflow",
     },
+    {
+      "binding": "REVIEW_WORKFLOW",
+      "name": "turbodiff-review",
+      "class_name": "ReviewWorkflow",
+    },
   ],
   // Decouples factory runs (minutes) from the requests that trigger them
   // (seconds). One queue for both fix and generation messages, discriminated
@@ -151,14 +156,13 @@
       },
     ],
   },
-  // Every agent generates a Durable Object class named after its identity
-  // (PrReviewer -> FluePrReviewerAgent), and Cloudflare requires a migration
-  // entry for each one. Append a new tag when you add an agent:
-  // https://flueframework.com/docs/guide/cloudflare-target/#managing-migrations
+  // Flue agents and application Durable Objects require migration history.
+  // The old conversational reviewer was replaced by REVIEW_WORKFLOW in v5.
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["FluePrReviewerAgent"] },
     { "tag": "v2", "new_sqlite_classes": ["Sandbox"] },
     { "tag": "v3", "new_sqlite_classes": ["LiveUpdates"] },
     { "tag": "v4", "new_sqlite_classes": ["FlueExplainerAgent"] },
+    { "tag": "v5", "deleted_classes": ["FluePrReviewerAgent"] },
   ],
 }

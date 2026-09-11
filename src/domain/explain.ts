@@ -2,8 +2,7 @@ import * as v from 'valibot';
 import type { ExplanationDocument } from '../shared/api-types.ts';
 import { isJsonObject, type JsonValue } from '../shared/json.ts';
 
-// The Explain tab (docs/explain-tab.md): a show-me
-// document for a change — one sentence per block, then the smallest
+// A show-me document for a change — one sentence per block, then the smallest
 // code-shape sketch that makes the point, each anchored to the diff lines it
 // describes. The Explainer agent emits it through submit_explanation; the
 // cockpit renders it beside the raw diff. This module owns the document

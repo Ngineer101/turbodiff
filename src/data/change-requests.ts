@@ -248,6 +248,66 @@ export async function listCrComments(changeRequestId: number): Promise<CrComment
   `);
 }
 
+export interface NativeReviewPublication {
+  expectedHead: string;
+  findings: {
+    path: string;
+    line: number;
+    severity: 'P1' | 'P2';
+    body: string;
+  }[];
+  summary: string;
+  reviewStatus: 'approved' | 'changes_requested';
+  checkStatus: 'passed' | 'failed';
+  checkSummary: string;
+}
+
+// Publishes a native review atomically against one exact source head. A stale
+// workflow cannot leave a partial set of comments or overwrite the live
+// review/check state for a newer revision.
+export async function publishNativeReview(
+  changeRequestId: number,
+  publication: NativeReviewPublication,
+): Promise<boolean> {
+  return withTransaction(async (transaction) => {
+    const current = await transaction.execute<{ id: number }>(sql`
+      SELECT id FROM app.change_requests
+      WHERE id = ${changeRequestId} AND status = 'open'
+        AND source_head = ${publication.expectedHead}
+      FOR UPDATE
+    `);
+    if (!current.rows[0]) return false;
+
+    for (const finding of publication.findings) {
+      await transaction.execute(sql`
+        INSERT INTO app.cr_comments
+          (change_request_id, file, line, author, kind, severity, body)
+        VALUES (
+          ${changeRequestId}, ${finding.path}, ${finding.line}, 'turbodiff[bot]',
+          'finding', ${finding.severity}, ${finding.body}
+        )
+      `);
+    }
+    await transaction.execute(sql`
+      INSERT INTO app.cr_comments
+        (change_request_id, file, line, author, kind, severity, body)
+      VALUES (${changeRequestId}, NULL, NULL, 'turbodiff[bot]', 'summary', NULL, ${publication.summary})
+    `);
+    await transaction.execute(sql`
+      UPDATE app.change_requests SET review_status = ${publication.reviewStatus}
+      WHERE id = ${changeRequestId}
+    `);
+    await transaction.execute(sql`
+      INSERT INTO app.cr_checks (change_request_id, name, status, summary)
+      VALUES (${changeRequestId}, 'review', ${publication.checkStatus}, ${publication.checkSummary})
+      ON CONFLICT (change_request_id, name) DO UPDATE SET
+        status = EXCLUDED.status, summary = EXCLUDED.summary,
+        updated_at = CURRENT_TIMESTAMP
+    `);
+    return true;
+  });
+}
+
 export async function upsertCrCheck(
   changeRequestId: number,
   name: 'check' | 'review' | 'verify',

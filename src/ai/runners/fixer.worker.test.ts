@@ -23,7 +23,7 @@ import {
 import type { FactoryMessage, FixQueueMessage } from '../../shared/factory-messages.ts';
 import type { RunStageCommand } from '../../domain/lifecycle-contract.ts';
 import {
-  completeLifecycleReview,
+  completeLifecycleReviewById,
   runLifecycleStage,
   scheduleChangeReview,
 } from '../../services/lifecycle.ts';
@@ -168,7 +168,8 @@ describe('coordinator-owned repair', () => {
     });
     const reviewCommand = stageCommands(queued)[0];
     if (!reviewCommand) throw new Error('review stage was not scheduled');
-    const dispatch: ReviewDispatcher = async (agent, repo, prNumber, _url, trigger, options) => {
+    let admittedReviewId: number | null = null;
+    const dispatch: ReviewDispatcher = async (agent, repo, prNumber, trigger, options) => {
       const id = await tryRecordReview(
         repo.id,
         repo.installation_id,
@@ -179,14 +180,16 @@ describe('coordinator-owned repair', () => {
         options?.riskTier ?? null,
         options?.stageRunId ?? null,
       );
+      admittedReviewId = id;
       return id !== null;
     };
     await runLifecycleStage(reviewCommand, dispatch, {
       computeRisk: async () => 'full',
       enqueue,
     });
-    await completeLifecycleReview(
-      'review--acme--api--42',
+    if (admittedReviewId === null) throw new Error('review was not admitted');
+    await completeLifecycleReviewById(
+      admittedReviewId,
       'https://github.com/acme/api/pull/42#review',
       1,
       'request_changes',

@@ -295,12 +295,6 @@ function IntegrationCard({ conn, repos }: { conn: ApiIntegration; repos: ApiInte
         </div>
       </div>
 
-      {conn.auth_type === 'api_key' && conn.kind === 'mcp' ? (
-        <p className="mt-3 text-xs text-mute/80">
-          Mounted into reviews only when the header name is exactly "Authorization" — otherwise this
-          credential is verified by Test but not used at review time (a @flue/runtime limitation).
-        </p>
-      ) : null}
 
       {conn.kind === 'mcp' ? (
         repos.length === 0 ? (

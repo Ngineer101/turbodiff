@@ -85,15 +85,9 @@ export function serializeReview(
     missing_paths: r.missing_paths ?? [],
     coverage_head_sha: r.coverage_head_sha,
     published_head_sha: r.published_head_sha,
-    verification_status: r.verification_status,
     file_evidence: fileEvidence
       .filter((item) => item.review_id === r.id)
-      .map(({ path, patch_delivered, disposition, evidence }) => ({
-        path,
-        patch_delivered,
-        disposition,
-        evidence,
-      })),
+      .map(({ path, disposition, evidence }) => ({ path, disposition, evidence })),
     state: reviewState(r),
     error: r.error,
     review_url: r.review_url,

@@ -5,7 +5,7 @@ import type { JsonValue } from '../shared/json.ts';
 import { execute, queryOne, queryRows, withTransaction } from './database.ts';
 import { minutesAgo } from './sql.ts';
 
-// Explain-tab documents (src/domain/explain.ts). Rows are written by the
+// Rows are written by the
 // explain dispatcher (running), the Explainer agent's submit tool (ready),
 // and the settlement observer (failed); the cockpit reads the latest row
 // for the head it is showing.

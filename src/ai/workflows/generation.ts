@@ -1,7 +1,6 @@
 import type { Sandbox } from '@cloudflare/sandbox';
 import { env, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { NonRetryableError } from 'cloudflare:workflows';
-import type { ZodType } from 'zod';
 import {
   implementerAgent,
   type ImplementInput,
@@ -27,11 +26,7 @@ import { resolveRunnerAuth } from '../runtime/runner-auth.ts';
 import { generationSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
 import { mountSkills } from '../runtime/skills.ts';
-import {
-  prepareCachedWorktree,
-  pushHeadCommand,
-  worktreeChanged,
-} from '../runtime/repository-workspace.ts';
+import { prepareCachedWorktree, pushHeadCommand } from '../runtime/repository-workspace.ts';
 import {
   remoteSourceOf,
   resolveWorkspaceRemote,
@@ -52,6 +47,7 @@ import { mintUserToken } from '../../services/user-tokens.ts';
 import { openNativeChangeRequest } from '../../services/change-requests.ts';
 import { notifyFeatureLive } from '../../services/live-updates.ts';
 import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
+import { readRepositoryChangeArtifact } from '../runtime/repository-change-artifact.ts';
 import { completeLifecycleStage } from '../../services/lifecycle.ts';
 import type { GenerateQueueMessage } from '../../shared/factory-messages.ts';
 
@@ -152,34 +148,6 @@ type RunContext = {
   // run-scoped credentials without re-reading the repo row.
   remoteSource: RemoteSource;
 };
-
-async function readOptionalText(sandbox: Sandbox, path: string): Promise<string | null> {
-  try {
-    return (await sandbox.readFile(path)).content.trim() || null;
-  } catch {
-    return null;
-  }
-}
-
-async function readImplementerArtifact<Output>(
-  sandbox: Sandbox,
-  workDirectory: string,
-  output: ZodType<Output>,
-  outputFiles: ImplementInput['outputFiles'],
-): Promise<Output> {
-  if (!(await worktreeChanged(sandbox, workDirectory))) {
-    return output.parse({ kind: 'no-change' });
-  }
-
-  const summary = await readOptionalText(sandbox, outputFiles.summary);
-  if (!summary) throw new Error(`implementer did not produce ${outputFiles.summary}`);
-
-  return output.parse({
-    kind: 'repository-change',
-    summary,
-    notes: await readOptionalText(sandbox, outputFiles.notes),
-  });
-}
 
 function implementationInput(ctx: RunContext, baselineFailure: string | null): ImplementInput {
   const check: ImplementInput['check'] =
@@ -472,7 +440,13 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
                   `generation agent exited ${agent.exitCode}: ${scrub(`${resultText}\n${agent.stderr}`.trim()).slice(-1_000)}`,
                 );
               }
-              return readImplementerArtifact(sandbox, WORK, output, implementInput.outputFiles);
+              return readRepositoryChangeArtifact(
+                sandbox,
+                WORK,
+                output,
+                implementInput.outputFiles,
+                `${ctx.title} — generated change; see the diff.`,
+              );
             },
           });
           return { artifact, usage, sessionId };
@@ -594,7 +568,13 @@ export class GenerationWorkflow extends WorkflowEntrypoint<unknown, GenerationPa
                     nextSessionId = null;
                     return output.parse({ kind: 'no-change' });
                   }
-                  return readImplementerArtifact(sandbox, WORK, output, repairInput.outputFiles);
+                  return readRepositoryChangeArtifact(
+                    sandbox,
+                    WORK,
+                    output,
+                    repairInput.outputFiles,
+                    `${ctx.title} — generated change; see the diff.`,
+                  );
                 },
               });
               return { ok, artifact, usage, sessionId: nextSessionId };

@@ -42,6 +42,7 @@ import {
 import { githubWorkspaceRemote, resolveWorkspaceRemote } from '../../integrations/git/provider.ts';
 import type { WorkspaceRemote } from '../../integrations/git/remotes.ts';
 import { refreshChangeRequest } from '../../services/change-requests.ts';
+import { scheduleChangeReview } from '../../services/lifecycle.ts';
 import { mountSkills } from '../runtime/skills.ts';
 import { fetchPushablePrHead, prTouchesWorkflowFiles } from '../runtime/pull-requests.ts';
 
@@ -390,13 +391,18 @@ ${UNTRUSTED_CONTENT_RULES}
     }
     const commit = (await sandbox.exec(`git -C ${CLONE_DIR} rev-parse HEAD`)).stdout.trim();
 
-    // A pushed native CR has a stale diff and verdict: recompute and
-    // re-review immediately rather than waiting on a push event.
+    // A pushed native CR has a stale diff and verdict. Refresh the canonical
+    // change, then schedule the normal review factory flow.
     if (cr && repoRow) {
-      await refreshChangeRequest(repoRow, cr).catch((err) =>
-        console.error(`turbodiff: post-chat refresh of CR ${cr.id} failed:`, err),
-      );
-      await enqueueFactoryMessage({ kind: 'cr_review', changeRequestId: cr.id });
+      const refreshed = await refreshChangeRequest(repoRow, cr);
+      if (refreshed.change_id) {
+        await scheduleChangeReview({
+          changeId: refreshed.change_id,
+          trigger: 'synchronize',
+          actor: 'chat',
+          idempotencyKey: `native-review:${refreshed.change_id}:chat:${refreshed.source_head ?? commit}`,
+        });
+      }
     }
     return { reply, outcome: 'changed', fixStatus: 'fixed', commit, usage: totalUsage };
   } finally {

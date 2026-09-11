@@ -35,7 +35,6 @@ export type ReviewDispatcher = (
   agent: AgentRow,
   repo: RepositoryRow,
   prNumber: number,
-  prUrl: string,
   trigger: string,
   opts?: DispatchOptions,
 ) => Promise<boolean>;
@@ -175,8 +174,6 @@ export async function dispatchChangeReviews(
 
   const headSha = push?.headSha ?? change.source_head;
   const dispatched: string[] = [];
-  const url =
-    change.external_url ?? `https://github.com/${repo.owner}/${repo.name}/pull/${change.number}`;
   for (const agent of agents.slice(0, budget)) {
     const options: DispatchOptions = { riskTier: selection.tier };
     if (modelOverride) options.modelOverride = modelOverride;
@@ -185,7 +182,7 @@ export async function dispatchChangeReviews(
     if (delta) {
       options.delta = { sinceHead: delta.sinceHead, files: delta.files.map((f) => f.filename) };
     }
-    if (await dispatch(agent, repo, change.number, url, trigger, options)) {
+    if (await dispatch(agent, repo, change.number, trigger, options)) {
       dispatched.push(agent.slug);
     }
   }

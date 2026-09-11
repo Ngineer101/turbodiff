@@ -11,25 +11,21 @@ function segment(path: string, body: string): string {
 }
 
 describe('review context', () => {
-  it('keeps a complete manifest and never slices a later file out of existence', () => {
+  it('keeps every reviewable file in the patch and manifest', () => {
     const first = segment('src/large.ts', 'x'.repeat(80));
     const ui = segment('src/client/button.tsx', 'button');
-    const snapshot = buildReviewDiffSnapshot(first + ui, first.length);
+    const snapshot = buildReviewDiffSnapshot(first + ui);
 
-    expect(snapshot.diff).toBe(first);
+    expect(snapshot.diff).toBe(first + ui);
     expect(snapshot.files.map((file) => file.path)).toEqual([
       'src/large.ts',
       'src/client/button.tsx',
     ]);
-    expect(snapshot.includedFiles).toEqual(['src/large.ts']);
-    expect(snapshot.remainingFiles).toEqual(['src/client/button.tsx']);
-    expect(snapshot.complete).toBe(false);
   });
 
   it('omits generated noise without requiring it for coverage', () => {
     const snapshot = buildReviewDiffSnapshot(
       segment('pnpm-lock.yaml', 'lock') + segment('src/app.ts', 'code'),
-      10_000,
     );
 
     expect(snapshot.files[0]).toMatchObject({
@@ -37,7 +33,8 @@ describe('review context', () => {
       reviewable: false,
       omittedReason: 'lockfile',
     });
-    expect(snapshot.includedFiles).toEqual(['src/app.ts']);
+    expect(snapshot.diff).toContain('[turbodiff: diff for pnpm-lock.yaml omitted — lockfile]');
+    expect(snapshot.diff).toContain('diff --git a/src/app.ts b/src/app.ts');
     expect(missingReviewFiles(snapshot.files, ['src/app.ts'])).toEqual([]);
   });
 
@@ -56,7 +53,6 @@ describe('review context', () => {
     expect(reviewPublicationEvent(true, false, true)).toBe('APPROVE');
     expect(reviewPublicationEvent(true, true, false)).toBe('REQUEST_CHANGES');
     expect(reviewPublicationEvent(false, true, true)).toBe('COMMENT');
-    expect(reviewPublicationEvent(true, false, true, false)).toBe('COMMENT');
   });
 
   it('keeps uncertainty distinct from a clean or blocking conclusion', () => {
@@ -64,6 +60,5 @@ describe('review context', () => {
     expect(reviewConclusion(false, true, true)).toBe('ready_with_warnings');
     expect(reviewConclusion(true, true, true)).toBe('not_ready');
     expect(reviewConclusion(false, false, false)).toBe('inconclusive');
-    expect(reviewConclusion(true, false, true, false)).toBe('inconclusive');
   });
 });

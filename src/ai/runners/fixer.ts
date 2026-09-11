@@ -26,7 +26,7 @@ import { installDependencies, NPM_CACHE_ENV } from '../runtime/sandbox-deps.ts';
 import { checkCommandUnrunnable, runCheckCommand } from '../runtime/check-command.ts';
 import { FIX_MAX_ATTEMPTS, type FixQueueMessage } from '../../shared/factory-messages.ts';
 import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
-import { completeLifecycleRepair } from '../../services/lifecycle.ts';
+import { completeLifecycleRepair, scheduleChangeReview } from '../../services/lifecycle.ts';
 import { resolveRunnerAuth } from '../runtime/runner-auth.ts';
 import { runnerSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
@@ -476,13 +476,18 @@ export async function runFix(params: FixParams): Promise<FixOutcome> {
       tested: !!params.testCommand,
       crId: cr?.id,
     });
-    // A fixed native CR has a stale diff and verdict: recompute and
-    // re-review immediately rather than waiting on the push event.
+    // A fixed native CR has a stale diff and verdict. Refresh the canonical
+    // change, then schedule the normal review factory flow.
     if (cr && repoRow) {
-      await refreshChangeRequest(repoRow, cr).catch((err) =>
-        console.error(`turbodiff: post-fix refresh of CR ${cr.id} failed:`, err),
-      );
-      await enqueueFactoryMessage({ kind: 'cr_review', changeRequestId: cr.id });
+      const refreshed = await refreshChangeRequest(repoRow, cr);
+      if (refreshed.change_id) {
+        await scheduleChangeReview({
+          changeId: refreshed.change_id,
+          trigger: 'synchronize',
+          actor: 'fixer',
+          idempotencyKey: `native-review:${refreshed.change_id}:fix:${refreshed.source_head ?? commit}`,
+        });
+      }
     }
     return {
       status: 'fixed',

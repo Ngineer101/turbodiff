@@ -1,12 +1,14 @@
 # AGENTS.md
 
-This is a [Flue](https://flueframework.com) project: agents are TypeScript functions.
-The app is Turbodiff, a multi-tenant GitHub App for AI PR review, hosted on Cloudflare
+Turbodiff is a multi-tenant software factory whose agents are pure TypeScript definitions.
+The app is hosted on Cloudflare
 Workers at <https://turbodiff.dev> (repo: <https://github.com/Ngineer101/turbodiff>).
 
 ## Layout
 
-- `src/ai/` — the generic `PrReviewer` agent, GitHub tools, review dispatch/metering, sandbox runners, runtime support, and durable Workflows. `runtime/` owns shared runner authentication, sandbox access, redaction, skill mounting, repository-workspace mechanics, and the model-neutral OpenCode adapter (`coding-agent.ts` plus structured event parsing); stage orchestration stays explicit in `runners/` and `workflows/`. A module whose first line is `'use agent'` exports durable agent identities. Review instance ids are `<agent-slug>--<owner>--<repo>--<pr>`.
+- `src/agents/` — pure agent definitions: Zod input/output contracts, prompts, and repository-access requirements. All definitions run through `runAgent()`; they never own persistence, publication, queues, or provider APIs.
+- `src/artifacts/` — typed semantic outputs passed between agents and factory stages.
+- `src/ai/` — sandbox runners, runtime support, and durable Workflows. `runtime/` owns runner authentication, sandbox access, redaction, skill mounting, repository-workspace mechanics, and the model-neutral OpenCode adapter; stage orchestration stays explicit in `runners/` and `workflows/`. Legacy modules whose first line is `'use agent'` are Flue durable identities and require Durable Object migrations.
 - `src/domain/` — pure policies and value logic: personas, scheduling, attribution, prompt security, skill rendering, and AI Gateway model/capability policy.
 - `src/data/` — Drizzle/PostgreSQL persistence through Cloudflare Hyperdrive. `schema.ts` is the schema source of truth, `database.ts` owns short-lived Hyperdrive clients, and `db.ts` is the stable facade; queries and row types are split across repositories, factory, agents, connections, reviews, usage, credentials, board, and automations.
 - `src/services/` — application use cases and authorization. The GitHub webhook service mirrors installations/repos and drives review/fix policy without depending on Hono. Queue producers use the typed `factory-queue.ts` gateway. `ai-gateway-proxy.ts` validates sandbox model capabilities and owns the upstream retry/streaming exchange.
@@ -17,7 +19,7 @@ Workers at <https://turbodiff.dev> (repo: <https://github.com/Ngineer101/turbodi
 - `src/cloudflare.ts` — Worker-level exports and non-HTTP handlers.
 - `db/migrations/` — Drizzle migrations for the PostgreSQL `app` and `auth` schemas. Generate from `src/data/schema.ts` with `vp exec drizzle-kit generate --name=<name>`, apply through a direct `DATABASE_URL` with `vp run db:migrate`, and verify with `vp run db:verify`. Worker traffic uses the `HYPERDRIVE` binding.
 - `public/` — static assets (logo), auto-served by the Cloudflare Vite plugin.
-- `wrangler.jsonc` — Worker config; every agent needs a Durable Object migration entry.
+- `wrangler.jsonc` — Worker config; every Flue durable identity needs a Durable Object migration entry, while generic agents run in Workflows.
 
 ## Commands
 
@@ -43,12 +45,12 @@ package.json script names, which is why dev/build/deploy exist only as tasks).
   quotes in `vite.config.ts`).
 - `vp exec <bin>` — escape hatch for anything a `vp` subcommand doesn't cover
   (e.g. `vp exec wrangler ...`).
-- `npx flue run src/ai/agents/pr-reviewer.ts --message "Hi"` — run the reviewer agent locally, no server.
+
 - `npx flue docs search <query>` — search the Flue docs from the terminal (then `flue docs read <path>`).
 
 ## Conventions
 
-- Reviews are tracked in PostgreSQL: dispatched rows insert as `running` with the `head_sha` under review; `post_review` flips them to `completed` and records the `finding_paths` its findings anchored to (both feed the push re-review policy in `src/domain/review-selection.ts`). A row still `running` after ~20 min renders as `stalled` on `/reviews`.
-- The reviewer model is set in `src/ai/agents/pr-reviewer.ts` (`thinkingLevel: 'off'` — see the comment there before changing it).
+- Reviews are exact-head `ReviewWorkflow` runs. `reviewerAgent` returns a Zod-validated artifact; orchestration persists it, publishes it through a provider adapter, and settles lifecycle state. Agents never publish their own output.
+- Review artifacts live at deterministic private R2 keys under `agent-artifacts/reviews/<review-id>/`; repair stages consume those artifacts rather than scraping published comments.
 - Hosted Flue agents call the named AI Gateway through `env.AI`. Sandbox coding runs call pinned OpenCode through `/ai-proxy/v1/*`; the permanent `AI_GATEWAY_API_TOKEN` remains Worker-only and the sandbox receives a short-lived capability bound to one exact model. Runner model ids are canonical Cloudflare ids (`provider/model` or `@cf/author/model`).
 - Runner models are operator-managed in `app.models`. Do not add source-code model lists or defaults; enabled `runner_default` and `runner_fast_default` rows are required.

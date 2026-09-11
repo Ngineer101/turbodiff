@@ -333,13 +333,12 @@ describe('review quality feedback', () => {
       ),
       testDatabase().prepare(
         `INSERT INTO review_findings
-          (id, review_id, candidate_index, path, line, side, severity, body, evidence,
-           failure_path, published, verifier_confidence, verifier_severity)
+          (id, review_id, candidate_index, path, line, side, severity, body, evidence, failure_path)
          VALUES
           (9101, 9001, 0, 'src/app.ts', 12, 'RIGHT', 'P1', 'authorization runs too late',
-           'mutation precedes requireUser', 'anonymous request -> mutation', true, 'high', 'P1'),
+           'mutation precedes requireUser', 'anonymous request -> mutation'),
           (9102, 9002, 0, 'src/private.ts', 7, 'RIGHT', 'P2', 'other tenant finding',
-           'private evidence', 'private path', true, 'high', 'P2')`,
+           'private evidence', 'private path')`,
       ),
     ]);
   }
@@ -389,33 +388,29 @@ describe('review quality feedback', () => {
     ).resolves.toMatchObject({ feedback: 'useful', feedback_by_github_id: 3001, stamped: true });
   });
 
-  it('returns tenant-scoped readiness and complete per-file delivery evidence', async () => {
+  it('returns tenant-scoped readiness and per-file artifact evidence', async () => {
     await testDatabase().batch([
       testDatabase().prepare(
         `INSERT INTO reviews
           (id, repository_id, installation_id, pr_number, trigger_event, status, conclusion,
            coverage_status, reviewable_file_count, covered_file_count, missing_paths,
-           coverage_head_sha, published_head_sha, verification_status)
+           coverage_head_sha, published_head_sha)
          VALUES
           (9201, 101, 1001, 27, 'opened', 'completed', 'ready_with_warnings',
-           'complete', 2, 2, '[]', 'abc123', 'abc123', 'completed'),
+           'complete', 2, 2, '[]', 'abc123', 'abc123'),
           (9202, 202, 2002, 28, 'opened', 'completed', 'ready',
-           'complete', 1, 1, '[]', 'private-sha', 'private-sha', 'completed')`,
+           'complete', 1, 1, '[]', 'private-sha', 'private-sha')`,
       ),
       testDatabase().prepare(
         `INSERT INTO review_file_evidence
-          (review_id, path, patch_delivered, disposition, evidence, delivered_at, acknowledged_at)
+          (review_id, path, disposition, evidence, acknowledged_at)
          VALUES
-          (9201, 'src/complete.ts', true, 'reviewed', 'Checked the authorization branch.',
-           CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-          (9201, 'src/chunked.ts', false, 'reviewed', 'Checked all paged diff chunks.',
-           NULL, CURRENT_TIMESTAMP),
-          (9202, 'src/private.ts', true, 'reviewed', 'Must not cross the tenant boundary.',
-           CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-      ),
-      testDatabase().prepare(
-        `INSERT INTO review_patch_deliveries (review_id, path, chunk_index, chunk_count)
-         VALUES (9201, 'src/chunked.ts', 0, 2), (9201, 'src/chunked.ts', 1, 2)`,
+          (9201, 'src/complete.ts', 'reviewed', 'Checked the authorization branch.',
+           CURRENT_TIMESTAMP),
+          (9201, 'src/blocked.ts', 'blocked', 'Could not validate generated code.',
+           CURRENT_TIMESTAMP),
+          (9202, 'src/private.ts', 'reviewed', 'Must not cross the tenant boundary.',
+           CURRENT_TIMESTAMP)`,
       ),
     ]);
 
@@ -433,10 +428,9 @@ describe('review quality feedback', () => {
       covered_file_count: 2,
       coverage_head_sha: 'abc123',
       published_head_sha: 'abc123',
-      verification_status: 'completed',
       file_evidence: [
-        { path: 'src/chunked.ts', patch_delivered: true, disposition: 'reviewed' },
-        { path: 'src/complete.ts', patch_delivered: true, disposition: 'reviewed' },
+        { path: 'src/blocked.ts', disposition: 'blocked' },
+        { path: 'src/complete.ts', disposition: 'reviewed' },
       ],
     });
     expect(JSON.stringify(payload)).not.toContain('private-sha');

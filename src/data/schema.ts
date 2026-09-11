@@ -448,11 +448,6 @@ export const models = appSchema.table(
     runnerDefault: boolean('runner_default').default(false).notNull(),
     runnerFastDefault: boolean('runner_fast_default').default(false).notNull(),
     reviewerDefault: boolean('reviewer_default').default(false).notNull(),
-    reviewerExperimentWeight: integer('reviewer_experiment_weight').default(0).notNull(),
-    verifierExperimentWeight: integer('verifier_experiment_weight').default(0).notNull(),
-    // Input budget reserved for diff packets. Operator-managed because model
-    // context windows differ; tool output is derived from this, not a global cap.
-    reviewDiffTokens: integer('review_diff_tokens').default(64000).notNull(),
     enabled: boolean().default(true).notNull(),
     sortOrder: integer('sort_order').default(0).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
@@ -471,18 +466,7 @@ export const models = appSchema.table(
     uniqueIndex('models_reviewer_default_unique')
       .on(table.reviewerDefault)
       .where(sql`reviewer_default`),
-    check(
-      'models_reviewer_experiment_weight_check',
-      sql`reviewer_experiment_weight >= 0 AND reviewer_experiment_weight <= 10000`,
-    ),
-    check(
-      'models_verifier_experiment_weight_check',
-      sql`verifier_experiment_weight >= 0 AND verifier_experiment_weight <= 10000`,
-    ),
-    check(
-      'models_review_diff_tokens_check',
-      sql`review_diff_tokens >= 8000 AND review_diff_tokens <= 200000`,
-    ),
+
   ],
 );
 
@@ -724,29 +708,8 @@ export const reviews = appSchema.table(
     model: text(),
     agentSlug: text('agent_slug'),
     agentInstanceId: text('agent_instance_id'),
-    // Durable Flue delivery identity. The instance id is intentionally reused
-    // across re-reviews; this id binds metering and settlement to one run.
-    submissionId: text('submission_id'),
     riskTier: text('risk_tier'),
     findingsCount: integer('findings_count'),
-    candidateCount: integer('candidate_count'),
-    verificationStatus: text('verification_status'),
-    verificationModel: text('verification_model'),
-    verificationInputTokens: bigint('verification_input_tokens', { mode: 'number' })
-      .default(0)
-      .notNull(),
-    verificationOutputTokens: bigint('verification_output_tokens', { mode: 'number' })
-      .default(0)
-      .notNull(),
-    verificationCostUsd: numeric('verification_cost_usd', {
-      precision: 20,
-      scale: 10,
-      mode: 'number',
-    })
-      .default(0)
-      .notNull(),
-    verificationLatencyMs: integer('verification_latency_ms'),
-    experimentKey: text('experiment_key'),
     stageRunId: bigint('stage_run_id', { mode: 'number' }).references(
       (): AnyPgColumn => stageRuns.id,
       { onDelete: 'set null' },
@@ -768,7 +731,7 @@ export const reviews = appSchema.table(
     // last reviewed head instead of re-tiering the whole PR. Null on rows
     // recorded before the column existed.
     headSha: text('head_sha'),
-    // Files the agent anchored findings to (post_review). A later push
+    // Files the review artifact anchored findings to. A later push
     // re-runs an approving agent only when its delta touches one of these.
     findingPaths: jsonb('finding_paths').$type<string[]>(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
@@ -777,9 +740,6 @@ export const reviews = appSchema.table(
   },
   (table) => [
     index('reviews_agent_instance_idx').using('btree', table.agentInstanceId),
-    uniqueIndex('reviews_submission_id_idx')
-      .using('btree', table.submissionId)
-      .where(sql`(submission_id IS NOT NULL)`),
     index('reviews_installation_time_idx').using(
       'btree',
       table.installationId,
@@ -825,21 +785,6 @@ export const reviews = appSchema.table(
       sql`(risk_tier IS NULL) OR (risk_tier = ANY (ARRAY['trivial'::text, 'lite'::text, 'full'::text]))`,
     ),
     check('reviews_findings_count_check', sql`(findings_count IS NULL) OR (findings_count >= 0)`),
-    check(
-      'reviews_candidate_count_check',
-      sql`(candidate_count IS NULL) OR (candidate_count >= 0)`,
-    ),
-    check(
-      'reviews_verification_status_check',
-      sql`(verification_status IS NULL) OR (verification_status = ANY (ARRAY['skipped'::text, 'completed'::text, 'failed'::text, 'incomplete'::text]))`,
-    ),
-    check('reviews_verification_input_tokens_check', sql`verification_input_tokens >= 0`),
-    check('reviews_verification_output_tokens_check', sql`verification_output_tokens >= 0`),
-    check('reviews_verification_cost_usd_check', sql`verification_cost_usd >= (0)::numeric`),
-    check(
-      'reviews_verification_latency_ms_check',
-      sql`(verification_latency_ms IS NULL) OR (verification_latency_ms >= 0)`,
-    ),
     check(
       'reviews_verdict_check',
       sql`(verdict IS NULL) OR (verdict = ANY (ARRAY['approve'::text, 'comment'::text, 'request_changes'::text]))`,
@@ -889,10 +834,6 @@ export const reviewFindings = appSchema.table(
     body: text().notNull(),
     evidence: text().notNull(),
     failurePath: text('failure_path').notNull(),
-    published: boolean().default(false).notNull(),
-    verifierConfidence: text('verifier_confidence'),
-    verifierSeverity: text('verifier_severity'),
-    verificationReason: text('verification_reason'),
     feedback: text(),
     feedbackByGithubId: bigint('feedback_by_github_id', { mode: 'number' }),
     feedbackAt: timestamp('feedback_at', { withTimezone: true, mode: 'string' }),
@@ -903,21 +844,11 @@ export const reviewFindings = appSchema.table(
   (table) => [
     unique('review_findings_review_candidate_unique').on(table.reviewId, table.candidateIndex),
     index('review_findings_review_idx').on(table.reviewId),
-    index('review_findings_feedback_idx')
-      .on(table.feedback, table.id.desc())
-      .where(sql`published`),
+    index('review_findings_feedback_idx').on(table.feedback, table.id.desc()),
     check('review_findings_candidate_index_check', sql`candidate_index >= 0`),
     check('review_findings_line_check', sql`line > 0`),
     check('review_findings_side_check', sql`side = ANY (ARRAY['LEFT'::text, 'RIGHT'::text])`),
     check('review_findings_severity_check', sql`severity = ANY (ARRAY['P1'::text, 'P2'::text])`),
-    check(
-      'review_findings_verifier_confidence_check',
-      sql`(verifier_confidence IS NULL) OR (verifier_confidence = ANY (ARRAY['low'::text, 'medium'::text, 'high'::text]))`,
-    ),
-    check(
-      'review_findings_verifier_severity_check',
-      sql`(verifier_severity IS NULL) OR (verifier_severity = ANY (ARRAY['P1'::text, 'P2'::text]))`,
-    ),
     check(
       'review_findings_feedback_check',
       sql`(feedback IS NULL) OR (feedback = ANY (ARRAY['useful'::text, 'false_positive'::text, 'fixed'::text, 'dismissed'::text]))`,
@@ -935,10 +866,8 @@ export const reviewFileEvidence = appSchema.table(
       .notNull()
       .references(() => reviews.id, { onDelete: 'cascade' }),
     path: text().notNull(),
-    patchDelivered: boolean('patch_delivered').default(false).notNull(),
     disposition: text(),
     evidence: text(),
-    deliveredAt: timestamp('delivered_at', { withTimezone: true, mode: 'string' }),
     acknowledgedAt: timestamp('acknowledged_at', { withTimezone: true, mode: 'string' }),
   },
   (table) => [
@@ -956,34 +885,6 @@ export const reviewFileEvidence = appSchema.table(
   ],
 );
 
-export const reviewPatchDeliveries = appSchema.table(
-  'review_patch_deliveries',
-  {
-    id: bigint({ mode: 'number' })
-      .primaryKey()
-      .generatedByDefaultAsIdentity({ maxValue: '9007199254740991' }),
-    reviewId: bigint('review_id', { mode: 'number' })
-      .notNull()
-      .references(() => reviews.id, { onDelete: 'cascade' }),
-    path: text().notNull(),
-    chunkIndex: integer('chunk_index').notNull(),
-    chunkCount: integer('chunk_count').notNull(),
-    deliveredAt: timestamp('delivered_at', { withTimezone: true, mode: 'string' })
-      .default(sql`CURRENT_TIMESTAMP`)
-      .notNull(),
-  },
-  (table) => [
-    unique('review_patch_deliveries_review_path_chunk_unique').on(
-      table.reviewId,
-      table.path,
-      table.chunkIndex,
-    ),
-    index('review_patch_deliveries_review_idx').on(table.reviewId, table.path),
-    check('review_patch_deliveries_chunk_index_check', sql`chunk_index >= 0`),
-    check('review_patch_deliveries_chunk_count_check', sql`chunk_count > 0`),
-    check('review_patch_deliveries_chunk_range_check', sql`chunk_index < chunk_count`),
-  ],
-);
 
 export const fixAttempts = appSchema.table(
   'fix_attempts',
@@ -1178,8 +1079,7 @@ export const chatMessages = appSchema.table(
   ],
 );
 
-// One row per Explain-tab generation (src/domain/explain.ts): keyed by the
-// change head it describes, so a push starts a fresh row and the earlier
+// Keyed by the change head it describes, so a push starts a fresh row and the earlier
 // document stays readable while the new one is written. `document` is the
 // agent-submitted block list; null until ready or on failure.
 export const featureExplanations = appSchema.table(

@@ -31,12 +31,9 @@ import {
   listReposForPlan,
   pipelineCostByMonth,
   recentChatHistory,
-  recordReviewQuality,
-  recordReviewQualityById,
-  recordReviewPatchDelivery,
-  recordReviewPatchChunkDelivery,
+  recordReviewFindingsById,
   recordReviewFileAcknowledgements,
-  listReviewFileEvidence,
+  listReviewFileEvidenceForReviews,
   reviewQualityDashboard,
   recordRepositoryRef,
   repositoryRef,
@@ -47,14 +44,9 @@ import {
   tryRecordAutomationRun,
   tryClaimConnectionRefresh,
   tryRecordFixAttempt,
-  markReviewFailed,
   markReviewFailedById,
-  markReviewFailedBySubmission,
-  bindReviewSubmission,
   tryRecordReview,
-  completeReview,
   completeReviewById,
-  addReviewUsageBySubmission,
   headHasCompletedReview,
   lastReviewedHead,
   latestCompletedReviewsByAgent,
@@ -64,7 +56,6 @@ import {
   finishInstallationRepoSync,
   storeInstallationAccessSnapshot,
 } from './db.ts';
-import { assignReviewModels } from './models.ts';
 
 async function seedTenant(): Promise<void> {
   await testDatabase().batch([
@@ -107,7 +98,6 @@ beforeEach(async () => {
     'connections',
     'skills',
     'agents',
-    'review_patch_deliveries',
     'review_file_evidence',
     'review_findings',
     'reviews',
@@ -369,7 +359,7 @@ describe('cockpit chat messages', () => {
 });
 
 describe('review dispatch invariants', () => {
-  it('never lets an older submission mutate its replacement review', async () => {
+  it('never lets an older run mutate its replacement review', async () => {
     const instanceId = 'review--acme--api--16';
     const oldId = await tryRecordReview(
       101,
@@ -383,7 +373,6 @@ describe('review dispatch invariants', () => {
       'a'.repeat(40),
     );
     expect(oldId).not.toBeNull();
-    await bindReviewSubmission(oldId!, 'submission-old');
     await markReviewFailedById(oldId!, 'replaced');
 
     const currentId = await tryRecordReview(
@@ -398,38 +387,25 @@ describe('review dispatch invariants', () => {
       'b'.repeat(40),
     );
     expect(currentId).not.toBeNull();
-    await bindReviewSubmission(currentId!, 'submission-current');
 
     await expect(
       completeReviewById(oldId!, 'https://example.test/stale', 3, 'approve'),
     ).resolves.toBeNull();
-    await recordReviewQualityById(oldId!, {
-      candidates: [],
-      decisions: [],
-      publishedCandidateIndexes: [],
-      status: 'completed',
-      model: null,
-      inputTokens: 0,
-      outputTokens: 0,
-      costUsd: 0,
-      latencyMs: null,
-      experimentKey: null,
-    });
-    await expect(
-      markReviewFailedBySubmission('submission-old', 'late failure'),
-    ).resolves.toBeNull();
-    await addReviewUsageBySubmission('submission-old', {
-      inputTokens: 7,
-      outputTokens: 2,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      costUsd: 0.01,
-      model: 'cloudflare/openai/gpt-5.6-sol',
-    });
+    await recordReviewFindingsById(oldId!, [
+      {
+        path: 'src/stale.ts',
+        line: 1,
+        side: 'RIGHT',
+        severity: 'P1',
+        body: 'stale finding',
+        evidence: 'old evidence',
+        failurePath: 'old path',
+      },
+    ]);
 
     const rows = await testDatabase()
       .prepare(
-        `SELECT id, status, findings_count, candidate_count, input_tokens, submission_id
+        `SELECT id, status, findings_count, input_tokens
          FROM reviews WHERE agent_instance_id = ?1 ORDER BY id`,
       )
       .bind(instanceId)
@@ -437,31 +413,21 @@ describe('review dispatch invariants', () => {
         id: number;
         status: string;
         findings_count: number | null;
-        candidate_count: number | null;
         input_tokens: number;
-        submission_id: string;
       }>();
     expect(rows.results).toEqual([
-      {
-        id: oldId,
-        status: 'failed',
-        findings_count: null,
-        candidate_count: null,
-        input_tokens: 7,
-        submission_id: 'submission-old',
-      },
-      {
-        id: currentId,
-        status: 'running',
-        findings_count: null,
-        candidate_count: null,
-        input_tokens: 0,
-        submission_id: 'submission-current',
-      },
+      { id: oldId, status: 'failed', findings_count: null, input_tokens: 0 },
+      { id: currentId, status: 'running', findings_count: null, input_tokens: 0 },
     ]);
+    await expect(
+      testDatabase()
+        .prepare('SELECT COUNT(*) AS count FROM review_findings WHERE review_id = ?1')
+        .bind(oldId)
+        .first<{ count: number }>(),
+    ).resolves.toEqual({ count: 0 });
   });
 
-  it('requires server-observed patch delivery alongside per-file acknowledgement', async () => {
+  it('records the artifact per-file evidence without a transport delivery protocol', async () => {
     const reviewId = await tryRecordReview(
       101,
       1001,
@@ -474,40 +440,36 @@ describe('review dispatch invariants', () => {
       'c'.repeat(40),
     );
     expect(reviewId).not.toBeNull();
-    await recordReviewPatchDelivery(reviewId!, ['src/a.ts', 'src/a.ts']);
-    await recordReviewPatchChunkDelivery(reviewId!, 'src/b.ts', 1, 2);
-    await recordReviewPatchChunkDelivery(reviewId!, 'src/c.ts', 1, 2);
-    await recordReviewPatchChunkDelivery(reviewId!, 'src/c.ts', 0, 2);
     await recordReviewFileAcknowledgements(reviewId!, [
       { path: 'src/a.ts', disposition: 'reviewed', evidence: 'checked the mutation path' },
-      { path: 'src/b.ts', disposition: 'blocked', evidence: 'patch exceeded the current packet' },
-      { path: 'src/c.ts', disposition: 'reviewed', evidence: 'checked both paged patch chunks' },
+      { path: 'src/b.ts', disposition: 'blocked', evidence: 'could not validate generated code' },
     ]);
 
-    await expect(listReviewFileEvidence(reviewId!)).resolves.toEqual([
+    await expect(listReviewFileEvidenceForReviews([reviewId!])).resolves.toEqual([
       {
+        review_id: reviewId,
         path: 'src/a.ts',
-        patch_delivered: true,
         disposition: 'reviewed',
         evidence: 'checked the mutation path',
       },
       {
+        review_id: reviewId,
         path: 'src/b.ts',
-        patch_delivered: false,
         disposition: 'blocked',
-        evidence: 'patch exceeded the current packet',
-      },
-      {
-        path: 'src/c.ts',
-        patch_delivered: true,
-        disposition: 'reviewed',
-        evidence: 'checked both paged patch chunks',
+        evidence: 'could not validate generated code',
       },
     ]);
   });
 
-  it('records verifier evidence and tenant-scoped finding feedback', async () => {
-    await tryRecordReview(101, 1001, 15, 'opened', 'review', 'review--acme--api--15');
+  it('records published findings and tenant-scoped feedback', async () => {
+    const reviewId = await tryRecordReview(
+      101,
+      1001,
+      15,
+      'opened',
+      'review',
+      'review--acme--api--15',
+    );
     const candidate = {
       path: 'src/app.ts',
       line: 12,
@@ -517,71 +479,25 @@ describe('review dispatch invariants', () => {
       evidence: 'mutation is called before requireUser',
       failurePath: 'anonymous request -> mutation',
     };
-    await recordReviewQuality('review--acme--api--15', {
-      candidates: [candidate],
-      decisions: [
-        {
-          candidate: 0,
-          accepted: true,
-          confidence: 'high',
-          severity: 'P1',
-          reason: 'reachable without a session',
-        },
-      ],
-      publishedCandidateIndexes: [0],
-      status: 'completed',
-      model: 'cloudflare/anthropic/claude-sonnet-5',
-      inputTokens: 120,
-      outputTokens: 20,
-      costUsd: 0.02,
-      latencyMs: 900,
-      experimentKey: 'weighted-v1:test',
-    });
+    expect(reviewId).not.toBeNull();
+    await recordReviewFindingsById(reviewId!, [candidate]);
     await expect(
       testDatabase()
         .prepare(
-          `SELECT candidate_count, verification_status, verification_model,
-                  verification_input_tokens, verification_output_tokens,
-                  verification_cost_usd, verification_latency_ms, experiment_key
-           FROM reviews WHERE agent_instance_id = 'review--acme--api--15'`,
-        )
-        .first(),
-    ).resolves.toMatchObject({
-      candidate_count: 1,
-      verification_status: 'completed',
-      verification_model: 'cloudflare/anthropic/claude-sonnet-5',
-      verification_input_tokens: 120,
-      verification_output_tokens: 20,
-      verification_cost_usd: 0.02,
-      verification_latency_ms: 900,
-      experiment_key: 'weighted-v1:test',
-    });
-    await expect(
-      testDatabase()
-        .prepare(
-          `SELECT evidence, failure_path, published, verifier_confidence,
-                  verifier_severity, verification_reason, feedback
+          `SELECT evidence, failure_path, feedback
            FROM review_findings WHERE candidate_index = 0`,
         )
         .first(),
     ).resolves.toMatchObject({
       evidence: 'mutation is called before requireUser',
       failure_path: 'anonymous request -> mutation',
-      published: true,
-      verifier_confidence: 'high',
-      verifier_severity: 'P1',
-      verification_reason: 'reachable without a session',
       feedback: null,
     });
-    await completeReview('review--acme--api--15', null, 1, 'request_changes', ['src/app.ts']);
+    await completeReviewById(reviewId!, null, 1, 'request_changes', ['src/app.ts']);
 
     const dashboard = await reviewQualityDashboard([1001]);
-    expect(dashboard.stats).toMatchObject({ candidates: 1, published: 1, labeled: 0 });
-    expect(dashboard.findings[0]).toMatchObject({
-      repo: 'acme/api',
-      pr_number: 15,
-      verification_reason: 'reachable without a session',
-    });
+    expect(dashboard.stats).toMatchObject({ published: 1, labeled: 0 });
+    expect(dashboard.findings[0]).toMatchObject({ repo: 'acme/api', pr_number: 15 });
     const findingId = dashboard.findings[0].id;
     await expect(setReviewFindingFeedback(findingId, [9999], 3001, 'useful')).resolves.toBe(false);
     await expect(
@@ -604,41 +520,12 @@ describe('review dispatch invariants', () => {
     });
   });
 
-  it('assigns database-weighted scout and verifier models with gateway ids', async () => {
-    await testDatabase()
-      .prepare(
-        `UPDATE models SET for_reviewer = true, reviewer_default = true,
-          reviewer_experiment_weight = 10, verifier_experiment_weight = 10
-         WHERE model_id = 'claude-fable-5.1'`,
-      )
-      .run();
-    try {
-      await expect(
-        assignReviewModels('acme/api:15:head', 'cloudflare/anthropic/fallback'),
-      ).resolves.toEqual({
-        scout: 'cloudflare/anthropic/claude-fable-5.1',
-        verifier: 'cloudflare/anthropic/claude-fable-5.1',
-        scoutPacketChars: 192_000,
-        verifierPacketChars: 192_000,
-        experimentKey:
-          'weighted-v1:scout=cloudflare/anthropic/claude-fable-5.1:verifier=cloudflare/anthropic/claude-fable-5.1',
-      });
-    } finally {
-      await testDatabase()
-        .prepare(
-          `UPDATE models SET for_reviewer = false, reviewer_default = false,
-            reviewer_experiment_weight = 0, verifier_experiment_weight = 0
-           WHERE model_id = 'claude-fable-5.1'`,
-        )
-        .run();
-    }
-  });
 
   it('records why a review failed', async () => {
     const id = await tryRecordReview(101, 1001, 12, 'opened', 'review', 'review--acme--api--12');
-    await expect(
-      markReviewFailed('review--acme--api--12', 'dispatch failed: boom'),
-    ).resolves.toMatchObject({ stage_run_id: null });
+    await expect(markReviewFailedById(id!, 'dispatch failed: boom')).resolves.toMatchObject({
+      stage_run_id: null,
+    });
     const row = await testDatabase()
       .prepare(`SELECT status, error FROM reviews WHERE id = ?1`)
       .bind(id)
@@ -668,17 +555,24 @@ describe('review dispatch invariants', () => {
     const record = (slug: string, trigger: string, head: string | null) =>
       tryRecordReview(101, 1001, 13, trigger, slug, `${slug}--acme--api--13`, 'full', null, head);
 
-    await record('review', 'opened', headA);
-    await completeReview('review--acme--api--13', null, 1, 'approve', ['src/a.ts']);
+    const firstReview = await record('review', 'opened', headA);
+    await completeReviewById(firstReview!, null, 1, 'approve', ['src/a.ts']);
     // A failed dispatch concluded nothing and must not count as a prior.
-    await record('security', 'opened', headA);
-    await markReviewFailed('security--acme--api--13', 'boom');
+    const securityReview = await record('security', 'opened', headA);
+    await markReviewFailedById(securityReview!, 'boom');
     // A row from before heads were tracked still carries its verdict.
-    await tryRecordReview(101, 1001, 13, 'opened', 'a11y', 'a11y--acme--api--13');
-    await completeReview('a11y--acme--api--13', null, 2, 'request_changes', ['src/x.ts']);
+    const accessibilityReview = await tryRecordReview(
+      101,
+      1001,
+      13,
+      'opened',
+      'a11y',
+      'a11y--acme--api--13',
+    );
+    await completeReviewById(accessibilityReview!, null, 2, 'request_changes', ['src/x.ts']);
     // The newest completed row per agent wins.
-    await record('review', 'synchronize', headB);
-    await completeReview('review--acme--api--13', null, 0, 'approve', []);
+    const latestReview = await record('review', 'synchronize', headB);
+    await completeReviewById(latestReview!, null, 0, 'approve', []);
 
     await expect(latestCompletedReviewsByAgent(101, 13)).resolves.toEqual([
       {
@@ -715,7 +609,7 @@ describe('review dispatch invariants', () => {
       null,
       head,
     );
-    await completeReview('review--acme--api--14', 'https://example.test/review', 0, 'comment', [], {
+    await completeReviewById(id!, 'https://example.test/review', 0, 'comment', [], {
       conclusion: 'inconclusive',
       coverageStatus: 'incomplete',
       reviewableFileCount: 3,

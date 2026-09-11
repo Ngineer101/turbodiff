@@ -1,9 +1,11 @@
+import { z } from 'zod';
+import { reviewArtifactSchema } from '../artifacts/review.ts';
+import { readArtifact } from '../integrations/artifact-store.ts';
 import {
   attachFactoryRunChange,
   cancelFactoryRun,
   cancelStageRun,
   claimStageRun,
-  completeReview,
   completeReviewById,
   countBudgetedFixAttempts,
   createAcceptanceContract,
@@ -20,13 +22,12 @@ import {
   latestVerificationForFeature,
   listCrChecks,
   listStageRuns,
-  markReviewFailed,
   markReviewFailedById,
-  markReviewFailedBySubmission,
   recordLifecycleDecision,
   recordStageRunOutput,
   resumeFactoryRun,
   reviewStageProgress,
+  reviewStageEvidence,
   reviewHeadReadiness,
   type FactoryRunRow,
   type StageRunRow,
@@ -472,6 +473,7 @@ type ReviewStageOutput = {
   failed: number;
   blocking: boolean;
   inconclusive: number;
+  artifacts: { agent: string; key: string }[];
   errors?: string[];
 };
 
@@ -492,12 +494,19 @@ async function settleReviewStage(
   if (!stageRun || stageRun.stage !== 'review' || stageRun.status !== 'running') return;
   const progress = await reviewStageProgress(stageRunId);
   if (progress.running > 0) return;
+  const evidence = await reviewStageEvidence(stageRunId);
   const output: ReviewStageOutput = {
     running: progress.running,
     completed: progress.completed,
     failed: progress.failed,
     blocking: progress.blocking,
     inconclusive: progress.inconclusive,
+    artifacts: evidence
+      .filter((review) => review.status === 'completed')
+      .map((review) => ({
+        agent: review.agent_slug ?? 'reviewer',
+        key: `agent-artifacts/reviews/${review.id}/output.json`,
+      })),
   };
   if (progress.errors.length > 0) output.errors = progress.errors;
   const command: RunStageCommand = {
@@ -551,35 +560,6 @@ async function settleReviewStage(
   });
 }
 
-export async function completeLifecycleReview(
-  agentInstanceId: string,
-  reviewUrl: string | null,
-  findingsCount: number,
-  verdict: 'approve' | 'comment' | 'request_changes',
-  // Files the findings anchored to — what a later push is checked against
-  // before this agent is asked to look again.
-  findingPaths: string[] = [],
-  enqueue: typeof enqueueFactoryMessage = enqueueFactoryMessage,
-  readiness?: {
-    conclusion: ReviewConclusion;
-    coverageStatus: 'complete' | 'incomplete' | 'stale';
-    reviewableFileCount: number;
-    coveredFileCount: number;
-    missingPaths: string[];
-    coverageHeadSha: string | null;
-    publishedHeadSha: string | null;
-  },
-): Promise<void> {
-  const completed = await completeReview(
-    agentInstanceId,
-    reviewUrl,
-    findingsCount,
-    verdict,
-    findingPaths,
-    readiness,
-  );
-  if (completed?.stage_run_id) await settleReviewStage(completed.stage_run_id, enqueue);
-}
 
 export async function completeLifecycleReviewById(
   reviewId: number,
@@ -609,14 +589,6 @@ export async function completeLifecycleReviewById(
   if (completed?.stage_run_id) await settleReviewStage(completed.stage_run_id, enqueue);
 }
 
-export async function failLifecycleReview(
-  agentInstanceId: string,
-  reason: string | null = null,
-  enqueue: typeof enqueueFactoryMessage = enqueueFactoryMessage,
-): Promise<void> {
-  const failed = await markReviewFailed(agentInstanceId, reason);
-  if (failed?.stage_run_id) await settleReviewStage(failed.stage_run_id, enqueue);
-}
 
 export async function failLifecycleReviewById(
   reviewId: number,
@@ -627,14 +599,6 @@ export async function failLifecycleReviewById(
   if (failed?.stage_run_id) await settleReviewStage(failed.stage_run_id, enqueue);
 }
 
-export async function failLifecycleReviewBySubmission(
-  submissionId: string,
-  reason: string | null = null,
-  enqueue: typeof enqueueFactoryMessage = enqueueFactoryMessage,
-): Promise<void> {
-  const failed = await markReviewFailedBySubmission(submissionId, reason);
-  if (failed?.stage_run_id) await settleReviewStage(failed.stage_run_id, enqueue);
-}
 
 export type ResumeStageResult =
   | { kind: 'scheduled'; stageRunId: number; stage: LifecycleStage; attempt: number }
@@ -767,6 +731,37 @@ async function unmetCriteriaRepairFindings(
   return formatUnmetCriteriaFindings(feature.acceptance ?? [], verification.results) || undefined;
 }
 
+const reviewStageArtifactsSchema = z.object({
+  artifacts: z.array(
+    z.object({ agent: z.string().min(1), key: z.string().min(1) }).strict(),
+  ),
+});
+
+async function reviewArtifactRepairFindings(runId: number): Promise<string | undefined> {
+  const stages = await listStageRuns(runId);
+  const reviewStage = stages
+    .filter((stage) => stage.stage === 'review' && stage.status === 'completed')
+    .at(-1);
+  const parsed = reviewStageArtifactsSchema.safeParse(reviewStage?.output);
+  if (!parsed.success || parsed.data.artifacts.length === 0) return undefined;
+  const sections: string[] = [];
+  for (const reference of parsed.data.artifacts) {
+    const artifact = await readArtifact(reference.key, reviewArtifactSchema);
+    if (artifact.findings.length === 0) continue;
+    sections.push(
+      `## ${reference.agent}\n` +
+        artifact.findings
+          .map(
+            (finding) =>
+              `- ${finding.severity} \`${finding.path}:${finding.line}\`: ${finding.body}\n` +
+              `  Evidence: ${finding.evidence}\n  Failure path: ${finding.failurePath}`,
+          )
+          .join('\n'),
+    );
+  }
+  return sections.join('\n\n') || undefined;
+}
+
 export async function runLifecycleStage(
   command: RunStageCommand,
   dispatchReview: ReviewDispatcher,
@@ -845,22 +840,32 @@ export async function runLifecycleStage(
     return;
   }
   if (stageRun.stage === 'repair') {
-    const findings = feature ? await unmetCriteriaRepairFindings(run.id, feature) : undefined;
-    const fix: FixQueueMessage = {
-      kind: 'fix',
-      repoId: repo.id,
-      prNumber: change.number,
-      trigger: 'lifecycle_repair',
-      factoryRunId: run.id,
-      stageRunId: stageRun.id,
-      changeId: change.id,
-    };
-    if (findings) fix.findings = findings;
-    await enqueue(fix);
-    await recordStageRunOutput(stageRun.id, {
-      kind: 'repair_enqueued',
-      source: findings ? 'verification' : 'review',
-    });
+    try {
+      const verificationFindings = feature
+        ? await unmetCriteriaRepairFindings(run.id, feature)
+        : undefined;
+      const findings = verificationFindings ?? (await reviewArtifactRepairFindings(run.id));
+      if (!findings) throw new Error('repair input artifact is unavailable or contains no findings');
+      const fix: FixQueueMessage = {
+        kind: 'fix',
+        repoId: repo.id,
+        prNumber: change.number,
+        trigger: 'lifecycle_repair',
+        factoryRunId: run.id,
+        stageRunId: stageRun.id,
+        changeId: change.id,
+        findings,
+      };
+      await enqueue(fix);
+      await recordStageRunOutput(stageRun.id, {
+        kind: 'repair_enqueued',
+        source: verificationFindings ? 'verification' : 'review_artifact',
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      await finishStageRun(stageRun.id, 'failed', undefined, detail);
+      await coordinateStageOutcome(command, false, enqueue);
+    }
     return;
   }
   if (stageRun.stage === 'verify') {

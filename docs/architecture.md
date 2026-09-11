@@ -1,8 +1,6 @@
 # Architecture
 
-Turbodiff uses a small layered architecture. The layers are directories, not
-framework abstractions: functions remain plain TypeScript and dependencies are
-imported directly.
+Turbodiff uses a small layered architecture. The layers are directories, not framework abstractions: functions remain plain TypeScript and dependencies are imported directly.
 
 ## Dependency direction
 

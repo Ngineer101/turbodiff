@@ -1,8 +1,6 @@
-import { createAgentRouter } from '@flue/runtime/routing';
 import { env } from 'cloudflare:workers';
 import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
-import { PrReviewer } from '../ai/agents/pr-reviewer.ts';
 import { runFix, sandboxSmoke } from '../ai/runners/fixer.ts';
 import { approvePlan } from '../services/plans.ts';
 import {
@@ -31,7 +29,6 @@ import {
 // admission; durable AI work remains in runners/workflows.
 export function createInternalRoutes() {
   const routes = new Hono();
-  const reviewer = createAgentRouter(PrReviewer);
   // Operator endpoints keep the shared secret (Authorization: Bearer <REVIEW_SECRET>).
   const requireSecret = createMiddleware(async (c, next) => {
     const token = c.req.header('authorization')?.replace(/^Bearer\s+/i, '') ?? '';
@@ -40,12 +37,7 @@ export function createInternalRoutes() {
     }
     await next();
   });
-  // The agent conversation surface (debugging: GET /internal/pr-reviewer/<instance-id>
-  // returns the durable conversation incl. settlements). Lives under /internal
-  // because the signed-in UI owns /agents.
   routes.use('/*', requireSecret);
-
-  routes.route('/pr-reviewer', reviewer);
 
   // Artifacts-hosted project provisioning (docs/artifacts-provider.md):
   //   POST /projects { "owner": "...", "name": "...", "description"?: "..." }

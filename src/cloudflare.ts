@@ -15,12 +15,13 @@ import {
 } from './ai/workflows/conflict-resolution.ts';
 import { startChatTurn, ChatWorkflow } from './ai/workflows/chat.ts';
 import { startFix, FixWorkflow } from './ai/workflows/fix.ts';
+import { ReviewWorkflow } from './ai/workflows/review.ts';
 import type { FactoryMessage } from './shared/factory-messages.ts';
 import { startGeneration } from './ai/workflows/generation.ts';
 import { failStrandedGeneration, failStrandedVerifications } from './data/factory.ts';
 import { sweepFactoryPrConflicts } from './services/merge-conflicts.ts';
 import { runPlanAnalyze, runPlanRefine } from './ai/runners/planner.ts';
-import { dispatchNativeCrReviews } from './ai/review/native-dispatch.ts';
+import { dispatchNativeCrReviews } from './services/native-review-dispatch.ts';
 import { mergeNativeChangeRequest, runQueuedCrMerge } from './services/change-requests.ts';
 import { startVerification, VerificationWorkflow } from './ai/workflows/verification.ts';
 import { notifyPlanLive } from './services/live-updates.ts';
@@ -45,6 +46,7 @@ export { FixWorkflow };
 export { ChatWorkflow };
 export { AutomationWorkflow };
 export { ConflictResolveWorkflow };
+export { ReviewWorkflow };
 
 // Fix and generation runs take minutes, far beyond what a webhook or intake
 // request can wait on, so producers enqueue and these consumers do the work.
@@ -104,12 +106,7 @@ export default {
             // the response timed out while the merge itself succeeded).
             await runQueuedCrMerge(body.changeRequestId, body.actor);
             break;
-          case 'cr_review':
-            // Native change-request review (docs/artifacts-provider.md):
-            // risk-tiered dispatch of the SAME configured reviewer agents that
-            // review GitHub PRs, with CR-backed tools swapped in by the pin.
-            await dispatchNativeCrReviews(body.changeRequestId);
-            break;
+
           default:
             // Fix runs get the same no-wall-clock treatment as generation
             // and verification: the consumer just creates the instance.
