@@ -3,6 +3,7 @@ allowBuilds:
   '@mongodb-js/zstd': false
   core-js-pure: false
   esbuild: true
+  msgpackr-extract: false
   node-liblzma: false
   protobufjs: false
   workerd: true
