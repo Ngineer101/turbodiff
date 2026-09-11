@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 // only ever renders via <img> from a Blob URL, where scripts cannot execute;
 // never dangerouslySetInnerHTML, <object>, or <iframe>.
 
-// Mirror of the decode in repo-browser.ts (decodeBase64Text), minus the
+// Mirror of the source-code adapter's decodeBase64Text, minus the
 // text step — the server already strips whitespace from the base64.
 function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
   const bin = atob(b64);

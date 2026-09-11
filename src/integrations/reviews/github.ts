@@ -4,11 +4,7 @@ import type { RepositoryRow } from '../../data/db.ts';
 import { buildReviewDiffSnapshot } from '../../domain/review-context.ts';
 import { installationToken } from '../github/app.ts';
 import { githubRequest as gh } from '../github/client.ts';
-import type {
-  ReviewPublication,
-  ReviewPublicationPlan,
-  ReviewSource,
-} from './types.ts';
+import type { ReviewPublication, ReviewPublicationPlan, ReviewSource } from './types.ts';
 
 interface PullRequestMetadata {
   title: string;
@@ -91,7 +87,9 @@ function comments(findings: ReviewFinding[]): ReviewComment[] {
 }
 
 function findingsAsMarkdown(findings: ReviewFinding[]): string {
-  return findings.map((finding) => `**\`${finding.path}:${finding.line}\`**\n${finding.body}`).join('\n\n');
+  return findings
+    .map((finding) => `**\`${finding.path}:${finding.line}\`**\n${finding.body}`)
+    .join('\n\n');
 }
 
 function reviewBody(reviewerName: string, plan: ReviewPublicationPlan): string {

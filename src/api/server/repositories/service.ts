@@ -45,13 +45,13 @@ import {
   readTree,
   RepoBrowserError,
   saveFile,
-} from '../../../integrations/repositories/github-browser.ts';
+} from '../../../integrations/source-code/github.ts';
 import {
   listBranchesAndDefaultArtifacts,
   readFileArtifacts,
   readTreeArtifacts,
   saveFileArtifacts,
-} from '../../../integrations/repositories/artifacts-browser.ts';
+} from '../../../integrations/source-code/artifacts.ts';
 import type { CurrentUserIdentity } from '../../contract/auth.ts';
 import type {
   CloneCredential,

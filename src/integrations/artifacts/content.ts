@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import type { RepositoryRow } from '../../data/db.ts';
 import { isJsonObject, isNumber, isString, type JsonValue } from '../../shared/json.ts';
-import type { RepositoryTreeEntry, RepositoryTreeResult } from '../repositories/types.ts';
+import type { RepositoryTreeEntry, RepositoryTreeResult } from '../source-code/types.ts';
 
 // Cloudflare's live Artifacts binding documentation includes these content
 // methods, but Wrangler 4.120's generated declarations lag that surface. Keep

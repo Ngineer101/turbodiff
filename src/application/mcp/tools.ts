@@ -29,7 +29,7 @@ import {
   readFile,
   readTree,
   RepoBrowserError,
-} from '../../integrations/repositories/github-browser.ts';
+} from '../../integrations/source-code/github.ts';
 import { parseUtc, VERIFY_STALL_AFTER_MS } from '../../shared/time.ts';
 
 export class McpToolError extends Error {}
