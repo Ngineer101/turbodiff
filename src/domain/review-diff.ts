@@ -23,7 +23,7 @@ export interface DiffSegment {
 // Splits a unified diff into per-file segments with the path from each
 // `diff --git` header (quoted paths and renames resolve to the b-side).
 // Shared by generic review context preparation and the native change-request
-// per-file patch builder (services/change-requests.ts) so the
+// per-file patch builder (application/deliveries/change-requests.ts) so the
 // two can never disagree on file boundaries.
 export function splitDiffSegments(diff: string): DiffSegment[] {
   return diff

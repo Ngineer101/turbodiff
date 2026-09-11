@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { runFix, sandboxSmoke } from '../ai/runners/fixer.ts';
-import { approvePlan } from '../services/plans.ts';
+import { approvePlan } from '../application/planning/approve-plan.ts';
 import {
   createFeature,
   createPlan,
@@ -17,13 +17,13 @@ import {
 } from '../data/db.ts';
 import { timingSafeEqual } from '../integrations/security/crypto.ts';
 import { isString } from '../shared/json.ts';
-import { enqueueFactoryMessage, enqueueFactoryMessages } from '../services/factory-queue.ts';
+import { enqueueFactoryMessage, enqueueFactoryMessages } from '../application/factory/queue.ts';
 import { factoryUnsupportedReason } from '../integrations/git/provider.ts';
 import {
   createArtifactsProject,
   mintArtifactsCloneToken,
   PROJECT_SEGMENT,
-} from '../services/artifacts.ts';
+} from '../application/repositories/artifacts.ts';
 
 // Shared-secret operator surface. This transport owns validation and queue
 // admission; durable AI work remains in runners/workflows.

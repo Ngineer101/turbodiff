@@ -1,6 +1,6 @@
 // The auto-merge decision, extracted so the GitHub path
-// (services/auto-merge.ts) and the native change-request path
-// (services/change-requests.ts) can never drift apart on policy — they
+// (application/deliveries/auto-merge.ts) and the native change-request path
+// (application/deliveries/change-requests.ts) can never drift apart on policy — they
 // already did once (the blocking_reviews pairing). Pure: callers gather the
 // facts from their provider's sources; this answers with a decline reason or
 // null for "merge".

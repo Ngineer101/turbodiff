@@ -140,7 +140,6 @@ export function decideLifecycle(
     if (profileKey === 'legacy_factory' && context.origin !== 'factory') {
       return { kind: 'ignore', reason: 'legacy profile admits factory changes only' };
     }
-    if (fact(context, 'draft')) return { kind: 'ignore', reason: 'change is draft' };
     if (context.event === 'change.updated') {
       if (!fact(context, 'headChanged')) return { kind: 'ignore', reason: 'change head unchanged' };
       if (fact(context, 'debounceActive')) {

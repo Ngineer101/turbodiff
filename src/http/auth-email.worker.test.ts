@@ -7,7 +7,7 @@ import { testDatabase } from '../test/database-fixture.ts';
 import { Hono } from 'hono';
 import { describe, expect, it } from 'vite-plus/test';
 import type { JsonObject } from '../shared/json.ts';
-import { requireUser } from '../services/auth.ts';
+import { requireUser } from '../application/auth/session.ts';
 import { handleEmailSignUp } from './auth-email.ts';
 
 async function signUp(body: JsonObject): Promise<Response> {

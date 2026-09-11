@@ -68,7 +68,7 @@ export function parseSkillMarkdown(markdown: string): ParsedSkillMarkdown {
 }
 
 // Derives a slug satisfying the app-wide slug contract (SLUG_RE in
-// api-support.ts and the skills_slug_format DB check): lowercase runs of
+// skill-definition.ts and the skills_slug_format DB check): lowercase runs of
 // [a-z0-9] separated by single dashes, 2-31 chars, no leading/trailing dash.
 export function deriveSkillSlug(raw: string): string {
   const slug = raw

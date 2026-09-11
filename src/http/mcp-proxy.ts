@@ -1,5 +1,5 @@
 import type { Context } from 'hono';
-import { proxyMcpRequest } from '../services/mcp-proxy.ts';
+import { proxyMcpRequest } from '../integrations/mcp/proxy.ts';
 
 // Hono adapter for the MCP integration. Authentication, allowlisting,
 // credential resolution, and upstream streaming live in the service.

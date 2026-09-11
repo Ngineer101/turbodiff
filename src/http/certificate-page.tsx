@@ -1,7 +1,7 @@
 // Public HTTP "Proof of Build" certificate page, server-rendered as hono/jsx like
 // landing.tsx. Pure render — no env or DB access — so it can be previewed and
 // tested with fixture data outside the Worker. Data assembly lives in
-// src/services/certificates.ts.
+// src/application/deliveries/certificates.ts.
 import type { CertificateData } from '../shared/certificate.ts';
 import { parseUtc } from '../shared/time.ts';
 

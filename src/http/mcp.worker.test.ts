@@ -10,7 +10,7 @@ import { Hono } from 'hono';
 import { beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 import { oAuthDiscoveryMetadata, oAuthProtectedResourceMetadata } from 'better-auth/plugins';
 import { withAuth } from '../integrations/auth/better-auth.ts';
-import type { AuthedUser } from '../services/auth.ts';
+import type { AuthedUser } from '../application/auth/session.ts';
 import { isJsonArray, isJsonObject, isString, parseJson, type JsonObject } from '../shared/json.ts';
 import { createMcpRoutes, type McpRouteDependencies } from './mcp.ts';
 

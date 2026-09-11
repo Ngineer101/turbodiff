@@ -4,7 +4,7 @@ import { DEFAULT_AGENT_SLUG } from './personas.ts';
 // Pure review-dispatch policy: which risk tier a set of changed files earns,
 // which enabled agents that tier runs, and — on a push to an already-reviewed
 // change — which agents actually need another look. The service layer
-// (services/review-policy.ts, services/change-review.ts) fetches the inputs;
+// (application/reviews/policy.ts, application/reviews/change-review.ts) fetches the inputs;
 // nothing here touches the network or the database.
 
 // Risk-tiered dispatch, after Cloudflare's AI code review setup: small
