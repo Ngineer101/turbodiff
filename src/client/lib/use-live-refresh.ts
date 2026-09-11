@@ -4,7 +4,7 @@ import { isJsonObject } from '../../shared/json.ts';
 import { api } from './api.ts';
 
 // Cheap live updates: poll the one-row change counter (GET
-// /api/factory/version, maintained by PostgreSQL triggers) and refetch the real
+// /api/factory-state, maintained by PostgreSQL triggers) and refetch the real
 // payloads only when it moves. Mounted once in AppShell — invalidation only
 // refetches queries with active observers, so the cost of a bump is exactly
 // the page being looked at. The per-query 30s intervals in queries.ts remain
@@ -41,7 +41,9 @@ export function useLiveRefresh(installationIds: number[]): void {
     const connect = (installationId: number, attempt: number) => {
       if (stopped) return;
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const socket = new WebSocket(`${protocol}//${location.host}/api/live/${installationId}`);
+      const socket = new WebSocket(
+        `${protocol}//${location.host}/protocol/installations/${installationId}/events`,
+      );
       sockets.add(socket);
       let opened = false;
       socket.addEventListener('open', () => {
@@ -92,8 +94,8 @@ export function useLiveRefresh(installationIds: number[]): void {
   // A deliberately slow global counter remains as a safety net during
   // deploys, offline transitions, or browsers where WebSockets are blocked.
   const { data } = useQuery({
-    queryKey: ['factory-version'],
-    queryFn: () => api.get<{ v: number }>('/api/factory/version'),
+    queryKey: ['factory-state'],
+    queryFn: () => api.get<{ version: number }>('/api/factory-state'),
     enabled: !fullyConnected,
     refetchInterval: fullyConnected ? false : FALLBACK_POLL_MS,
     // Version numbers are meaningless across reloads — never persist, and
@@ -103,11 +105,11 @@ export function useLiveRefresh(installationIds: number[]): void {
   });
   const prev = useRef<number | null>(null);
   useEffect(() => {
-    const v = data?.v;
+    const v = data?.version;
     if (v === undefined) return;
     if (prev.current !== null && v !== prev.current) {
       invalidate();
     }
     prev.current = v;
-  }, [data?.v, invalidate]);
+  }, [data?.version, invalidate]);
 }

@@ -581,7 +581,7 @@ export function TaskPage() {
           <div>
             <BlockLabel className="mb-2">Task</BlockLabel>
             <div className="flex flex-col gap-1.5">
-              {showNotify ? <NotificationsRailButton vapidPublicKey={me.vapid_public_key} /> : null}
+              {showNotify ? <NotificationsRailButton vapidPublicKey={me.vapidPublicKey} /> : null}
               {task.archived ? (
                 <Button
                   variant="secondary"

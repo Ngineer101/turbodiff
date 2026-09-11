@@ -93,8 +93,8 @@ const CockpitDiffWorkspace = lazy(() =>
     default: module.CockpitDiffWorkspace,
   })),
 );
-// The agent chat rail is its own chunk (the route stays within its
-// performance budget); while it loads, RailPlaceholder holds its width.
+// The agent chat rail is its own chunk; while it loads, RailPlaceholder holds
+// its width.
 const ChatRail = lazy(() =>
   import('../components/chat-rail.tsx').then((module) => ({ default: module.ChatRail })),
 );
