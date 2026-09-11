@@ -236,23 +236,22 @@ Use [.dev.vars.example](.dev.vars.example) as the local configuration template.
 
 Leave these out unless you use the related feature:
 
-| Name                     | Where         | Used for                                                                 |
-| ------------------------ | ------------- | ------------------------------------------------------------------------ |
-| `ARTIFACTS_REMOTE_BASE`  | Worker var    | Git address for repositories stored in Cloudflare Artifacts.             |
-| `RESEND_FROM_ADDRESS`    | Worker var    | Sender address for organization invitation emails.                       |
-| `REVIEW_DAILY_LIMIT`     | Worker var    | Maximum automatic reviews per installation in 24 hours; defaults to 50.  |
-| `TRIVIAL_MODEL`          | Worker var    | Cheaper model for very small pull requests; empty disables it.           |
-| `REVIEW_SECRET`          | Worker secret | Protects operator-only HTTP endpoints.                                   |
-| `TOKEN_ENCRYPTION_KEY`   | Worker secret | Encrypts credentials for connected tools.                                |
-| `RESEND_API_KEY`         | Worker secret | Sends organization invitation emails.                                    |
-| `SKILLS_SH_API_TOKEN`    | Worker secret | Enables browsing the skills.sh catalog.                                  |
-| `VAPID_PUBLIC_KEY`       | Worker secret | Enables browser notifications; set all three `VAPID_*` values.           |
-| `VAPID_PRIVATE_KEY`      | Worker secret | Enables browser notifications; set all three `VAPID_*` values.           |
-| `VAPID_SUBJECT`          | Worker secret | Contact URI for browser notifications, such as `mailto:you@example.com`. |
-| `DEV_FAKE_INSTALLATIONS` | Local only    | Comma-separated installation IDs for local sign-in without GitHub.       |
-| `POSTGRES_DATABASE_URL`  | CI secret     | Production migration URL used by the GitHub Actions deploy workflow.     |
-| `CLOUDFLARE_API_TOKEN`   | CI secret     | Lets the GitHub Actions deploy workflow publish to Cloudflare.           |
-| `CLOUDFLARE_ACCOUNT_ID`  | CI secret     | Selects the Cloudflare account used by the deploy workflow.              |
+| Name                    | Where         | Used for                                                                 |
+| ----------------------- | ------------- | ------------------------------------------------------------------------ |
+| `ARTIFACTS_REMOTE_BASE` | Worker var    | Git address for repositories stored in Cloudflare Artifacts.             |
+| `RESEND_FROM_ADDRESS`   | Worker var    | Sender address for organization invitation emails.                       |
+| `REVIEW_DAILY_LIMIT`    | Worker var    | Maximum automatic reviews per installation in 24 hours; defaults to 50.  |
+| `TRIVIAL_MODEL`         | Worker var    | Cheaper model for very small pull requests; empty disables it.           |
+| `REVIEW_SECRET`         | Worker secret | Protects operator-only HTTP endpoints.                                   |
+| `TOKEN_ENCRYPTION_KEY`  | Worker secret | Encrypts credentials for connected tools.                                |
+| `RESEND_API_KEY`        | Worker secret | Sends organization invitation emails.                                    |
+| `SKILLS_SH_API_TOKEN`   | Worker secret | Enables browsing the skills.sh catalog.                                  |
+| `VAPID_PUBLIC_KEY`      | Worker secret | Enables browser notifications; set all three `VAPID_*` values.           |
+| `VAPID_PRIVATE_KEY`     | Worker secret | Enables browser notifications; set all three `VAPID_*` values.           |
+| `VAPID_SUBJECT`         | Worker secret | Contact URI for browser notifications, such as `mailto:you@example.com`. |
+| `POSTGRES_DATABASE_URL` | CI secret     | Production migration URL used by the GitHub Actions deploy workflow.     |
+| `CLOUDFLARE_API_TOKEN`  | CI secret     | Lets the GitHub Actions deploy workflow publish to Cloudflare.           |
+| `CLOUDFLARE_ACCOUNT_ID` | CI secret     | Selects the Cloudflare account used by the deploy workflow.              |
 
 Generate `REVIEW_SECRET` and `TOKEN_ENCRYPTION_KEY` with
 `openssl rand -hex 32`. `TOKEN_ENCRYPTION_KEY` is required before anyone can
@@ -295,11 +294,6 @@ check.
 ## Learn more
 
 - [Architecture](docs/architecture.md)
-- [PostgreSQL setup](docs/postgres.md)
-- [How code-writing agents run](docs/coding-harness.md)
-- [How pull request reviews work](docs/review-quality.md)
-- [Software factory lifecycle](docs/software-factory-lifecycle.md)
-- [Cloudflare Artifacts repositories](docs/artifacts-provider.md)
 
 ## Contributing
 

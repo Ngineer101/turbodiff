@@ -184,6 +184,7 @@ export interface TaskRepoStatusRow {
   owner: string;
   name: string;
   feature_id: number | null;
+  change_id: number | null;
   feature_status: string | null;
   feature_error: string | null;
   pr_number: number | null;
@@ -200,7 +201,7 @@ export async function getTaskRepoStatuses(planIds: number[]): Promise<TaskRepoSt
   if (planIds.length === 0) return [];
   return queryRows<TaskRepoStatusRow>(sql`
     SELECT pr.plan_id, pr.repository_id, r.owner, r.name, r.provider,
-      f.id AS feature_id, f.status AS feature_status, f.error AS feature_error,
+      f.id AS feature_id, f.change_id, f.status AS feature_status, f.error AS feature_error,
       f.pr_number, v.status AS verification_status, v.results AS verification_results,
       v.created_at AS verification_created_at
     FROM app.plan_repositories pr
@@ -223,7 +224,7 @@ export async function boardTaskRepoStatuses(
   if (installationIds.length === 0) return [];
   return queryRows<TaskRepoStatusRow>(sql`
     SELECT pr.plan_id, pr.repository_id, r.owner, r.name, r.provider,
-      f.id AS feature_id, f.status AS feature_status, f.error AS feature_error,
+      f.id AS feature_id, f.change_id, f.status AS feature_status, f.error AS feature_error,
       f.pr_number, v.status AS verification_status, v.results AS verification_results,
       v.created_at AS verification_created_at
     FROM app.plan_repositories pr
@@ -767,6 +768,7 @@ export async function latestFixedAttempt(
 export interface PlanRow {
   id: number;
   repository_id: number;
+  work_item_id: number | null;
   title: string;
   requirements: string;
   analysis: string | null;
@@ -999,7 +1001,7 @@ export async function updatePlan(
   `);
 }
 
-// --- push subscriptions (Web Push, src/services/push-notifications.ts) ---
+// --- push subscriptions (Web Push, src/application/notifications/push.ts) ---
 
 export interface PushSubscriptionRow {
   id: number;
@@ -1113,7 +1115,6 @@ export async function tryRecordReview(
   });
 }
 
-
 export async function completeReviewById(
   reviewId: number,
   reviewUrl: string | null,
@@ -1145,7 +1146,6 @@ export async function completeReviewById(
     RETURNING stage_run_id
   `);
 }
-
 
 export async function addReviewUsageById(
   reviewId: number,

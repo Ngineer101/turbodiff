@@ -1,7 +1,7 @@
 import { env, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { processFixMessage } from '../runners/fixer.ts';
 import type { FixQueueMessage } from '../../shared/factory-messages.ts';
-import { notifyRepositoryLive } from '../../services/live-updates.ts';
+import { notifyRepositoryLive } from '../../application/notifications/live-updates.ts';
 
 // Fix runs as a durable Workflow — the last of the three long agent runs
 // (generation, verification, fix) to leave the queue consumer's 15-minute

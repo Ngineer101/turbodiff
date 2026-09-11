@@ -12,7 +12,6 @@ import {
   Plug,
   Repeat,
   Search,
-  ShieldCheck,
   Settings,
   Sparkles,
 } from 'lucide-react';
@@ -49,7 +48,6 @@ export const SIDEBAR_NAV = [
   { to: '/automations', label: 'Automations', icon: Repeat },
   { to: '/integrations', label: 'Integrations', icon: Plug },
   { to: '/usage', label: 'Usage', icon: BarChart2 },
-  { to: '/review-quality', label: 'Quality', icon: ShieldCheck },
   { to: '/settings', label: 'Settings', icon: Settings },
 ] as const;
 
@@ -66,11 +64,11 @@ const BOTTOM_NAV = [
 ] as const;
 
 function GithubRecoveryBanner({ me }: { me: ApiMe }) {
-  if (me.github_status === 'ready') return null;
+  if (me.githubStatus === 'ready') return null;
 
   let message: ReactNode;
   let action: ReactNode;
-  switch (me.github_status) {
+  switch (me.githubStatus) {
     case 'not_connected':
       message = <>GitHub isn&rsquo;t connected — the factory can&rsquo;t reach repositories yet.</>;
       action = (
@@ -104,7 +102,7 @@ function GithubRecoveryBanner({ me }: { me: ApiMe }) {
       message = <>GitHub is connected, but no GitHub App installation is available to you.</>;
       action = (
         <a
-          href={`https://github.com/apps/${me.github_app_slug}/installations/new`}
+          href={`https://github.com/apps/${me.githubAppSlug}/installations/new`}
           className="font-medium text-accent-bright hover:underline"
         >
           Install or configure the GitHub App &rarr;
@@ -124,7 +122,7 @@ function GithubRecoveryBanner({ me }: { me: ApiMe }) {
   return (
     <div className="mb-5 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-line-2/70 bg-surface/60 px-4 py-3 text-[0.85rem] text-ink-dim">
       {/* Every state here needs a human or is still moving — never green. */}
-      <Lamp tone="hold" pulse={me.github_status === 'syncing'} />
+      <Lamp tone="hold" pulse={me.githubStatus === 'syncing'} />
       {message}
       {action}
     </div>
@@ -297,7 +295,7 @@ export function AppShell({ me, children }: { me: ApiMe; children: ReactNode }) {
   const isDesktop = useIsDesktop();
   // App-wide live updates: one tiny version poll instead of per-page
   // full-payload polling (see use-live-refresh.ts).
-  useLiveRefresh(me.installation_ids);
+  useLiveRefresh(me.installationIds);
   useHotkeys(
     NAV_SHORTCUTS.map((s) => s.key).join(','),
     (_e, hk) => {

@@ -22,8 +22,6 @@ import type {
   ApiRepoCode,
   ApiRepoFile,
   ApiRepoTree,
-  ApiReviewQuality,
-  ApiReviewsPage,
   ApiSettings,
   ApiSkillCatalog,
   ApiSkillDetail,
@@ -86,7 +84,7 @@ export const meQuery = queryOptions({
   queryFn: () => api.get<ApiMe>('/api/me'),
   staleTime: 60_000,
   refetchInterval: (query) => {
-    const status = query.state.data?.github_status;
+    const status = query.state.data?.githubStatus;
     if (status === 'syncing') return 2_000;
     if (status === 'reauthorization_required') return 5_000;
     if (status === 'temporarily_unavailable') return 15_000;
@@ -113,18 +111,6 @@ export const taskQuery = (id: number) =>
 export const usageQuery = queryOptions({
   queryKey: ['usage'],
   queryFn: () => api.get<ApiUsage>('/api/usage'),
-});
-
-export const reviewQualityQuery = queryOptions({
-  queryKey: ['review-quality'],
-  queryFn: () => api.get<ApiReviewQuality>('/api/review-quality'),
-});
-
-export const reviewsQuery = queryOptions({
-  queryKey: ['reviews', 1],
-  queryFn: () => api.get<ApiReviewsPage>('/api/reviews?page=1'),
-  refetchInterval: (query) =>
-    query.state.data?.reviews.some((review) => review.state === 'running') ? LIVE_POLL_MS : false,
 });
 
 // Terminal fix-run outcomes for a cockpit comment's linked batch — anything

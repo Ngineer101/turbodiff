@@ -502,7 +502,7 @@ function NotificationsSettings() {
         await unsubscribeFromPush();
         return { next, ok: true };
       }
-      return { next, ok: await subscribeToPush(me.vapid_public_key) };
+      return { next, ok: await subscribeToPush(me.vapidPublicKey) };
     },
     onSuccess: ({ next, ok }) => {
       if (!ok) {
@@ -520,7 +520,7 @@ function NotificationsSettings() {
   });
 
   if (!pushSupported()) return null;
-  const unconfigured = !me.vapid_public_key;
+  const unconfigured = !me.vapidPublicKey;
 
   return (
     <>

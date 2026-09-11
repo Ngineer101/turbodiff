@@ -6,7 +6,7 @@ import {
   type RepositoryRow,
 } from '../../data/db.ts';
 import { explanationRequestBody } from '../../domain/explain.ts';
-import { loadFeatureDiff } from '../../services/feature-diff.ts';
+import { loadFeatureDiff } from '../../application/deliveries/feature-diff.ts';
 import { Explainer } from '../agents/explainer.ts';
 
 // Application boundary for the Explain tab: loads the same diff snapshot the

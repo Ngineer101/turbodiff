@@ -76,7 +76,7 @@ function Invitation({ id, invitation }: { id: string; invitation: ApiInvitationP
       // the board otherwise (an invited password account gets its connect
       // prompt there).
       const installationId = accepted.installation_id;
-      if (installationId !== null && me.installation_ids.includes(installationId)) {
+      if (installationId !== null && me.installationIds.includes(installationId)) {
         void navigate({
           to: '/settings/members/$installationId',
           params: { installationId: String(installationId) },

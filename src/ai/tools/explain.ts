@@ -5,7 +5,7 @@ import {
   explanationFromSchema,
   explanationProblems,
 } from '../../domain/explain.ts';
-import { notifyFeatureLive } from '../../services/live-updates.ts';
+import { notifyFeatureLive } from '../../application/notifications/live-updates.ts';
 
 // The Explainer agent's one output channel. Closes over the instance id so a
 // regenerate can never complete the row of the run it replaced, and over the

@@ -1,8 +1,7 @@
 import { sql } from 'drizzle-orm';
-import type { ReviewFinding } from '../artifacts/review.ts';
 import type { ReviewConclusion } from '../domain/review-context.ts';
 import { STALL_AFTER_MINUTES } from '../shared/time.ts';
-import { execute, queryOne, queryRows, withTransaction } from './database.ts';
+import { execute, queryOne, queryRows } from './database.ts';
 import { bigintArray, minutesAgo } from './sql.ts';
 
 export interface AgentUsageRow {
@@ -62,24 +61,12 @@ export interface ReviewActivityRow {
   repo_name: string | null;
 }
 
-export type ReviewFindingFeedback = 'useful' | 'false_positive' | 'fixed' | 'dismissed';
-
 export interface ReviewRunGuard {
   id: number;
   repository_id: number;
   pr_number: number;
   status: string;
   head_sha: string | null;
-}
-
-export interface ReviewFileEvidenceRow {
-  path: string;
-  disposition: 'reviewed' | 'blocked' | null;
-  evidence: string | null;
-}
-
-export interface ReviewFileEvidenceDetail extends ReviewFileEvidenceRow {
-  review_id: number;
 }
 
 export interface ReviewFileAcknowledgement {
@@ -118,148 +105,6 @@ export async function recordReviewFileAcknowledgements(
       evidence = EXCLUDED.evidence,
       acknowledged_at = EXCLUDED.acknowledged_at
   `);
-}
-
-
-export async function listReviewFileEvidenceForReviews(
-  reviewIds: number[],
-): Promise<ReviewFileEvidenceDetail[]> {
-  if (reviewIds.length === 0) return [];
-  return queryRows<ReviewFileEvidenceDetail>(sql`
-    SELECT e.review_id, e.path, e.disposition, e.evidence
-    FROM app.review_file_evidence e
-    WHERE e.review_id = ANY(${bigintArray(reviewIds)})
-    ORDER BY e.review_id, e.path
-  `);
-}
-
-export async function recordReviewFindingsById(
-  reviewId: number,
-  findings: ReviewFinding[],
-): Promise<void> {
-  await withTransaction(async (transaction) => {
-    const found = await transaction.execute<{ id: number }>(sql`
-      SELECT id FROM app.reviews
-      WHERE id = ${reviewId} AND status = 'running'
-      FOR UPDATE
-    `);
-    if (!found.rows[0]) return;
-    await transaction.execute(sql`DELETE FROM app.review_findings WHERE review_id = ${reviewId}`);
-    if (findings.length === 0) return;
-    const values = findings.map(
-      (finding, index) => sql`(
-        ${reviewId}, ${index}, ${finding.path}, ${finding.line}, ${finding.side},
-        ${finding.severity}, ${finding.body}, ${finding.evidence}, ${finding.failurePath}
-      )`,
-    );
-    await transaction.execute(sql`
-      INSERT INTO app.review_findings
-        (review_id, candidate_index, path, line, side, severity, body, evidence, failure_path)
-      VALUES ${sql.join(values, sql`, `)}
-    `);
-  });
-}
-
-export interface ReviewQualityFindingRow {
-  id: number;
-  review_id: number;
-  repo: string | null;
-  pr_number: number;
-  agent_slug: string | null;
-  path: string;
-  line: number;
-  severity: 'P1' | 'P2';
-  body: string;
-  feedback: ReviewFindingFeedback | null;
-  created_at: string;
-}
-
-export interface ReviewQualityStats {
-  published: number;
-  labeled: number;
-  true_positives: number;
-  false_positives: number;
-}
-
-export async function reviewQualityDashboard(
-  installationIds: number[],
-): Promise<{ stats: ReviewQualityStats; findings: ReviewQualityFindingRow[] }> {
-  const empty: ReviewQualityStats = {
-    published: 0,
-    labeled: 0,
-    true_positives: 0,
-    false_positives: 0,
-  };
-  if (installationIds.length === 0) return { stats: empty, findings: [] };
-  const ids = bigintArray(installationIds);
-  const [stats, findings] = await Promise.all([
-    queryOne<ReviewQualityStats>(sql`
-      SELECT
-        COUNT(f.id) AS published,
-        COUNT(f.id) FILTER (WHERE f.feedback IS NOT NULL) AS labeled,
-        COUNT(f.id) FILTER (WHERE f.feedback IN ('useful', 'fixed')) AS true_positives,
-        COUNT(f.id) FILTER (WHERE f.feedback = 'false_positive') AS false_positives
-      FROM app.review_findings f
-      JOIN app.reviews r ON r.id = f.review_id
-      WHERE r.installation_id = ANY(${ids})
-        AND r.created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'
-    `),
-    queryRows<ReviewQualityFindingRow>(sql`
-      SELECT f.id, f.review_id,
-        CASE WHEN repo.id IS NULL THEN NULL ELSE repo.owner || '/' || repo.name END AS repo,
-        r.pr_number, r.agent_slug, f.path, f.line, f.severity, f.body,
-        f.feedback, f.created_at
-      FROM app.review_findings f
-      JOIN app.reviews r ON r.id = f.review_id
-      LEFT JOIN app.repositories repo ON repo.id = r.repository_id
-      WHERE r.installation_id = ANY(${ids})
-      ORDER BY f.id DESC LIMIT 100
-    `),
-  ]);
-  return { stats: stats ?? empty, findings };
-}
-
-export async function setReviewFindingFeedback(
-  id: number,
-  installationIds: number[],
-  githubUserId: number,
-  feedback: ReviewFindingFeedback,
-): Promise<boolean> {
-  if (installationIds.length === 0) return false;
-  const result = await queryOne<{ id: number }>(sql`
-    UPDATE app.review_findings f SET feedback = ${feedback},
-      feedback_by_github_id = ${githubUserId}, feedback_at = CURRENT_TIMESTAMP
-    FROM app.reviews r
-    WHERE f.id = ${id} AND f.review_id = r.id
-      AND r.installation_id = ANY(${bigintArray(installationIds)})
-    RETURNING f.id
-  `);
-  return result !== null;
-}
-
-export async function listRecentReviews(
-  installationIds: number[],
-  limit = 50,
-  offset = 0,
-): Promise<ReviewActivityRow[]> {
-  if (installationIds.length === 0) return [];
-  return queryRows<ReviewActivityRow>(sql`
-    SELECT r.*, repo.owner AS repo_owner, repo.name AS repo_name
-    FROM app.reviews r
-    LEFT JOIN app.repositories repo ON repo.id = r.repository_id
-    WHERE r.installation_id = ANY(${bigintArray(installationIds)})
-    ORDER BY r.id DESC
-    LIMIT ${limit} OFFSET ${offset}
-  `);
-}
-
-export async function countReviews(installationIds: number[]): Promise<number> {
-  if (installationIds.length === 0) return 0;
-  const row = await queryOne<{ n: number }>(sql`
-    SELECT COUNT(*) AS n FROM app.reviews
-    WHERE installation_id = ANY(${bigintArray(installationIds)})
-  `);
-  return row?.n ?? 0;
 }
 
 export interface MonthlyUsageRow {
@@ -372,7 +217,6 @@ export async function dashboardStats(installationIds: number[]): Promise<Dashboa
   return row ?? empty;
 }
 
-
 export async function markReviewFailedById(
   reviewId: number,
   error: string | null = null,
@@ -384,7 +228,6 @@ export async function markReviewFailedById(
     RETURNING stage_run_id
   `);
 }
-
 
 export interface ReviewStageProgress {
   running: number;

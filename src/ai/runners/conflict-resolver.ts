@@ -28,13 +28,16 @@ import {
   installationToken,
   sandboxGitToken,
 } from '../../integrations/github/app.ts';
-import { checkMergeability, postConflictResolvedComment } from '../../services/merge-conflicts.ts';
+import {
+  checkMergeability,
+  postConflictResolvedComment,
+} from '../../application/deliveries/merge-conflicts.ts';
 import { UNTRUSTED_CONTENT_RULES } from '../../domain/prompt-security.ts';
 import {
   FIX_MAX_ATTEMPTS,
   type ConflictResolveQueueMessage,
 } from '../../shared/factory-messages.ts';
-import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
+import { enqueueFactoryMessage } from '../../application/factory/queue.ts';
 
 // Opt-in agent-driven merge-conflict resolution for factory PRs
 // (docs/software-factory-design.md): clone the PR's head branch, merge the

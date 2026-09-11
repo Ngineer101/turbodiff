@@ -1,7 +1,7 @@
 import { env, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { processResolveConflictMessage } from '../runners/conflict-resolver.ts';
 import type { ConflictResolveQueueMessage } from '../../shared/factory-messages.ts';
-import { notifyRepositoryLive } from '../../services/live-updates.ts';
+import { notifyRepositoryLive } from '../../application/notifications/live-updates.ts';
 
 // Conflict resolution runs as a durable Workflow, same as fix — an
 // agent-driven merge conflict resolution can exceed a queue consumer's wall

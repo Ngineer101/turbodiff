@@ -117,7 +117,6 @@ export async function getReviewerModelCatalog(): Promise<SurfaceCatalog> {
   return reviewerCatalog(await enabledModelRows());
 }
 
-
 export async function resolveRunnerModel(
   requested?: string | null,
   role: 'default' | 'fast' = 'default',

@@ -58,7 +58,8 @@ function changedFiles(input: ReviewerInput): string {
 function previousReviewDelta(input: ReviewerInput): string {
   const delta = input.changedSincePreviousReview;
   if (!delta) return '';
-  const paths = delta.paths.length > 0 ? delta.paths.map((path) => `- ${path}`).join('\n') : '- none';
+  const paths =
+    delta.paths.length > 0 ? delta.paths.map((path) => `- ${path}`).join('\n') : '- none';
   return `\n## Change since the previous review\nPrevious revision: ${delta.revision}\nPrioritize these paths, then check any affected interactions:\n${paths}\n`;
 }
 

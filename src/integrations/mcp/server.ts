@@ -7,8 +7,8 @@ import {
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { CfWorkerJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/cfworker';
-import type { AuthedUser } from '../../services/auth.ts';
-import type { enqueueFactoryMessage } from '../../services/factory-queue.ts';
+import type { AuthedUser } from '../../application/auth/session.ts';
+import type { enqueueFactoryMessage } from '../../application/factory/queue.ts';
 import {
   createTodo,
   getFeature,
@@ -19,7 +19,7 @@ import {
   repoTree,
   sendChatMessage,
   startTask,
-} from '../../services/mcp-tools.ts';
+} from '../../application/mcp/tools.ts';
 import {
   isJsonArray,
   isJsonObject,
@@ -32,7 +32,7 @@ import {
 // statelessly over streamable HTTP: one Server + transport pair per POST, no
 // mcp-session-id, JSON responses only (no SSE streams). Authentication
 // happens in http/mcp.ts before this module sees the request; the tool
-// surface itself lives in services/mcp-tools.ts. The sibling client.ts is
+// surface itself lives in application/mcp/tools.ts. The sibling client.ts is
 // the outbound probe for user-configured agent connections — its request
 // shapes double as this server's test vectors.
 

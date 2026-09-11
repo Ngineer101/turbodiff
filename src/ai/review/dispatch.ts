@@ -1,5 +1,5 @@
 import { tryRecordReview, type AgentRow, type RepositoryRow } from '../../data/db.ts';
-import { failLifecycleReviewById } from '../../services/lifecycle.ts';
+import { failLifecycleReviewById } from '../../application/factory/lifecycle.ts';
 import { startReviewWorkflow, type ReviewWorkflowParams } from '../workflows/review.ts';
 
 // Admits one exact review run and starts the generic review Workflow. The

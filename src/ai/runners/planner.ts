@@ -22,7 +22,7 @@ import { resolveWorkspaceRemote } from '../../integrations/git/provider.ts';
 import { installationToken } from '../../integrations/github/app.ts';
 import { githubRequest as gh } from '../../integrations/github/client.ts';
 import { signArtifactKey } from '../../integrations/security/crypto.ts';
-import { notifyPlanUsers } from '../../services/push-notifications.ts';
+import { notifyPlanUsers } from '../../application/notifications/push.ts';
 import { persistAgentLog } from '../runtime/agent-runs.ts';
 import { runCodingAgent } from '../runtime/coding-agent.ts';
 import {

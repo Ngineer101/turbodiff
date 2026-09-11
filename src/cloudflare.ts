@@ -8,7 +8,7 @@
 // https://flueframework.com/docs/guide/cloudflare-target/#extending-cloudflarets-entrypoint
 
 import { startAutomationRun, AutomationWorkflow } from './ai/workflows/automation.ts';
-import { pollAutomations } from './services/automation-poll.ts';
+import { pollAutomations } from './application/automations/poll.ts';
 import {
   ConflictResolveWorkflow,
   startResolveConflict,
@@ -19,14 +19,17 @@ import { ReviewWorkflow } from './ai/workflows/review.ts';
 import type { FactoryMessage } from './shared/factory-messages.ts';
 import { startGeneration } from './ai/workflows/generation.ts';
 import { failStrandedGeneration, failStrandedVerifications } from './data/factory.ts';
-import { sweepFactoryPrConflicts } from './services/merge-conflicts.ts';
+import { sweepFactoryPrConflicts } from './application/deliveries/merge-conflicts.ts';
 import { runPlanAnalyze, runPlanRefine } from './ai/runners/planner.ts';
-import { dispatchNativeCrReviews } from './services/native-review-dispatch.ts';
-import { mergeNativeChangeRequest, runQueuedCrMerge } from './services/change-requests.ts';
+import { dispatchNativeCrReviews } from './application/reviews/native-dispatch.ts';
+import {
+  mergeNativeChangeRequest,
+  runQueuedCrMerge,
+} from './application/deliveries/change-requests.ts';
 import { startVerification, VerificationWorkflow } from './ai/workflows/verification.ts';
-import { notifyPlanLive } from './services/live-updates.ts';
+import { notifyPlanLive } from './application/notifications/live-updates.ts';
 import { withDatabaseScope } from './data/database.ts';
-import { runLifecycleStage, scheduleFeatureDelivery } from './services/lifecycle.ts';
+import { runLifecycleStage, scheduleFeatureDelivery } from './application/factory/lifecycle.ts';
 import { dispatchReviewAgent } from './ai/review/dispatch.ts';
 
 // The fixer sandbox container (docs/software-factory-design.md). Declared in
@@ -117,7 +120,7 @@ export default {
     });
   },
 
-  // Fixed-interval poll for due automations (src/services/automation-poll.ts) —
+  // Fixed-interval poll for due automations (src/application/automations/poll.ts) —
   // schedule precision is bounded by the cron interval in wrangler.jsonc.
   async scheduled(): Promise<void> {
     await withDatabaseScope(async () => {

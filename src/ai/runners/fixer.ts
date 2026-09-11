@@ -25,8 +25,11 @@ import { UNTRUSTED_CONTENT_RULES } from '../../domain/prompt-security.ts';
 import { installDependencies, NPM_CACHE_ENV } from '../runtime/sandbox-deps.ts';
 import { checkCommandUnrunnable, runCheckCommand } from '../runtime/check-command.ts';
 import { FIX_MAX_ATTEMPTS, type FixQueueMessage } from '../../shared/factory-messages.ts';
-import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
-import { completeLifecycleRepair, scheduleChangeReview } from '../../services/lifecycle.ts';
+import { enqueueFactoryMessage } from '../../application/factory/queue.ts';
+import {
+  completeLifecycleRepair,
+  scheduleChangeReview,
+} from '../../application/factory/lifecycle.ts';
 import { resolveRunnerAuth } from '../runtime/runner-auth.ts';
 import { runnerSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
@@ -37,7 +40,7 @@ import {
   CR_BOT_AUTHOR,
   latestNativeReviewFindings,
   refreshChangeRequest,
-} from '../../services/change-requests.ts';
+} from '../../application/deliveries/change-requests.ts';
 import { mountSkills } from '../runtime/skills.ts';
 import {
   fetchPushablePrHead,

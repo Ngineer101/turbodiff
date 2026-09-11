@@ -1,6 +1,6 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { ARTIFACTS_NAMESPACE } from '../../integrations/git/provider.ts';
-import { applyArtifactsEvent } from '../../services/artifacts.ts';
+import { applyArtifactsEvent } from '../../application/repositories/artifacts.ts';
 import { parseArtifactsEvent } from '../../shared/artifacts-events.ts';
 
 // Artifacts event ingestion (docs/artifacts-provider.md). The platform

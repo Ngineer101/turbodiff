@@ -31,16 +31,12 @@ import {
   listReposForPlan,
   pipelineCostByMonth,
   recentChatHistory,
-  recordReviewFindingsById,
   recordReviewFileAcknowledgements,
-  listReviewFileEvidenceForReviews,
-  reviewQualityDashboard,
   recordRepositoryRef,
   repositoryRef,
   repositoryRefs,
   setChatMessageStatus,
   setChatSessionId,
-  setReviewFindingFeedback,
   tryRecordAutomationRun,
   tryClaimConnectionRefresh,
   tryRecordFixAttempt,
@@ -99,7 +95,6 @@ beforeEach(async () => {
     'skills',
     'agents',
     'review_file_evidence',
-    'review_findings',
     'reviews',
     'todo_repositories',
     'plan_repositories',
@@ -391,18 +386,6 @@ describe('review dispatch invariants', () => {
     await expect(
       completeReviewById(oldId!, 'https://example.test/stale', 3, 'approve'),
     ).resolves.toBeNull();
-    await recordReviewFindingsById(oldId!, [
-      {
-        path: 'src/stale.ts',
-        line: 1,
-        side: 'RIGHT',
-        severity: 'P1',
-        body: 'stale finding',
-        evidence: 'old evidence',
-        failurePath: 'old path',
-      },
-    ]);
-
     const rows = await testDatabase()
       .prepare(
         `SELECT id, status, findings_count, input_tokens
@@ -419,12 +402,6 @@ describe('review dispatch invariants', () => {
       { id: oldId, status: 'failed', findings_count: null, input_tokens: 0 },
       { id: currentId, status: 'running', findings_count: null, input_tokens: 0 },
     ]);
-    await expect(
-      testDatabase()
-        .prepare('SELECT COUNT(*) AS count FROM review_findings WHERE review_id = ?1')
-        .bind(oldId)
-        .first<{ count: number }>(),
-    ).resolves.toEqual({ count: 0 });
   });
 
   it('records the artifact per-file evidence without a transport delivery protocol', async () => {
@@ -445,81 +422,31 @@ describe('review dispatch invariants', () => {
       { path: 'src/b.ts', disposition: 'blocked', evidence: 'could not validate generated code' },
     ]);
 
-    await expect(listReviewFileEvidenceForReviews([reviewId!])).resolves.toEqual([
-      {
-        review_id: reviewId,
-        path: 'src/a.ts',
-        disposition: 'reviewed',
-        evidence: 'checked the mutation path',
-      },
-      {
-        review_id: reviewId,
-        path: 'src/b.ts',
-        disposition: 'blocked',
-        evidence: 'could not validate generated code',
-      },
-    ]);
-  });
-
-  it('records published findings and tenant-scoped feedback', async () => {
-    const reviewId = await tryRecordReview(
-      101,
-      1001,
-      15,
-      'opened',
-      'review',
-      'review--acme--api--15',
-    );
-    const candidate = {
-      path: 'src/app.ts',
-      line: 12,
-      side: 'RIGHT' as const,
-      severity: 'P1' as const,
-      body: '🔴 **P1** authorization runs too late',
-      evidence: 'mutation is called before requireUser',
-      failurePath: 'anonymous request -> mutation',
-    };
-    expect(reviewId).not.toBeNull();
-    await recordReviewFindingsById(reviewId!, [candidate]);
     await expect(
       testDatabase()
         .prepare(
-          `SELECT evidence, failure_path, feedback
-           FROM review_findings WHERE candidate_index = 0`,
+          `SELECT review_id, path, disposition, evidence
+           FROM review_file_evidence WHERE review_id = ?1 ORDER BY path`,
         )
-        .first(),
+        .bind(reviewId)
+        .all(),
     ).resolves.toMatchObject({
-      evidence: 'mutation is called before requireUser',
-      failure_path: 'anonymous request -> mutation',
-      feedback: null,
-    });
-    await completeReviewById(reviewId!, null, 1, 'request_changes', ['src/app.ts']);
-
-    const dashboard = await reviewQualityDashboard([1001]);
-    expect(dashboard.stats).toMatchObject({ published: 1, labeled: 0 });
-    expect(dashboard.findings[0]).toMatchObject({ repo: 'acme/api', pr_number: 15 });
-    const findingId = dashboard.findings[0].id;
-    await expect(setReviewFindingFeedback(findingId, [9999], 3001, 'useful')).resolves.toBe(false);
-    await expect(
-      testDatabase()
-        .prepare('SELECT feedback, feedback_by_github_id FROM review_findings WHERE id = ?1')
-        .bind(findingId)
-        .first(),
-    ).resolves.toMatchObject({ feedback: null, feedback_by_github_id: null });
-    await expect(setReviewFindingFeedback(findingId, [1001], 3001, 'useful')).resolves.toBe(true);
-    await expect(
-      testDatabase()
-        .prepare(
-          'SELECT feedback, feedback_by_github_id, feedback_at IS NOT NULL AS stamped FROM review_findings WHERE id = ?1',
-        )
-        .bind(findingId)
-        .first(),
-    ).resolves.toMatchObject({ feedback: 'useful', feedback_by_github_id: 3001, stamped: true });
-    await expect(reviewQualityDashboard([1001])).resolves.toMatchObject({
-      stats: { labeled: 1, true_positives: 1, false_positives: 0 },
+      results: [
+        {
+          review_id: reviewId,
+          path: 'src/a.ts',
+          disposition: 'reviewed',
+          evidence: 'checked the mutation path',
+        },
+        {
+          review_id: reviewId,
+          path: 'src/b.ts',
+          disposition: 'blocked',
+          evidence: 'could not validate generated code',
+        },
+      ],
     });
   });
-
 
   it('records why a review failed', async () => {
     const id = await tryRecordReview(101, 1001, 12, 'opened', 'review', 'review--acme--api--12');

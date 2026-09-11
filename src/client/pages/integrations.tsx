@@ -295,7 +295,6 @@ function IntegrationCard({ conn, repos }: { conn: ApiIntegration; repos: ApiInte
         </div>
       </div>
 
-
       {conn.kind === 'mcp' ? (
         repos.length === 0 ? (
           <Muted className="mt-3 block border-t border-line/70 pt-3 text-xs">

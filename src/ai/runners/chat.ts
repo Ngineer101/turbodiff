@@ -30,7 +30,7 @@ import {
   CHAT_BUSY_RETRIES,
   type ChatQueueMessage,
 } from '../../shared/factory-messages.ts';
-import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
+import { enqueueFactoryMessage } from '../../application/factory/queue.ts';
 import { resolveRunnerAuth } from '../runtime/runner-auth.ts';
 import { runnerSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
@@ -41,8 +41,8 @@ import {
 } from '../runtime/repository-workspace.ts';
 import { githubWorkspaceRemote, resolveWorkspaceRemote } from '../../integrations/git/provider.ts';
 import type { WorkspaceRemote } from '../../integrations/git/remotes.ts';
-import { refreshChangeRequest } from '../../services/change-requests.ts';
-import { scheduleChangeReview } from '../../services/lifecycle.ts';
+import { refreshChangeRequest } from '../../application/deliveries/change-requests.ts';
+import { scheduleChangeReview } from '../../application/factory/lifecycle.ts';
 import { mountSkills } from '../runtime/skills.ts';
 import { fetchPushablePrHead, prTouchesWorkflowFiles } from '../runtime/pull-requests.ts';
 

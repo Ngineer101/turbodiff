@@ -8,12 +8,8 @@ import {
   type ChangeRequestRow,
 } from '../../data/db.ts';
 import { buildReviewDiffSnapshot } from '../../domain/review-context.ts';
-import { cockpitFeatureUrl } from '../../services/urls.ts';
-import type {
-  ReviewPublication,
-  ReviewPublicationPlan,
-  ReviewSource,
-} from './types.ts';
+import { cockpitFeatureUrl } from '../../application/urls.ts';
+import type { ReviewPublication, ReviewPublicationPlan, ReviewSource } from './types.ts';
 
 export async function loadArtifactsReviewSource(
   repo: RepositoryRow,

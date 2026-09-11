@@ -26,12 +26,12 @@ import {
   setProposedAcceptance,
 } from '../../data/db.ts';
 import { persistAgentLog } from '../runtime/agent-runs.ts';
-import { maybeAutoMerge } from '../../services/auto-merge.ts';
-import { maybeResolveConflict } from '../../services/merge-conflicts.ts';
-import { CR_BOT_AUTHOR, maybeAutoMergeCr } from '../../services/change-requests.ts';
-import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
-import { certificateUrl } from '../../services/certificates.ts';
-import { cockpitFeatureUrl } from '../../services/urls.ts';
+import { maybeAutoMerge } from '../../application/deliveries/auto-merge.ts';
+import { maybeResolveConflict } from '../../application/deliveries/merge-conflicts.ts';
+import { CR_BOT_AUTHOR, maybeAutoMergeCr } from '../../application/deliveries/change-requests.ts';
+import { enqueueFactoryMessage } from '../../application/factory/queue.ts';
+import { certificateUrl } from '../../application/deliveries/certificates.ts';
+import { cockpitFeatureUrl } from '../../application/urls.ts';
 import { formatUnmetCriteriaFindings, type CriterionResult } from '../../domain/verification.ts';
 import { parseUtc } from '../../shared/time.ts';
 import { signArtifactKey } from '../../integrations/security/crypto.ts';

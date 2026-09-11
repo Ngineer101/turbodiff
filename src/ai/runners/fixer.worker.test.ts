@@ -26,8 +26,8 @@ import {
   completeLifecycleReviewById,
   runLifecycleStage,
   scheduleChangeReview,
-} from '../../services/lifecycle.ts';
-import type { ReviewDispatcher } from '../../services/change-review.ts';
+} from '../../application/factory/lifecycle.ts';
+import type { ReviewDispatcher } from '../../application/reviews/change-review.ts';
 
 type ExecuteFix = NonNullable<FixProcessorDependencies['runFix']>;
 
@@ -136,8 +136,8 @@ describe('coordinator-owned repair', () => {
       ),
       testDatabase().prepare(
         `INSERT INTO repositories
-          (id, installation_id, owner, name, enabled, auto_fix, review_intake, process_profile)
-         VALUES (101, 1001, 'acme', 'api', TRUE, FALSE, 'all_changes', 'review_and_repair')`,
+          (id, installation_id, owner, name, enabled, auto_fix, process_profile)
+         VALUES (101, 1001, 'acme', 'api', TRUE, FALSE, 'review_and_repair')`,
       ),
     ]);
     await ensureBuiltinAgents(1001);

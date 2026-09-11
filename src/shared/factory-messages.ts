@@ -63,7 +63,6 @@ export interface ConflictResolveQueueMessage {
   prNumber: number;
 }
 
-
 export interface CrMergeQueueMessage {
   kind: 'cr_merge';
   changeRequestId: number;

@@ -2,7 +2,6 @@ import { inArray, sql } from 'drizzle-orm';
 import { execute, queryOne, queryRows, withDatabase, withTransaction } from './database.ts';
 import { repositories } from './schema.ts';
 import { bigintArray } from './sql.ts';
-import type { ReviewIntakeMode } from '../domain/review-intake.ts';
 import type { ProcessProfileKey } from '../domain/lifecycle-contract.ts';
 import type { AdoptableProcessProfileKey } from '../domain/process-profiles.ts';
 
@@ -30,7 +29,6 @@ export interface RepositoryRow {
   enabled: boolean;
   review_on_push: boolean; // re-dispatch tiered agents on pushes to open PRs
   review_push_debounce_minutes: number; // trailing window before a push review runs (0 = now)
-  review_intake: ReviewIntakeMode;
   process_profile: ProcessProfileKey;
   blocking_reviews: boolean; // P1 → REQUEST_CHANGES, clean → APPROVE
   auto_fix: boolean; // dispatch the fix agent when a blocking review lands
@@ -299,32 +297,12 @@ export async function setRepoReviewPushDebounceMinutes(id: number, minutes: numb
   `);
 }
 
-export async function setRepoReviewIntake(id: number, mode: ReviewIntakeMode): Promise<void> {
-  const profile =
-    mode === 'on_demand'
-      ? 'review_on_demand'
-      : mode === 'all_changes'
-        ? 'automatic_review'
-        : 'legacy_factory';
-  await execute(sql`
-    UPDATE app.repositories SET review_intake = ${mode}, process_profile = ${profile}
-    WHERE id = ${id}
-  `);
-}
-
 export async function setRepoProcessProfile(
   id: number,
   profile: AdoptableProcessProfileKey,
 ): Promise<void> {
-  const intake: ReviewIntakeMode =
-    profile === 'legacy_factory'
-      ? 'factory_only'
-      : profile === 'review_on_demand' || profile === 'idea_to_pr'
-        ? 'on_demand'
-        : 'all_changes';
   await execute(sql`
-    UPDATE app.repositories SET process_profile = ${profile}, review_intake = ${intake}
-    WHERE id = ${id}
+    UPDATE app.repositories SET process_profile = ${profile} WHERE id = ${id}
   `);
 }
 

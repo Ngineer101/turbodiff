@@ -37,7 +37,7 @@ import { verifyStageOutcome } from '../domain/verification.ts';
 import type { RunStageCommand } from '../domain/lifecycle-contract.ts';
 import type { JsonObject } from '../shared/json.ts';
 import { createWebhookRoutes, type WebhookRouteDependencies } from './webhooks.ts';
-import type { ReviewDispatcher } from '../services/change-review.ts';
+import type { ReviewDispatcher } from '../application/reviews/change-review.ts';
 import {
   completeLifecycleRepair,
   completeLifecycleReviewById,
@@ -46,7 +46,7 @@ import {
   resumeFailedStage,
   runLifecycleStage,
   scheduleFeatureDelivery,
-} from '../services/lifecycle.ts';
+} from '../application/factory/lifecycle.ts';
 
 type TestEnv = Cloudflare.Env & { GITHUB_WEBHOOK_SECRET: string };
 interface ScheduledReviewBody {
@@ -79,9 +79,8 @@ async function activeReviewId(agentInstanceId: string): Promise<number> {
   return row.id;
 }
 
-type CompleteReviewArgs = Parameters<typeof completeLifecycleReviewById> extends [number, ...infer R]
-  ? R
-  : never;
+type CompleteReviewArgs =
+  Parameters<typeof completeLifecycleReviewById> extends [number, ...infer R] ? R : never;
 
 async function completeLifecycleReview(
   agentInstanceId: string,
@@ -90,11 +89,13 @@ async function completeLifecycleReview(
   await completeLifecycleReviewById(await activeReviewId(agentInstanceId), ...args);
 }
 
-type FailReviewArgs = Parameters<typeof failLifecycleReviewById> extends [number, ...infer R]
-  ? R
-  : never;
+type FailReviewArgs =
+  Parameters<typeof failLifecycleReviewById> extends [number, ...infer R] ? R : never;
 
-async function failLifecycleReview(agentInstanceId: string, ...args: FailReviewArgs): Promise<void> {
+async function failLifecycleReview(
+  agentInstanceId: string,
+  ...args: FailReviewArgs
+): Promise<void> {
   await failLifecycleReviewById(await activeReviewId(agentInstanceId), ...args);
 }
 
@@ -128,19 +129,11 @@ async function postWebhook(app: Hono, event: string, payload: JsonObject): Promi
 async function seedRepo(
   opts: {
     autoFix?: boolean;
-    reviewIntake?: 'factory_only' | 'on_demand' | 'all_changes';
-    processProfile?: 'review_and_repair';
+    processProfile?: 'legacy_factory' | 'automatic_review' | 'review_and_repair';
     pushDebounceMinutes?: number;
   } = {},
 ): Promise<void> {
-  const reviewIntake = opts.reviewIntake ?? 'factory_only';
-  const processProfile =
-    opts.processProfile ??
-    (reviewIntake === 'all_changes'
-      ? 'automatic_review'
-      : reviewIntake === 'on_demand'
-        ? 'review_on_demand'
-        : 'legacy_factory');
+  const processProfile = opts.processProfile ?? 'legacy_factory';
   await testDatabase().batch([
     testDatabase().prepare(
       `INSERT INTO installations (id, account_login, account_id, account_type)
@@ -149,11 +142,11 @@ async function seedRepo(
     testDatabase()
       .prepare(
         `INSERT INTO repositories
-          (id, installation_id, owner, name, review_on_push, auto_fix, review_intake,
+          (id, installation_id, owner, name, review_on_push, auto_fix,
            process_profile, review_push_debounce_minutes)
-       VALUES (101, 1001, 'acme', 'api', TRUE, ?1, ?2, ?3, ?4)`,
+       VALUES (101, 1001, 'acme', 'api', TRUE, ?1, ?2, ?3)`,
       )
-      .bind(opts.autoFix ?? false, reviewIntake, processProfile, opts.pushDebounceMinutes ?? 10),
+      .bind(opts.autoFix ?? false, processProfile, opts.pushDebounceMinutes ?? 10),
   ]);
 }
 
@@ -359,7 +352,7 @@ describe('composable feature delivery', () => {
     await testDatabase()
       .prepare(
         `UPDATE repositories
-         SET process_profile = 'idea_to_pr', review_intake = 'on_demand'
+         SET process_profile = 'idea_to_pr'
          WHERE id = 101`,
       )
       .run();
@@ -1392,8 +1385,8 @@ describe('factory PR webhook decisions', () => {
     expect(refreshed?.source_head).toBe('c'.repeat(40));
   });
 
-  it('automatically reviews a human PR only after all-changes intake is selected', async () => {
-    await seedRepo({ reviewIntake: 'all_changes' });
+  it('automatically reviews a human PR under the automatic-review profile', async () => {
+    await seedRepo({ processProfile: 'automatic_review' });
     await ensureBuiltinAgents(1001);
     const queued: FactoryMessage[] = [];
     const response = await postWebhook(
@@ -1544,7 +1537,7 @@ describe('push re-reviews', () => {
   // unless a repo opts the others in), so the selection rules have a fleet
   // to choose from.
   async function seedReviewedRepo(opts: Parameters<typeof seedRepo>[0] = {}): Promise<void> {
-    await seedRepo({ reviewIntake: 'all_changes', ...opts });
+    await seedRepo({ processProfile: 'automatic_review', ...opts });
     await ensureBuiltinAgents(1001);
     await testDatabase()
       .prepare(

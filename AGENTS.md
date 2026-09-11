@@ -1,8 +1,7 @@
 # AGENTS.md
 
 Turbodiff is a multi-tenant software factory whose agents are pure TypeScript definitions.
-The app is hosted on Cloudflare
-Workers at <https://turbodiff.dev> (repo: <https://github.com/Ngineer101/turbodiff>).
+The app is hosted on Cloudflare Workers (repo: <https://github.com/Ngineer101/turbodiff>)
 
 ## Layout
 
@@ -11,9 +10,10 @@ Workers at <https://turbodiff.dev> (repo: <https://github.com/Ngineer101/turbodi
 - `src/ai/` — sandbox runners, runtime support, and durable Workflows. `runtime/` owns runner authentication, sandbox access, redaction, skill mounting, repository-workspace mechanics, and the model-neutral OpenCode adapter; stage orchestration stays explicit in `runners/` and `workflows/`. Legacy modules whose first line is `'use agent'` are Flue durable identities and require Durable Object migrations.
 - `src/domain/` — pure policies and value logic: personas, scheduling, attribution, prompt security, skill rendering, and AI Gateway model/capability policy.
 - `src/data/` — Drizzle/PostgreSQL persistence through Cloudflare Hyperdrive. `schema.ts` is the schema source of truth, `database.ts` owns short-lived Hyperdrive clients, and `db.ts` is the stable facade; queries and row types are split across repositories, factory, agents, connections, reviews, usage, credentials, board, and automations.
-- `src/services/` — application use cases and authorization. The GitHub webhook service mirrors installations/repos and drives review/fix policy without depending on Hono. Queue producers use the typed `factory-queue.ts` gateway. `ai-gateway-proxy.ts` validates sandbox model capabilities and owns the upstream retry/streaming exchange.
-- `src/integrations/` — GitHub, better-auth, MCP, notification, and cryptographic adapters. External protocol, grant signing, and credential-refresh details belong here or in a coordinating service, never in data queries. GitHub REST JSON and pagination go through `integrations/github/client.ts`.
-- `src/http/` — Hono routes, middleware adapters, and server-rendered views. `api.ts` is the session-cookie JSON API; `api-support.ts` owns its presentation, validation, and resource-authorization helpers. Public `/ai-proxy/v1/*` and `/mcp-proxy/:id` routes accept only short-lived sandbox capabilities; permanent credentials stay in the Worker. The landing page's injected script string must not contain backticks or `${` sequences.
+- `src/api/` — the signed-in Effect JSON API. `contract/` is the runtime-schema source of truth for endpoints, payloads, responses, and problem errors. `server/<domain>/handlers.ts` is transport wiring and `service.ts` owns endpoint-specific authorization and use cases. API-only serialization stays beside that domain. Shared application or provider behavior must not be placed here.
+- `src/application/` — cross-entrypoint use cases and authorization grouped by domain. API services, Workflows, queues, cron handlers, webhooks, and internal protocols may depend on this layer; it never imports `src/api/` or accepts Hono contexts. Reusable Worker capabilities such as immutable JSON caching live here. Factory producers use `application/factory/queue.ts`, lifecycle orchestration lives in `application/factory/lifecycle.ts`, and MCP tool use cases live in `application/mcp/tools.ts`.
+- `src/integrations/` — GitHub, better-auth, MCP, OAuth connection credentials, repository providers, skills.sh, AI Gateway, notification, and cryptographic adapters. External protocol, grant-signing, credential-refresh, and provider-specific details belong here, never in data queries. GitHub REST JSON and pagination go through `integrations/github/client.ts`.
+- `src/http/` — Hono adapters and server-rendered views for transports intentionally outside the Effect JSON API: auth callbacks, WebSockets, multipart, redirects, raw streams, public capability URLs, webhooks, MCP, and the sandbox AI proxy. Permanent credentials stay in the Worker. The landing page's injected script string must not contain backticks or `${` sequences.
 - `src/client/` — the signed-in SPA: TanStack Router (code-based routes in `main.tsx`), TanStack Query (loaders + polling while agents run), Tailwind v4 tokens in `styles.css`, shared primitives in `components/ui/`, one file per page in `pages/`. Built by `vite.client.config.ts` into `public/app` (fixed entry names `app.js`/`app.css`, referenced by the shell in ui.ts); the `@pierre/diffs` cockpit is a lazy route. `npm run build:app` builds it; `dev`/`build`/`deploy` run it first.
 - `src/app.ts` — the HTTP composition root; provider setup and route mounting only. `/internal/*` is implemented in `src/http/internal.ts` and requires `Authorization: Bearer $REVIEW_SECRET`.
 - `src/cloudflare.ts` — Worker-level exports and non-HTTP handlers.
@@ -47,10 +47,3 @@ package.json script names, which is why dev/build/deploy exist only as tasks).
   (e.g. `vp exec wrangler ...`).
 
 - `npx flue docs search <query>` — search the Flue docs from the terminal (then `flue docs read <path>`).
-
-## Conventions
-
-- Reviews are exact-head `ReviewWorkflow` runs. `reviewerAgent` returns a Zod-validated artifact; orchestration persists it, publishes it through a provider adapter, and settles lifecycle state. Agents never publish their own output.
-- Review artifacts live at deterministic private R2 keys under `agent-artifacts/reviews/<review-id>/`; repair stages consume those artifacts rather than scraping published comments.
-- Hosted Flue agents call the named AI Gateway through `env.AI`. Sandbox coding runs call pinned OpenCode through `/ai-proxy/v1/*`; the permanent `AI_GATEWAY_API_TOKEN` remains Worker-only and the sandbox receives a short-lived capability bound to one exact model. Runner model ids are canonical Cloudflare ids (`provider/model` or `@cf/author/model`).
-- Runner models are operator-managed in `app.models`. Do not add source-code model lists or defaults; enabled `runner_default` and `runner_fast_default` rows are required.

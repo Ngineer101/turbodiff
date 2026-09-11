@@ -3,7 +3,7 @@ import { verifyWebhookSignature } from '../integrations/github/app.ts';
 import {
   createGithubWebhookService,
   type GithubWebhookDependencies,
-} from '../services/github-webhooks.ts';
+} from '../application/webhooks/github.ts';
 import { parseJson } from '../shared/json.ts';
 
 export type WebhookRouteDependencies = GithubWebhookDependencies;

@@ -283,7 +283,6 @@ export const repositories = appSchema.table(
     // many minutes out, and a newer push in the meantime supersedes it. 0
     // reviews immediately. Capped at 720 (the queue's 12h delay ceiling).
     reviewPushDebounceMinutes: integer('review_push_debounce_minutes').default(10).notNull(),
-    reviewIntake: text('review_intake').default('factory_only').notNull(),
     processProfile: text('process_profile').default('legacy_factory').notNull(),
     blockingReviews: boolean('blocking_reviews').default(false).notNull(),
     autoFix: boolean('auto_fix').default(false).notNull(),
@@ -328,10 +327,6 @@ export const repositories = appSchema.table(
       sql`provider = ANY (ARRAY['github'::text, 'artifacts'::text])`,
     ),
     check('repositories_app_port_check', sql`(app_port >= 1) AND (app_port <= 65535)`),
-    check(
-      'repositories_review_intake_check',
-      sql`review_intake = ANY (ARRAY['factory_only'::text, 'on_demand'::text, 'all_changes'::text])`,
-    ),
     check(
       'repositories_process_profile_check',
       sql`process_profile = ANY (ARRAY['review_on_demand'::text, 'automatic_review'::text, 'review_and_repair'::text, 'idea_to_pr'::text, 'assisted_delivery'::text, 'full_delivery'::text, 'native_turnkey'::text, 'legacy_factory'::text])`,
@@ -466,7 +461,6 @@ export const models = appSchema.table(
     uniqueIndex('models_reviewer_default_unique')
       .on(table.reviewerDefault)
       .where(sql`reviewer_default`),
-
   ],
 );
 
@@ -554,6 +548,10 @@ export const plans = appSchema.table(
     todoId: bigint('todo_id', { mode: 'number' }).references((): AnyPgColumn => todos.id, {
       onDelete: 'set null',
     }),
+    workItemId: bigint('work_item_id', { mode: 'number' }).references(
+      (): AnyPgColumn => workItems.id,
+      { onDelete: 'set null' },
+    ),
     title: text().notNull(),
     requirements: text().notNull(),
     analysis: text(),
@@ -596,6 +594,7 @@ export const plans = appSchema.table(
       name: 'plans_repository_id_fkey',
     }).onDelete('cascade'),
     unique('plans_todo_unique').on(table.todoId),
+    unique('plans_work_item_unique').on(table.workItemId),
     check(
       'plans_status_check',
       sql`status = ANY (ARRAY['analyzing'::text, 'awaiting_answers'::text, 'refining'::text, 'plan_ready'::text, 'approving'::text, 'approved'::text, 'failed'::text])`,
@@ -817,45 +816,6 @@ export const reviews = appSchema.table(
   ],
 );
 
-export const reviewFindings = appSchema.table(
-  'review_findings',
-  {
-    id: bigint({ mode: 'number' })
-      .primaryKey()
-      .generatedByDefaultAsIdentity({ maxValue: '9007199254740991' }),
-    reviewId: bigint('review_id', { mode: 'number' })
-      .notNull()
-      .references(() => reviews.id, { onDelete: 'cascade' }),
-    candidateIndex: integer('candidate_index').notNull(),
-    path: text().notNull(),
-    line: integer().notNull(),
-    side: text().notNull(),
-    severity: text().notNull(),
-    body: text().notNull(),
-    evidence: text().notNull(),
-    failurePath: text('failure_path').notNull(),
-    feedback: text(),
-    feedbackByGithubId: bigint('feedback_by_github_id', { mode: 'number' }),
-    feedbackAt: timestamp('feedback_at', { withTimezone: true, mode: 'string' }),
-    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
-      .default(sql`CURRENT_TIMESTAMP`)
-      .notNull(),
-  },
-  (table) => [
-    unique('review_findings_review_candidate_unique').on(table.reviewId, table.candidateIndex),
-    index('review_findings_review_idx').on(table.reviewId),
-    index('review_findings_feedback_idx').on(table.feedback, table.id.desc()),
-    check('review_findings_candidate_index_check', sql`candidate_index >= 0`),
-    check('review_findings_line_check', sql`line > 0`),
-    check('review_findings_side_check', sql`side = ANY (ARRAY['LEFT'::text, 'RIGHT'::text])`),
-    check('review_findings_severity_check', sql`severity = ANY (ARRAY['P1'::text, 'P2'::text])`),
-    check(
-      'review_findings_feedback_check',
-      sql`(feedback IS NULL) OR (feedback = ANY (ARRAY['useful'::text, 'false_positive'::text, 'fixed'::text, 'dismissed'::text]))`,
-    ),
-  ],
-);
-
 export const reviewFileEvidence = appSchema.table(
   'review_file_evidence',
   {
@@ -884,7 +844,6 @@ export const reviewFileEvidence = appSchema.table(
     ),
   ],
 );
-
 
 export const fixAttempts = appSchema.table(
   'fix_attempts',
@@ -1504,11 +1463,18 @@ export const workItems = appSchema.table(
     id: bigint({ mode: 'number' })
       .primaryKey()
       .generatedByDefaultAsIdentity({ maxValue: '9007199254740991' }),
+    // Kept during the legacy lifecycle transition. New intake uses
+    // work_item_targets as the source of truth; lifecycle-created work keeps
+    // this primary-repository pointer until every producer writes targets.
     repositoryId: bigint('repository_id', { mode: 'number' }),
+    installationId: bigint('installation_id', { mode: 'number' }).notNull(),
     origin: text().notNull(),
     title: text().notNull(),
     description: text().notNull(),
     status: text().default('open').notNull(),
+    createdByLogin: text('created_by_login'),
+    createdById: bigint('created_by_id', { mode: 'number' }),
+    runnerModel: text('runner_model'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .default(sql`CURRENT_TIMESTAMP`)
       .notNull(),
@@ -1517,7 +1483,18 @@ export const workItems = appSchema.table(
       .notNull(),
   },
   (table) => [
+    unique('work_items_id_installation_unique').on(table.id, table.installationId),
+    index('work_items_installation_created_idx').using(
+      'btree',
+      table.installationId,
+      table.createdAt.desc(),
+    ),
     index('work_items_repo_created_idx').using('btree', table.repositoryId, table.createdAt.desc()),
+    foreignKey({
+      columns: [table.installationId],
+      foreignColumns: [installations.id],
+      name: 'work_items_installation_id_fkey',
+    }).onDelete('cascade'),
     foreignKey({
       columns: [table.repositoryId],
       foreignColumns: [repositories.id],
@@ -1528,6 +1505,44 @@ export const workItems = appSchema.table(
       sql`origin = ANY (ARRAY['idea'::text, 'issue'::text, 'external_change'::text, 'automation'::text, 'api'::text])`,
     ),
     check('work_items_status_check', sql`status = ANY (ARRAY['open'::text, 'closed'::text])`),
+  ],
+);
+
+export const workItemTargets = appSchema.table(
+  'work_item_targets',
+  {
+    workItemId: bigint('work_item_id', { mode: 'number' }).notNull(),
+    repositoryId: bigint('repository_id', { mode: 'number' }).notNull(),
+    installationId: bigint('installation_id', { mode: 'number' }).notNull(),
+    position: integer().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.workItemId, table.repositoryId] }),
+    unique('work_item_targets_position_unique').on(table.workItemId, table.position),
+    index('work_item_targets_work_item_tenant_idx').using(
+      'btree',
+      table.workItemId,
+      table.installationId,
+    ),
+    index('work_item_targets_repository_idx').using(
+      'btree',
+      table.repositoryId,
+      table.installationId,
+    ),
+    foreignKey({
+      columns: [table.workItemId, table.installationId],
+      foreignColumns: [workItems.id, workItems.installationId],
+      name: 'work_item_targets_work_item_tenant_fkey',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.repositoryId, table.installationId],
+      foreignColumns: [repositories.id, repositories.installationId],
+      name: 'work_item_targets_repository_tenant_fkey',
+    }).onDelete('cascade'),
+    check('work_item_targets_position_check', sql`position >= 0 AND position < 3`),
   ],
 );
 

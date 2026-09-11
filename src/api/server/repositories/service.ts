@@ -22,7 +22,6 @@ import {
   setRepoDemoVideos,
   setRepoEnabled,
   setRepoProcessProfile,
-  setRepoReviewIntake,
   setRepoReviewOnPush,
   setRepoReviewPushDebounceMinutes,
   setRepoSkillEnabled,
@@ -183,7 +182,6 @@ const serializeSettings = (repository: RepositoryRow): RepositorySettings => ({
   enabled: repository.enabled,
   reviewOnPush: repository.review_on_push,
   reviewPushDebounceMinutes: repository.review_push_debounce_minutes,
-  reviewIntake: repository.review_intake,
   // `legacy_factory` is an internal compatibility profile with the same
   // stages as `full_delivery`; it is not part of the public API vocabulary.
   processProfile:
@@ -520,9 +518,6 @@ export const RepositoryServiceLive = Layer.effect(
             }
             if (input.reviewPushDebounceMinutes !== undefined) {
               writes.push(setRepoReviewPushDebounceMinutes(id, input.reviewPushDebounceMinutes));
-            }
-            if (input.reviewIntake !== undefined) {
-              writes.push(setRepoReviewIntake(id, input.reviewIntake));
             }
             if (input.processProfile !== undefined) {
               writes.push(setRepoProcessProfile(id, input.processProfile));

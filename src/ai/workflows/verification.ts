@@ -6,8 +6,8 @@ import {
   verificationSkipReason,
   verifyStageOutcome,
 } from '../../domain/verification.ts';
-import { notifyFeatureLive } from '../../services/live-updates.ts';
-import { completeLifecycleStage } from '../../services/lifecycle.ts';
+import { notifyFeatureLive } from '../../application/notifications/live-updates.ts';
+import { completeLifecycleStage } from '../../application/factory/lifecycle.ts';
 import type { VerifyQueueMessage } from '../../shared/factory-messages.ts';
 
 // Verification as a durable Workflow, for the same reason generation is one:

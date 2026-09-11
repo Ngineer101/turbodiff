@@ -1,7 +1,7 @@
 import { env, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { processChatMessage } from '../runners/chat.ts';
 import type { ChatQueueMessage } from '../../shared/factory-messages.ts';
-import { notifyFeatureLive } from '../../services/live-updates.ts';
+import { notifyFeatureLive } from '../../application/notifications/live-updates.ts';
 
 // Chat turns run as a durable Workflow, mirroring FixWorkflow: the sandbox
 // work (clone/refresh + agent + tests + repair rounds) routinely exceeds the

@@ -43,12 +43,12 @@ import {
   checkCommandUnrunnable,
   runCheckCommand,
 } from '../runtime/check-command.ts';
-import { mintUserToken } from '../../services/user-tokens.ts';
-import { openNativeChangeRequest } from '../../services/change-requests.ts';
-import { notifyFeatureLive } from '../../services/live-updates.ts';
-import { enqueueFactoryMessage } from '../../services/factory-queue.ts';
+import { mintUserToken } from '../../application/security/user-tokens.ts';
+import { openNativeChangeRequest } from '../../application/deliveries/change-requests.ts';
+import { notifyFeatureLive } from '../../application/notifications/live-updates.ts';
+import { enqueueFactoryMessage } from '../../application/factory/queue.ts';
 import { readRepositoryChangeArtifact } from '../runtime/repository-change-artifact.ts';
-import { completeLifecycleStage } from '../../services/lifecycle.ts';
+import { completeLifecycleStage } from '../../application/factory/lifecycle.ts';
 import type { GenerateQueueMessage } from '../../shared/factory-messages.ts';
 
 // Phase 2 of the software factory, re-architected as a Cloudflare Workflow.

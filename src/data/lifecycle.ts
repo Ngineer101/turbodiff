@@ -114,14 +114,24 @@ export async function createFactoryRunWithStage(input: {
         `)) ?? run;
       if (run.work_item_id === null) {
         const workItem = await queryOne<{ id: number }>(sql`
-          INSERT INTO app.work_items (repository_id, origin, title, description)
-          VALUES (
-            ${input.repositoryId}, ${input.workItem.origin}, ${input.workItem.title},
-            ${input.workItem.description}
+          INSERT INTO app.work_items (
+            repository_id, installation_id, origin, title, description
           )
+          SELECT r.id, r.installation_id, ${input.workItem.origin},
+            ${input.workItem.title}, ${input.workItem.description}
+          FROM app.repositories r
+          WHERE r.id = ${input.repositoryId}
           RETURNING id
         `);
         if (!workItem) throw new Error('work item insert returned no row');
+        await execute(sql`
+          INSERT INTO app.work_item_targets (
+            work_item_id, repository_id, installation_id, position
+          )
+          SELECT ${workItem.id}, r.id, r.installation_id, 0
+          FROM app.repositories r WHERE r.id = ${input.repositoryId}
+          ON CONFLICT DO NOTHING
+        `);
         run =
           (await queryOne<FactoryRunRow>(sql`
             UPDATE app.factory_runs SET work_item_id = ${workItem.id}

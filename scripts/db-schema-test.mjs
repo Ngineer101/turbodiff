@@ -130,13 +130,6 @@ await db.exec(`
   INSERT INTO reviews
     (repository_id, installation_id, pr_number, trigger_event, status, agent_instance_id)
   VALUES (3001, 1001, 42, 'opened', 'running', 'review--acme--rocket--42');
-  INSERT INTO review_findings
-    (review_id, candidate_index, path, line, side, severity, body, evidence, failure_path)
-  SELECT
-    id, 0, 'src/index.ts', 12, 'RIGHT', 'P1', 'The guard is bypassed.',
-    'The request reaches the mutation before authorization.',
-    'An unauthenticated request can mutate state.'
-  FROM reviews WHERE agent_instance_id = 'review--acme--rocket--42';
   INSERT INTO auth."user"
     ("id", "name", "email", "createdAt", "updatedAt")
   VALUES ('auth-user', 'Auth User', 'auth@example.test', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
@@ -219,6 +212,25 @@ try {
   crossTenantLinkRejected = true;
 }
 if (!crossTenantLinkRejected) throw new Error('Cross-tenant repository links were not rejected');
+
+await db.exec(`
+  INSERT INTO repositories (id, installation_id, owner, name)
+  VALUES (3002, 1002, 'other', 'private');
+  INSERT INTO work_items (id, installation_id, origin, title, description)
+  VALUES (6001, 1001, 'idea', 'Scoped work', 'Must stay in Acme');
+`);
+let crossTenantWorkTargetRejected = false;
+try {
+  await db.exec(`
+    INSERT INTO work_item_targets (work_item_id, repository_id, installation_id, position)
+    VALUES (6001, 3002, 1001, 0)
+  `);
+} catch {
+  crossTenantWorkTargetRejected = true;
+}
+if (!crossTenantWorkTargetRejected) {
+  throw new Error('Cross-tenant work-item target was not rejected');
+}
 
 let providerMismatchRejected = false;
 try {

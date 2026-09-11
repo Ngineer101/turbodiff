@@ -17,7 +17,7 @@ import {
   type AutomationRow,
 } from '../../data/db.ts';
 import { getRunnerModelCatalog } from '../../data/models.ts';
-import { buildSandboxMcpConfig } from '../../services/mcp-proxy.ts';
+import { buildSandboxMcpConfig } from '../../integrations/mcp/proxy.ts';
 import { resolveRunnerAuth } from '../runtime/runner-auth.ts';
 import { runnerSandbox } from '../runtime/sandbox.ts';
 import { redactSecrets } from '../runtime/redaction.ts';
@@ -35,11 +35,11 @@ import {
   describePushFailure,
   installationToken,
 } from '../../integrations/github/app.ts';
-import { notifyAutomationLive } from '../../services/live-updates.ts';
+import { notifyAutomationLive } from '../../application/notifications/live-updates.ts';
 import { readRepositoryChangeArtifact } from '../runtime/repository-change-artifact.ts';
 
 // A recurring, clock-driven counterpart to the generation workflow: a
-// user-authored prompt runs on a schedule (src/services/automation-poll.ts) against
+// user-authored prompt runs on a schedule (src/application/automations/poll.ts) against
 // a fresh checkout of one repo and, when it produces changes, opens a PR. Same
 // Workflow shape as generation for the same reason — no wall-clock kill,
 // memoized steps, and business outcomes (no changes, checks failed) are

@@ -113,15 +113,17 @@ vi.mock('../../integrations/git/provider.ts', () => ({
     env: {},
   }),
 }));
-vi.mock('../../services/push-notifications.ts', () => ({ notifyPlanUsers: vi.fn() }));
-vi.mock('../../services/auto-merge.ts', () => ({ maybeAutoMerge: vi.fn() }));
-vi.mock('../../services/merge-conflicts.ts', () => ({ maybeResolveConflict: vi.fn() }));
-vi.mock('../../services/change-requests.ts', () => ({
+vi.mock('../../application/notifications/push.ts', () => ({ notifyPlanUsers: vi.fn() }));
+vi.mock('../../application/deliveries/auto-merge.ts', () => ({ maybeAutoMerge: vi.fn() }));
+vi.mock('../../application/deliveries/merge-conflicts.ts', () => ({
+  maybeResolveConflict: vi.fn(),
+}));
+vi.mock('../../application/deliveries/change-requests.ts', () => ({
   CR_BOT_AUTHOR: 'test-bot',
   maybeAutoMergeCr: vi.fn(),
 }));
-vi.mock('../../services/factory-queue.ts', () => ({ enqueueFactoryMessage: vi.fn() }));
-vi.mock('../../services/certificates.ts', () => ({ certificateUrl: vi.fn() }));
+vi.mock('../../application/factory/queue.ts', () => ({ enqueueFactoryMessage: vi.fn() }));
+vi.mock('../../application/deliveries/certificates.ts', () => ({ certificateUrl: vi.fn() }));
 
 beforeEach(() => {
   vi.clearAllMocks();

@@ -59,7 +59,6 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
-
       - name: Planning runtime (pinned OpenCode)
         run: pnpm vp run test:planning
 
