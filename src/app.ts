@@ -5,7 +5,8 @@ import { sql } from 'drizzle-orm';
 import { execute, withDatabaseScope } from './data/database.ts';
 import { Hono } from 'hono';
 import { registerExplainMetering } from './ai/explain/metering.ts';
-import { createApiRoutes } from './http/api.ts';
+import { handleEffectApi } from './api/server/handler.ts';
+import { createProtocolRoutes } from './http/protocol.ts';
 import { handleEmailSignUp } from './http/auth-email.ts';
 import { renderCertificatePage } from './http/certificate-page.tsx';
 import { createInternalRoutes } from './http/internal.ts';
@@ -17,7 +18,7 @@ import { createWebhookRoutes } from './http/webhooks.ts';
 import { oAuthDiscoveryMetadata, oAuthProtectedResourceMetadata } from 'better-auth/plugins';
 import { withAuth } from './integrations/auth/better-auth.ts';
 import { verifyArtifactSig } from './integrations/security/crypto.ts';
-import { certificateSigKey, loadCertificateData } from './services/certificates.ts';
+import { certificateSigKey, loadCertificateData } from './application/deliveries/certificates.ts';
 
 // Route every model call through the Workers AI binding and the named
 // AI Gateway (set AI_GATEWAY_ID in wrangler.jsonc). The gateway holds the
@@ -167,8 +168,12 @@ app.post('/api/auth/sign-up/email', handleEmailSignUp);
 
 app.on(['GET', 'POST'], '/api/auth/*', (c) => withAuth((instance) => instance.handler(c.req.raw)));
 
-// SPA data plane (session cookie auth, JSON in/out).
-app.route('/api', createApiRoutes());
+// Effect owns the complete JSON data plane. Unknown /api routes are contract
+// 404s; there is no legacy fallback with a second authorization stack.
+app.all('/api/*', (c) => handleEffectApi(c.req.raw));
+
+// Hono only owns transports whose mechanics are not JSON domain endpoints.
+app.route('/protocol', createProtocolRoutes());
 
 // SPA shell + landing + OAuth sign-in (session cookie auth).
 app.route('/', createUiRoutes());

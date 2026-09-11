@@ -1,5 +1,6 @@
-import { HttpServerRequest } from '@effect/platform';
+import { HttpApp, HttpServerRequest } from '@effect/platform';
 import { Effect, Layer } from 'effect';
+import { notifyInstallationsLive } from '../../application/notifications/live-updates.ts';
 import { SessionAuth, type CurrentUserIdentity } from '../contract/auth.ts';
 import { forbidden, serviceUnavailable, unauthorized } from '../contract/errors.ts';
 import { ApiDependencies } from './context.ts';
@@ -33,6 +34,20 @@ export const SessionAuthLive = Layer.effect(
 
       if (user.membershipRefresh) dependencies.defer(user.membershipRefresh());
       if (user.repositoryRepair) dependencies.defer(user.repositoryRepair());
+      if (!SAFE_METHODS.has(request.method)) {
+        yield* HttpApp.appendPreResponseHandler((_request, response) =>
+          Effect.sync(() => {
+            if (response.status < 400) {
+              dependencies.defer(
+                notifyInstallationsLive(user.installationIds).catch((error) => {
+                  console.warn('turbodiff: live write invalidation failed', error);
+                }),
+              );
+            }
+            return response;
+          }),
+        );
+      }
       return user satisfies CurrentUserIdentity;
     });
   }),

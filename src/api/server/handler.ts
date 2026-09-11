@@ -37,33 +37,6 @@ import { DeliveryServiceLive } from './deliveries/service.ts';
 import { dispatchExplain } from '../../ai/explain/dispatch.ts';
 import { ApiDependencies, type ApiRuntimeDependencies } from './context.ts';
 
-export interface EffectApiDependencies {
-  readonly authenticate?: ApiRuntimeDependencies['authenticate'];
-  readonly orgAdmin?: ApiRuntimeDependencies['orgAdmin'];
-  readonly enqueueFactory?: ApiRuntimeDependencies['enqueueFactory'];
-  readonly defer?: ApiRuntimeDependencies['defer'];
-  readonly githubAppSlug?: string | null;
-  readonly vapidPublicKey?: string | null;
-  readonly resolveConnectionAuth?: ApiRuntimeDependencies['resolveConnectionAuth'];
-  readonly testMcpEndpoint?: ApiRuntimeDependencies['testMcpEndpoint'];
-  readonly canPushToRepo?: ApiRuntimeDependencies['canPushToRepo'];
-  readonly skillsSh?: ApiRuntimeDependencies['skillsSh'];
-  readonly dispatchExplain?: ApiRuntimeDependencies['dispatchExplain'];
-}
-
-const authenticationByRequest = new WeakMap<Request, ReturnType<typeof requireUser>>();
-
-// The outer Hono adapter and Effect auth middleware both need the identity on
-// successful writes. Deduplicate that lookup per Request without retaining
-// request data after the invocation is garbage-collected.
-export const authenticateEffectApiRequest: typeof requireUser = (request) => {
-  const running = authenticationByRequest.get(request);
-  if (running) return running;
-  const authentication = requireUser(request);
-  authenticationByRequest.set(request, authentication);
-  return authentication;
-};
-
 /**
  * Build the Effect runtime synchronously and eagerly.
  *
@@ -76,17 +49,17 @@ export const authenticateEffectApiRequest: typeof requireUser = (request) => {
  */
 export function createEffectApiHandler() {
   const defer = (promise: Promise<void>) => {
-      try {
-        waitUntil(promise);
-      } catch {
-        // Direct Hono/Vitest calls do not have a Worker invocation context.
-        // The work has already started; consume a rejection just like the
-        // legacy API test adapter does.
-        void promise.catch(() => {});
-      }
-    };
+    try {
+      waitUntil(promise);
+    } catch {
+      // Direct Hono/Vitest calls do not have a Worker invocation context.
+      // The work has already started; consume a rejection just like the
+      // production waitUntil path does.
+      void promise.catch(() => {});
+    }
+  };
   const dependencies: ApiRuntimeDependencies = {
-    authenticate: authenticateEffectApiRequest,
+    authenticate: requireUser,
     orgAdmin: userIsGithubOrgAdmin,
     enqueueFactory: enqueueFactoryMessage,
     defer,
@@ -96,7 +69,7 @@ export function createEffectApiHandler() {
     // contracts always receive strings and use '' for an unconfigured
     // optional integration.
     githubAppSlug: env.GITHUB_APP_SLUG,
-    vapidPublicKey:  env.VAPID_PUBLIC_KEY,
+    vapidPublicKey: env.VAPID_PUBLIC_KEY,
     resolveConnectionAuth: resolveConnectionAuth,
     testMcpEndpoint: testMcpEndpoint,
     canPushToRepo: userCanPushToRepo,

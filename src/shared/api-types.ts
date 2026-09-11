@@ -2,9 +2,6 @@
 // the SPA (src/client). Keep this file dependency-free: it is type-checked in
 // both the worker and client TypeScript programs.
 
-export type ReviewState = 'running' | 'completed' | 'stalled' | 'failed';
-export type ApiReviewConclusion = 'ready' | 'ready_with_warnings' | 'not_ready' | 'inconclusive';
-
 export type ApiProcessProfile =
   | 'review_on_demand'
   | 'automatic_review'
@@ -14,39 +11,6 @@ export type ApiProcessProfile =
   | 'full_delivery'
   | 'native_turnkey'
   | 'legacy_factory';
-
-// One review row, pre-digested for display: the worker computes state (which
-// needs the stall clock) and totals; the client only formats.
-export interface ApiReview {
-  id: number;
-  repo: string | null; // "owner/name", null if the repo was removed
-  pr_number: number;
-  pr_url: string | null;
-  agent_slug: string | null;
-  trigger_event: string;
-  risk_tier: string | null;
-  findings_count: number | null;
-  verdict: 'approve' | 'comment' | 'request_changes' | null;
-  conclusion: ApiReviewConclusion | null;
-  coverage_status: 'complete' | 'incomplete' | 'stale' | null;
-  reviewable_file_count: number | null;
-  covered_file_count: number | null;
-  missing_paths: string[];
-  coverage_head_sha: string | null;
-  published_head_sha: string | null;
-  file_evidence: {
-    path: string;
-    disposition: 'reviewed' | 'blocked' | null;
-    evidence: string | null;
-  }[];
-  state: ReviewState;
-  error: string | null; // why a failed review failed
-  review_url: string | null;
-  total_tokens: number;
-  cost_usd: number;
-  duration_s: number | null;
-  created_at: string; // ISO-8601 timestamptz
-}
 
 // One session (generation, review, fix, or verify run) inside a shipped
 // feature's usage accordion.
@@ -115,37 +79,6 @@ export interface ApiUsage {
     repo: string;
     runs: number;
     cost_usd: number;
-  }[];
-}
-
-export interface ApiReviewsPage {
-  total: number;
-  page: number;
-  pages: number;
-  reviews: ApiReview[];
-}
-
-export type ApiReviewFindingFeedback = 'useful' | 'false_positive' | 'fixed' | 'dismissed';
-
-export interface ApiReviewQuality {
-  stats: {
-    published: number;
-    labeled: number;
-    true_positives: number;
-    false_positives: number;
-  };
-  findings: {
-    id: number;
-    review_id: number;
-    repo: string | null;
-    pr_number: number;
-    agent_slug: string | null;
-    path: string;
-    line: number;
-    severity: 'P1' | 'P2';
-    body: string;
-    feedback: ApiReviewFindingFeedback | null;
-    created_at: string;
   }[];
 }
 
@@ -551,7 +484,6 @@ export interface ApiRepoSettings {
   // Trailing window (minutes) a push waits before its re-review runs; a newer
   // push in the window supersedes it. 0 reviews immediately.
   review_push_debounce_minutes: number;
-  review_intake: 'factory_only' | 'on_demand' | 'all_changes';
   process_profile: ApiProcessProfile;
   blocking_reviews: boolean;
   auto_fix: boolean;
@@ -579,19 +511,19 @@ export interface ApiMe {
   // account that hasn't linked one yet (name carries the display identity).
   login: string | null;
   name: string;
-  github_connected: boolean;
-  // Recovery-oriented account state. `github_connected` remains the stable
+  githubConnected: boolean;
+  // Recovery-oriented account state. `githubConnected` remains the stable
   // identity/link flag; this tells the UI which useful next action to show.
-  github_status:
+  githubStatus:
     | 'not_connected'
     | 'reauthorization_required'
     | 'temporarily_unavailable'
     | 'app_not_installed'
     | 'syncing'
     | 'ready';
-  github_app_slug: string;
-  vapid_public_key: string;
-  installation_ids: number[];
+  githubAppSlug: string;
+  vapidPublicKey: string;
+  installationIds: number[];
 }
 
 // Native organization roles, scoped per
