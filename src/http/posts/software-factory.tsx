@@ -56,7 +56,7 @@ export const softwareFactory: Post = {
     image: 'https://avatars.githubusercontent.com/u/21199947?v=4&s=96',
     bio: 'Building Turbodiff, the software factory that builds itself. Writes about agents, proof, and building good software.',
   },
-  tags: ['software factory', 'agents', 'proof of build'],
+  tags: ['software factory', 'agents', 'code review'],
   sections: [
     {
       id: 'the-loop-is-people',
@@ -196,9 +196,8 @@ export const softwareFactory: Post = {
             <cite>the line on the landing page, and the reason the product exists</cite>
           </blockquote>
           <p>
-            That is why every Turbodiff feature gets a certificate with the approved plan, the diff,
-            the check run, and screenshots for the acceptance criteria. This was the first part I
-            built because the rest of the loop is not useful unless its output can be verified.
+            That is why Turbodiff preserves the approved plan, normalized change, checks, and review
+            artifacts. The rest of the loop is not useful unless its output can be inspected.
           </p>
         </>
       ),

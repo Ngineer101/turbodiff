@@ -126,7 +126,7 @@ export async function updateWorkItem(
       status = COALESCE(${input.status ?? null}, status),
       completed_at = CASE
         WHEN ${input.status ?? null} IN ('completed', 'cancelled') THEN CURRENT_TIMESTAMP
-        WHEN ${input.status ?? null} IS NOT NULL THEN NULL
+        WHEN ${input.status ?? null}::text IS NOT NULL THEN NULL
         ELSE completed_at
       END,
       updated_at = CURRENT_TIMESTAMP

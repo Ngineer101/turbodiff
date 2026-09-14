@@ -90,24 +90,23 @@ export default defineConfig({
       'db:check': { command: 'drizzle-kit check' },
       'db:verify': { command: 'node scripts/db-verify.mjs', cache: false },
       'db:reset-test': {
-        command: 'node scripts/db-reset-test.mjs',
+        command: 'node tests/support/reset-database.mjs',
         dependsOn: ['db:migrate'],
         cache: false,
       },
       'test:planning': {
         command:
-          "pnpm --package=opencode-ai@1.18.29 dlx -c 'node --test scripts/planning-runtime.test.mjs'",
+          "pnpm --package=opencode-ai@1.18.29 dlx -c 'node --test tests/runtime/planning-runtime.test.mjs'",
         cache: false,
       },
-      'test:schema': { command: 'node scripts/db-schema-test.mjs' },
-      'test:worker': {
-        command: 'vp test --config vitest.worker.config.ts',
-        dependsOn: ['db:reset-test'],
+      'test:schema': { command: 'node tests/schema/baseline.mjs' },
+      'test:integration': {
+        command: 'vp test --config tests/config/vitest.integration.ts --run',
+        dependsOn: ['db:migrate'],
         cache: false,
       },
       'check:types': {
-        command:
-          'wrangler types && tsc --noEmit && tsc -p tsconfig.client.json --noEmit && tsc -p tsconfig.worker-tests.json --noEmit',
+        command: 'wrangler types && tsc --noEmit && tsc -p tsconfig.client.json --noEmit',
       },
     },
   },
