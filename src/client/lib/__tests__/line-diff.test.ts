@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vite-plus/test';
-import { diffLines, diffStats, toHunks, type DiffOp } from './line-diff.ts';
+import { diffLines, diffStats, toHunks, type DiffOp } from '../line-diff.ts';
 
 function render(ops: DiffOp[]): string[] {
   return ops.map((op) => `${op.kind === 'add' ? '+' : op.kind === 'del' ? '-' : ' '}${op.text}`);

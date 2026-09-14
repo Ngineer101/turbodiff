@@ -1,6 +1,6 @@
 import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it } from 'vite-plus/test';
-import { applyOptimistic, optimisticId, optimisticNow } from './optimistic.ts';
+import { applyOptimistic, optimisticId, optimisticNow } from '../optimistic.ts';
 
 describe('applyOptimistic', () => {
   it('patches the cached value immediately and rolls back to the snapshot', async () => {

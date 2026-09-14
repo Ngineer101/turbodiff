@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vite-plus/test';
-import type { ApiChatMessage } from '../../shared/api-types.ts';
+import type { ApiChatMessage } from '../../../shared/api-types.ts';
 import {
   agoShort,
   chatLedger,
@@ -18,7 +18,7 @@ import {
   turnSteps,
   unreadReplies,
   withFileContext,
-} from './chat-rail.ts';
+} from '../chat-rail.ts';
 
 const NOW = Date.parse('2026-09-03T12:00:00Z');
 

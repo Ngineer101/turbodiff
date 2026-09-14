@@ -46,7 +46,7 @@ import { cn } from '../lib/utils.ts';
 import { AgentRunLog } from '../components/agent-run-log.tsx';
 import { ConfirmButton } from '../components/confirm-button.tsx';
 import type { CockpitCommentMeta } from '../components/cockpit-patch-diff.tsx';
-import { CertStrip, Lamp, Serial, Stamp, type LampTone } from '../components/identity.tsx';
+import { Lamp, Serial, Stamp, type LampTone } from '../components/identity.tsx';
 import { FILE_STATUS_DOT, FileTree } from '../components/file-tree.tsx';
 import { Markdown } from '../components/markdown.tsx';
 import { MicButton } from '../components/mic-button.tsx';
@@ -1158,23 +1158,6 @@ export default function FeaturePage() {
             railSlot,
           )
         : null}
-
-      {/* The paper the work earns: sealed once the PR merges. */}
-      {data.certificate_url ? (
-        <a
-          href={data.certificate_url}
-          target="_blank"
-          rel="noopener"
-          className="block max-w-xl hover:opacity-90"
-        >
-          <CertStrip sealed={prState === 'merged'} ceremony={justMerged}>
-            BUILD CERTIFICATE №{String(data.feature.id).padStart(4, '0')} —{' '}
-            {prState === 'merged'
-              ? 'sealed · view →'
-              : 'issues when this PR is verified and merged'}
-          </CertStrip>
-        </a>
-      ) : null}
 
       {/* Evidence: criteria fills the width in two columns; the rest are
           collapsible full-width sections. */}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vite-plus/test';
-import { codeRoute } from './layout.ts';
+import { codeRoute } from '../layout.ts';
 
 describe('codeRoute', () => {
   it('matches the code browser for GitHub repo ids', () => {

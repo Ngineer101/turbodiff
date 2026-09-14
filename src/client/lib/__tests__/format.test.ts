@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vite-plus/test';
-import { ago, fmtDuration, fmtTokens, fmtUsd, parseUtc } from './format.ts';
+import { ago, fmtDuration, fmtTokens, fmtUsd, parseUtc } from '../format.ts';
 
 describe('fmtUsd', () => {
   it('scales precision with magnitude', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vite-plus/test';
-import { navShortcuts, nextIndex } from './shortcuts.ts';
+import { navShortcuts, nextIndex } from '../shortcuts.ts';
 
 describe('navShortcuts', () => {
   const nav = [
