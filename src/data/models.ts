@@ -1,44 +1,28 @@
 import { sql } from 'drizzle-orm';
-import { DEFAULT_MODEL } from '../domain/personas.ts';
-import { queryRows } from './database.ts';
-
-// --- Model catalog (deployment-wide, operator-managed via SQL) ---
-//
-// One app.models table drives both pickers. Stored ids stay provider-local;
-// each surface derives the model syntax understood by its runtime.
+import { queryOne, queryRows } from './database.ts';
 
 export interface ModelRow {
   id: number;
-  model_id: string;
   provider: string;
+  model_id: string;
   label: string;
-  for_runner: boolean;
-  for_reviewer: boolean;
-  runner_default: boolean;
-  runner_fast_default: boolean;
-  reviewer_default: boolean;
+  capabilities: string[];
   enabled: boolean;
-  sort_order: number;
+  is_default: boolean;
+  is_fast_default: boolean;
   created_at: string;
 }
 
 export interface ModelOption {
   id: string;
   label: string;
-}
-
-export interface SurfaceCatalog {
-  options: ModelOption[];
-  defaultModel: string;
-}
-
-export interface RunnerSurfaceCatalog extends SurfaceCatalog {
-  fastModel: string;
+  capabilities: string[];
 }
 
 export interface ModelCatalog {
-  runner: RunnerSurfaceCatalog;
-  reviewer: SurfaceCatalog;
+  options: ModelOption[];
+  defaultModel: string;
+  fastModel: string;
 }
 
 export class ModelCatalogConfigurationError extends Error {
@@ -48,91 +32,55 @@ export class ModelCatalogConfigurationError extends Error {
   }
 }
 
-// Reviewer calls go through the Cloudflare AI binding. Third-party models use
-// provider/model while Workers AI models retain their canonical @cf id.
-function gatewayId(row: ModelRow): string {
-  return row.model_id.startsWith('@cf/')
-    ? `cloudflare/${row.model_id}`
-    : `cloudflare/${row.provider}/${row.model_id}`;
-}
-
-function runnerId(row: ModelRow): string {
-  // Workers AI is the one catalog namespace whose canonical REST id already
-  // contains its author prefix (`@cf/author/model`).
+export function canonicalModelId(row: ModelRow): string {
   return row.model_id.startsWith('@cf/') ? row.model_id : `${row.provider}/${row.model_id}`;
 }
 
-function runnerCatalog(rows: ModelRow[]): RunnerSurfaceCatalog {
-  const runnerRows = rows.filter((row) => row.for_runner);
-  if (runnerRows.length === 0) {
-    throw new ModelCatalogConfigurationError(
-      'runner model catalog is empty; enable at least one app.models row with for_runner = true',
-    );
-  }
-  const defaultRow = runnerRows.find((row) => row.runner_default);
-  if (!defaultRow) {
-    throw new ModelCatalogConfigurationError(
-      'runner model catalog has no default; mark one enabled runner row runner_default = true',
-    );
-  }
-  const fastRow = runnerRows.find((row) => row.runner_fast_default);
-  if (!fastRow) {
-    throw new ModelCatalogConfigurationError(
-      'runner model catalog has no fast default; mark one enabled runner row runner_fast_default = true',
-    );
-  }
-  return {
-    options: runnerRows.map((row) => ({ id: runnerId(row), label: row.label })),
-    defaultModel: runnerId(defaultRow),
-    fastModel: runnerId(fastRow),
-  };
-}
-
-function reviewerCatalog(rows: ModelRow[]): SurfaceCatalog {
-  const reviewerRows = rows.filter((row) => row.for_reviewer);
-  return reviewerRows.length > 0
-    ? {
-        options: reviewerRows.map((row) => ({ id: gatewayId(row), label: row.label })),
-        defaultModel: gatewayId(
-          reviewerRows.find((row) => row.reviewer_default) ?? reviewerRows[0],
-        ),
-      }
-    : {
-        options: [{ id: DEFAULT_MODEL, label: 'Sonnet 5' }],
-        defaultModel: DEFAULT_MODEL,
-      };
-}
-
-async function enabledModelRows(): Promise<ModelRow[]> {
+export async function listEnabledModels(): Promise<ModelRow[]> {
   return queryRows<ModelRow>(sql`
-    SELECT * FROM app.models WHERE enabled ORDER BY sort_order, label
+    SELECT * FROM app.models WHERE enabled ORDER BY label, id
   `);
 }
 
-export async function getRunnerModelCatalog(): Promise<RunnerSurfaceCatalog> {
-  return runnerCatalog(await enabledModelRows());
+export async function getModelCatalog(): Promise<ModelCatalog> {
+  const rows = await listEnabledModels();
+  const defaultModel = rows.find((row) => row.is_default);
+  const fastModel = rows.find((row) => row.is_fast_default);
+  if (!defaultModel || !fastModel) {
+    throw new ModelCatalogConfigurationError(
+      'model catalog requires one enabled default and one enabled fast default',
+    );
+  }
+  return {
+    options: rows.map((row) => ({
+      id: canonicalModelId(row),
+      label: row.label,
+      capabilities: row.capabilities,
+    })),
+    defaultModel: canonicalModelId(defaultModel),
+    fastModel: canonicalModelId(fastModel),
+  };
 }
 
-export async function getReviewerModelCatalog(): Promise<SurfaceCatalog> {
-  return reviewerCatalog(await enabledModelRows());
-}
-
-export async function resolveRunnerModel(
+export async function resolveModel(
   requested?: string | null,
   role: 'default' | 'fast' = 'default',
-): Promise<string> {
-  const catalog = await getRunnerModelCatalog();
-  const selected = requested?.trim();
-  if (!selected) return role === 'fast' ? catalog.fastModel : catalog.defaultModel;
-  if (!catalog.options.some((option) => option.id === selected)) {
+): Promise<ModelRow> {
+  const rows = await listEnabledModels();
+  const requestedId = requested?.trim();
+  const selected = requestedId
+    ? rows.find((row) => canonicalModelId(row) === requestedId)
+    : rows.find((row) => (role === 'fast' ? row.is_fast_default : row.is_default));
+  if (!selected) {
     throw new ModelCatalogConfigurationError(
-      `runner model "${selected}" is not enabled in app.models`,
+      requestedId
+        ? `model "${requestedId}" is not enabled`
+        : `model catalog has no ${role} default`,
     );
   }
   return selected;
 }
 
-export async function getModelCatalog(): Promise<ModelCatalog> {
-  const rows = await enabledModelRows();
-  return { runner: runnerCatalog(rows), reviewer: reviewerCatalog(rows) };
+export async function getModel(id: number): Promise<ModelRow | null> {
+  return queryOne<ModelRow>(sql`SELECT * FROM app.models WHERE id = ${id}`);
 }
