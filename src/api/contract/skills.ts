@@ -10,16 +10,12 @@ const skillId = HttpApiSchema.param(
 
 export const Skill = Schema.Struct({
   id: PositiveInt,
-  installationId: PositiveInt,
+  organizationId: Schema.String,
   slug: Schema.String,
   name: Schema.String,
-  description: Schema.NullOr(Schema.String),
-  instructions: Schema.String,
-  source: Schema.NullOr(Schema.String),
-  sourceRef: Schema.NullOr(Schema.String),
-  sourceHash: Schema.NullOr(Schema.String),
-  importedAt: Schema.NullOr(Schema.String),
-  files: Schema.Array(Schema.Struct({ path: Schema.String })),
+  content: Schema.String,
+  contentHash: Schema.String,
+  enabled: Schema.Boolean,
 });
 export type Skill = typeof Skill.Type;
 
@@ -27,17 +23,17 @@ export const SkillCollection = Schema.Struct({ items: Schema.Array(Skill) });
 export type SkillCollection = typeof SkillCollection.Type;
 
 export const CreateSkill = Schema.Struct({
+  organizationId: Schema.String,
   slug: Schema.String,
   name: Schema.String,
-  description: Schema.String,
-  instructions: Schema.String,
+  content: Schema.String,
 });
 export type CreateSkill = typeof CreateSkill.Type;
 
 export const UpdateSkill = Schema.Struct({
-  name: Schema.String,
-  description: Schema.String,
-  instructions: Schema.String,
+  name: Schema.optional(Schema.String),
+  content: Schema.optional(Schema.String),
+  enabled: Schema.optional(Schema.Boolean),
 });
 export type UpdateSkill = typeof UpdateSkill.Type;
 
@@ -58,6 +54,7 @@ export const SkillCatalog = Schema.Struct({
   error: Schema.optional(Schema.String),
 });
 export const SkillImportRequest = Schema.Struct({
+  organizationId: Schema.String,
   reference: Schema.String,
   slug: Schema.optional(Schema.String),
 });

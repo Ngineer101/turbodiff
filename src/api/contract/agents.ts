@@ -35,54 +35,52 @@ const withDomainErrors = <
 
 export const ModelOption = Schema.Struct({ id: Schema.String, label: Schema.String });
 export const ModelCatalog = Schema.Struct({
-  runner: Schema.Struct({
-    options: Schema.Array(ModelOption),
-    defaultModel: Schema.String,
-    fastModel: Schema.String,
-  }),
-  reviewer: Schema.Struct({
-    options: Schema.Array(ModelOption),
-    defaultModel: Schema.String,
-  }),
+  options: Schema.Array(ModelOption),
+  defaultModel: Schema.String,
+  fastModel: Schema.String,
 });
 export type ModelCatalog = typeof ModelCatalog.Type;
 
 export const AgentSummary = Schema.Struct({
   id: PositiveInt,
+  organizationId: Schema.String,
+  definitionKey: Schema.String,
   slug: Schema.String,
   name: Schema.String,
   description: Schema.NullOr(Schema.String),
-  model: Schema.String,
   builtIn: Schema.Boolean,
+  enabled: Schema.Boolean,
+  skillIds: Schema.Array(PositiveInt),
 });
 
 export const Agent = Schema.Struct({
   ...AgentSummary.fields,
-  instructions: Schema.String,
-  installationId: PositiveInt,
+  instructionsOverride: Schema.NullOr(Schema.String),
 });
 export type Agent = typeof Agent.Type;
 
 export const AgentCollection = Schema.Struct({
   items: Schema.Array(AgentSummary),
-  githubAppSlug: Schema.String,
 });
 export type AgentCollection = typeof AgentCollection.Type;
 
 export const AgentWrite = Schema.Struct({
+  organizationId: Schema.String,
+  definitionKey: Schema.String,
   slug: Schema.String,
   name: Schema.String,
-  description: Schema.String,
-  instructions: Schema.String,
-  model: Schema.optional(Schema.String),
+  description: Schema.optional(Schema.NullOr(Schema.String)),
+  instructionsOverride: Schema.optional(Schema.NullOr(Schema.String)),
+  skillIds: Schema.optional(Schema.Array(PositiveInt)),
 });
 export type AgentWrite = typeof AgentWrite.Type;
 
 export const AgentUpdate = Schema.Struct({
   name: Schema.optional(Schema.String),
-  description: Schema.optional(Schema.String),
-  instructions: Schema.optional(Schema.String),
-  model: Schema.optional(Schema.String),
+  description: Schema.optional(Schema.NullOr(Schema.String)),
+  instructionsOverride: Schema.optional(Schema.NullOr(Schema.String)),
+  enabled: Schema.optional(Schema.Boolean),
+  skillIds: Schema.optional(Schema.Array(PositiveInt)),
 });
 export type AgentUpdate = typeof AgentUpdate.Type;
 

@@ -15,6 +15,10 @@ const skillId = HttpApiSchema.param(
   'skillId',
   Schema.NumberFromString.pipe(Schema.int(), Schema.positive()),
 );
+const integrationId = HttpApiSchema.param(
+  'integrationId',
+  Schema.NumberFromString.pipe(Schema.int(), Schema.positive()),
+);
 const withDomainErrors = <
   Name extends string,
   Method extends 'GET' | 'POST' | 'PUT',
@@ -41,31 +45,26 @@ const withDomainErrors = <
   >,
 ) => endpoint.addError(DomainError);
 
-const ProcessProfile = Schema.Literal(
-  'review_on_demand',
-  'automatic_review',
-  'review_and_repair',
-  'idea_to_pr',
-  'assisted_delivery',
-  'full_delivery',
-  'native_turnkey',
-);
-
-export const CreateProject = Schema.Struct({
+export const CreateRepository = Schema.Struct({
+  organizationId: Schema.String,
+  sourceIntegrationId: PositiveInt,
   owner: Schema.String,
   name: Schema.String,
   description: Schema.optional(Schema.String),
-  processProfile: Schema.optional(ProcessProfile),
 });
-export type CreateProject = typeof CreateProject.Type;
+export type CreateRepository = typeof CreateRepository.Type;
 
-export const Project = Schema.Struct({
-  repositoryId: PositiveInt,
-  repository: Schema.String,
+export const CreatedRepository = Schema.Struct({
+  id: PositiveInt,
+  organizationId: Schema.String,
+  sourceIntegrationId: PositiveInt,
+  owner: Schema.String,
+  name: Schema.String,
   defaultBranch: Schema.NullOr(Schema.String),
+  provider: Schema.String,
   remote: Schema.String,
 });
-export type Project = typeof Project.Type;
+export type CreatedRepository = typeof CreatedRepository.Type;
 
 export const CloneCredentialRequest = Schema.Struct({ scope: Schema.Literal('read', 'write') });
 export const CloneCredential = Schema.Struct({
@@ -141,13 +140,6 @@ export const RepositorySettings = Schema.Struct({
   id: PositiveInt,
   enabled: Schema.Boolean,
   reviewOnPush: Schema.Boolean,
-  reviewPushDebounceMinutes: Schema.Int,
-  processProfile: ProcessProfile,
-  blockingReviews: Schema.Boolean,
-  autoFix: Schema.Boolean,
-  autoMerge: Schema.Boolean,
-  autoResolveConflicts: Schema.Boolean,
-  demoVideos: Schema.Boolean,
   checkCommand: Schema.NullOr(Schema.String),
 });
 export type RepositorySettings = typeof RepositorySettings.Type;
@@ -155,13 +147,6 @@ export type RepositorySettings = typeof RepositorySettings.Type;
 export const UpdateRepositorySettings = Schema.Struct({
   enabled: Schema.optional(Schema.Boolean),
   reviewOnPush: Schema.optional(Schema.Boolean),
-  reviewPushDebounceMinutes: Schema.optional(Schema.Int),
-  processProfile: Schema.optional(ProcessProfile),
-  blockingReviews: Schema.optional(Schema.Boolean),
-  autoFix: Schema.optional(Schema.Boolean),
-  autoMerge: Schema.optional(Schema.Boolean),
-  autoResolveConflicts: Schema.optional(Schema.Boolean),
-  demoVideos: Schema.optional(Schema.Boolean),
   checkCommand: Schema.optional(Schema.String),
 });
 export type UpdateRepositorySettings = typeof UpdateRepositorySettings.Type;
@@ -174,41 +159,44 @@ const ToggleResource = Schema.Struct({
   name: Schema.String,
   enabled: Schema.Boolean,
 });
-export const InstallationCollection = Schema.Struct({
-  githubAppSlug: Schema.String,
-  items: Schema.Array(
-    Schema.Struct({
-      id: PositiveInt,
-      accountLogin: Schema.String,
-      accountType: Schema.String,
-      suspended: Schema.Boolean,
-      repositories: Schema.Array(
-        Schema.Struct({
-          id: PositiveInt,
-          owner: Schema.String,
-          name: Schema.String,
-          provider: Schema.String,
-          settings: RepositorySettings,
-          agents: Schema.Array(ToggleResource),
-          skills: Schema.Array(ToggleResource),
-        }),
-      ),
-    }),
-  ),
+const ToggleIntegration = Schema.Struct({
+  id: PositiveInt,
+  kind: Schema.Literal('scm', 'artifact_store', 'mcp', 'api'),
+  provider: Schema.String,
+  name: Schema.String,
+  enabled: Schema.Boolean,
 });
-export type InstallationCollection = typeof InstallationCollection.Type;
+export const Repository = Schema.Struct({
+  id: PositiveInt,
+  organizationId: Schema.String,
+  sourceIntegrationId: PositiveInt,
+  externalId: Schema.NullOr(Schema.String),
+  owner: Schema.String,
+  name: Schema.String,
+  defaultBranch: Schema.NullOr(Schema.String),
+  provider: Schema.String,
+  settings: RepositorySettings,
+  agents: Schema.Array(ToggleResource),
+  skills: Schema.Array(ToggleResource),
+  integrations: Schema.Array(ToggleIntegration),
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+});
+export type Repository = typeof Repository.Type;
+export const RepositoryCollection = Schema.Struct({ items: Schema.Array(Repository) });
+export type RepositoryCollection = typeof RepositoryCollection.Type;
 
 export const RepositoriesApi = HttpApiGroup.make('repositories')
   .add(
-    HttpApiEndpoint.get('listInstallations', '/installations')
-      .addSuccess(InstallationCollection)
+    HttpApiEndpoint.get('listRepositories', '/repositories')
+      .addSuccess(RepositoryCollection)
       .addError(DomainError),
   )
   .add(
     withDomainErrors(
-      HttpApiEndpoint.post('createProject', '/projects')
-        .setPayload(CreateProject)
-        .addSuccess(Project, { status: 201 }),
+      HttpApiEndpoint.post('createRepository', '/repositories')
+        .setPayload(CreateRepository)
+        .addSuccess(CreatedRepository, { status: 201 }),
     ),
   )
   .add(
@@ -260,6 +248,14 @@ export const RepositoriesApi = HttpApiGroup.make('repositories')
   )
   .add(
     HttpApiEndpoint.put('setRepositorySkill')`/repositories/${repositoryId}/skills/${skillId}`
+      .setPayload(EnableResource)
+      .addSuccess(HttpApiSchema.NoContent, { status: 204 })
+      .addError(DomainError),
+  )
+  .add(
+    HttpApiEndpoint.put(
+      'setRepositoryIntegration',
+    )`/repositories/${repositoryId}/integrations/${integrationId}`
       .setPayload(EnableResource)
       .addSuccess(HttpApiSchema.NoContent, { status: 204 })
       .addError(DomainError),

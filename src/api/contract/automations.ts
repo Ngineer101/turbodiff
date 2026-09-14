@@ -3,199 +3,113 @@ import { Schema } from 'effect';
 import { DomainError } from './errors.ts';
 
 const PositiveInt = Schema.Int.pipe(Schema.positive());
-const IdParam = (name: string) =>
+const idParam = (name: string) =>
   HttpApiSchema.param(name, Schema.NumberFromString.pipe(Schema.int(), Schema.positive()));
-
-export const RepositorySummary = Schema.Struct({
-  id: PositiveInt,
-  owner: Schema.String,
-  name: Schema.String,
-});
-
-export const AutomationRunSummary = Schema.Struct({
-  id: PositiveInt,
-  status: Schema.Literal('running', 'pr_opened', 'no_changes', 'checks_failed', 'failed'),
-  pullRequestNumber: Schema.NullOr(PositiveInt),
-  error: Schema.NullOr(Schema.String),
-  createdAt: Schema.String,
-});
 
 export const Automation = Schema.Struct({
   id: PositiveInt,
+  organizationId: Schema.String,
+  agentId: PositiveInt,
+  repositoryId: Schema.NullOr(PositiveInt),
   name: Schema.String,
-  prompt: Schema.String,
-  repository: RepositorySummary,
-  scheduleKind: Schema.Literal('hourly', 'daily', 'weekly'),
-  timeOfDay: Schema.NullOr(Schema.String),
-  dayOfWeek: Schema.NullOr(Schema.Int),
+  schedule: Schema.String,
+  timezone: Schema.String,
+  inputTemplate: Schema.Unknown,
+  skillIds: Schema.Array(PositiveInt),
+  integrationIds: Schema.Array(PositiveInt),
   enabled: Schema.Boolean,
-  runnerModel: Schema.NullOr(Schema.String),
-  nextRunAt: Schema.String,
-  lastRun: Schema.NullOr(
-    Schema.Struct({
-      id: PositiveInt,
-      status: Schema.String,
-      createdAt: Schema.String,
-    }),
-  ),
+  nextRunAt: Schema.NullOr(Schema.String),
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
 });
-
 export type Automation = typeof Automation.Type;
 
-export const AutomationCollection = Schema.Struct({
-  items: Schema.Array(Automation),
-  repositories: Schema.Array(
-    Schema.Struct({
-      id: PositiveInt,
-      owner: Schema.String,
-      name: Schema.String,
-      installationId: PositiveInt,
-    }),
-  ),
-});
-
+export const AutomationCollection = Schema.Struct({ items: Schema.Array(Automation) });
 export type AutomationCollection = typeof AutomationCollection.Type;
 
-const AutomationWrite = Schema.Struct({
-  name: Schema.String,
-  prompt: Schema.String,
-  scheduleKind: Schema.Literal('hourly', 'daily', 'weekly'),
-  timeOfDay: Schema.NullOr(Schema.String),
-  dayOfWeek: Schema.NullOr(Schema.Int),
-  runnerModel: Schema.NullOr(Schema.String),
-});
-
 export const CreateAutomation = Schema.Struct({
-  repositoryId: PositiveInt,
-  ...AutomationWrite.fields,
+  organizationId: Schema.String,
+  agentId: PositiveInt,
+  repositoryId: Schema.optional(Schema.NullOr(PositiveInt)),
+  name: Schema.String,
+  schedule: Schema.String,
+  timezone: Schema.optional(Schema.String),
+  inputTemplate: Schema.Unknown,
+  skillIds: Schema.optional(Schema.Array(PositiveInt)),
+  integrationIds: Schema.optional(Schema.Array(PositiveInt)),
+  enabled: Schema.optional(Schema.Boolean),
 });
-
 export type CreateAutomation = typeof CreateAutomation.Type;
 
 export const UpdateAutomation = Schema.Struct({
+  agentId: Schema.optional(PositiveInt),
+  repositoryId: Schema.optional(Schema.NullOr(PositiveInt)),
   name: Schema.optional(Schema.String),
-  prompt: Schema.optional(Schema.String),
-  scheduleKind: Schema.optional(Schema.Literal('hourly', 'daily', 'weekly')),
-  timeOfDay: Schema.optional(Schema.NullOr(Schema.String)),
-  dayOfWeek: Schema.optional(Schema.NullOr(Schema.Int)),
-  runnerModel: Schema.optional(Schema.NullOr(Schema.String)),
+  schedule: Schema.optional(Schema.String),
+  timezone: Schema.optional(Schema.String),
+  inputTemplate: Schema.optional(Schema.Unknown),
+  skillIds: Schema.optional(Schema.Array(PositiveInt)),
+  integrationIds: Schema.optional(Schema.Array(PositiveInt)),
   enabled: Schema.optional(Schema.Boolean),
 });
-
 export type UpdateAutomation = typeof UpdateAutomation.Type;
 
-export const AutomationRunCollection = Schema.Struct({
-  automation: Schema.Struct({ id: PositiveInt, name: Schema.String }),
-  items: Schema.Array(AutomationRunSummary),
-});
-
-export type AutomationRunCollection = typeof AutomationRunCollection.Type;
-
-export const AutomationRunDetail = Schema.Struct({
-  ...AutomationRunSummary.fields,
-  automation: Schema.Struct({
-    id: PositiveInt,
-    name: Schema.String,
-    repository: Schema.String,
-  }),
-  agentRuns: Schema.Array(
-    Schema.Struct({
-      id: PositiveInt,
-      kind: Schema.String,
-      success: Schema.Boolean,
-      createdAt: Schema.String,
-    }),
-  ),
-});
-
-export type AutomationRunDetail = typeof AutomationRunDetail.Type;
-
-export const AutomationRunAccepted = Schema.Struct({
+export const AutomationRun = Schema.Struct({
+  id: PositiveInt,
   automationId: PositiveInt,
+  workItemId: Schema.NullOr(PositiveInt),
+  status: Schema.Literal('queued', 'running', 'waiting', 'succeeded', 'failed', 'cancelled'),
+  createdAt: Schema.String,
+  startedAt: Schema.NullOr(Schema.String),
+  completedAt: Schema.NullOr(Schema.String),
+});
+export type AutomationRun = typeof AutomationRun.Type;
+export const AutomationRunCollection = Schema.Struct({ items: Schema.Array(AutomationRun) });
+export const AutomationRunAccepted = Schema.Struct({
+  factoryRunId: PositiveInt,
   status: Schema.Literal('queued'),
 });
 
-const withDomainErrors = <
-  Name extends string,
-  Method extends 'GET' | 'POST' | 'PATCH' | 'DELETE',
-  Path,
-  UrlParams,
-  Payload,
-  Headers,
-  Success,
-  Error,
-  R,
-  RE,
->(
-  endpoint: HttpApiEndpoint.HttpApiEndpoint<
-    Name,
-    Method,
-    Path,
-    UrlParams,
-    Payload,
-    Headers,
-    Success,
-    Error,
-    R,
-    RE
-  >,
-) => endpoint.addError(DomainError);
-
 export const AutomationsApi = HttpApiGroup.make('automations')
   .add(
-    withDomainErrors(
-      HttpApiEndpoint.get('listAutomations', '/automations').addSuccess(AutomationCollection),
-    ),
+    HttpApiEndpoint.get('listAutomations', '/automations')
+      .addSuccess(AutomationCollection)
+      .addError(DomainError),
   )
   .add(
-    withDomainErrors(
-      HttpApiEndpoint.post('createAutomation', '/automations')
-        .setPayload(CreateAutomation)
-        .addSuccess(Automation, { status: 201 }),
-    ),
+    HttpApiEndpoint.post('createAutomation', '/automations')
+      .setPayload(CreateAutomation)
+      .addSuccess(Automation, { status: 201 })
+      .addError(DomainError),
   )
   .add(
-    withDomainErrors(
-      HttpApiEndpoint.get('getAutomation')`/automations/${IdParam('automationId')}`.addSuccess(
-        Automation,
-      ),
-    ),
+    HttpApiEndpoint.get('getAutomation')`/automations/${idParam('automationId')}`
+      .addSuccess(Automation)
+      .addError(DomainError),
   )
   .add(
-    withDomainErrors(
-      HttpApiEndpoint.patch('updateAutomation')`/automations/${IdParam('automationId')}`
-        .setPayload(UpdateAutomation)
-        .addSuccess(Automation),
-    ),
+    HttpApiEndpoint.patch('updateAutomation')`/automations/${idParam('automationId')}`
+      .setPayload(UpdateAutomation)
+      .addSuccess(Automation)
+      .addError(DomainError),
   )
   .add(
-    withDomainErrors(
-      HttpApiEndpoint.del('deleteAutomation')`/automations/${IdParam('automationId')}`.addSuccess(
-        Schema.Void,
-        { status: 204 },
-      ),
-    ),
+    HttpApiEndpoint.del('deleteAutomation')`/automations/${idParam('automationId')}`
+      .addSuccess(HttpApiSchema.NoContent, { status: 204 })
+      .addError(DomainError),
   )
   .add(
-    withDomainErrors(
-      HttpApiEndpoint.get(
-        'listAutomationRuns',
-      )`/automations/${IdParam('automationId')}/runs`.addSuccess(AutomationRunCollection),
-    ),
+    HttpApiEndpoint.get('listAutomationRuns')`/automations/${idParam('automationId')}/factory-runs`
+      .addSuccess(AutomationRunCollection)
+      .addError(DomainError),
   )
   .add(
-    withDomainErrors(
-      HttpApiEndpoint.post(
-        'runAutomation',
-      )`/automations/${IdParam('automationId')}/runs`.addSuccess(AutomationRunAccepted, {
-        status: 202,
-      }),
-    ),
+    HttpApiEndpoint.post('runAutomation')`/automations/${idParam('automationId')}/factory-runs`
+      .addSuccess(AutomationRunAccepted, { status: 202 })
+      .addError(DomainError),
   )
   .add(
-    withDomainErrors(
-      HttpApiEndpoint.get('getAutomationRun')`/automation-runs/${IdParam('runId')}`.addSuccess(
-        AutomationRunDetail,
-      ),
-    ),
+    HttpApiEndpoint.get('getAutomationRun')`/factory-runs/${idParam('runId')}/automation`
+      .addSuccess(AutomationRun)
+      .addError(DomainError),
   );

@@ -2,14 +2,20 @@ import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from '@effect/platform';
 import { Schema } from 'effect';
 import { DomainError } from './errors.ts';
 
-const PositiveInt = Schema.Int.pipe(Schema.positive());
-const installationId = HttpApiSchema.param(
-  'installationId',
-  Schema.NumberFromString.pipe(Schema.int(), Schema.positive()),
-);
+const organizationId = HttpApiSchema.param('organizationId', Schema.String);
 const memberId = HttpApiSchema.param('memberId', Schema.String);
 const invitationId = HttpApiSchema.param('invitationId', Schema.String);
 const Role = Schema.Literal('owner', 'admin', 'member');
+
+export const Organization = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  slug: Schema.String,
+  role: Role,
+  createdAt: Schema.String,
+});
+export type Organization = typeof Organization.Type;
+export const OrganizationCollection = Schema.Struct({ items: Schema.Array(Organization) });
 
 export const Member = Schema.Struct({
   id: Schema.String,
@@ -39,28 +45,33 @@ export const InvitationPreview = Schema.Struct({
   id: Schema.String,
   email: Schema.String,
   role: Role,
+  organizationId: Schema.String,
   organizationName: Schema.String,
-  installationId: Schema.NullOr(PositiveInt),
   invitedBy: Schema.NullOr(Schema.String),
   expiresAt: Schema.NullOr(Schema.String),
 });
 export type InvitationPreview = typeof InvitationPreview.Type;
 export const InvitationAcceptance = Schema.Struct({
+  organizationId: Schema.String,
   organizationName: Schema.String,
-  installationId: Schema.NullOr(PositiveInt),
 });
 export type InvitationAcceptance = typeof InvitationAcceptance.Type;
 
 export const OrganizationsApi = HttpApiGroup.make('organizations')
   .add(
-    HttpApiEndpoint.get('listOrganizationMembers')`/organizations/${installationId}/members`
+    HttpApiEndpoint.get('listOrganizations', '/organizations')
+      .addSuccess(OrganizationCollection)
+      .addError(DomainError),
+  )
+  .add(
+    HttpApiEndpoint.get('listOrganizationMembers')`/organizations/${organizationId}/members`
       .addSuccess(OrganizationMembers)
       .addError(DomainError),
   )
   .add(
     HttpApiEndpoint.post(
       'createOrganizationInvitation',
-    )`/organizations/${installationId}/invitations`
+    )`/organizations/${organizationId}/invitations`
       .setPayload(CreateInvitation)
       .addSuccess(Invitation, { status: 201 })
       .addError(DomainError),
@@ -68,7 +79,7 @@ export const OrganizationsApi = HttpApiGroup.make('organizations')
   .add(
     HttpApiEndpoint.patch(
       'updateOrganizationMember',
-    )`/organizations/${installationId}/members/${memberId}`
+    )`/organizations/${organizationId}/members/${memberId}`
       .setPayload(UpdateMember)
       .addSuccess(HttpApiSchema.NoContent, { status: 204 })
       .addError(DomainError),
@@ -76,7 +87,7 @@ export const OrganizationsApi = HttpApiGroup.make('organizations')
   .add(
     HttpApiEndpoint.del(
       'deleteOrganizationMember',
-    )`/organizations/${installationId}/members/${memberId}`
+    )`/organizations/${organizationId}/members/${memberId}`
       .addSuccess(HttpApiSchema.NoContent, { status: 204 })
       .addError(DomainError),
   )

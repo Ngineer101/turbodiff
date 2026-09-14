@@ -42,7 +42,9 @@ export const CurrentUserView = Schema.Struct({
   ),
   githubAppSlug: Schema.String,
   vapidPublicKey: Schema.String,
-  installationIds: Schema.Array(Schema.Int),
+  activeOrganizationId: Schema.String,
+  organizationIds: Schema.Array(Schema.String),
+  githubInstallationIds: Schema.Array(Schema.Int),
 });
 
 export type CurrentUserView = typeof CurrentUserView.Type;

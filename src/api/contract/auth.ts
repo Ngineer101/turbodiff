@@ -5,10 +5,11 @@ import { Forbidden, ServiceUnavailable, Unauthorized } from './errors.ts';
 export interface CurrentUserIdentity {
   readonly session: {
     readonly authUserId: string;
-    readonly userId: number;
-    readonly login: string;
+    readonly githubUserId: number | null;
+    readonly login: string | null;
   };
-  readonly installationIds: number[];
+  readonly organizationIds: string[];
+  readonly activeOrganizationId: string;
   readonly githubConnected: boolean;
   readonly githubStatus:
     | 'not_connected'
@@ -18,8 +19,6 @@ export interface CurrentUserIdentity {
     | 'syncing'
     | 'ready';
   readonly name: string;
-  readonly membershipRefresh?: () => Promise<void>;
-  readonly repositoryRepair?: () => Promise<void>;
 }
 
 export class CurrentUser extends Context.Tag('Turbodiff/CurrentUser')<
