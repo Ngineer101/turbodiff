@@ -13,58 +13,26 @@ export const DeliveriesHandlers = HttpApiBuilder.group(
       .handle('getDelivery', ({ path }) =>
         Effect.flatMap(CurrentUser, (user) => service.get(user, path.deliveryId)),
       )
-      .handle('getDeliveryDiff', ({ path, urlParams }) =>
-        Effect.flatMap(CurrentUser, (user) =>
-          service.diff(user, path.deliveryId, urlParams.version),
-        ),
-      )
-      .handle('getDeliveryExplanation', ({ path, urlParams }) =>
-        Effect.flatMap(CurrentUser, (user) =>
-          service.explanation(user, path.deliveryId, urlParams.version),
-        ),
-      )
-      .handle('generateDeliveryExplanation', ({ path, payload }) =>
-        Effect.flatMap(CurrentUser, (user) =>
-          service.generateExplanation(user, path.deliveryId, payload),
-        ),
-      )
-      .handle('createDeliveryComment', ({ path, payload }) =>
-        Effect.flatMap(CurrentUser, (user) =>
-          service.createComment(user, path.deliveryId, payload),
-        ),
-      )
-      .handle('createDeliveryFixRun', ({ path }) =>
-        Effect.flatMap(CurrentUser, (user) => service.createFixRun(user, path.deliveryId)),
-      )
       .handle('listDeliveryMessages', ({ path }) =>
         Effect.flatMap(CurrentUser, (user) => service.listMessages(user, path.deliveryId)),
       )
       .handle('createDeliveryMessage', ({ path, payload }) =>
         Effect.flatMap(CurrentUser, (user) =>
-          service.createMessage(user, path.deliveryId, payload),
+          service.createMessage(user, path.deliveryId, payload.body),
         ),
       )
-      .handle('retryDelivery', ({ path }) =>
-        Effect.flatMap(CurrentUser, (user) => service.retry(user, path.deliveryId)),
-      )
-      .handle('resumeReviewRun', ({ path }) =>
-        Effect.flatMap(CurrentUser, (user) => service.resumeReviewRun(user, path.reviewRunId)),
+      .handle('startDeliveryRun', ({ path }) =>
+        Effect.flatMap(CurrentUser, (user) => service.startRun(user, path.deliveryId)),
       )
       .handle('replaceAcceptanceContract', ({ path, payload }) =>
         Effect.flatMap(CurrentUser, (user) =>
-          service.replaceAcceptanceContract(user, path.deliveryId, payload),
+          service.replaceAcceptanceContract(
+            user,
+            path.deliveryId,
+            payload.artifactId,
+            payload.status ?? 'active',
+          ),
         ),
-      )
-      .handle('resolveAcceptanceConflict', ({ path }) =>
-        Effect.flatMap(CurrentUser, (user) =>
-          service.resolveAcceptanceConflict(user, path.deliveryId),
-        ),
-      )
-      .handle('mergeDelivery', ({ path }) =>
-        Effect.flatMap(CurrentUser, (user) => service.merge(user, path.deliveryId)),
-      )
-      .handle('closeDelivery', ({ path }) =>
-        Effect.flatMap(CurrentUser, (user) => service.close(user, path.deliveryId)),
       );
   }),
 );

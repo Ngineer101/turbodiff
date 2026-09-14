@@ -1,35 +1,27 @@
 import { Context, Effect, Layer } from 'effect';
 import {
-  createPlanForWorkItem,
+  approveWorkItemPlan,
+  artifactWasProducedForWorkItem,
+  createFactoryRunWithStage,
   createWorkItem,
   deleteUnstartedWorkItem,
-  getPlanIdForWorkItem,
-  getPlanWithRepoById,
-  getRepoById,
-  getTaskRepoStatuses,
+  getArtifact,
+  getRepository,
   getWorkItem,
-  listAgentRunsForPlan,
-  listPlanIdsForWorkItems,
+  listFactoryRuns,
+  listDeliveriesForWorkItem,
   listWorkItems,
   listWorkItemTargets,
   replaceWorkItemTargets,
-  setPlanArchived,
-  setTaskRunnerModel,
-  updatePlan,
   updateWorkItem,
-  type PlanWithRepo,
+  type FactoryRunRow,
   type WorkItemRow,
   type WorkItemTargetRow,
 } from '../../../data/db.ts';
-import { getRunnerModelCatalog, ModelCatalogConfigurationError } from '../../../data/models.ts';
-import { approvePlan } from '../../../application/planning/approve-plan.ts';
-import { parseUtc, VERIFY_STALL_AFTER_MS } from '../../../shared/time.ts';
+import { DISPATCH_FLOW, PLANNING_FLOW } from '../../../application/factory/flows.ts';
 import type { CurrentUserIdentity } from '../../contract/auth.ts';
 import type {
   CreateWorkItem,
-  PlanningRun,
-  StartPlanningRun,
-  UpdatePlanningRun,
   UpdateWorkItem,
   WorkItem,
   WorkItemCollection,
@@ -39,10 +31,81 @@ import {
   conflict,
   internalServerError,
   notFound,
-  serviceUnavailable,
   type DomainError,
 } from '../../contract/errors.ts';
+import { requireOrganizationWrite } from '../authorization.ts';
 import { ApiDependencies } from '../context.ts';
+
+const dataEffect = <A>(run: () => Promise<A>): Effect.Effect<A, DomainError> =>
+  Effect.tryPromise({
+    try: run,
+    catch: (failure) => {
+      console.error('turbodiff: work-item operation failed', failure);
+      return internalServerError();
+    },
+  });
+
+const targetsFor = (rows: WorkItemTargetRow[], workItemId: number): WorkItem['targets'] =>
+  rows
+    .filter((row) => row.work_item_id === workItemId)
+    .map((row) => ({
+      repositoryId: row.repository_id,
+      owner: row.owner,
+      name: row.name,
+      position: row.position,
+    }));
+
+const serialize = (row: WorkItemRow, targets: WorkItemTargetRow[]): WorkItem => ({
+  id: row.id,
+  organizationId: row.organization_id,
+  origin: row.origin,
+  title: row.title,
+  description: row.description,
+  status: row.status,
+  approvedPlanArtifactId: row.approved_plan_artifact_id,
+  targets: targetsFor(targets, row.id),
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+  completedAt: row.completed_at,
+});
+
+const serializeRun = (run: FactoryRunRow) => ({
+  id: run.id,
+  flowKey: run.flow_key,
+  flowVersion: run.flow_version,
+  status: run.status,
+  createdAt: run.created_at,
+  startedAt: run.started_at,
+  completedAt: run.completed_at,
+});
+
+const owned = (user: CurrentUserIdentity, id: number) =>
+  dataEffect(() => getWorkItem(id)).pipe(
+    Effect.flatMap((row) =>
+      row && user.organizationIds.includes(row.organization_id)
+        ? Effect.succeed(row)
+        : Effect.fail(notFound('Unknown work item')),
+    ),
+  );
+
+const validateRepositoryIds = (organizationId: string, rawIds: readonly number[]) =>
+  Effect.gen(function* () {
+    const ids = [...new Set(rawIds)];
+    if (ids.length === 0 || ids.length > 3) {
+      return yield* Effect.fail(badRequest('Choose between one and three repositories'));
+    }
+    const repositories = yield* dataEffect(() => Promise.all(ids.map(getRepository)));
+    if (
+      !repositories.every(
+        (repository) => repository?.organization_id === organizationId && repository.enabled,
+      )
+    ) {
+      return yield* Effect.fail(
+        badRequest('A target repository is unknown, disabled, or belongs to another organization'),
+      );
+    }
+    return ids;
+  });
 
 export interface WorkItemOperations {
   readonly list: (user: CurrentUserIdentity) => Effect.Effect<WorkItemCollection, DomainError>;
@@ -57,38 +120,36 @@ export interface WorkItemOperations {
     input: UpdateWorkItem,
   ) => Effect.Effect<WorkItem, DomainError>;
   readonly remove: (user: CurrentUserIdentity, id: number) => Effect.Effect<void, DomainError>;
-  readonly startPlanning: (
+  readonly listRuns: (
     user: CurrentUserIdentity,
     id: number,
-    input: StartPlanningRun,
-  ) => Effect.Effect<{ planningRunId: number; status: 'queued' }, DomainError>;
-  readonly getPlanningRun: (
+  ) => Effect.Effect<{ items: ReturnType<typeof serializeRun>[] }, DomainError>;
+  readonly listDeliveries: (
     user: CurrentUserIdentity,
     id: number,
-  ) => Effect.Effect<PlanningRun, DomainError>;
-  readonly updatePlanningRun: (
+  ) => Effect.Effect<
+    {
+      items: Array<{
+        id: number;
+        repositoryId: number;
+        status: 'pending' | 'active' | 'completed' | 'failed' | 'cancelled';
+        createdAt: string;
+        updatedAt: string;
+        completedAt: string | null;
+      }>;
+    },
+    DomainError
+  >;
+  readonly startRun: (
     user: CurrentUserIdentity,
     id: number,
-    input: UpdatePlanningRun,
-  ) => Effect.Effect<PlanningRun, DomainError>;
-  readonly answerPlanningRun: (
+    flow: 'planning' | 'delivery',
+  ) => Effect.Effect<{ factoryRunId: number; stageRunId: number; status: 'queued' }, DomainError>;
+  readonly approvePlan: (
     user: CurrentUserIdentity,
     id: number,
-    answers: readonly string[],
-  ) => Effect.Effect<{ status: 'queued' }, DomainError>;
-  readonly retryPlanningRun: (
-    user: CurrentUserIdentity,
-    id: number,
-  ) => Effect.Effect<{ status: 'queued' }, DomainError>;
-  readonly approvePlanningRun: (
-    user: CurrentUserIdentity,
-    id: number,
-  ) => Effect.Effect<{ status: 'queued'; deliveryIds: number[] }, DomainError>;
-  readonly addPlanningFeedback: (
-    user: CurrentUserIdentity,
-    id: number,
-    comments: readonly { readonly snippet?: string; readonly comment: string }[],
-  ) => Effect.Effect<{ status: 'queued' }, DomainError>;
+    artifactId: number,
+  ) => Effect.Effect<{ artifactId: number; status: 'approved' }, DomainError>;
 }
 
 export class WorkItemService extends Context.Tag('Turbodiff/WorkItemService')<
@@ -96,217 +157,54 @@ export class WorkItemService extends Context.Tag('Turbodiff/WorkItemService')<
   WorkItemOperations
 >() {}
 
-const dataEffect = <A>(operation: () => Promise<A>): Effect.Effect<A, DomainError> =>
-  Effect.tryPromise({
-    try: operation,
-    catch: (error) => {
-      if (error instanceof ModelCatalogConfigurationError) {
-        return serviceUnavailable(error.message);
-      }
-      console.error('turbodiff: Effect work-item operation failed', error);
-      return internalServerError();
-    },
-  });
-
-const targetsFor = (targets: WorkItemTargetRow[], workItemId: number): WorkItem['targets'] =>
-  targets
-    .filter((target) => target.work_item_id === workItemId)
-    .map((target) => ({
-      repositoryId: target.repository_id,
-      owner: target.owner,
-      name: target.name,
-      provider: target.provider,
-      enabled: target.enabled,
-    }));
-
-const serializeWorkItem = (
-  row: WorkItemRow,
-  targets: WorkItemTargetRow[],
-  planningRunId: number | null,
-): WorkItem => ({
-  id: row.id,
-  installationId: row.installation_id,
-  origin: row.origin,
-  title: row.title,
-  description: row.description,
-  status: row.status,
-  runnerModel: row.runner_model,
-  planningRunId,
-  targets: targetsFor(targets, row.id),
-  createdAt: row.created_at,
-  updatedAt: row.updated_at,
-});
-
-const ensureOwned = (user: CurrentUserIdentity, row: WorkItemRow | null) =>
-  row && user.installationIds.includes(row.installation_id)
-    ? Effect.succeed(row)
-    : Effect.fail(notFound('Unknown work item'));
-
-const validRepositoryIds = (
-  installationId: number,
-  repositoryIds: readonly number[],
-): Effect.Effect<number[], DomainError> => {
-  const ids = [...new Set(repositoryIds)];
-  if (ids.length === 0 || ids.length > 3) {
-    return Effect.fail(badRequest('Choose between one and three repositories'));
-  }
-  return dataEffect(() => Promise.all(ids.map((id) => getRepoById(id)))).pipe(
-    Effect.flatMap((repositories) =>
-      repositories.every(
-        (repository) => repository?.installation_id === installationId && repository.enabled,
-      )
-        ? Effect.succeed(ids)
-        : Effect.fail(
-            badRequest('A target repository is unknown, disabled, or in another installation'),
-          ),
-    ),
-  );
-};
-
-function serializePlanningRun(
-  plan: PlanWithRepo,
-  targets: Awaited<ReturnType<typeof getTaskRepoStatuses>>,
-  agentRuns: Awaited<ReturnType<typeof listAgentRunsForPlan>>,
-): PlanningRun {
-  if (!plan.runner_model) {
-    throw new ModelCatalogConfigurationError(`Planning run ${plan.id} has no model snapshot`);
-  }
-  return {
-    id: plan.id,
-    workItemId: plan.work_item_id,
-    title: plan.title,
-    status: plan.status,
-    error: plan.error,
-    questions: plan.questions ?? [],
-    acceptance: plan.acceptance ?? [],
-    plan: plan.plan,
-    summary: plan.summary,
-    archived: plan.archived,
-    model: plan.runner_model,
-    attachments: (plan.attachments ?? []).map((attachment) => ({ name: attachment.name })),
-    targets: targets.map((target) => ({
-      repositoryId: target.repository_id,
-      owner: target.owner,
-      name: target.name,
-      provider: target.provider,
-      deliveryId: target.feature_id,
-      changeId: target.change_id,
-      pullRequestNumber: target.pr_number,
-      status: target.feature_status,
-      error: target.feature_error,
-      verification: target.verification_status
-        ? {
-            status:
-              target.verification_status === 'running' &&
-              target.verification_created_at !== null &&
-              Date.now() - parseUtc(target.verification_created_at) > VERIFY_STALL_AFTER_MS
-                ? 'stalled'
-                : target.verification_status,
-            total: (target.verification_results ?? []).length,
-            failed: (target.verification_results ?? []).filter(
-              (result) => result.verdict === 'fail',
-            ).length,
-          }
-        : null,
-    })),
-    agentRuns: agentRuns.map((run) => ({
-      id: run.id,
-      kind: run.kind,
-      success: run.success,
-      createdAt: run.created_at,
-    })),
-    createdAt: plan.created_at,
-  };
-}
-
 export const WorkItemServiceLive = Layer.effect(
   WorkItemService,
   Effect.gen(function* () {
     const dependencies = yield* ApiDependencies;
 
-    const loadOne = (user: CurrentUserIdentity, id: number) =>
+    const load = (user: CurrentUserIdentity, id: number) =>
       Effect.gen(function* () {
-        const row = yield* dataEffect(() => getWorkItem(id));
-        const owned = yield* ensureOwned(user, row);
-        const [targets, planningRunId] = yield* dataEffect(() =>
-          Promise.all([listWorkItemTargets([id]), getPlanIdForWorkItem(id)]),
-        );
-        return serializeWorkItem(owned, targets, planningRunId);
-      });
-
-    const ownedPlan = (user: CurrentUserIdentity, id: number) =>
-      dataEffect(() => getPlanWithRepoById(id)).pipe(
-        Effect.flatMap((plan) =>
-          plan && user.installationIds.includes(plan.installation_id)
-            ? Effect.succeed(plan)
-            : Effect.fail(notFound('Unknown planning run')),
-        ),
-      );
-
-    const loadPlanningRun = (user: CurrentUserIdentity, id: number) =>
-      Effect.gen(function* () {
-        const plan = yield* ownedPlan(user, id);
-        const [targets, agentRuns] = yield* dataEffect(() =>
-          Promise.all([getTaskRepoStatuses([plan.id]), listAgentRunsForPlan(plan.id)]),
-        );
-        return serializePlanningRun(plan, targets, agentRuns);
+        const row = yield* owned(user, id);
+        const targets = yield* dataEffect(() => listWorkItemTargets([id]));
+        return serialize(row, targets);
       });
 
     return {
       list: (user) =>
         Effect.gen(function* () {
-          const rows = yield* dataEffect(() => listWorkItems(user.installationIds));
-          const ids = rows.map((row) => row.id);
-          const [targets, plans] = yield* dataEffect(() =>
-            Promise.all([listWorkItemTargets(ids), listPlanIdsForWorkItems(ids)]),
-          );
-          const plansByWorkItem = new Map(plans.map((plan) => [plan.work_item_id, plan.id]));
-          return {
-            items: rows.map((row) =>
-              serializeWorkItem(row, targets, plansByWorkItem.get(row.id) ?? null),
-            ),
-          };
+          const rows = yield* dataEffect(() => listWorkItems(user.organizationIds));
+          const targets = yield* dataEffect(() => listWorkItemTargets(rows.map((row) => row.id)));
+          return { items: rows.map((row) => serialize(row, targets)) };
         }),
-      get: loadOne,
+      get: load,
       create: (user, input) =>
         Effect.gen(function* () {
-          if (!user.installationIds.includes(input.installationId)) {
-            return yield* Effect.fail(notFound('Unknown installation'));
-          }
+          yield* requireOrganizationWrite(user, input.organizationId);
           const title = input.title.trim().slice(0, 200);
           const description = input.description.trim();
-          if (!title) return yield* Effect.fail(badRequest('Title is required'));
-          if (!description) return yield* Effect.fail(badRequest('Description is required'));
-          const repositoryIds = yield* validRepositoryIds(
-            input.installationId,
+          if (!title || !description) {
+            return yield* Effect.fail(badRequest('Title and description are required'));
+          }
+          const repositoryIds = yield* validateRepositoryIds(
+            input.organizationId,
             input.repositoryIds,
           );
-          const catalog = yield* dataEffect(getRunnerModelCatalog);
-          const runnerModel = input.runnerModel?.trim() || catalog.defaultModel;
-          if (!catalog.options.some((option) => option.id === runnerModel)) {
-            return yield* Effect.fail(badRequest('Unknown model'));
-          }
-          const origin = input.origin ?? 'idea';
-          if (origin !== 'idea' && origin !== 'api') {
-            return yield* Effect.fail(badRequest('User-created work must have idea or api origin'));
-          }
           const row = yield* dataEffect(() =>
             createWorkItem({
-              installationId: input.installationId,
-              repositoryIds,
+              organizationId: input.organizationId,
+              origin: input.origin ?? 'idea',
               title,
               description,
-              origin,
-              createdBy: { login: user.session.login, id: user.session.userId },
-              runnerModel,
+              createdByUserId: user.session.authUserId,
+              repositoryIds,
             }),
           );
-          return yield* loadOne(user, row.id);
+          return yield* load(user, row.id);
         }),
       update: (user, id, input) =>
         Effect.gen(function* () {
-          const row = yield* dataEffect(() => getWorkItem(id));
-          const owned = yield* ensureOwned(user, row);
+          const row = yield* owned(user, id);
+          yield* requireOrganizationWrite(user, row.organization_id);
           const title = input.title?.trim().slice(0, 200);
           const description = input.description?.trim();
           if (input.title !== undefined && !title) {
@@ -315,176 +213,109 @@ export const WorkItemServiceLive = Layer.effect(
           if (input.description !== undefined && !description) {
             return yield* Effect.fail(badRequest('Description cannot be empty'));
           }
-          if (input.runnerModel !== undefined) {
-            const catalog = yield* dataEffect(getRunnerModelCatalog);
-            if (!catalog.options.some((option) => option.id === input.runnerModel?.trim())) {
-              return yield* Effect.fail(badRequest('Unknown model'));
-            }
-          }
           if (input.repositoryIds !== undefined) {
-            const repositoryIds = yield* validRepositoryIds(
-              owned.installation_id,
+            const repositoryIds = yield* validateRepositoryIds(
+              row.organization_id,
               input.repositoryIds,
             );
-            const replaced = yield* dataEffect(() => replaceWorkItemTargets(id, repositoryIds));
-            if (!replaced) {
-              return yield* Effect.fail(conflict('Targets are immutable after planning starts'));
-            }
+            yield* dataEffect(() => replaceWorkItemTargets(row, repositoryIds));
           }
-          const changes: Parameters<typeof updateWorkItem>[1] = {};
-          if (title !== undefined) changes.title = title;
-          if (description !== undefined) changes.description = description;
-          if (input.status !== undefined) changes.status = input.status;
-          if (input.runnerModel !== undefined) changes.runnerModel = input.runnerModel.trim();
-          const updated = yield* dataEffect(() => updateWorkItem(id, changes));
-          if (!updated) return yield* Effect.fail(notFound('Unknown work item'));
-          const planId = yield* dataEffect(() => getPlanIdForWorkItem(id));
-          if (planId && input.runnerModel !== undefined) {
-            yield* dataEffect(() => setTaskRunnerModel(planId, input.runnerModel!.trim()));
-          }
-          return yield* loadOne(user, id);
+          yield* dataEffect(() => updateWorkItem(id, { title, description, status: input.status }));
+          return yield* load(user, id);
         }),
       remove: (user, id) =>
         Effect.gen(function* () {
-          yield* ensureOwned(user, yield* dataEffect(() => getWorkItem(id)));
-          const deleted = yield* dataEffect(() => deleteUnstartedWorkItem(id));
-          if (!deleted) {
+          const row = yield* owned(user, id);
+          yield* requireOrganizationWrite(user, row.organization_id);
+          if (!(yield* dataEffect(() => deleteUnstartedWorkItem(id)))) {
             return yield* Effect.fail(
-              conflict('Started work items cannot be deleted; close them instead'),
+              conflict('Started work items cannot be deleted; cancel them instead'),
             );
           }
         }),
-      startPlanning: (user, id, input) =>
+      listRuns: (user, id) =>
         Effect.gen(function* () {
-          const row = yield* ensureOwned(user, yield* dataEffect(() => getWorkItem(id)));
-          if (row.status !== 'open') return yield* Effect.fail(conflict('Work item is closed'));
-          const requirements = input.requirements?.trim() || row.description;
-          const title = input.title?.trim().slice(0, 200) || row.title;
-          const catalog = yield* dataEffect(getRunnerModelCatalog);
-          const model = input.model?.trim() || row.runner_model || catalog.defaultModel;
-          if (!catalog.options.some((option) => option.id === model)) {
-            return yield* Effect.fail(badRequest('Unknown model'));
-          }
-          const attachments = (input.attachments ?? [])
-            .filter((attachment) => attachment.key.startsWith('plan-uploads/'))
-            .slice(0, 5)
-            .map((attachment) => ({
-              key: attachment.key,
-              name: attachment.name.slice(-120),
-              content_type: attachment.contentType,
-            }));
-          const planningInput: Parameters<typeof createPlanForWorkItem>[0] = {
-            workItemId: id,
-            title,
-            requirements,
-            createdBy: { login: user.session.login, id: user.session.userId },
-            runnerModel: model,
+          const row = yield* owned(user, id);
+          const runs = yield* dataEffect(() => listFactoryRuns({ workItemId: row.id }));
+          return { items: runs.map(serializeRun) };
+        }),
+      listDeliveries: (user, id) =>
+        Effect.gen(function* () {
+          const row = yield* owned(user, id);
+          const deliveries = yield* dataEffect(() => listDeliveriesForWorkItem(row.id));
+          return {
+            items: deliveries.map((delivery) => ({
+              id: delivery.id,
+              repositoryId: delivery.repository_id,
+              status: delivery.status,
+              createdAt: delivery.created_at,
+              updatedAt: delivery.updated_at,
+              completedAt: delivery.completed_at,
+            })),
           };
-          if (attachments.length > 0) planningInput.attachments = attachments;
-          const started = yield* dataEffect(() => createPlanForWorkItem(planningInput));
-          if (!started) return yield* Effect.fail(conflict('Work item cannot be started'));
-          if (started.created) {
-            yield* dataEffect(() =>
-              dependencies.enqueueFactory({ kind: 'plan_analyze', planId: started.planId }),
-            );
-          }
-          return { planningRunId: started.planId, status: 'queued' as const };
         }),
-      getPlanningRun: loadPlanningRun,
-      updatePlanningRun: (user, id, input) =>
+      startRun: (user, id, requestedFlow) =>
         Effect.gen(function* () {
-          yield* ownedPlan(user, id);
-          if (input.model !== undefined) {
-            const model = input.model.trim();
-            const catalog = yield* dataEffect(getRunnerModelCatalog);
-            if (!catalog.options.some((option) => option.id === model)) {
-              return yield* Effect.fail(badRequest('Unknown model'));
-            }
-            yield* dataEffect(() => setTaskRunnerModel(id, model));
+          const workItem = yield* owned(user, id);
+          yield* requireOrganizationWrite(user, workItem.organization_id);
+          if (workItem.status === 'completed' || workItem.status === 'cancelled') {
+            return yield* Effect.fail(conflict(`Work item is ${workItem.status}`));
           }
-          if (input.archived !== undefined) {
-            yield* dataEffect(() => setPlanArchived(id, input.archived!));
+          if (requestedFlow === 'delivery' && !workItem.approved_plan_artifact_id) {
+            return yield* Effect.fail(conflict('Approve a plan artifact before delivery'));
           }
-          return yield* loadPlanningRun(user, id);
-        }),
-      answerPlanningRun: (user, id, answers) =>
-        Effect.gen(function* () {
-          const plan = yield* ownedPlan(user, id);
-          if (plan.status !== 'awaiting_answers') {
-            return yield* Effect.fail(
-              conflict(`Planning run is ${plan.status}, not awaiting answers`),
-            );
-          }
-          const normalized = (plan.questions ?? []).map((_, index) => answers[index] ?? '');
-          yield* dataEffect(() => updatePlan(id, { status: 'refining', answers: normalized }));
-          yield* dataEffect(() => dependencies.enqueueFactory({ kind: 'plan_refine', planId: id }));
-          return { status: 'queued' as const };
-        }),
-      retryPlanningRun: (user, id) =>
-        Effect.gen(function* () {
-          const plan = yield* ownedPlan(user, id);
-          if (plan.status !== 'failed') {
-            return yield* Effect.fail(conflict(`Planning run is ${plan.status}, not retryable`));
-          }
-          let hasFeedback = false;
-          try {
-            hasFeedback = plan.feedback ? JSON.parse(plan.feedback).length > 0 : false;
-          } catch {
-            hasFeedback = false;
-          }
-          const refine = plan.answers !== null || hasFeedback;
-          yield* dataEffect(() => updatePlan(id, { status: refine ? 'refining' : 'analyzing' }));
-          yield* dataEffect(() =>
-            dependencies.enqueueFactory(
-              refine ? { kind: 'plan_refine', planId: id } : { kind: 'plan_analyze', planId: id },
+          const flow = requestedFlow === 'planning' ? PLANNING_FLOW : DISPATCH_FLOW;
+          const key = `${flow.key}:${workItem.id}:${crypto.randomUUID()}`;
+          const started = yield* dataEffect(() =>
+            createFactoryRunWithStage(
+              {
+                organizationId: workItem.organization_id,
+                flowKey: flow.key,
+                flowVersion: flow.version,
+                workItemId: workItem.id,
+                trigger: 'manual',
+                actorUserId: user.session.authUserId,
+                idempotencyKey: key,
+              },
+              {
+                stageKey: flow.initialStage,
+                idempotencyKey: `${key}:${flow.initialStage}:1`,
+              },
             ),
           );
-          return { status: 'queued' as const };
-        }),
-      approvePlanningRun: (user, id) =>
-        Effect.gen(function* () {
-          yield* ownedPlan(user, id);
-          const deliveryIds = yield* dataEffect(() =>
-            approvePlan(id, { login: user.session.login, id: user.session.userId }),
-          );
-          if (!deliveryIds) {
-            return yield* Effect.fail(conflict('Planning run is not ready for approval'));
-          }
           yield* dataEffect(() =>
-            Promise.all(
-              deliveryIds.map((featureId) =>
-                dependencies.enqueueFactory({ kind: 'generate', featureId }),
-              ),
-            ).then(() => undefined),
-          );
-          return { status: 'queued' as const, deliveryIds };
-        }),
-      addPlanningFeedback: (user, id, input) =>
-        Effect.gen(function* () {
-          const plan = yield* ownedPlan(user, id);
-          if (plan.status !== 'plan_ready') {
-            return yield* Effect.fail(
-              conflict(`Planning run is ${plan.status}, not ready for feedback`),
-            );
-          }
-          const comments = input
-            .map((item) => ({
-              snippet: item.snippet?.trim().slice(0, 300) ?? '',
-              comment: item.comment.trim().slice(0, 1000),
-            }))
-            .filter((item) => item.comment)
-            .slice(0, 20);
-          if (comments.length === 0) {
-            return yield* Effect.fail(badRequest('At least one comment is required'));
-          }
-          yield* dataEffect(() =>
-            updatePlan(id, {
-              status: 'refining',
-              feedback: JSON.stringify(comments),
+            updateWorkItem(workItem.id, {
+              status: requestedFlow === 'planning' ? 'planning' : 'in_progress',
             }),
           );
-          yield* dataEffect(() => dependencies.enqueueFactory({ kind: 'plan_refine', planId: id }));
-          return { status: 'queued' as const };
+          yield* dataEffect(() =>
+            dependencies.enqueueFactory({
+              kind: 'run_factory',
+              factoryRunId: started.factoryRun.id,
+              stageRunId: started.stageRun.id,
+            }),
+          );
+          return {
+            factoryRunId: started.factoryRun.id,
+            stageRunId: started.stageRun.id,
+            status: 'queued' as const,
+          };
+        }),
+      approvePlan: (user, id, artifactId) =>
+        Effect.gen(function* () {
+          const workItem = yield* owned(user, id);
+          yield* requireOrganizationWrite(user, workItem.organization_id);
+          const artifact = yield* dataEffect(() => getArtifact(artifactId));
+          if (
+            !artifact ||
+            artifact.organization_id !== workItem.organization_id ||
+            artifact.kind !== 'plan' ||
+            !(yield* dataEffect(() => artifactWasProducedForWorkItem(artifactId, workItem.id)))
+          ) {
+            return yield* Effect.fail(notFound('Unknown plan artifact'));
+          }
+          yield* dataEffect(() => approveWorkItemPlan(workItem.id, artifact));
+          return { artifactId: artifact.id, status: 'approved' as const };
         }),
     } satisfies WorkItemOperations;
   }),

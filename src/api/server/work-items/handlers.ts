@@ -23,33 +23,20 @@ export const WorkItemsHandlers = HttpApiBuilder.group(
       .handle('deleteWorkItem', ({ path }) =>
         Effect.flatMap(CurrentUser, (user) => service.remove(user, path.workItemId)),
       )
-      .handle('startPlanningRun', ({ path, payload }) =>
+      .handle('listWorkItemFactoryRuns', ({ path }) =>
+        Effect.flatMap(CurrentUser, (user) => service.listRuns(user, path.workItemId)),
+      )
+      .handle('listWorkItemDeliveries', ({ path }) =>
+        Effect.flatMap(CurrentUser, (user) => service.listDeliveries(user, path.workItemId)),
+      )
+      .handle('startWorkItemFactoryRun', ({ path, payload }) =>
         Effect.flatMap(CurrentUser, (user) =>
-          service.startPlanning(user, path.workItemId, payload),
+          service.startRun(user, path.workItemId, payload.flow),
         ),
       )
-      .handle('getPlanningRun', ({ path }) =>
-        Effect.flatMap(CurrentUser, (user) => service.getPlanningRun(user, path.planningRunId)),
-      )
-      .handle('updatePlanningRun', ({ path, payload }) =>
+      .handle('approveWorkItemPlan', ({ path, payload }) =>
         Effect.flatMap(CurrentUser, (user) =>
-          service.updatePlanningRun(user, path.planningRunId, payload),
-        ),
-      )
-      .handle('answerPlanningRun', ({ path, payload }) =>
-        Effect.flatMap(CurrentUser, (user) =>
-          service.answerPlanningRun(user, path.planningRunId, payload.answers),
-        ),
-      )
-      .handle('retryPlanningRun', ({ path }) =>
-        Effect.flatMap(CurrentUser, (user) => service.retryPlanningRun(user, path.planningRunId)),
-      )
-      .handle('approvePlanningRun', ({ path }) =>
-        Effect.flatMap(CurrentUser, (user) => service.approvePlanningRun(user, path.planningRunId)),
-      )
-      .handle('addPlanningFeedback', ({ path, payload }) =>
-        Effect.flatMap(CurrentUser, (user) =>
-          service.addPlanningFeedback(user, path.planningRunId, payload.comments),
+          service.approvePlan(user, path.workItemId, payload.artifactId),
         ),
       );
   }),

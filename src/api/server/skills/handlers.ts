@@ -14,11 +14,13 @@ export const SkillsHandlers = HttpApiBuilder.group(
         service.catalog(urlParams.q ?? '', urlParams.sort ?? 'trending'),
       )
       .handle('previewSkillImport', ({ payload }) =>
-        Effect.flatMap(CurrentUser, (user) => service.previewImport(user, payload.reference)),
+        Effect.flatMap(CurrentUser, (user) =>
+          service.previewImport(user, payload.organizationId, payload.reference),
+        ),
       )
       .handle('importSkill', ({ payload }) =>
         Effect.flatMap(CurrentUser, (user) =>
-          service.import(user, payload.reference, payload.slug),
+          service.import(user, payload.organizationId, payload.reference, payload.slug),
         ),
       )
       .handle('listSkills', () => Effect.flatMap(CurrentUser, service.list))

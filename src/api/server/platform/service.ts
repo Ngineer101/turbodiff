@@ -1,17 +1,16 @@
 import { Context, Effect, Layer } from 'effect';
-import { deletePushSubscriptionByEndpoint, upsertPushSubscription } from '../../../data/db.ts';
+import {
+  deletePushSubscription,
+  listGithubInstallationIds,
+  upsertPushSubscription,
+} from '../../../data/db.ts';
 import type { CurrentUserIdentity } from '../../contract/auth.ts';
 import type { CurrentUserView, PushSubscriptionInput } from '../../contract/platform.ts';
-import {
-  badRequest,
-  conflict,
-  internalServerError,
-  type DomainError,
-} from '../../contract/errors.ts';
+import { badRequest, internalServerError, type DomainError } from '../../contract/errors.ts';
 import { ApiDependencies } from '../context.ts';
 
 export interface PlatformOperations {
-  readonly currentUser: (user: CurrentUserIdentity) => CurrentUserView;
+  readonly currentUser: (user: CurrentUserIdentity) => Effect.Effect<CurrentUserView, DomainError>;
   readonly subscribe: (
     user: CurrentUserIdentity,
     subscription: PushSubscriptionInput,
@@ -41,22 +40,22 @@ export const PlatformServiceLive = Layer.effect(
   Effect.gen(function* () {
     const dependencies = yield* ApiDependencies;
     return {
-      currentUser: (user) => ({
-        login: user.githubConnected ? user.session.login : null,
-        name: user.name,
-        githubConnected: user.githubConnected,
-        githubStatus: user.githubStatus,
-        githubAppSlug: dependencies.githubAppSlug,
-        vapidPublicKey: dependencies.vapidPublicKey,
-        installationIds: user.installationIds,
-      }),
+      currentUser: (user) =>
+        databaseEffect(() => listGithubInstallationIds(user.organizationIds)).pipe(
+          Effect.map((githubInstallationIds) => ({
+            login: user.githubConnected ? user.session.login : null,
+            name: user.name,
+            githubConnected: user.githubConnected,
+            githubStatus: user.githubStatus,
+            githubAppSlug: dependencies.githubAppSlug,
+            vapidPublicKey: dependencies.vapidPublicKey,
+            activeOrganizationId: user.activeOrganizationId,
+            organizationIds: user.organizationIds,
+            githubInstallationIds,
+          })),
+        ),
       subscribe: (user, input) =>
         Effect.gen(function* () {
-          if (!user.githubConnected || user.session.userId <= 0) {
-            return yield* Effect.fail(
-              conflict('Connect GitHub before enabling push notifications'),
-            );
-          }
           const endpoint = input.endpoint.trim();
           const p256dh = input.keys.p256dh.trim();
           const auth = input.keys.auth.trim();
@@ -64,7 +63,7 @@ export const PlatformServiceLive = Layer.effect(
             return yield* Effect.fail(badRequest('A complete push subscription is required'));
           }
           yield* databaseEffect(() =>
-            upsertPushSubscription(user.session.userId, { endpoint, p256dh, auth }),
+            upsertPushSubscription(user.session.authUserId, { endpoint, p256dh, auth }),
           );
           return { endpoint };
         }),
@@ -72,9 +71,7 @@ export const PlatformServiceLive = Layer.effect(
         Effect.gen(function* () {
           const endpoint = rawEndpoint.trim();
           if (!endpoint) return yield* Effect.fail(badRequest('endpoint is required'));
-          yield* databaseEffect(() =>
-            deletePushSubscriptionByEndpoint(user.session.userId, endpoint),
-          );
+          yield* databaseEffect(() => deletePushSubscription(user.session.authUserId, endpoint));
         }),
     } satisfies PlatformOperations;
   }),

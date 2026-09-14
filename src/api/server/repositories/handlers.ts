@@ -10,9 +10,9 @@ export const RepositoriesHandlers = HttpApiBuilder.group(
   Effect.fn(function* (handlers) {
     const service = yield* RepositoryService;
     return handlers
-      .handle('listInstallations', () => Effect.flatMap(CurrentUser, service.listInstallations))
-      .handle('createProject', ({ payload }) =>
-        Effect.flatMap(CurrentUser, (user) => service.createProject(user, payload)),
+      .handle('listRepositories', () => Effect.flatMap(CurrentUser, service.list))
+      .handle('createRepository', ({ payload }) =>
+        Effect.flatMap(CurrentUser, (user) => service.create(user, payload)),
       )
       .handle('createCloneCredential', ({ path, payload }) =>
         Effect.flatMap(CurrentUser, (user) =>
@@ -48,6 +48,16 @@ export const RepositoriesHandlers = HttpApiBuilder.group(
       .handle('setRepositorySkill', ({ path, payload }) =>
         Effect.flatMap(CurrentUser, (user) =>
           service.setSkillEnabled(user, path.repositoryId, path.skillId, payload.enabled),
+        ),
+      )
+      .handle('setRepositoryIntegration', ({ path, payload }) =>
+        Effect.flatMap(CurrentUser, (user) =>
+          service.setIntegrationEnabled(
+            user,
+            path.repositoryId,
+            path.integrationId,
+            payload.enabled,
+          ),
         ),
       );
   }),

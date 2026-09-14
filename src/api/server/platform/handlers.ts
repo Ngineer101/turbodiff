@@ -10,7 +10,7 @@ export const PlatformHandlers = HttpApiBuilder.group(
   Effect.fn(function* (handlers) {
     const service = yield* PlatformService;
     return handlers
-      .handle('getCurrentUser', () => Effect.map(CurrentUser, (user) => service.currentUser(user)))
+      .handle('getCurrentUser', () => Effect.flatMap(CurrentUser, service.currentUser))
       .handle('createPushSubscription', ({ payload }) =>
         Effect.flatMap(CurrentUser, (user) => service.subscribe(user, payload)),
       )

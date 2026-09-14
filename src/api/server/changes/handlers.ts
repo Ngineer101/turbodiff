@@ -20,9 +20,6 @@ export const ChangesHandlers = HttpApiBuilder.group(
       )
       .handle('createReviewRun', ({ path }) =>
         Effect.flatMap(CurrentUser, (user) => service.createReviewRun(user, path.changeId)),
-      )
-      .handle('getReviewRun', ({ path }) =>
-        Effect.flatMap(CurrentUser, (user) => service.getReviewRun(user, path.reviewRunId)),
       );
   }),
 );

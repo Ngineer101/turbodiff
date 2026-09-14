@@ -2,19 +2,15 @@ import { Context, Effect, Layer } from 'effect';
 import {
   createAgent,
   deleteAgent,
-  ensureBuiltinAgents,
-  getAgentById,
+  getAgent,
   getAgentBySlug,
   listAgents,
   updateAgent,
   type AgentRow,
-} from '../../../data/db.ts';
-import {
-  ModelCatalogConfigurationError,
-  getModelCatalog,
-  getReviewerModelCatalog,
-} from '../../../data/models.ts';
-import { RESERVED_AGENT_SLUGS } from '../../../domain/personas.ts';
+} from '../../../data/agents.ts';
+import { getModelCatalog, ModelCatalogConfigurationError } from '../../../data/models.ts';
+import { getSkill, listAgentSkillIds, replaceAgentSkillLinks } from '../../../data/skills.ts';
+import { AGENT_DEFINITIONS, BUILTIN_AGENTS } from '../../../domain/agent-definitions.ts';
 import type { CurrentUserIdentity } from '../../contract/auth.ts';
 import type {
   Agent,
@@ -25,14 +21,68 @@ import type {
 } from '../../contract/agents.ts';
 import {
   badRequest,
+  conflict,
   forbidden,
   internalServerError,
   notFound,
   serviceUnavailable,
   type DomainError,
 } from '../../contract/errors.ts';
-import { capableInstallationIds } from '../authorization.ts';
-import { ApiDependencies } from '../context.ts';
+import { requireOrganizationWrite } from '../authorization.ts';
+
+const builtinSlugs = new Set<string>(BUILTIN_AGENTS.map((agent) => agent.slug));
+
+const operation = <A>(run: () => Promise<A>): Effect.Effect<A, DomainError> =>
+  Effect.tryPromise({
+    try: run,
+    catch: (failure) => {
+      if (failure instanceof ModelCatalogConfigurationError) {
+        return serviceUnavailable(failure.message);
+      }
+      console.error('turbodiff: agent operation failed', failure);
+      return internalServerError();
+    },
+  });
+
+const summary = (row: AgentRow, skillIds: number[]) => ({
+  id: row.id,
+  organizationId: row.organization_id,
+  definitionKey: row.definition_key,
+  slug: row.slug,
+  name: row.name,
+  description: row.description,
+  builtIn: builtinSlugs.has(row.slug),
+  enabled: row.enabled,
+  skillIds,
+});
+
+const serialize = (row: AgentRow, skillIds: number[]): Agent => ({
+  ...summary(row, skillIds),
+  instructionsOverride: row.instructions_override,
+});
+
+const validSlug = (slug: string) => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug);
+
+const owned = (user: CurrentUserIdentity, id: number) =>
+  operation(() => getAgent(id)).pipe(
+    Effect.flatMap((row) =>
+      row && user.organizationIds.includes(row.organization_id)
+        ? Effect.succeed(row)
+        : Effect.fail(notFound('Unknown agent')),
+    ),
+  );
+
+const validSkillIds = (organizationId: string, rawIds: readonly number[]) =>
+  Effect.gen(function* () {
+    const skillIds = [...new Set(rawIds)];
+    const skills = yield* operation(() => Promise.all(skillIds.map(getSkill)));
+    if (!skills.every((skill) => skill?.organization_id === organizationId && skill.enabled)) {
+      return yield* Effect.fail(
+        badRequest('A skill is unknown, disabled, or belongs to another organization'),
+      );
+    }
+    return skillIds;
+  });
 
 export interface AgentOperations {
   readonly models: () => Effect.Effect<ModelCatalog, DomainError>;
@@ -55,195 +105,110 @@ export class AgentService extends Context.Tag('Turbodiff/AgentService')<
   AgentOperations
 >() {}
 
-const operation = <A>(run: () => Promise<A>): Effect.Effect<A, DomainError> =>
-  Effect.tryPromise({
-    try: run,
-    catch: (error) => {
-      if (error instanceof ModelCatalogConfigurationError) {
-        return serviceUnavailable(error.message);
-      }
-      console.error('turbodiff: Effect agent operation failed', error);
-      return internalServerError();
-    },
-  });
-
-const serialize = (agent: AgentRow): Agent => ({
-  id: agent.id,
-  slug: agent.slug,
-  name: agent.name,
-  description: agent.description,
-  model: agent.model,
-  builtIn: agent.is_builtin,
-  instructions: agent.instructions,
-  installationId: agent.installation_id,
-});
-
-const slugError = (slug: string): string | null => {
-  if (slug.length < 2 || slug.length > 31 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
-    return 'slug must be 2-31 chars: lowercase letters and digits separated by single dashes';
-  }
-  if (RESERVED_AGENT_SLUGS.has(slug)) return `"${slug}" is a reserved word`;
-  return null;
-};
-
-export const AgentServiceLive = Layer.effect(
-  AgentService,
-  Effect.gen(function* () {
-    const dependencies = yield* ApiDependencies;
-
-    const authorized = (user: CurrentUserIdentity, id: number) =>
-      operation(() => getAgentById(id)).pipe(
-        Effect.flatMap((agent) =>
-          agent && user.installationIds.includes(agent.installation_id)
-            ? Effect.succeed(agent)
-            : Effect.fail(notFound('Unknown agent')),
+export const AgentServiceLive = Layer.succeed(AgentService, {
+  models: () =>
+    operation(getModelCatalog).pipe(
+      Effect.map((catalog) => ({
+        options: catalog.options.map(({ id, label }) => ({ id, label })),
+        defaultModel: catalog.defaultModel,
+        fastModel: catalog.fastModel,
+      })),
+    ),
+  list: (user) =>
+    Effect.gen(function* () {
+      const items = yield* operation(() => listAgents(user.organizationIds));
+      const links = yield* operation(() => listAgentSkillIds(items.map((item) => item.id)));
+      return {
+        items: items.map((item) =>
+          summary(
+            item,
+            links.filter((link) => link.agent_id === item.id).map((link) => link.skill_id),
+          ),
         ),
+      };
+    }),
+  get: (user, id) =>
+    Effect.gen(function* () {
+      const row = yield* owned(user, id);
+      const links = yield* operation(() => listAgentSkillIds([row.id]));
+      return serialize(
+        row,
+        links.map((link) => link.skill_id),
       );
-
-    const capable = (user: CurrentUserIdentity) => {
-      if (user.installationIds.length === 0) return Effect.fail(notFound('No installations'));
-      return capableInstallationIds(user, dependencies);
-    };
-
-    const validate = (
-      values: { name: string; instructions: string; model: string },
-      models: readonly { id: string }[],
-      currentModel?: string,
-    ): string | null => {
-      if (!values.name) return 'name is required';
-      if (!values.instructions) return 'instructions are required';
-      if (!models.some((model) => model.id === values.model) && values.model !== currentModel) {
-        return 'model must be one of the configured models';
+    }),
+  create: (user, input) =>
+    Effect.gen(function* () {
+      yield* requireOrganizationWrite(user, input.organizationId);
+      const slug = input.slug.trim().toLowerCase();
+      const name = input.name.trim();
+      const definitionKey = input.definitionKey.trim();
+      const instructionsOverride = input.instructionsOverride?.trim() || null;
+      if (!validSlug(slug) || slug.length > 63) {
+        return yield* Effect.fail(badRequest('Agent slug is invalid'));
       }
-      return null;
-    };
-
-    return {
-      models: () =>
-        operation(getModelCatalog).pipe(
-          Effect.map((catalog) => ({
-            runner: {
-              options: catalog.runner.options,
-              defaultModel: catalog.runner.defaultModel,
-              fastModel: catalog.runner.fastModel,
-            },
-            reviewer: {
-              options: catalog.reviewer.options,
-              defaultModel: catalog.reviewer.defaultModel,
-            },
-          })),
-        ),
-      list: (user) =>
-        Effect.gen(function* () {
-          const [agents, editableIds] = yield* Effect.all([
-            operation(() => listAgents(user.installationIds)),
-            capableInstallationIds(user, dependencies).pipe(
-              Effect.catchTag('Forbidden', () => Effect.succeed([])),
-            ),
-          ]);
-          dependencies.defer(
-            Promise.all(
-              user.installationIds.map((id) =>
-                ensureBuiltinAgents(id).catch((error) =>
-                  console.warn(`turbodiff: agent repair failed for installation ${id}`, error),
-                ),
-              ),
-            ).then(() => undefined),
-          );
-          const editable = new Set(editableIds);
-          const preferred = [
-            ...agents.filter((agent) => editable.has(agent.installation_id)),
-            ...agents.filter((agent) => !editable.has(agent.installation_id)),
-          ];
-          const seen = new Set<string>();
-          return {
-            githubAppSlug: dependencies.githubAppSlug,
-            items: preferred
-              .filter((agent) => (seen.has(agent.slug) ? false : (seen.add(agent.slug), true)))
-              .map((agent) => ({
-                id: agent.id,
-                slug: agent.slug,
-                name: agent.name,
-                description: agent.description,
-                model: agent.model,
-                builtIn: agent.is_builtin,
-              })),
-          };
+      if (!name) return yield* Effect.fail(badRequest('Agent name is required'));
+      if (!(definitionKey in AGENT_DEFINITIONS)) {
+        return yield* Effect.fail(badRequest('Unknown agent definition'));
+      }
+      if (yield* operation(() => getAgentBySlug(input.organizationId, slug))) {
+        return yield* Effect.fail(conflict(`Agent slug "${slug}" already exists`));
+      }
+      const skillIds = yield* validSkillIds(input.organizationId, input.skillIds ?? []);
+      const created = yield* operation(() =>
+        createAgent({
+          organizationId: input.organizationId,
+          definitionKey,
+          slug,
+          name,
+          description: input.description?.trim() || null,
+          instructionsOverride,
         }),
-      get: (user, id) => authorized(user, id).pipe(Effect.map(serialize)),
-      create: (user, input) =>
-        Effect.gen(function* () {
-          const installationIds = yield* capable(user);
-          const catalog = yield* operation(getReviewerModelCatalog);
-          const values = {
-            slug: input.slug.trim().toLowerCase(),
-            name: input.name.trim(),
-            description: input.description.trim(),
-            instructions: input.instructions.trim(),
-            model: input.model?.trim() || catalog.defaultModel,
-          };
-          const error = slugError(values.slug) ?? validate(values, catalog.options);
-          if (error) return yield* Effect.fail(badRequest(error));
-          const existing = yield* operation(() =>
-            Promise.all(user.installationIds.map((id) => getAgentBySlug(id, values.slug))),
-          );
-          if (existing.some(Boolean)) {
-            return yield* Effect.fail(
-              badRequest(`An agent with slug "${values.slug}" already exists`),
-            );
-          }
-          yield* operation(() => Promise.all(installationIds.map((id) => createAgent(id, values))));
-          const created = yield* operation(() => getAgentBySlug(installationIds[0], values.slug));
-          if (!created) return yield* Effect.fail(internalServerError());
-          return serialize(created);
+      );
+      yield* operation(() => replaceAgentSkillLinks(created.id, created.organization_id, skillIds));
+      return serialize(created, skillIds);
+    }),
+  update: (user, id, input) =>
+    Effect.gen(function* () {
+      const row = yield* owned(user, id);
+      yield* requireOrganizationWrite(user, row.organization_id);
+      const name = input.name?.trim();
+      if (input.name !== undefined && !name) {
+        return yield* Effect.fail(badRequest('Agent name is required'));
+      }
+      const skillIds =
+        input.skillIds === undefined
+          ? null
+          : yield* validSkillIds(row.organization_id, input.skillIds);
+      yield* operation(() =>
+        updateAgent(id, {
+          name,
+          description:
+            input.description === undefined ? undefined : input.description?.trim() || null,
+          instructionsOverride:
+            input.instructionsOverride === undefined
+              ? undefined
+              : input.instructionsOverride?.trim() || null,
+          enabled: input.enabled,
         }),
-      update: (user, id, input) =>
-        Effect.gen(function* () {
-          const agent = yield* authorized(user, id);
-          const installationIds = yield* capable(user);
-          const catalog = yield* operation(getReviewerModelCatalog);
-          const values = {
-            name: input.name?.trim() ?? agent.name,
-            description: input.description?.trim() ?? agent.description ?? '',
-            instructions: input.instructions?.trim() ?? agent.instructions,
-            model: input.model?.trim() || agent.model,
-          };
-          const error = validate(values, catalog.options, agent.model);
-          if (error) return yield* Effect.fail(badRequest(error));
-          const siblings = (yield* operation(() => listAgents(installationIds))).filter(
-            (candidate) => candidate.slug === agent.slug,
-          );
-          yield* operation(() =>
-            Promise.all(siblings.map((sibling) => updateAgent(sibling.id, values))),
-          );
-          if (!agent.is_builtin) {
-            const covered = new Set(siblings.map((sibling) => sibling.installation_id));
-            yield* operation(() =>
-              Promise.all(
-                installationIds
-                  .filter((installationId) => !covered.has(installationId))
-                  .map((installationId) =>
-                    createAgent(installationId, { ...values, slug: agent.slug }),
-                  ),
-              ),
-            );
-          }
-          const updated = yield* operation(() => getAgentBySlug(installationIds[0], agent.slug));
-          if (!updated) return yield* Effect.fail(notFound('Unknown agent'));
-          return serialize(updated);
-        }),
-      remove: (user, id) =>
-        Effect.gen(function* () {
-          const agent = yield* authorized(user, id);
-          const installationIds = yield* capable(user);
-          if (agent.is_builtin) {
-            return yield* Effect.fail(forbidden('Built-in agents cannot be deleted'));
-          }
-          const siblings = (yield* operation(() => listAgents(installationIds))).filter(
-            (candidate) => candidate.slug === agent.slug && !candidate.is_builtin,
-          );
-          yield* operation(() => Promise.all(siblings.map((sibling) => deleteAgent(sibling.id))));
-        }),
-    } satisfies AgentOperations;
-  }),
-);
+      );
+      if (skillIds) {
+        yield* operation(() => replaceAgentSkillLinks(row.id, row.organization_id, skillIds));
+      }
+      const updated = yield* operation(() => getAgent(id));
+      if (!updated) return yield* Effect.fail(notFound('Unknown agent'));
+      const links = yield* operation(() => listAgentSkillIds([updated.id]));
+      return serialize(
+        updated,
+        links.map((link) => link.skill_id),
+      );
+    }),
+  remove: (user, id) =>
+    Effect.gen(function* () {
+      const row = yield* owned(user, id);
+      yield* requireOrganizationWrite(user, row.organization_id);
+      if (builtinSlugs.has(row.slug)) {
+        return yield* Effect.fail(forbidden('Built-in agents cannot be deleted'));
+      }
+      yield* operation(() => deleteAgent(id));
+    }),
+} satisfies AgentOperations);

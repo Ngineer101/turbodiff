@@ -9,8 +9,6 @@ export const ReportingHandlers = HttpApiBuilder.group(
   'reporting',
   Effect.fn(function* (handlers) {
     const service = yield* ReportingService;
-    return handlers
-      .handle('getUsageSummary', () => Effect.flatMap(CurrentUser, service.usage))
-      .handle('getFactoryState', () => service.factoryState());
+    return handlers.handle('getUsageSummary', () => Effect.flatMap(CurrentUser, service.usage));
   }),
 );

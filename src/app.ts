@@ -4,12 +4,9 @@ import { env } from 'cloudflare:workers';
 import { sql } from 'drizzle-orm';
 import { execute, withDatabaseScope } from './data/database.ts';
 import { Hono } from 'hono';
-import { registerExplainMetering } from './ai/explain/metering.ts';
 import { handleEffectApi } from './api/server/handler.ts';
 import { createProtocolRoutes } from './http/protocol.ts';
 import { handleEmailSignUp } from './http/auth-email.ts';
-import { renderCertificatePage } from './http/certificate-page.tsx';
-import { createInternalRoutes } from './http/internal.ts';
 import { createMcpRoutes } from './http/mcp.ts';
 import { handleMcpProxy } from './http/mcp-proxy.ts';
 import { handleAiGatewayProxy } from './http/ai-gateway-proxy.ts';
@@ -18,7 +15,6 @@ import { createWebhookRoutes } from './http/webhooks.ts';
 import { oAuthDiscoveryMetadata, oAuthProtectedResourceMetadata } from 'better-auth/plugins';
 import { withAuth } from './integrations/auth/better-auth.ts';
 import { verifyArtifactSig } from './integrations/security/crypto.ts';
-import { certificateSigKey, loadCertificateData } from './application/deliveries/certificates.ts';
 
 // Route every model call through the Workers AI binding and the named
 // AI Gateway (set AI_GATEWAY_ID in wrangler.jsonc). The gateway holds the
@@ -29,9 +25,6 @@ setProvider(
     gateway: { id: env.AI_GATEWAY_ID, metadata: { app: 'turbodiff' } },
   }),
 );
-
-// The explainer still uses Flue; generic agent Workflows meter themselves.
-registerExplainMetering();
 
 const startedAt = Date.now();
 
@@ -89,9 +82,7 @@ app.get('/version', (c) => {
   return c.json({ id: env.CF_VERSION_METADATA.id, tag: env.CF_VERSION_METADATA.tag });
 });
 
-// Verification evidence (Phase 4): screenshots from verify runs, stored in R2
-// and embedded in PR comments — public so GitHub can render them inline. Keys
-// are harness-generated (verify/<featureId>/<name>.png), never user input.
+// Artifacts may be shared through signed capability URLs.
 app.get('/artifacts/*', async (c) => {
   const key = c.req.path.replace(/^\/artifacts\//, '');
   if (!key || key.includes('..')) return c.notFound();
@@ -108,19 +99,6 @@ app.get('/artifacts/*', async (c) => {
       'cache-control': 'public, max-age=31536000, immutable',
     },
   });
-});
-
-// Shareable "Proof of Build" certificate for a factory feature: the latest
-// verification evidence rendered as a public page. Same capability-URL scheme
-// as /artifacts/* — the signature over cert/<id> is the only credential.
-app.get('/b/:id', async (c) => {
-  const id = Number(c.req.param('id'));
-  if (!Number.isInteger(id) || id <= 0) return c.notFound();
-  const sig = c.req.query('sig') ?? '';
-  if (!(await verifyArtifactSig(certificateSigKey(id), sig))) return c.notFound();
-  const data = await loadCertificateData(id);
-  if (!data) return c.notFound();
-  return c.html(renderCertificatePage(data));
 });
 
 // GitHub App webhooks — authenticated by HMAC signature, not the bearer secret.
@@ -177,7 +155,5 @@ app.route('/protocol', createProtocolRoutes());
 
 // SPA shell + landing + OAuth sign-in (session cookie auth).
 app.route('/', createUiRoutes());
-
-app.route('/internal', createInternalRoutes());
 
 export default app;

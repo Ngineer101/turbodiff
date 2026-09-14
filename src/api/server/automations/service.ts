@@ -1,27 +1,33 @@
 import { Context, Effect, Layer } from 'effect';
 import {
   createAutomation,
+  createFactoryRunWithStage,
+  createWorkItem,
   deleteAutomation,
-  getAutomationById,
-  getAutomationRunDetail,
-  getRepoById,
-  listAgentRunsForAutomationRun,
-  listAutomationRuns,
-  listAutomationsForInstallations,
-  listInstallationsWithRepos,
+  getAgent,
+  getAutomation,
+  getFactoryRun,
+  getIntegration,
+  getRepository,
+  getSkill,
+  listAutomationIntegrationIds,
+  listAutomationSkillIds,
+  listAutomations,
+  listFactoryRuns,
+  replaceAutomationIntegrationLinks,
+  replaceAutomationSkillLinks,
   updateAutomation,
-  type AutomationFields,
   type AutomationRow,
+  type FactoryRunRow,
 } from '../../../data/db.ts';
-import { ModelCatalogConfigurationError, getRunnerModelCatalog } from '../../../data/models.ts';
-import { computeNextRunAt } from '../../../domain/automation-schedule.ts';
-import { factoryUnsupportedReason } from '../../../integrations/git/provider.ts';
-import { capabilityDenied } from '../../../application/auth/access-control.ts';
+import { nextAutomationRunAt } from '../../../domain/automation-schedule.ts';
+import { AUTOMATION_FLOW } from '../../../application/factory/flows.ts';
+import { withTransaction } from '../../../data/database.ts';
+import { isJsonObject, isString, type JsonValue } from '../../../shared/json.ts';
 import type {
   Automation,
   AutomationCollection,
-  AutomationRunCollection,
-  AutomationRunDetail,
+  AutomationRun,
   CreateAutomation,
   UpdateAutomation,
 } from '../../contract/automations.ts';
@@ -29,15 +35,133 @@ import type { CurrentUserIdentity } from '../../contract/auth.ts';
 import {
   badRequest,
   conflict,
-  forbidden,
   internalServerError,
   notFound,
-  serviceUnavailable,
   type DomainError,
 } from '../../contract/errors.ts';
+import { requireOrganizationWrite } from '../authorization.ts';
 import { ApiDependencies } from '../context.ts';
 
-type AutomationRunStatus = 'running' | 'pr_opened' | 'no_changes' | 'checks_failed' | 'failed';
+const dataEffect = <A>(run: () => Promise<A>): Effect.Effect<A, DomainError> =>
+  Effect.tryPromise({
+    try: run,
+    catch: (failure) => {
+      console.error('turbodiff: automation operation failed', failure);
+      return internalServerError();
+    },
+  });
+
+const serialize = (
+  row: AutomationRow,
+  skillIds: number[],
+  integrationIds: number[],
+): Automation => ({
+  id: row.id,
+  organizationId: row.organization_id,
+  agentId: row.agent_id,
+  repositoryId: row.repository_id,
+  name: row.name,
+  schedule: row.schedule,
+  timezone: row.timezone,
+  inputTemplate: row.input_template,
+  skillIds,
+  integrationIds,
+  enabled: row.enabled,
+  nextRunAt: row.next_run_at,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+
+const serializeRun = (row: FactoryRunRow): AutomationRun => ({
+  id: row.id,
+  automationId: row.automation_id!,
+  workItemId: row.work_item_id,
+  status: row.status,
+  createdAt: row.created_at,
+  startedAt: row.started_at,
+  completedAt: row.completed_at,
+});
+
+const owned = (user: CurrentUserIdentity, id: number) =>
+  dataEffect(() => getAutomation(id)).pipe(
+    Effect.flatMap((row) =>
+      row && user.organizationIds.includes(row.organization_id)
+        ? Effect.succeed(row)
+        : Effect.fail(notFound('Unknown automation')),
+    ),
+  );
+
+const validateRelations = (organizationId: string, agentId: number, repositoryId: number | null) =>
+  dataEffect(async () => {
+    const [agent, repository] = await Promise.all([
+      getAgent(agentId),
+      repositoryId ? getRepository(repositoryId) : null,
+    ]);
+    if (!agent || agent.organization_id !== organizationId || !agent.enabled) {
+      return 'Agent is unknown, disabled, or belongs to another organization';
+    }
+    if (agent.definition_key !== 'planner' && agent.definition_key !== 'implementer') {
+      return `Agent definition ${agent.definition_key} cannot drive an automation`;
+    }
+    if (!repositoryId) return 'Planner and implementer automations require a repository';
+    if (!repository || repository.organization_id !== organizationId || !repository.enabled) {
+      return 'Repository is unknown, disabled, or belongs to another organization';
+    }
+    return null;
+  });
+
+const validateBindings = (
+  organizationId: string,
+  rawSkillIds: readonly number[],
+  rawIntegrationIds: readonly number[],
+) =>
+  dataEffect(async () => {
+    const skillIds = [...new Set(rawSkillIds)];
+    const integrationIds = [...new Set(rawIntegrationIds)];
+    const [skills, integrations] = await Promise.all([
+      Promise.all(skillIds.map(getSkill)),
+      Promise.all(integrationIds.map(getIntegration)),
+    ]);
+    const valid =
+      skills.every((skill) => skill?.organization_id === organizationId && skill.enabled) &&
+      integrations.every(
+        (integration) => integration?.organization_id === organizationId && integration.enabled,
+      );
+    return valid ? { skillIds, integrationIds } : null;
+  }).pipe(
+    Effect.flatMap((bindings) =>
+      bindings
+        ? Effect.succeed(bindings)
+        : Effect.fail(
+            badRequest(
+              'A skill or integration is unknown, disabled, or belongs to another organization',
+            ),
+          ),
+    ),
+  );
+
+const nextRunAt = (schedule: string, timezone: string): Effect.Effect<string, DomainError> => {
+  if (timezone !== 'UTC') return Effect.fail(badRequest('Only the UTC timezone is supported'));
+  const next = nextAutomationRunAt(schedule, new Date());
+  return next
+    ? Effect.succeed(next)
+    : Effect.fail(badRequest('schedule must be "hourly", "daily HH:MM", or "weekly D HH:MM"'));
+};
+
+interface AutomationWorkItemText {
+  title: string;
+  description: string;
+}
+
+const workItemText = (automation: AutomationRow): AutomationWorkItemText => {
+  const template = isJsonObject(automation.input_template) ? automation.input_template : {};
+  return {
+    title: isString(template.title) ? template.title : automation.name,
+    description: isString(template.description)
+      ? template.description
+      : JSON.stringify(automation.input_template),
+  };
+};
 
 export interface AutomationOperations {
   readonly list: (user: CurrentUserIdentity) => Effect.Effect<AutomationCollection, DomainError>;
@@ -55,15 +179,15 @@ export interface AutomationOperations {
   readonly listRuns: (
     user: CurrentUserIdentity,
     id: number,
-  ) => Effect.Effect<AutomationRunCollection, DomainError>;
+  ) => Effect.Effect<{ items: readonly AutomationRun[] }, DomainError>;
   readonly run: (
     user: CurrentUserIdentity,
     id: number,
-  ) => Effect.Effect<{ automationId: number; status: 'queued' }, DomainError>;
+  ) => Effect.Effect<{ factoryRunId: number; status: 'queued' }, DomainError>;
   readonly getRun: (
     user: CurrentUserIdentity,
     id: number,
-  ) => Effect.Effect<AutomationRunDetail, DomainError>;
+  ) => Effect.Effect<AutomationRun, DomainError>;
 }
 
 export class AutomationService extends Context.Tag('Turbodiff/AutomationService')<
@@ -71,282 +195,218 @@ export class AutomationService extends Context.Tag('Turbodiff/AutomationService'
   AutomationOperations
 >() {}
 
-function dataEffect<A>(operation: () => Promise<A>): Effect.Effect<A, DomainError> {
-  return Effect.tryPromise({
-    try: operation,
-    catch: (error) => {
-      if (error instanceof ModelCatalogConfigurationError) {
-        return serviceUnavailable(error.message);
-      }
-      console.error('turbodiff: Effect API operation failed', error);
-      return internalServerError();
-    },
-  });
-}
-
-function serialize(
-  automation: AutomationRow,
-  repository: { id: number; owner: string; name: string },
-  lastRun: { id: number; status: string; created_at: string } | null,
-): Automation {
-  // SAFETY: app.automations.schedule_kind has a database CHECK constraint for this closed set.
-  const scheduleKind = automation.schedule_kind as Automation['scheduleKind'];
-  return {
-    id: automation.id,
-    name: automation.name,
-    prompt: automation.prompt,
-    repository,
-    scheduleKind,
-    timeOfDay: automation.time_of_day,
-    dayOfWeek: automation.day_of_week,
-    enabled: automation.enabled,
-    runnerModel: automation.runner_model,
-    nextRunAt: automation.next_run_at,
-    lastRun: lastRun
-      ? { id: lastRun.id, status: lastRun.status, createdAt: lastRun.created_at }
-      : null,
-  };
-}
-
-function normalizedFields(input: {
-  name: string;
-  prompt: string;
-  scheduleKind: 'hourly' | 'daily' | 'weekly';
-  timeOfDay: string | null;
-  dayOfWeek: number | null;
-  runnerModel: string | null;
-}): AutomationFields {
-  return {
-    name: input.name.trim(),
-    prompt: input.prompt.trim(),
-    schedule_kind: input.scheduleKind,
-    time_of_day: input.timeOfDay?.trim() || null,
-    day_of_week: input.dayOfWeek,
-    runner_model: input.runnerModel?.trim() || null,
-  };
-}
-
-function validate(fields: AutomationFields): string | null {
-  if (!fields.name) return 'name is required';
-  if (!fields.prompt) return 'prompt is required';
-  if (fields.schedule_kind === 'hourly') {
-    if (fields.time_of_day !== null) return 'hourly automations cannot set a time of day';
-  } else if (!fields.time_of_day || !/^([01]\d|2[0-3]):([0-5]\d)$/.test(fields.time_of_day)) {
-    return 'timeOfDay is required (HH:MM, 24h UTC)';
-  }
-  if (fields.schedule_kind === 'weekly') {
-    if (fields.day_of_week === null || fields.day_of_week < 0 || fields.day_of_week > 6) {
-      return 'dayOfWeek is required for weekly automations (0-6)';
-    }
-  } else if (fields.day_of_week !== null) {
-    return 'dayOfWeek is only valid for weekly automations';
-  }
-  return null;
-}
-
-function nextRun(fields: AutomationFields): string {
-  // SAFETY: normalizedFields accepts only the three public schedule literals.
-  const kind = fields.schedule_kind as 'hourly' | 'daily' | 'weekly';
-  return computeNextRunAt(
-    {
-      kind,
-      timeOfDay: fields.time_of_day,
-      dayOfWeek: fields.day_of_week,
-    },
-    new Date(),
-  );
-}
-
 export const AutomationServiceLive = Layer.effect(
   AutomationService,
   Effect.gen(function* () {
     const dependencies = yield* ApiDependencies;
 
-    const authorized = (user: CurrentUserIdentity, id: number) =>
-      Effect.gen(function* () {
-        const automation = yield* dataEffect(() => getAutomationById(id));
-        if (!automation) return yield* Effect.fail(notFound('Unknown automation'));
-        const repository = yield* dataEffect(() => getRepoById(automation.repository_id));
-        if (!repository || !user.installationIds.includes(repository.installation_id)) {
-          return yield* Effect.fail(notFound('Unknown automation'));
-        }
-        return { automation, repository };
+    const loadBindings = (rows: AutomationRow[]) =>
+      dataEffect(async () => {
+        const ids = rows.map((row) => row.id);
+        const [skills, integrations] = await Promise.all([
+          listAutomationSkillIds(ids),
+          listAutomationIntegrationIds(ids),
+        ]);
+        return { skills, integrations };
       });
 
-    const requireSettings = (
-      user: CurrentUserIdentity,
-      installationId: number,
-    ): Effect.Effect<void, DomainError> =>
-      dataEffect(() =>
-        capabilityDenied(user, installationId, 'settings', dependencies.orgAdmin),
-      ).pipe(Effect.flatMap((denial) => (denial ? Effect.fail(forbidden(denial)) : Effect.void)));
+    const serializeWith = (
+      row: AutomationRow,
+      bindings: Effect.Effect.Success<ReturnType<typeof loadBindings>>,
+    ) =>
+      serialize(
+        row,
+        bindings.skills
+          .filter((link) => link.automation_id === row.id)
+          .map((link) => link.skill_id),
+        bindings.integrations
+          .filter((link) => link.automation_id === row.id)
+          .map((link) => link.integration_id),
+      );
 
-    const detail = (user: CurrentUserIdentity, id: number) =>
+    const trigger = (user: CurrentUserIdentity, automation: AutomationRow) =>
       Effect.gen(function* () {
-        const { automation, repository } = yield* authorized(user, id);
-        const runs = yield* dataEffect(() => listAutomationRuns(id));
-        const latest = runs[0];
-        return serialize(
-          automation,
-          repository,
-          latest ? { id: latest.id, status: latest.status, created_at: latest.created_at } : null,
+        const text = workItemText(automation);
+        const key = `automation:${automation.id}:${crypto.randomUUID()}`;
+        const started = yield* dataEffect(() =>
+          withTransaction(async () => {
+            const workItem = await createWorkItem({
+              organizationId: automation.organization_id,
+              origin: 'automation',
+              title: text.title.slice(0, 200),
+              description: text.description,
+              createdByUserId: user.session.authUserId,
+              repositoryIds: automation.repository_id ? [automation.repository_id] : [],
+            });
+            return createFactoryRunWithStage(
+              {
+                organizationId: automation.organization_id,
+                flowKey: AUTOMATION_FLOW.key,
+                flowVersion: AUTOMATION_FLOW.version,
+                workItemId: workItem.id,
+                automationId: automation.id,
+                trigger: 'manual',
+                actorUserId: user.session.authUserId,
+                idempotencyKey: key,
+              },
+              {
+                stageKey: AUTOMATION_FLOW.initialStage,
+                idempotencyKey: `${key}:${AUTOMATION_FLOW.initialStage}:1`,
+              },
+            );
+          }),
         );
+        yield* dataEffect(() =>
+          dependencies.enqueueFactory({
+            kind: 'run_factory',
+            factoryRunId: started.factoryRun.id,
+            stageRunId: started.stageRun.id,
+          }),
+        );
+        return { factoryRunId: started.factoryRun.id, status: 'queued' as const };
       });
 
     return {
       list: (user) =>
         Effect.gen(function* () {
-          const installationIds = [...user.installationIds];
-          const [automations, groups] = yield* dataEffect(() =>
-            Promise.all([
-              listAutomationsForInstallations(installationIds),
-              listInstallationsWithRepos(installationIds),
-            ]),
-          );
-          return {
-            items: automations.map((automation) =>
-              serialize(
-                automation,
-                {
-                  id: automation.repository_id,
-                  owner: automation.owner,
-                  name: automation.name_repo,
-                },
-                automation.last_run,
-              ),
-            ),
-            repositories: groups
-              .flatMap((group) => group.repos)
-              .filter((repository) => repository.enabled)
-              .map((repository) => ({
-                id: repository.id,
-                owner: repository.owner,
-                name: repository.name,
-                installationId: repository.installation_id,
-              })),
-          };
+          const items = yield* dataEffect(() => listAutomations(user.organizationIds));
+          const bindings = yield* loadBindings(items);
+          return { items: items.map((item) => serializeWith(item, bindings)) };
         }),
-      get: detail,
+      get: (user, id) =>
+        Effect.gen(function* () {
+          const row = yield* owned(user, id);
+          return serializeWith(row, yield* loadBindings([row]));
+        }),
       create: (user, input) =>
         Effect.gen(function* () {
-          const repository = yield* dataEffect(() => getRepoById(input.repositoryId));
-          if (
-            !repository ||
-            !user.installationIds.includes(repository.installation_id) ||
-            !repository.enabled
-          ) {
-            return yield* Effect.fail(notFound('Unknown or disabled repository'));
+          yield* requireOrganizationWrite(user, input.organizationId);
+          const name = input.name.trim();
+          const schedule = input.schedule.trim().toLowerCase();
+          const timezone = input.timezone?.trim() || 'UTC';
+          if (!name) return yield* Effect.fail(badRequest('Automation name is required'));
+          if (!isJsonObject(input.inputTemplate)) {
+            return yield* Effect.fail(badRequest('inputTemplate must be a JSON object'));
           }
-          const unsupported = factoryUnsupportedReason(repository);
-          if (unsupported) return yield* Effect.fail(conflict(unsupported));
-          yield* requireSettings(user, repository.installation_id);
-          const fields = normalizedFields(input);
-          const validationError = validate(fields);
-          if (validationError) return yield* Effect.fail(badRequest(validationError));
-          if (fields.runner_model) {
-            const catalog = yield* dataEffect(getRunnerModelCatalog);
-            if (!catalog.options.some((option) => option.id === fields.runner_model)) {
-              return yield* Effect.fail(badRequest('Unknown model'));
-            }
-          }
-          const id = yield* dataEffect(() =>
-            createAutomation(repository.id, fields, nextRun(fields)),
+          const inputTemplate: JsonValue = input.inputTemplate;
+          const repositoryId = input.repositoryId ?? null;
+          const relationError = yield* validateRelations(
+            input.organizationId,
+            input.agentId,
+            repositoryId,
           );
-          return yield* detail(user, id);
+          if (relationError) return yield* Effect.fail(badRequest(relationError));
+          const bindings = yield* validateBindings(
+            input.organizationId,
+            input.skillIds ?? [],
+            input.integrationIds ?? [],
+          );
+          const next = yield* nextRunAt(schedule, timezone);
+          const row = yield* dataEffect(() =>
+            createAutomation({
+              organizationId: input.organizationId,
+              agentId: input.agentId,
+              repositoryId,
+              name,
+              schedule,
+              timezone,
+              inputTemplate,
+              enabled: input.enabled ?? true,
+              nextRunAt: input.enabled === false ? null : next,
+              createdByUserId: user.session.authUserId,
+            }),
+          );
+          yield* dataEffect(() =>
+            Promise.all([
+              replaceAutomationSkillLinks(row.id, row.organization_id, bindings.skillIds),
+              replaceAutomationIntegrationLinks(
+                row.id,
+                row.organization_id,
+                bindings.integrationIds,
+              ),
+            ]),
+          );
+          return serialize(row, bindings.skillIds, bindings.integrationIds);
         }),
       update: (user, id, input) =>
         Effect.gen(function* () {
-          const { automation, repository } = yield* authorized(user, id);
-          yield* requireSettings(user, repository.installation_id);
-          // SAFETY: app.automations.schedule_kind is constrained to the public schedule literals.
-          const storedSchedule = automation.schedule_kind as 'hourly' | 'daily' | 'weekly';
-          const fields = normalizedFields({
-            name: input.name ?? automation.name,
-            prompt: input.prompt ?? automation.prompt,
-            scheduleKind: input.scheduleKind ?? storedSchedule,
-            timeOfDay: input.timeOfDay === undefined ? automation.time_of_day : input.timeOfDay,
-            dayOfWeek: input.dayOfWeek === undefined ? automation.day_of_week : input.dayOfWeek,
-            runnerModel:
-              input.runnerModel === undefined ? automation.runner_model : input.runnerModel,
-          });
-          const validationError = validate(fields);
-          if (validationError) return yield* Effect.fail(badRequest(validationError));
-          if (fields.runner_model && fields.runner_model !== automation.runner_model) {
-            const catalog = yield* dataEffect(getRunnerModelCatalog);
-            if (!catalog.options.some((option) => option.id === fields.runner_model)) {
-              return yield* Effect.fail(badRequest('Unknown model'));
-            }
+          const row = yield* owned(user, id);
+          yield* requireOrganizationWrite(user, row.organization_id);
+          const name = input.name?.trim() ?? row.name;
+          const schedule = input.schedule?.trim().toLowerCase() ?? row.schedule;
+          const timezone = input.timezone?.trim() ?? row.timezone;
+          const agentId = input.agentId ?? row.agent_id;
+          const repositoryId =
+            input.repositoryId === undefined ? row.repository_id : input.repositoryId;
+          const enabled = input.enabled ?? row.enabled;
+          const template = input.inputTemplate ?? row.input_template;
+          if (!name) return yield* Effect.fail(badRequest('Automation name is required'));
+          if (!isJsonObject(template)) {
+            return yield* Effect.fail(badRequest('inputTemplate must be a JSON object'));
           }
-          const scheduleChanged =
-            fields.schedule_kind !== automation.schedule_kind ||
-            fields.time_of_day !== automation.time_of_day ||
-            fields.day_of_week !== automation.day_of_week;
-          yield* dataEffect(() =>
-            updateAutomation(
-              id,
-              { ...fields, enabled: input.enabled ?? automation.enabled },
-              scheduleChanged ? nextRun(fields) : automation.next_run_at,
-            ),
+          const inputTemplate: JsonValue = template;
+          const relationError = yield* validateRelations(
+            row.organization_id,
+            agentId,
+            repositoryId,
           );
-          return yield* detail(user, id);
+          if (relationError) return yield* Effect.fail(badRequest(relationError));
+          const existingBindings = yield* loadBindings([row]);
+          const bindings = yield* validateBindings(
+            row.organization_id,
+            input.skillIds ?? existingBindings.skills.map((link) => link.skill_id),
+            input.integrationIds ??
+              existingBindings.integrations.map((link) => link.integration_id),
+          );
+          const next = enabled ? yield* nextRunAt(schedule, timezone) : null;
+          yield* dataEffect(() =>
+            updateAutomation(id, {
+              agentId,
+              repositoryId,
+              name,
+              schedule,
+              timezone,
+              inputTemplate,
+              enabled,
+              nextRunAt: next,
+            }),
+          );
+          yield* dataEffect(() =>
+            Promise.all([
+              replaceAutomationSkillLinks(id, row.organization_id, bindings.skillIds),
+              replaceAutomationIntegrationLinks(id, row.organization_id, bindings.integrationIds),
+            ]),
+          );
+          const updated = yield* dataEffect(() => getAutomation(id));
+          if (!updated) return yield* Effect.fail(notFound('Unknown automation'));
+          return serialize(updated, bindings.skillIds, bindings.integrationIds);
         }),
       remove: (user, id) =>
         Effect.gen(function* () {
-          const { repository } = yield* authorized(user, id);
-          yield* requireSettings(user, repository.installation_id);
+          const row = yield* owned(user, id);
+          yield* requireOrganizationWrite(user, row.organization_id);
           yield* dataEffect(() => deleteAutomation(id));
         }),
       listRuns: (user, id) =>
         Effect.gen(function* () {
-          const { automation } = yield* authorized(user, id);
-          const runs = yield* dataEffect(() => listAutomationRuns(id));
-          return {
-            automation: { id: automation.id, name: automation.name },
-            items: runs.map((run) => ({
-              id: run.id,
-              // SAFETY: automation_runs.status has a CHECK constraint for AutomationRunStatus.
-              status: run.status as AutomationRunStatus,
-              pullRequestNumber: run.pr_number,
-              error: run.error,
-              createdAt: run.created_at,
-            })),
-          };
+          const automation = yield* owned(user, id);
+          const rows = yield* dataEffect(() => listFactoryRuns({ automationId: automation.id }));
+          return { items: rows.map(serializeRun) };
         }),
       run: (user, id) =>
         Effect.gen(function* () {
-          const { automation, repository } = yield* authorized(user, id);
-          yield* requireSettings(user, repository.installation_id);
-          yield* dataEffect(() =>
-            dependencies.enqueueFactory({ kind: 'automation', automationId: automation.id }),
-          );
-          return { automationId: automation.id, status: 'queued' as const };
+          const automation = yield* owned(user, id);
+          yield* requireOrganizationWrite(user, automation.organization_id);
+          if (!automation.enabled) return yield* Effect.fail(conflict('Automation is disabled'));
+          return yield* trigger(user, automation);
         }),
       getRun: (user, id) =>
         Effect.gen(function* () {
-          const found = yield* dataEffect(() => getAutomationRunDetail(id));
-          if (!found || !user.installationIds.includes(found.automation.installation_id)) {
-            return yield* Effect.fail(notFound('Unknown automation run'));
+          const run = yield* dataEffect(() => getFactoryRun(id));
+          if (!run || !run.automation_id || !user.organizationIds.includes(run.organization_id)) {
+            return yield* Effect.fail(notFound('Unknown automation factory run'));
           }
-          const agentRuns = yield* dataEffect(() => listAgentRunsForAutomationRun(id));
-          return {
-            id: found.run.id,
-            // SAFETY: automation_runs.status has a CHECK constraint for AutomationRunStatus.
-            status: found.run.status as AutomationRunStatus,
-            pullRequestNumber: found.run.pr_number,
-            error: found.run.error,
-            createdAt: found.run.created_at,
-            automation: {
-              id: found.automation.id,
-              name: found.automation.name,
-              repository: `${found.automation.owner}/${found.automation.repo}`,
-            },
-            agentRuns: agentRuns.map((run) => ({
-              id: run.id,
-              kind: run.kind,
-              success: run.success,
-              createdAt: run.created_at,
-            })),
-          };
+          return serializeRun(run);
         }),
     } satisfies AutomationOperations;
   }),
