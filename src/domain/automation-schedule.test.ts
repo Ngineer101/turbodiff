@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vite-plus/test';
 // Co-located with the pure scheduling policy.
-import { computeNextRunAt } from './automation-schedule.ts';
+import { computeNextRunAt, nextAutomationRunAt } from './automation-schedule.ts';
 
 describe('computeNextRunAt', () => {
   it('hourly adds exactly one hour', () => {
@@ -38,5 +38,12 @@ describe('computeNextRunAt', () => {
     expect(computeNextRunAt({ kind: 'weekly', timeOfDay: '09:00', dayOfWeek: 4 }, from)).toBe(
       '2026-08-13T09:00:00.000Z',
     );
+  });
+
+  it('turns accepted API schedule strings into their next occurrence', () => {
+    const from = new Date('2026-08-13T10:00:00Z');
+    expect(nextAutomationRunAt('daily 09:00', from)).toBe('2026-08-14T09:00:00.000Z');
+    expect(nextAutomationRunAt('weekly 4 11:30', from)).toBe('2026-08-13T11:30:00.000Z');
+    expect(nextAutomationRunAt('daily', from)).toBeNull();
   });
 });

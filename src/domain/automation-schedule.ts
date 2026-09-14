@@ -41,3 +41,27 @@ export function computeNextRunAt(schedule: ScheduleInput, from: Date): string {
   }
   return toSqlUtc(next);
 }
+
+export function parseAutomationSchedule(value: string): ScheduleInput | null {
+  const parts = value.trim().toLowerCase().split(/\s+/);
+  if (parts.length === 1 && parts[0] === 'hourly') {
+    return { kind: 'hourly', timeOfDay: null, dayOfWeek: null };
+  }
+  if (parts.length === 2 && parts[0] === 'daily' && /^([01]\d|2[0-3]):[0-5]\d$/.test(parts[1]!)) {
+    return { kind: 'daily', timeOfDay: parts[1]!, dayOfWeek: null };
+  }
+  if (
+    parts.length === 3 &&
+    parts[0] === 'weekly' &&
+    /^[0-6]$/.test(parts[1]!) &&
+    /^([01]\d|2[0-3]):[0-5]\d$/.test(parts[2]!)
+  ) {
+    return { kind: 'weekly', dayOfWeek: Number(parts[1]), timeOfDay: parts[2]! };
+  }
+  return null;
+}
+
+export function nextAutomationRunAt(value: string, from: Date): string | null {
+  const schedule = parseAutomationSchedule(value);
+  return schedule ? computeNextRunAt(schedule, from) : null;
+}
