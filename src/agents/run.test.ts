@@ -5,6 +5,7 @@ import { defineAgent, type AgentExecutionRequest, type AgentExecutor } from './t
 
 const inputSchema = z.object({ task: z.string().trim().min(1) }).strict();
 const outputSchema = z.object({ artifact: z.string().trim().min(1) }).strict();
+type TestArtifact = z.infer<typeof outputSchema>;
 
 const testAgent = defineAgent<{ task: string }, { artifact: string }>({
   id: 'test-agent',
@@ -17,7 +18,7 @@ const testAgent = defineAgent<{ task: string }, { artifact: string }>({
 describe('runAgent', () => {
   it('validates input before invoking the paid executor', async () => {
     let executed = false;
-    const execute: AgentExecutor = async () => {
+    const execute: AgentExecutor<TestArtifact> = async () => {
       executed = true;
       throw new Error('executor should not run');
     };
@@ -31,7 +32,7 @@ describe('runAgent', () => {
   it('passes execution metadata and requires the executor to validate its artifact', async () => {
     const requests: AgentExecutionRequest[] = [];
     let rawArtifact = { artifact: 'finished' };
-    const execute: AgentExecutor = async (request, artifactSchema) => {
+    const execute: AgentExecutor<TestArtifact> = async (request, artifactSchema) => {
       requests.push(request);
       return artifactSchema.parse(rawArtifact);
     };

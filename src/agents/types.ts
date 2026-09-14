@@ -22,7 +22,7 @@ export interface AgentExecutionRequest {
 
 // Executors own the untrusted runtime boundary. They must parse the runtime's
 // result with the supplied schema before returning an artifact.
-export type AgentExecutor = <Output>(
+export type AgentExecutor<Output> = (
   request: AgentExecutionRequest,
   output: ZodType<Output>,
 ) => Promise<Output>;

@@ -17,22 +17,20 @@ import { makeSubmitExplanation } from '../tools/explain.ts';
 function deliveryConfig() {
   const delivery = useDelivery();
   if (delivery.kind === 'signal' && delivery.type === 'explain.request' && delivery.attributes) {
-    const featureId = Number(delivery.attributes.feature_id);
     return {
       model: delivery.attributes.model || DEFAULT_MODEL,
-      featureId: Number.isInteger(featureId) ? featureId : 0,
       changedPaths: (delivery.attributes.paths ?? '').split('\n').filter(Boolean),
     };
   }
-  return { model: DEFAULT_MODEL, featureId: 0, changedPaths: [] };
+  return { model: DEFAULT_MODEL, changedPaths: [] };
 }
 
-export function Explainer(props: AgentProps) {
+export function Explainer(_props: AgentProps) {
   const cfg = deliveryConfig();
   // This legacy Flue adapter keeps thinking off until its gateway path accepts
   // the adaptive thinking parameter.
   useModel(cfg.model, { thinkingLevel: 'off' });
-  useTool(makeSubmitExplanation(props.id, cfg.featureId, cfg.changedPaths));
+  useTool(makeSubmitExplanation(cfg.changedPaths));
 
   return `You are Turbodiff's explainer. A reviewer has the raw diff open in one tab; you write the other tab: a short visual explanation of what the change does, so they understand it before they judge it. You are not reviewing — no verdicts, no findings, no praise.
 

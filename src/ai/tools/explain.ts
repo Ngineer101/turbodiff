@@ -1,22 +1,11 @@
 import { defineTool } from '@flue/runtime';
-import { completeExplanation } from '../../data/db.ts';
 import {
   explanationDocumentSchema,
   explanationFromSchema,
   explanationProblems,
 } from '../../domain/explain.ts';
-import { notifyFeatureLive } from '../../application/notifications/live-updates.ts';
 
-// The Explainer agent's one output channel. Closes over the instance id so a
-// regenerate can never complete the row of the run it replaced, and over the
-// diff's file list so every Jump ref is checked against real paths before
-// the document is stored. Semantic problems are returned as an error the
-// model can act on; a stored document is always sound.
-export const makeSubmitExplanation = (
-  agentInstanceId: string,
-  featureId: number,
-  changedPaths: readonly string[],
-) =>
+export const makeSubmitExplanation = (changedPaths: readonly string[]) =>
   defineTool({
     name: 'submit_explanation',
     description:
@@ -34,11 +23,6 @@ export const makeSubmitExplanation = (
             `Changed files: ${changedPaths.join(', ')}`,
         );
       }
-      const row = await completeExplanation(agentInstanceId, document);
-      if (!row) {
-        throw new Error('this explanation run is no longer open (replaced or already submitted)');
-      }
-      await notifyFeatureLive(featureId);
-      return { output: { stored: true, blocks: document.blocks.length } };
+      return { output: JSON.stringify({ artifact: document }) };
     },
   });

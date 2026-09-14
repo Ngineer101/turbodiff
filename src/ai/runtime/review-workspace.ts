@@ -21,7 +21,7 @@ export async function prepareReviewWorkspace(
   headSha: string,
   agentInstanceId: string,
 ): Promise<ReviewWorkspace> {
-  if (repo.provider !== 'github') {
+  if (repo.source_provider !== 'github') {
     throw new Error('hosted review workspaces currently require a GitHub pull request');
   }
   const expectedHead = assertReviewHeadSha(headSha);

@@ -1,8 +1,8 @@
 import type { AgentDefinition, AgentExecutor } from './types.ts';
 
-export interface RunAgentOptions {
+export interface RunAgentOptions<Output> {
   model: string | null;
-  execute: AgentExecutor;
+  execute: AgentExecutor<Output>;
 }
 
 // The single generic agent boundary. Inputs are checked before paid work starts;
@@ -10,7 +10,7 @@ export interface RunAgentOptions {
 export async function runAgent<Input, Output>(
   agent: AgentDefinition<Input, Output>,
   input: Input,
-  options: RunAgentOptions,
+  options: RunAgentOptions<Output>,
 ): Promise<Output> {
   const checkedInput = agent.input.parse(input);
   return options.execute(

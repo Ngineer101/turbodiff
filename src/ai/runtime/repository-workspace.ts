@@ -206,11 +206,7 @@ export async function refreshPrCheckout(
   return true;
 }
 
-// Full-history, all-branches mirror for the change-request engine
-// (ai/runtime/cr-engine.ts): merge-base and cross-branch diffs need shared
-// history the shallow single-branch caches above deliberately avoid. Clone
-// on first touch, fetch after; the first exec on a cold container
-// additionally pays the boot, hence the generous timeout.
+// Full-history mirror for source-code operations that need refs beyond one branch.
 export async function prepareFullMirror(
   sandbox: Sandbox,
   dir: string,
