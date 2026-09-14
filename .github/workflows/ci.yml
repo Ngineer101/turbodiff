@@ -53,8 +53,8 @@ jobs:
       - name: Fresh PostgreSQL schema test
         run: pnpm vp run test:schema
 
-      - name: Worker and PostgreSQL integration tests
-        run: pnpm vp run test:worker
+      - name: Service and PostgreSQL integration tests
+        run: pnpm vp run test:integration
 
       - name: Build
         run: pnpm vp run build
