@@ -40,11 +40,11 @@ const CSS = `
 		padding: 0.8rem 1.4rem; border-radius: 8px;
 		background: var(--accent); color: var(--accent-ink);
 		font-weight: 700; font-size: 0.95rem;
-		box-shadow: 2px 2px 0 var(--ink);
-		transition: transform 0.12s ease-out, box-shadow 0.12s ease-out, background 0.12s;
+		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+		transition: filter 0.12s ease-out, box-shadow 0.12s ease-out, background 0.12s;
 	}
 	.cta:hover { background: var(--accent-bright); }
-	.cta:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 var(--ink); }
+	.cta:active { filter: brightness(0.95); }
 	.cta svg { width: 1em; height: 1em; fill: currentColor; }
 	.read {
 		display: inline-flex; align-items: center; gap: 0.6em;
@@ -61,8 +61,7 @@ const CSS = `
 		position: relative;
 		border-radius: 12px; overflow: hidden;
 		background: var(--surface); border: 1.5px solid var(--line-2);
-		box-shadow: 3px 3px 0 var(--accent);
-		transform: rotate(1deg);
+		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 		font-family: var(--mono);
 	}
 	.term .chrome {
@@ -95,17 +94,16 @@ const CSS = `
 		animation: drop 0.22s var(--ease) both, land 0.18s 0.22s var(--ease) both;
 	}
 	@keyframes drop {
-		from { opacity: 0; transform: translateY(12px) scale(0.94) rotate(0deg); box-shadow: 0 0 0 var(--accent); }
-		to { opacity: 1; transform: translateY(0) scale(1) rotate(0deg); box-shadow: 0 0 0 var(--accent); }
+		from { opacity: 0; transform: translateY(12px) scale(0.94); box-shadow: 0 0 0 rgba(0, 0, 0, 0); }
+		to { opacity: 1; transform: translateY(0) scale(1); box-shadow: 0 0 0 rgba(0, 0, 0, 0); }
 	}
 	@keyframes land {
-		from { transform: rotate(0deg); box-shadow: 0 0 0 var(--accent); }
-		to { transform: rotate(1deg); box-shadow: 3px 3px 0 var(--accent); }
+		from { box-shadow: 0 0 0 rgba(0, 0, 0, 0); }
+		to { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); }
 	}
 	@media (max-width: 899px) {
 		.hero .wrap { grid-template-columns: 1fr; gap: 2.5rem; }
-		.term, .term.boot { transform: none; box-shadow: 2px 2px 0 var(--accent); }
-		@keyframes land { from { box-shadow: 0 0 0 var(--accent); } to { box-shadow: 2px 2px 0 var(--accent); } }
+		.term, .term.boot { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); }
 	}
 
 	/* --- proof strip --- */

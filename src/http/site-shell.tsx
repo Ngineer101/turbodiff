@@ -42,24 +42,20 @@ export const SHELL_CSS = `
 	/* --- stickers: the shared vocabulary --- */
 	.tag {
 		display: inline-block;
-		padding: 0.3em 0.75em; border-radius: 4px;
+		padding: 0.3em 0.75em; border-radius: 9999px;
 		background: var(--accent); color: var(--accent-ink);
-		font-family: var(--mono); font-size: 0.66rem; font-weight: 700;
-		letter-spacing: 0.18em; text-transform: uppercase;
-		box-shadow: 1px 1px 0 var(--ink);
-		transform: rotate(-3deg);
+		font-family: var(--mono); font-size: 0.66rem; font-weight: 600;
+		letter-spacing: 0.14em; text-transform: uppercase;
 	}
-	.tag.flat { transform: rotate(-2deg); box-shadow: none; }
+	.tag.flat { box-shadow: none; }
 	.mark {
-		display: block; width: 34px; height: 34px; border-radius: 7px;
-		box-shadow: 1px 1px 0 var(--accent);
-		transform: rotate(-6deg);
+		display: block; width: 34px; height: 34px; border-radius: 8px;
 	}
 	.card {
 		background: var(--surface); border: 1px solid var(--line-2); border-radius: 10px;
-		box-shadow: 1px 1px 0 var(--line);
+		box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
 	}
-	.card.live { border-color: var(--accent); box-shadow: 1px 1px 0 var(--accent); }
+	.card.live { border-color: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
 	.lamp {
 		display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
 	}

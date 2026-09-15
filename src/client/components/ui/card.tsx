@@ -1,8 +1,8 @@
 import type { HTMLAttributes } from 'react';
 import { cn } from '../../lib/utils.ts';
 
-// The sticker card: a bordered surface with a hard offset shadow. Depth lives
-// here and nowhere else — panels and empty states stay flat.
+// The card: a bordered surface with a soft shadow. Depth lives here and
+// nowhere else — panels and empty states stay flat.
 export function Card({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
   return (
     <div
