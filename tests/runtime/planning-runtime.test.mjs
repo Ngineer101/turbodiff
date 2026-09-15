@@ -12,7 +12,7 @@ import {
   importPlanningSession,
   PLANNING_CONFIG,
 } from '../../src/integrations/agent-runtime/planning-session.ts';
-import { proxyAiGatewayRequest } from '../../src/http/ai-gateway-proxy.ts';
+import { proxyAiGatewayRequest } from '../../src/integrations/ai-gateway/proxy.ts';
 import { createAiGatewayGrant } from '../../src/integrations/security/ai-gateway-grant.ts';
 
 const exec = promisify(execFile);
