@@ -1,6 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 
-/** Hibernating, installation-scoped invalidation hub for the signed-in SPA. */
+/** Hibernating, organization-scoped invalidation hub for the signed-in SPA. */
 export class LiveUpdates extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
     if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {

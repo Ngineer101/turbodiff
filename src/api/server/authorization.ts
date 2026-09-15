@@ -1,31 +1,34 @@
 import { Effect } from 'effect';
-import { capabilityDenied } from '../../application/auth/access-control.ts';
+import { memberRole } from '../../data/db.ts';
 import type { CurrentUserIdentity } from '../contract/auth.ts';
-import { forbidden, internalServerError, type DomainError } from '../contract/errors.ts';
-import type { ApiRuntimeDependencies } from './context.ts';
+import { forbidden, internalServerError, notFound, type DomainError } from '../contract/errors.ts';
 
-export const capableInstallationIds = (
-  user: CurrentUserIdentity,
-  dependencies: ApiRuntimeDependencies,
-): Effect.Effect<number[], DomainError> =>
+export const dataEffect = <A>(run: () => Promise<A>): Effect.Effect<A, DomainError> =>
   Effect.tryPromise({
-    try: () =>
-      Promise.all(
-        user.installationIds.map(async (installationId) =>
-          (await capabilityDenied(user, installationId, 'settings', dependencies.orgAdmin))
-            ? null
-            : installationId,
-        ),
-      ),
+    try: run,
     catch: (error) => {
-      console.error('turbodiff: Effect authorization check failed', error);
+      console.error('turbodiff: API operation failed', error);
       return internalServerError();
     },
-  }).pipe(
-    Effect.map((ids) => ids.filter((id): id is number => id !== null)),
-    Effect.flatMap((ids) =>
-      ids.length > 0
-        ? Effect.succeed(ids)
-        : Effect.fail(forbidden("'settings' capability required for this action")),
+  });
+
+export const requireOrganization = (
+  user: CurrentUserIdentity,
+  organizationId: string,
+): Effect.Effect<void, DomainError> =>
+  user.organizationIds.includes(organizationId)
+    ? Effect.void
+    : Effect.fail(notFound('Unknown organization'));
+
+export const requireOrganizationWrite = (
+  user: CurrentUserIdentity,
+  organizationId: string,
+): Effect.Effect<void, DomainError> =>
+  requireOrganization(user, organizationId).pipe(
+    Effect.andThen(dataEffect(() => memberRole(organizationId, user.session.authUserId))),
+    Effect.flatMap((role) =>
+      role === 'owner' || role === 'admin'
+        ? Effect.void
+        : Effect.fail(forbidden('Organization admin role required')),
     ),
   );

@@ -98,9 +98,9 @@ export async function readArtifactsTreeDirect(
   path: string,
   knownHeadSha?: string,
 ): Promise<RepositoryTreeResult | null> {
-  if (!repo.artifacts_repo) return null;
+  if (!repo.external_id) return null;
   try {
-    const handle = await env.GIT_ARTIFACTS.get(repo.artifacts_repo);
+    const handle = await env.GIT_ARTIFACTS.get(repo.external_id);
     const head = knownHeadSha ?? commitHash(await handle.log({ ref, limit: 1, offset: 0 }));
     if (!head) return null;
     let treeHash = commitTreeHash(await handle.readCommit(head));
@@ -131,7 +131,7 @@ export async function readArtifactsTreeDirect(
     console.warn(
       JSON.stringify({
         message: 'artifacts binding content read fell back to sandbox mirror',
-        repo: repo.artifacts_repo,
+        repo: repo.external_id,
         detail: err instanceof Error ? err.message : String(err),
       }),
     );

@@ -2,8 +2,12 @@ import type { Sandbox } from '@cloudflare/sandbox';
 import { redactSecrets } from '../../ai/runtime/redaction.ts';
 import { prepareFullMirror } from '../../ai/runtime/repository-workspace.ts';
 import { generationSandbox } from '../../ai/runtime/sandbox.ts';
-import type { RepositoryRow } from '../../data/db.ts';
-import { recordRepositoryRef, repositoryRef, repositoryRefs } from '../../data/performance.ts';
+import {
+  recordRepositoryRef,
+  repositoryRef,
+  repositoryRefs,
+  type RepositoryRow,
+} from '../../data/db.ts';
 import { readArtifactsTreeDirect } from '../artifacts/content.ts';
 import { resolveWorkspaceRemote } from '../git/provider.ts';
 import type { WorkspaceRemote } from '../git/remotes.ts';
@@ -23,17 +27,8 @@ import type {
   SaveRepositoryFileResult,
 } from './types.ts';
 
-// The Artifacts source-code adapter has no contents REST
-// API, so the same provider-neutral repository result types are computed
-// with real git in the warm per-repo sandbox against a full mirror — the CR
-// engine's established pattern (ai/runtime/cr-engine.ts). User-influenced
-// values (ref, path, message, author) only ever travel via env vars
-// referenced as "$VAR" in command strings; file content goes through
-// sandbox.writeFile, never through env or the command string.
+// Artifacts repositories use real git in a warm sandbox because there is no contents API.
 
-// Its own mirror, NOT the CR engine's /workspace/cr-workspace: the engine
-// checks out and hard-resets that directory, and the browser's saves mutate
-// this one. Same container, separate directories.
 export const BROWSE_DIR = '/workspace/code-browse';
 
 // Mirror the GitHub adapter's 1 MB too_large semantics.
@@ -53,11 +48,11 @@ const SYNC_MARKER = `${BROWSE_DIR}/.git/turbodiff-synced-version`;
 // after (the CR engine's sync pattern) — but at most once per freshness
 // window for reads. The marker file carries the last sync's epoch seconds.
 async function browseContext(repo: RepositoryRow, scope: 'read' | 'write'): Promise<BrowseContext> {
-  if (repo.provider !== 'artifacts') {
+  if (repo.source_provider !== 'artifacts') {
     throw new Error(`${repo.owner}/${repo.name} is not an Artifacts-hosted repo`);
   }
   const sandbox = generationSandbox(repo);
-  const version = repo.last_push_at ?? 'before-first-push-event';
+  const version = repo.updated_at;
   if (scope === 'read') {
     const probe = await sandbox.exec(
       `stored=$(cat ${SYNC_MARKER} 2>/dev/null || true); ` +
@@ -127,11 +122,7 @@ export async function listBranchesAndDefaultArtifacts(
     })
     .filter(({ name, sha }) => name && name !== 'HEAD' && sha)
     .sort((a, b) => a.name.localeCompare(b.name));
-  await Promise.all(
-    discovered.map(({ name, sha }) =>
-      recordRepositoryRef(repo.id, name, sha, repo.last_push_at ?? new Date().toISOString()),
-    ),
-  );
+  await Promise.all(discovered.map(({ name, sha }) => recordRepositoryRef(repo.id, name, sha)));
   const branches = discovered.map(({ name }) => name);
   // default_branch is set at Artifacts project creation; fall back for rows
   // that somehow predate it.

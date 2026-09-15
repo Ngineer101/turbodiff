@@ -1,27 +1,18 @@
 import {
-  createTodo as createTodoRow,
-  createPlanForTodo,
-  createUserChatMessage,
-  getFeature as getFeatureRow,
-  getPlanWithRepoById,
-  getRepoById,
-  getTaskRepoStatuses,
-  getTodo,
-  hasPendingChatTurn,
-  latestVerificationForFeature,
-  listChatMessages,
-  listInstallationsWithRepos,
-  listPlansForInstallations,
-  listReposForTodo,
-  listTodos,
-  setTodoRepositories,
-  todoRepositoriesForTodos,
+  createFactoryRunWithStage,
+  createWorkItem as createWorkItemRow,
+  getRepository,
+  getWorkItem as getWorkItemRow,
+  listFactoryRuns,
+  listRepositories as listRepositoryRows,
+  listWorkItems as listWorkItemRows,
+  listWorkItemTargets,
+  memberRole,
+  updateWorkItem,
   type RepositoryRow,
+  type WorkItemRow,
 } from '../../data/db.ts';
 import { installationToken } from '../../integrations/github/app.ts';
-import { capabilityDenied } from '../auth/access-control.ts';
-import { userCanPushToRepo, userIsGithubOrgAdmin, type AuthedUser } from '../auth/session.ts';
-import type { enqueueFactoryMessage } from '../factory/queue.ts';
 import {
   isValidRepoPath,
   isValidRepoRef,
@@ -30,307 +21,249 @@ import {
   readTree,
   RepoBrowserError,
 } from '../../integrations/source-code/github.ts';
-import { parseUtc, VERIFY_STALL_AFTER_MS } from '../../shared/time.ts';
+import {
+  listBranchesAndDefaultArtifacts,
+  readFileArtifacts,
+  readTreeArtifacts,
+} from '../../integrations/source-code/artifacts.ts';
+import type { AuthedUser } from '../auth/session.ts';
+import { DISPATCH_FLOW, PLANNING_FLOW } from '../factory/flows.ts';
+import type { enqueueFactoryMessage } from '../factory/queue.ts';
 
 export class McpToolError extends Error {}
 
-const MAX_TASK_REPOS = 3;
-const CODE_NOT_SUPPORTED = 'code browsing is not yet supported for turbodiff-hosted repositories';
-
-function requireInstallation(user: AuthedUser, installationId: number): void {
-  if (!user.installationIds.includes(installationId)) {
-    throw new McpToolError('unknown installation');
+function requireOrganization(user: AuthedUser, organizationId: string): void {
+  if (!user.organizationIds.includes(organizationId)) {
+    throw new McpToolError('unknown organization');
   }
 }
 
-async function authorizedRepo(user: AuthedUser, repositoryId: number): Promise<RepositoryRow> {
-  const repo = Number.isInteger(repositoryId) ? await getRepoById(repositoryId) : null;
-  if (!repo || !user.installationIds.includes(repo.installation_id)) {
+async function requireOrganizationWrite(user: AuthedUser, organizationId: string): Promise<void> {
+  requireOrganization(user, organizationId);
+  const role = await memberRole(organizationId, user.session.authUserId);
+  if (role !== 'owner' && role !== 'admin') {
+    throw new McpToolError('organization admin role required');
+  }
+}
+
+async function authorizedRepository(user: AuthedUser, id: number): Promise<RepositoryRow> {
+  const repository = Number.isInteger(id) ? await getRepository(id) : null;
+  if (!repository || !user.organizationIds.includes(repository.organization_id)) {
     throw new McpToolError('unknown repository');
   }
-  return repo;
+  return repository;
 }
 
-// Same computation as the planning-run verification summary, re-derived
-// here to keep the service layer below http.
-function verificationSummary(
-  status: string | null | undefined,
-  results: { verdict: string }[] | null | undefined,
-  createdAt: string | null | undefined,
-): { status: string; total: number; failed: number } | null {
-  if (!status) return null;
-  const rows = results ?? [];
-  // Display-only 'stalled' mapping past the shared cutoff — the DB row stays
-  // 'running' until the cron sweep resolves it.
-  const stalled =
-    status === 'running' &&
-    createdAt != null &&
-    Date.now() - parseUtc(createdAt) > VERIFY_STALL_AFTER_MS;
+function serializeWorkItem(row: WorkItemRow) {
   return {
-    status: stalled ? 'stalled' : status,
-    total: rows.length,
-    failed: rows.filter((r) => r.verdict === 'fail').length,
+    id: row.id,
+    organization_id: row.organization_id,
+    origin: row.origin,
+    title: row.title,
+    description: row.description,
+    status: row.status,
+    approved_plan_artifact_id: row.approved_plan_artifact_id,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    completed_at: row.completed_at,
   };
 }
 
-export async function listBoard(user: AuthedUser) {
-  const [groups, plans, todos] = await Promise.all([
-    listInstallationsWithRepos(user.installationIds),
-    listPlansForInstallations(user.installationIds),
-    listTodos(user.installationIds),
-  ]);
-  const active = plans.filter((p) => !p.archived);
-  const [repoStatuses, todoRepos] = await Promise.all([
-    getTaskRepoStatuses(active.map((p) => p.id)),
-    todoRepositoriesForTodos(todos.map((t) => t.id)),
-  ]);
-  return {
-    todos: todos.map((t) => ({
-      id: t.id,
-      installation_id: t.installation_id,
-      title: t.title,
-      notes: t.notes,
-      created_at: t.created_at,
-      repos: todoRepos
-        .filter((r) => r.todo_id === t.id)
-        .map((r) => ({ id: r.repository_id, owner: r.owner, name: r.name })),
-    })),
-    tasks: active.map((p) => ({
-      id: p.id,
-      installation_id: p.installation_id,
-      title: p.title,
-      status: p.status,
-      error: p.error,
-      created_at: p.created_at,
-      repos: repoStatuses
-        .filter((r) => r.plan_id === p.id)
-        .map((r) => ({
-          repository_id: r.repository_id,
-          owner: r.owner,
-          name: r.name,
-          feature_id: r.feature_id,
-          feature_status: r.feature_status,
-          pr_number: r.pr_number,
-        })),
-    })),
-    repos: groups
-      .flatMap((g) => g.repos)
-      .filter((r) => r.enabled)
-      .map((r) => ({
-        id: r.id,
-        owner: r.owner,
-        name: r.name,
-        installation_id: r.installation_id,
+export async function listWorkItems(user: AuthedUser) {
+  const rows = await listWorkItemRows(user.organizationIds);
+  const targets = await listWorkItemTargets(rows.map((row) => row.id));
+  return rows.map((row) => ({
+    ...serializeWorkItem(row),
+    targets: targets
+      .filter((target) => target.work_item_id === row.id)
+      .map((target) => ({
+        repository_id: target.repository_id,
+        owner: target.owner,
+        name: target.name,
       })),
-  };
+  }));
 }
 
-export async function getTask(user: AuthedUser, taskId: number) {
-  const plan = Number.isInteger(taskId) ? await getPlanWithRepoById(taskId) : null;
-  if (!plan || !user.installationIds.includes(plan.installation_id)) {
-    throw new McpToolError('unknown task');
+export async function getWorkItem(user: AuthedUser, id: number) {
+  const row = Number.isInteger(id) ? await getWorkItemRow(id) : null;
+  if (!row || !user.organizationIds.includes(row.organization_id)) {
+    throw new McpToolError('unknown work item');
   }
-  const repoStatuses = await getTaskRepoStatuses([plan.id]);
-  return {
-    id: plan.id,
-    title: plan.title,
-    status: plan.status,
-    error: plan.error,
-    created_at: plan.created_at,
-    requirements: plan.requirements,
-    plan: plan.plan,
-    summary: plan.summary,
-    questions: plan.questions ?? [],
-    answers: plan.answers ?? [],
-    acceptance: plan.acceptance ?? [],
-    repos: repoStatuses.map((r) => ({
-      repository_id: r.repository_id,
-      owner: r.owner,
-      name: r.name,
-      feature_id: r.feature_id,
-      feature_status: r.feature_status,
-      feature_error: r.feature_error,
-      pr_number: r.pr_number,
-      verification: verificationSummary(
-        r.verification_status,
-        r.verification_results,
-        r.verification_created_at,
-      ),
-    })),
-  };
-}
-
-export async function getFeature(user: AuthedUser, featureId: number) {
-  const feature = Number.isInteger(featureId) ? await getFeatureRow(featureId) : null;
-  const repo = feature ? await getRepoById(feature.repository_id) : null;
-  if (!feature || !repo || !user.installationIds.includes(repo.installation_id)) {
-    throw new McpToolError('unknown feature');
-  }
-  const [verification, messages] = await Promise.all([
-    latestVerificationForFeature(feature.id),
-    listChatMessages(feature.id),
+  const [targets, runs] = await Promise.all([
+    listWorkItemTargets([row.id]),
+    listFactoryRuns({ workItemId: row.id }),
   ]);
   return {
-    id: feature.id,
-    title: feature.title,
-    status: feature.status,
-    error: feature.error,
-    pr_number: feature.pr_number,
-    repo: `${repo.owner}/${repo.name}`,
-    verification: verificationSummary(
-      verification?.status,
-      verification?.results,
-      verification?.created_at,
-    ),
-    chat: messages.map((m) => ({
-      role: m.role,
-      body: m.body,
-      status: m.status,
-      outcome: m.outcome,
-      created_at: m.created_at,
+    ...serializeWorkItem(row),
+    targets: targets.map((target) => ({
+      repository_id: target.repository_id,
+      owner: target.owner,
+      name: target.name,
+    })),
+    factory_runs: runs.map((run) => ({
+      id: run.id,
+      flow_key: run.flow_key,
+      status: run.status,
+      created_at: run.created_at,
     })),
   };
 }
 
-async function resolveRef(token: string, repo: RepositoryRow, ref: string | undefined) {
-  if (ref !== undefined && ref !== '') {
+export async function listRepositories(user: AuthedUser) {
+  const rows = await listRepositoryRows(user.organizationIds);
+  return rows.map((row) => ({
+    id: row.id,
+    organization_id: row.organization_id,
+    owner: row.owner,
+    name: row.name,
+    provider: row.source_provider,
+    default_branch: row.default_branch,
+    enabled: row.enabled,
+  }));
+}
+
+async function githubToken(repository: RepositoryRow): Promise<string> {
+  const installationId = Number(repository.source_external_account_id);
+  if (!Number.isSafeInteger(installationId) || installationId <= 0) {
+    throw new McpToolError('repository has no usable GitHub integration');
+  }
+  return installationToken(installationId);
+}
+
+async function resolveRef(repository: RepositoryRow, ref?: string): Promise<string> {
+  if (ref) {
     if (!isValidRepoRef(ref)) throw new McpToolError('a valid ref is required');
     return ref;
   }
-  const { default_branch } = await listBranchesAndDefault(token, repo);
-  return default_branch;
+  if (repository.source_provider === 'github') {
+    return (await listBranchesAndDefault(await githubToken(repository), repository)).default_branch;
+  }
+  if (repository.source_provider === 'artifacts') {
+    const branches = await listBranchesAndDefaultArtifacts(repository);
+    if (branches.default_branch) return branches.default_branch;
+  }
+  throw new McpToolError('repository has no default branch');
 }
 
-export async function repoTree(
+export async function repositoryTree(
   user: AuthedUser,
   repositoryId: number,
-  path?: string,
+  path = '',
   ref?: string,
 ) {
-  const repo = await authorizedRepo(user, repositoryId);
-  if (repo.provider !== 'github') throw new McpToolError(CODE_NOT_SUPPORTED);
-  const treePath = path ?? '';
-  if (!isValidRepoPath(treePath)) throw new McpToolError('invalid path');
+  const repository = await authorizedRepository(user, repositoryId);
+  if (!isValidRepoPath(path)) throw new McpToolError('invalid path');
   try {
-    const token = await installationToken(repo.installation_id);
-    return await readTree(token, repo, await resolveRef(token, repo, ref), treePath);
-  } catch (err) {
-    if (err instanceof RepoBrowserError) throw new McpToolError(err.message);
-    throw err;
+    const resolvedRef = await resolveRef(repository, ref);
+    if (repository.source_provider === 'github') {
+      return readTree(await githubToken(repository), repository, resolvedRef, path);
+    }
+    if (repository.source_provider === 'artifacts') {
+      return readTreeArtifacts(repository, resolvedRef, path);
+    }
+    throw new McpToolError('repository provider does not support code browsing');
+  } catch (error) {
+    if (error instanceof RepoBrowserError) throw new McpToolError(error.message);
+    throw error;
   }
 }
 
-export async function readRepoFile(
+export async function readRepositoryFile(
   user: AuthedUser,
   repositoryId: number,
   path: string,
   ref?: string,
 ) {
-  const repo = await authorizedRepo(user, repositoryId);
-  if (repo.provider !== 'github') throw new McpToolError(CODE_NOT_SUPPORTED);
+  const repository = await authorizedRepository(user, repositoryId);
   if (!path || !isValidRepoPath(path)) throw new McpToolError('invalid path');
   try {
-    const token = await installationToken(repo.installation_id);
-    return await readFile(token, repo, await resolveRef(token, repo, ref), path);
-  } catch (err) {
-    if (err instanceof RepoBrowserError) throw new McpToolError(err.message);
-    throw err;
+    const resolvedRef = await resolveRef(repository, ref);
+    if (repository.source_provider === 'github') {
+      return readFile(await githubToken(repository), repository, resolvedRef, path);
+    }
+    if (repository.source_provider === 'artifacts') {
+      return readFileArtifacts(repository, resolvedRef, path);
+    }
+    throw new McpToolError('repository provider does not support code browsing');
+  } catch (error) {
+    if (error instanceof RepoBrowserError) throw new McpToolError(error.message);
+    throw error;
   }
 }
 
-// Every id must belong to the installation and be enabled — the same
-// server-side rule as api.ts's validRepoIds.
-async function validRepoIds(installationId: number, repoIds: number[]): Promise<boolean> {
-  if (repoIds.length === 0 || repoIds.length > MAX_TASK_REPOS) return false;
-  const repos = await Promise.all(repoIds.map((id) => getRepoById(id)));
-  return repos.every((r) => r && r.installation_id === installationId && r.enabled);
-}
-
-export async function createTodo(
+export async function createWorkItem(
   user: AuthedUser,
-  input: { installation_id?: number; title: string; notes?: string; repository_ids?: number[] },
-): Promise<{ todo_id: number }> {
+  input: {
+    organization_id: string;
+    repository_ids: number[];
+    title: string;
+    description: string;
+  },
+) {
+  await requireOrganizationWrite(user, input.organization_id);
   const title = input.title.trim();
-  if (!title) throw new McpToolError('title is required');
-  const installationId = input.installation_id ?? user.installationIds[0];
-  if (installationId === undefined) throw new McpToolError('unknown installation');
-  requireInstallation(user, installationId);
-  const repoIds = input.repository_ids ?? [];
-  if (repoIds.length > MAX_TASK_REPOS) throw new McpToolError('at most 3 repositories');
-  if (repoIds.length > 0 && !(await validRepoIds(installationId, repoIds))) {
-    throw new McpToolError('unknown or disabled repository');
+  const description = input.description.trim();
+  const repositoryIds = [...new Set(input.repository_ids)];
+  if (!title || !description) throw new McpToolError('title and description are required');
+  if (repositoryIds.length === 0 || repositoryIds.length > 3) {
+    throw new McpToolError('choose between one and three repositories');
   }
-  const id = await createTodoRow(installationId, title.slice(0, 200), input.notes?.trim() || null, {
-    login: user.session.login,
-    id: user.session.userId,
+  const repositories = await Promise.all(repositoryIds.map(getRepository));
+  if (
+    !repositories.every(
+      (repository) => repository?.organization_id === input.organization_id && repository.enabled,
+    )
+  ) {
+    throw new McpToolError('unknown, disabled, or cross-organization repository');
+  }
+  const row = await createWorkItemRow({
+    organizationId: input.organization_id,
+    origin: 'api',
+    title: title.slice(0, 200),
+    description,
+    createdByUserId: user.session.authUserId,
+    repositoryIds,
   });
-  if (repoIds.length > 0) await setTodoRepositories(id, repoIds);
-  return { todo_id: id };
+  return { work_item_id: row.id };
 }
 
-export async function startTask(
+export async function startFactoryRun(
   user: AuthedUser,
-  input: { todo_id: number; requirements: string; title?: string },
+  input: { work_item_id: number; flow: 'planning' | 'delivery' },
   enqueue: typeof enqueueFactoryMessage,
-): Promise<{ task_id: number }> {
-  const todo = Number.isInteger(input.todo_id) ? await getTodo(input.todo_id) : null;
-  if (!todo || !user.installationIds.includes(todo.installation_id)) {
-    throw new McpToolError('unknown todo');
+) {
+  const workItem = await getWorkItemRow(input.work_item_id);
+  if (!workItem || !user.organizationIds.includes(workItem.organization_id)) {
+    throw new McpToolError('unknown work item');
   }
-  if (todo.plan_id !== null) throw new McpToolError('already started');
-  const repos = await listReposForTodo(todo.id);
-  if (repos.length === 0) throw new McpToolError('select at least one repository first');
-  const requirements = input.requirements.trim();
-  if (!requirements) throw new McpToolError('requirements are required');
-  const started = await createPlanForTodo(
-    todo.id,
-    repos.map((r) => r.id),
-    input.title?.trim() || todo.title,
-    requirements,
-    { login: user.session.login, id: user.session.userId },
+  await requireOrganizationWrite(user, workItem.organization_id);
+  if (workItem.status === 'completed' || workItem.status === 'cancelled') {
+    throw new McpToolError(`work item is ${workItem.status}`);
+  }
+  if (input.flow === 'delivery' && !workItem.approved_plan_artifact_id) {
+    throw new McpToolError('approve a plan artifact before delivery');
+  }
+  const flow = input.flow === 'planning' ? PLANNING_FLOW : DISPATCH_FLOW;
+  const key = `${flow.key}:${workItem.id}:${crypto.randomUUID()}`;
+  const started = await createFactoryRunWithStage(
+    {
+      organizationId: workItem.organization_id,
+      flowKey: flow.key,
+      flowVersion: flow.version,
+      workItemId: workItem.id,
+      trigger: 'mcp',
+      actorUserId: user.session.authUserId,
+      idempotencyKey: key,
+    },
+    { stageKey: flow.initialStage, idempotencyKey: `${key}:${flow.initialStage}:1` },
   );
-  if (!started) throw new McpToolError('todo could not be started');
-  if (!started.created) throw new McpToolError('already started');
-  await enqueue({ kind: 'plan_analyze', planId: started.planId });
-  return { task_id: started.planId };
-}
-
-export async function sendChatMessage(
-  user: AuthedUser,
-  input: { feature_id: number; message: string },
-  enqueue: typeof enqueueFactoryMessage,
-): Promise<{ message_id: number }> {
-  const feature = Number.isInteger(input.feature_id) ? await getFeatureRow(input.feature_id) : null;
-  const repo = feature ? await getRepoById(feature.repository_id) : null;
-  if (!feature || !repo || !user.installationIds.includes(repo.installation_id)) {
-    throw new McpToolError('unknown feature');
-  }
-  const body = input.message.trim();
-  if (!body) throw new McpToolError('message is required');
-  if (!feature.pr_number || feature.status !== 'pr_opened') {
-    throw new McpToolError('no open pull request for this feature');
-  }
-  if (repo.provider === 'artifacts') {
-    const denied = await capabilityDenied(
-      user,
-      repo.installation_id,
-      'settings',
-      userIsGithubOrgAdmin,
-    );
-    if (denied) throw new McpToolError(denied);
-  } else if (!(await userCanPushToRepo(user, repo.owner, repo.name))) {
-    throw new McpToolError('push access to the repository is required for this action');
-  }
-  // One turn in flight at a time — matches the API route's 409.
-  if (await hasPendingChatTurn(feature.id)) {
-    throw new McpToolError('a chat turn is already running — wait for the reply');
-  }
-  const messageId = await createUserChatMessage(
-    feature.id,
-    body,
-    user.session.login,
-    user.session.userId,
-  );
-  await enqueue({ kind: 'chat', featureId: feature.id, chatMessageId: messageId });
-  return { message_id: messageId };
+  await updateWorkItem(workItem.id, {
+    status: input.flow === 'planning' ? 'planning' : 'in_progress',
+  });
+  await enqueue({
+    kind: 'run_factory',
+    factoryRunId: started.factoryRun.id,
+    stageRunId: started.stageRun.id,
+  });
+  return { factory_run_id: started.factoryRun.id, stage_run_id: started.stageRun.id };
 }

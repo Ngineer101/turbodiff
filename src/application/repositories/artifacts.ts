@@ -2,12 +2,13 @@ import { env } from 'cloudflare:workers';
 import { redactSecrets } from '../../ai/runtime/redaction.ts';
 import { runnerSandbox } from '../../ai/runtime/sandbox.ts';
 import {
-  createArtifactsInstallation,
-  createArtifactsRepository,
-  getArtifactsInstallationByLogin,
-  getRepoByArtifactsName,
-  recordArtifactsPush,
+  deleteRepositoryRef,
+  getIntegration,
+  getRepositoryByExternalId,
+  getRepositoryByProviderExternalId,
+  recordRepositoryRef,
   removeRepositories,
+  upsertRepositories,
   type RepositoryRow,
 } from '../../data/db.ts';
 import {
@@ -15,20 +16,13 @@ import {
   artifactsWorkspaceRemote,
   deriveArtifactsRepoName,
 } from '../../integrations/git/provider.ts';
-import { ensureOrganizationForInstallation, ensureOwnerMember } from '../auth/access-control.ts';
-import type { ProcessProfileKey } from '../../domain/lifecycle-contract.ts';
 import {
-  isArtifactsPushedEvent,
   ARTIFACTS_REPO_DELETED,
+  isArtifactsPushedEvent,
   type ArtifactsEvent,
 } from '../../shared/artifacts-events.ts';
-import { deleteRepositoryRef, recordRepositoryRef } from '../../data/performance.ts';
-import { listChangeRequestsForRepo } from '../../data/db.ts';
-import { refreshChangeRequest } from '../deliveries/change-requests.ts';
-import { scheduleChangeReview } from '../factory/lifecycle.ts';
-
-// Same identifier grammar the GitHub routes accept for owner/name segments.
 import { PROJECT_SEGMENT } from '../../shared/projects.ts';
+
 export { PROJECT_SEGMENT };
 
 export interface CloneCredential {
@@ -43,22 +37,29 @@ export interface CreatedProject {
   remote: string;
 }
 
-function isArtifactsErrorWithCode<T>(err: T, code: string): boolean {
-  return err instanceof Error && 'code' in err && err.code === code;
+function isArtifactsErrorWithCode<Failure>(failure: Failure, code: string): boolean {
+  return failure instanceof Error && 'code' in failure && failure.code === code;
 }
 
 export async function createArtifactsProject(input: {
+  organizationId: string;
+  sourceIntegrationId: number;
   owner: string;
   name: string;
   description?: string;
-  // GitHub id of the creating user; when present they become the linked
-  // organization's owner (member rows join on githubId).
-  creatorGithubId?: number;
-  // Process profile chosen on the new-project form; defaults in the data layer.
-  processProfile?: ProcessProfileKey;
 }): Promise<CreatedProject> {
   if (!PROJECT_SEGMENT.test(input.owner) || !PROJECT_SEGMENT.test(input.name)) {
     throw new Error(`owner and name must match ${PROJECT_SEGMENT}`);
+  }
+  const integration = await getIntegration(input.sourceIntegrationId);
+  if (
+    !integration ||
+    integration.organization_id !== input.organizationId ||
+    integration.kind !== 'artifact_store' ||
+    integration.provider !== 'artifacts' ||
+    !integration.enabled
+  ) {
+    throw new Error('the selected integration is not an enabled Artifacts store');
   }
 
   let created: Awaited<ReturnType<typeof env.GIT_ARTIFACTS.create>> | null = null;
@@ -68,39 +69,30 @@ export async function createArtifactsProject(input: {
       created = await env.GIT_ARTIFACTS.create(candidate, {
         description: input.description?.trim() || `turbodiff project ${input.owner}/${input.name}`,
       });
-    } catch (err) {
-      if (!isArtifactsErrorWithCode(err, 'ALREADY_EXISTS')) throw err;
+    } catch (failure) {
+      if (!isArtifactsErrorWithCode(failure, 'ALREADY_EXISTS')) throw failure;
     }
   }
-  if (!created) {
-    throw new Error(`an Artifacts repo already exists for every candidate name of ${input.name}`);
-  }
+  if (!created) throw new Error(`No available Artifacts repository name for ${input.name}`);
 
   try {
     await seedInitialCommit(created.name, created.remote, created.token, input);
-    const installation =
-      (await getArtifactsInstallationByLogin(input.owner)) ??
-      (await createArtifactsInstallation(input.owner));
-    const organizationId = await ensureOrganizationForInstallation(installation.id, input.owner);
-    if (input.creatorGithubId) await ensureOwnerMember(organizationId, input.creatorGithubId);
-    const repo = await createArtifactsRepository({
-      installationId: installation.id,
-      owner: input.owner,
-      name: input.name,
-      artifactsRepo: created.name,
-      defaultBranch: created.defaultBranch,
-      processProfile: input.processProfile,
-    });
+    await upsertRepositories(integration, [
+      {
+        externalId: created.name,
+        owner: input.owner,
+        name: input.name,
+        defaultBranch: created.defaultBranch,
+      },
+    ]);
+    const repo = await getRepositoryByExternalId(integration.id, created.name);
+    if (!repo) throw new Error('repository insert returned no row');
     return { repo, remote: created.remote };
-  } catch (err) {
-    // Compensate so a retry doesn't trip over a half-provisioned repo.
-    await env.GIT_ARTIFACTS.delete(created.name).catch((cleanupErr) => {
-      console.error(
-        `turbodiff: failed to clean up artifacts repo ${created?.name} after provisioning error:`,
-        cleanupErr,
-      );
+  } catch (failure) {
+    await env.GIT_ARTIFACTS.delete(created.name).catch((cleanupFailure) => {
+      console.error('turbodiff: failed to clean up Artifacts repository', cleanupFailure);
     });
-    throw err;
+    throw failure;
   }
 }
 
@@ -111,97 +103,61 @@ async function seedInitialCommit(
   input: { owner: string; name: string; description?: string },
 ): Promise<void> {
   const remote = artifactsWorkspaceRemote(remoteUrl, token);
-  const sandbox = runnerSandbox(`provision--${artifactsRepo}`.toLowerCase(), {
-    sleepAfter: '5m',
-  });
-  const dir = `/workspace/provision-${artifactsRepo}`;
-  const readme =
-    `# ${input.name}\n\n` +
-    `${input.description?.trim() || 'A turbodiff project.'}\n\n` +
-    `Created by [turbodiff](https://turbodiff.dev); hosted on Cloudflare Artifacts.\n`;
-
-  // First exec on a cold container pays the boot, hence the generous timeout.
-  const init = await sandbox.exec(
-    `rm -rf ${dir} && mkdir -p ${dir} && cd ${dir} && git init -q -b main && ` +
-      `git config user.name "turbodiff[bot]" && ` +
-      `git config user.email "turbodiff[bot]@users.noreply.github.com"`,
+  const sandbox = runnerSandbox(`provision--${artifactsRepo}`.toLowerCase(), { sleepAfter: '5m' });
+  const directory = `/workspace/provision-${artifactsRepo}`;
+  const readme = `# ${input.name}\n\n${input.description?.trim() || 'A turbodiff project.'}\n`;
+  const initialized = await sandbox.exec(
+    `rm -rf ${directory} && mkdir -p ${directory} && cd ${directory} && git init -q -b main && ` +
+      'git config user.name "turbodiff[bot]" && ' +
+      'git config user.email "turbodiff[bot]@users.noreply.github.com"',
     { timeout: 5 * 60_000 },
   );
-  if (!init.success) {
-    throw new Error(`provisioning workspace init failed: ${init.stderr.slice(0, 500)}`);
+  if (!initialized.success) {
+    throw new Error(`provisioning workspace init failed: ${initialized.stderr.slice(0, 500)}`);
   }
-  await sandbox.writeFile(`${dir}/README.md`, readme);
-  const push = await sandbox.exec(
-    `cd ${dir} && git add -A && git commit -q -m "Initialize ${input.name}" && ` +
+  await sandbox.writeFile(`${directory}/README.md`, readme);
+  const pushed = await sandbox.exec(
+    `cd ${directory} && git add -A && git commit -q -m "Initialize repository" && ` +
       `git ${remote.configFlags} push -q "${remote.authUrl}" main`,
     { env: remote.env, timeout: 2 * 60_000 },
   );
-  if (!push.success) {
-    throw new Error(
-      `initial commit push failed: ${redactSecrets(push.stderr, [token]).slice(0, 500)}`,
-    );
+  if (!pushed.success) {
+    throw new Error(`initial push failed: ${redactSecrets(pushed.stderr, [token]).slice(0, 500)}`);
   }
-  await sandbox.exec(`rm -rf ${dir}`).catch(() => {});
+  await sandbox.exec(`rm -rf ${directory}`).catch(() => undefined);
 }
 
-// A user-facing clone credential: the "deploy key" replacement that lets
-// anyone with access clone their turbodiff-hosted repo with plain git.
 export async function mintArtifactsCloneToken(
   repo: RepositoryRow,
   scope: 'read' | 'write',
   ttlSeconds: number,
 ): Promise<CloneCredential> {
-  if (repo.provider !== 'artifacts' || !repo.artifacts_repo) {
-    throw new Error(`${repo.owner}/${repo.name} is not an Artifacts-hosted repo`);
+  if (repo.source_provider !== 'artifacts' || !repo.external_id) {
+    throw new Error(`${repo.owner}/${repo.name} is not an Artifacts-hosted repository`);
   }
-  const handle = await env.GIT_ARTIFACTS.get(repo.artifacts_repo);
+  const handle = await env.GIT_ARTIFACTS.get(repo.external_id);
   const token = await handle.createToken(scope, ttlSeconds);
   return {
-    remote: artifactsRemoteUrl(repo.artifacts_repo),
+    remote: artifactsRemoteUrl(repo.external_id),
     token: token.plaintext,
     scope,
     expiresAt: token.expiresAt,
   };
 }
 
-// Applies one Artifacts event to PostgreSQL. Runs inside the ArtifactsEventsWorkflow;
-// must stay idempotent (workflow steps can be retried).
 export async function applyArtifactsEvent(event: ArtifactsEvent): Promise<string> {
+  const repo = await getRepositoryByProviderExternalId('artifacts', event.repoName);
   if (isArtifactsPushedEvent(event)) {
-    const pushedAt = event.eventTimestamp ?? new Date().toISOString();
-    const row = await recordArtifactsPush(event.repoName, pushedAt);
-    if (!row) return `push to untracked repo ${event.repoName} ignored`;
-    // Keep open change requests current when their source or target branch moves.
+    if (!repo) return `push to untracked repository ${event.repoName} ignored`;
     const branch = event.ref.replace(/^refs\/heads\//, '');
-    if (/^0+$/.test(event.after)) await deleteRepositoryRef(row.id, branch);
-    else await recordRepositoryRef(row.id, branch, event.after, pushedAt);
-    let refreshed = 0;
-    for (const cr of await listChangeRequestsForRepo(row.id, 'open')) {
-      if (cr.source_branch !== branch && cr.target_branch !== branch) continue;
-      try {
-        const updated = await refreshChangeRequest(row, cr);
-        refreshed += 1;
-        if (cr.source_branch === branch && row.review_on_push && updated.change_id) {
-          await scheduleChangeReview({
-            changeId: updated.change_id,
-            trigger: 'synchronize',
-            actor: 'artifacts.push',
-            idempotencyKey: `native-review:${updated.change_id}:synchronize:${updated.source_head ?? event.after}`,
-          });
-        }
-      } catch (err) {
-        console.error(`turbodiff: push-triggered refresh of CR ${cr.id} failed:`, err);
-      }
-    }
-    return `recorded push to ${row.owner}/${row.name} (${event.ref}); ${refreshed} CR(s) refreshed`;
+    if (/^0+$/.test(event.after)) await deleteRepositoryRef(repo.id, branch);
+    else await recordRepositoryRef(repo.id, branch, event.after);
+    return `recorded push to ${repo.owner}/${repo.name} (${event.ref})`;
   }
   if (event.type === ARTIFACTS_REPO_DELETED) {
-    const row = await getRepoByArtifactsName(event.repoName);
-    if (!row || row.provider !== 'artifacts') return `delete of untracked repo ${event.repoName}`;
-    // The hosted repo is gone (operator delete); drop the stale row so the
-    // dashboard and factory stop offering it.
-    await removeRepositories([row.id]);
-    return `removed repository row for deleted repo ${row.owner}/${row.name}`;
+    if (!repo) return `delete of untracked repository ${event.repoName} ignored`;
+    await removeRepositories([repo.id]);
+    return `removed repository row for ${repo.owner}/${repo.name}`;
   }
   return `no handler for ${event.type}`;
 }

@@ -1,8 +1,7 @@
 import { env } from 'cloudflare:workers';
 import {
-  deletePushSubscriptionById,
-  getPlan,
-  listPushSubscriptionsForUser,
+  deletePushSubscriptionByEndpoint,
+  listPushSubscriptions,
   type PushSubscriptionRow,
 } from '../../data/db.ts';
 
@@ -191,24 +190,21 @@ export async function sendPushToSubscription(
   }
 }
 
-// Notification failures do not affect plan state.
-export async function notifyPlanUsers(
-  planId: number,
+export async function notifyUsers(
+  userIds: readonly string[],
   payload: { title: string; body: string; url: string },
 ): Promise<void> {
   try {
-    const plan = await getPlan(planId);
-    if (!plan || plan.created_by_id === null) return;
-    const subs = await listPushSubscriptionsForUser(plan.created_by_id);
+    const subs = await listPushSubscriptions([...new Set(userIds)]);
     const results = await Promise.all(
       subs.map(async (sub) => ({ sub, result: await sendPushToSubscription(sub, payload) })),
     );
     await Promise.all(
       results
         .filter(({ result }) => result === 'gone')
-        .map(({ sub }) => deletePushSubscriptionById(sub.id)),
+        .map(({ sub }) => deletePushSubscriptionByEndpoint(sub.endpoint)),
     );
   } catch (err) {
-    console.error('turbodiff: notifyPlanUsers failed for plan', planId, err);
+    console.error('turbodiff: push notification failed', err);
   }
 }

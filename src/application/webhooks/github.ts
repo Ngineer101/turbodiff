@@ -1,391 +1,243 @@
-import { env } from 'cloudflare:workers';
+import { z } from 'zod';
 import {
-  addRepositories,
-  countFixAttempts,
-  deleteInstallation,
-  ensureBuiltinAgents,
-  getFeatureByRepoPr,
-  getInstallation,
-  getRepoById,
+  createFactoryRunWithStage,
+  disableRepositoriesForIntegration,
+  ensureGithubOrganization,
+  findAuthUserByGithubId,
+  getIntegration,
+  getIntegrationByExternalAccount,
+  getRepositoryByExternalId,
+  getRepositoryByProviderExternalId,
   removeRepositories,
-  setInstallationSuspended,
-  updateFeature,
+  updateIntegration,
   upsertChange,
-  changeProviderKey,
-  upsertInstallation,
+  upsertExternalIntegration,
+  upsertRepositories,
 } from '../../data/db.ts';
-import { FIX_MAX_ATTEMPTS, type FixQueueMessage } from '../../shared/factory-messages.ts';
+import { isJsonObject, type JsonObject, type JsonValue } from '../../shared/json.ts';
 import { enqueueFactoryMessage } from '../factory/queue.ts';
-import { ensureOrganizationForInstallation, ensureOwnerMember } from '../auth/access-control.ts';
-import type { JsonValue } from '../../shared/json.ts';
-import type { ChangeCapability, ChangeOrigin } from '../../domain/lifecycle-contract.ts';
-import { scheduleChangeReview } from '../factory/lifecycle.ts';
-import { isDeliveryProcessProfile } from '../../domain/process-profiles.ts';
+import { REVIEW_FLOW } from '../factory/flows.ts';
+import { syncGithubChangeRevision } from '../changes/github-revision.ts';
 
-interface WebhookAccount {
-  login: string;
-  id: number;
-  type: string;
-}
+const webhookRepository = z.object({
+  id: z.number().int().positive(),
+  name: z.string(),
+  full_name: z.string(),
+  default_branch: z.string().optional(),
+});
+const installationEvent = z.object({
+  action: z.string(),
+  installation: z.object({
+    id: z.number().int().positive(),
+    account: z.object({ login: z.string(), id: z.number().int().positive(), type: z.string() }),
+  }),
+  repositories: z.array(webhookRepository).optional(),
+  repositories_added: z.array(webhookRepository).optional(),
+  repositories_removed: z.array(webhookRepository).optional(),
+  sender: z.object({ id: z.number().int().positive(), login: z.string() }).optional(),
+});
+const pullRequestEvent = z.object({
+  action: z.string(),
+  number: z.number().int().positive(),
+  installation: z.object({ id: z.number().int().positive() }).optional(),
+  pull_request: z.object({
+    draft: z.boolean(),
+    html_url: z.string(),
+    merged: z.boolean().optional(),
+    title: z.string().optional(),
+    user: z.object({ type: z.string() }).nullable().optional(),
+    head: z.object({ ref: z.string(), sha: z.string() }).optional(),
+    base: z.object({ ref: z.string(), sha: z.string() }).optional(),
+  }),
+  repository: webhookRepository,
+});
+const repositoryEvent = z.object({
+  action: z.string(),
+  installation: z.object({ id: z.number().int().positive() }).optional(),
+  repository: webhookRepository,
+});
 
-interface WebhookRepoRef {
-  id: number;
-  name: string;
-  full_name: string;
-}
+type WebhookRepository = z.infer<typeof webhookRepository>;
+type InstallationEvent = z.infer<typeof installationEvent>;
+type PullRequestEvent = z.infer<typeof pullRequestEvent>;
+type RepositoryEvent = z.infer<typeof repositoryEvent>;
 
-interface InstallationEvent {
-  action: string;
-  installation: { id: number; account: WebhookAccount };
-  repositories?: WebhookRepoRef[];
-  repositories_added?: WebhookRepoRef[];
-  repositories_removed?: WebhookRepoRef[];
-  // Present on the initial `installation` delivery (not on
-  // installation_repositories) — the GitHub user who installed the app.
-  sender?: { id: number; login: string };
-}
-
-interface PullRequestEvent {
-  action: string;
-  number: number;
-  pull_request: {
-    draft: boolean;
-    html_url: string;
-    merged?: boolean;
-    state?: string;
-    title?: string;
-    updated_at?: string;
-    maintainer_can_modify?: boolean;
-    user?: { login: string; type: string } | null;
-    head?: { ref: string; sha: string; repo: { full_name: string } | null };
-    base?: { ref: string; sha: string };
-  };
-  repository: { id: number; full_name: string };
-}
-
-interface PullRequestReviewEvent {
-  action: string;
-  review: {
-    id: number;
-    state: string; // lowercase in webhook payloads: changes_requested | approved | commented
-    user: { login: string; type: string } | null;
-  };
-  pull_request: { number: number; html_url: string; state: string; draft: boolean };
-  repository: { id: number; full_name: string };
-}
-
-interface WorkflowRunEvent {
-  action: string;
-  workflow_run: { id: number; conclusion: string | null; pull_requests: { number: number }[] };
-  repository: { id: number; full_name: string };
-}
-
-interface RepositoryEvent {
-  action: string;
-  repository: WebhookRepoRef;
-}
-
-// A flat type avoids recursive response-type instantiation in Hono.
-type HandlerBody = Record<string, string | number | boolean | string[]>;
-
+type HandlerBody = Record<string, string | number | boolean>;
 export interface WebhookHandlerResult {
   body: HandlerBody;
-  status?: 502;
+  status?: 400 | 502;
 }
-
-export type FixEnqueuer = (message: FixQueueMessage) => Promise<void>;
-
 export interface GithubWebhookDependencies {
-  enqueueFix?: FixEnqueuer;
-  enqueueLifecycle?: typeof enqueueFactoryMessage;
+  enqueueFactory?: typeof enqueueFactoryMessage;
 }
 
-export function createGithubWebhookService(dependencies: GithubWebhookDependencies = {}) {
-  const enqueueFix: FixEnqueuer =
-    dependencies.enqueueFix ??
-    (async (message: FixQueueMessage) => {
-      await enqueueFactoryMessage(message);
-    });
-
+const ownerAndName = (repository: WebhookRepository) => {
+  const [owner = '', name = repository.name] = repository.full_name.split('/');
   return {
-    handle(event: string, payload: JsonValue): Promise<WebhookHandlerResult> {
-      return handleEvent(event, payload, enqueueFix, dependencies.enqueueLifecycle);
-    },
+    externalId: String(repository.id),
+    owner,
+    name,
+    defaultBranch: repository.default_branch,
   };
-}
+};
 
-function verifiedEventPayload<T>(payload: JsonValue): T {
-  // SAFETY: the verified GitHub event name selects the payload schema.
-  return payload as T;
-}
+const installationConfig = (event: InstallationEvent): JsonObject => ({
+  accountId: event.installation.account.id,
+  accountLogin: event.installation.account.login,
+  accountType: event.installation.account.type,
+  installerGithubId: event.sender?.id ?? null,
+  suspended: event.action === 'suspend',
+});
 
-async function handleEvent(
-  event: string,
-  payload: JsonValue,
-  enqueueFix: FixEnqueuer,
-  enqueueLifecycle?: typeof enqueueFactoryMessage,
-): Promise<WebhookHandlerResult> {
-  switch (event) {
-    case 'installation':
-      return handleInstallation(verifiedEventPayload<InstallationEvent>(payload));
-    case 'installation_repositories':
-      return handleInstallationRepositories(verifiedEventPayload<InstallationEvent>(payload));
-    case 'pull_request':
-      return handlePullRequest(verifiedEventPayload<PullRequestEvent>(payload), enqueueLifecycle);
-    case 'pull_request_review':
-      return handlePullRequestReview(
-        verifiedEventPayload<PullRequestReviewEvent>(payload),
-        enqueueFix,
-      );
-    case 'workflow_run':
-      return handleWorkflowRun(verifiedEventPayload<WorkflowRunEvent>(payload), enqueueFix);
-    case 'repository': {
-      // Keep owner/name current when a repo is renamed or transferred.
-      const p = verifiedEventPayload<RepositoryEvent>(payload);
-      if (p.action === 'renamed' || p.action === 'transferred') {
-        const row = await getRepoById(p.repository.id);
-        if (row) await addRepositories(row.installation_id, [p.repository]);
-        return { body: { ok: true, updated: p.repository.full_name } };
-      }
-      return { body: { ok: true, ignored: p.action } };
+async function handleInstallation(event: InstallationEvent): Promise<WebhookHandlerResult> {
+  const externalId = String(event.installation.id);
+  if (event.action === 'deleted') {
+    const integration = await getIntegrationByExternalAccount('github', externalId);
+    if (integration) {
+      await updateIntegration(integration.id, {
+        name: integration.name,
+        config: installationConfig(event),
+        enabled: false,
+      });
+      await disableRepositoriesForIntegration(integration.id);
     }
-    default:
-      return { body: { ok: true, ignored: event } };
+    return { body: { ok: true, removed: externalId } };
   }
+
+  let integration = await getIntegrationByExternalAccount('github', externalId);
+  if (!integration) {
+    const ownerUserId = event.sender ? await findAuthUserByGithubId(event.sender.id) : null;
+    const organization = await ensureGithubOrganization({
+      accountId: event.installation.account.id,
+      accountLogin: event.installation.account.login,
+      ownerUserId,
+    });
+    integration = await upsertExternalIntegration({
+      organizationId: organization.id,
+      kind: 'scm',
+      provider: 'github',
+      name: `github-${event.installation.account.login.toLowerCase()}`,
+      externalAccountId: externalId,
+      config: installationConfig(event),
+      enabled: event.action !== 'suspend',
+    });
+  } else {
+    await updateIntegration(integration.id, {
+      name: integration.name,
+      config: installationConfig(event),
+      enabled: event.action !== 'suspend',
+    });
+    integration = (await getIntegration(integration.id)) ?? integration;
+  }
+  await upsertRepositories(
+    integration,
+    (event.repositories ?? event.repositories_added ?? []).map(ownerAndName),
+  );
+  for (const repository of event.repositories_removed ?? []) {
+    const row = await getRepositoryByExternalId(integration.id, String(repository.id));
+    if (row) await removeRepositories([row.id]);
+  }
+  return { body: { ok: true, integration: integration.id } };
 }
 
-async function handleInstallation(p: InstallationEvent): Promise<WebhookHandlerResult> {
-  switch (p.action) {
-    case 'created':
-      await upsertInstallation(p.installation.id, p.installation.account, p.sender?.id);
-      await addRepositories(p.installation.id, p.repositories ?? []);
-      await ensureBuiltinAgents(p.installation.id);
-      if (p.installation.account.type === 'Organization') {
-        const orgId = await ensureOrganizationForInstallation(
-          p.installation.id,
-          p.installation.account.login,
-        );
-        if (p.sender) await ensureOwnerMember(orgId, p.sender.id);
-      }
-      return { body: { ok: true, installed: p.installation.account.login } };
-    case 'deleted':
-      await deleteInstallation(p.installation.id);
-      return { body: { ok: true, uninstalled: p.installation.account.login } };
-    case 'suspend':
-    case 'unsuspend':
-      await setInstallationSuspended(p.installation.id, p.action === 'suspend');
-      return { body: { ok: true, [p.action]: p.installation.account.login } };
-    default:
-      return { body: { ok: true, ignored: p.action } };
+async function handleRepository(event: RepositoryEvent): Promise<WebhookHandlerResult> {
+  if (!event.installation || !['renamed', 'transferred', 'edited'].includes(event.action)) {
+    return { body: { ok: true, ignored: event.action } };
   }
-}
-
-async function handleInstallationRepositories(p: InstallationEvent): Promise<WebhookHandlerResult> {
-  // Recover if the original installation event was missed.
-  await upsertInstallation(p.installation.id, p.installation.account);
-  if (p.installation.account.type === 'Organization') {
-    await ensureOrganizationForInstallation(p.installation.id, p.installation.account.login);
-  }
-  await addRepositories(p.installation.id, p.repositories_added ?? []);
-  await removeRepositories((p.repositories_removed ?? []).map((r) => r.id));
-  return {
-    body: {
-      ok: true,
-      added: (p.repositories_added ?? []).length,
-      removed: (p.repositories_removed ?? []).length,
-    },
-  };
-}
-
-function githubChangeCapabilities(p: PullRequestEvent): ChangeCapability[] {
-  const capabilities: ChangeCapability[] = [
-    'read_change',
-    'publish_review',
-    'publish_check',
-    'merge',
-  ];
-  // Fork pull requests are reviewable but not assumed writable.
-  if (p.pull_request.head?.repo?.full_name === p.repository.full_name) {
-    capabilities.push('write_head');
-  }
-  return capabilities;
-}
-
-function githubChangeOrigin(p: PullRequestEvent, factoryFeature: boolean): ChangeOrigin {
-  if (factoryFeature || p.pull_request.head?.ref.startsWith('turbodiff/')) return 'factory';
-  if (p.pull_request.user?.type === 'Bot') return 'automation';
-  return 'human';
+  const integration = await getIntegrationByExternalAccount(
+    'github',
+    String(event.installation.id),
+  );
+  if (!integration) return { body: { ok: true, skipped: 'integration not tracked' } };
+  await upsertRepositories(integration, [ownerAndName(event.repository)]);
+  return { body: { ok: true, repository: event.repository.full_name } };
 }
 
 async function handlePullRequest(
-  p: PullRequestEvent,
-  enqueueLifecycle?: typeof enqueueFactoryMessage,
+  event: PullRequestEvent,
+  enqueue: typeof enqueueFactoryMessage,
 ): Promise<WebhookHandlerResult> {
-  const repo = await getRepoById(p.repository.id);
-  if (!repo) return { body: { ok: true, skipped: 'repo not tracked' } };
-  const feature = await getFeatureByRepoPr(repo.id, p.number);
+  const repository = await getRepositoryByProviderExternalId('github', String(event.repository.id));
+  if (!repository) return { body: { ok: true, skipped: 'repository not tracked' } };
+  const integration = await getIntegration(repository.source_integration_id);
+  if (!integration || !integration.enabled)
+    return { body: { ok: true, skipped: 'integration disabled' } };
+  const status =
+    event.action === 'closed' ? (event.pull_request.merged ? 'merged' : 'closed') : 'open';
   const change = await upsertChange({
-    repositoryId: repo.id,
-    providerKey: changeProviderKey('github', p.number),
-    number: p.number,
-    origin: githubChangeOrigin(p, feature !== null),
-    title: p.pull_request.title ?? feature?.title ?? `Pull request #${p.number}`,
-    externalUrl: p.pull_request.html_url,
-    sourceBranch: p.pull_request.head?.ref ?? feature?.branch ?? `refs/pull/${p.number}/head`,
-    targetBranch: p.pull_request.base?.ref ?? repo.default_branch ?? 'main',
-    status: p.action === 'closed' ? (p.pull_request.merged ? 'merged' : 'closed') : 'open',
-    sourceHead: p.pull_request.head?.sha ?? null,
-    targetHead: p.pull_request.base?.sha ?? null,
-    draft: p.pull_request.draft,
-    capabilities: githubChangeCapabilities(p),
-    providerUpdatedAt: p.pull_request.updated_at ?? null,
+    organizationId: repository.organization_id,
+    repositoryId: repository.id,
+    providerIntegrationId: integration.id,
+    providerKey: `pull_request:${event.number}`,
+    number: event.number,
+    title: event.pull_request.title ?? `Pull request #${event.number}`,
+    sourceRef: event.pull_request.head?.ref ?? `refs/pull/${event.number}/head`,
+    targetRef: event.pull_request.base?.ref ?? repository.default_branch ?? 'main',
+    url: event.pull_request.html_url,
+    origin: event.pull_request.head?.ref.startsWith('turbodiff/')
+      ? 'factory'
+      : event.pull_request.user?.type === 'Bot'
+        ? 'automation'
+        : 'human',
+    status,
   });
-  if (feature) await updateFeature(feature.id, { changeId: change.id });
-
-  if (p.action === 'closed') {
-    if (!feature) {
-      return {
-        body: {
-          ok: true,
-          change: change.id,
-          status: p.pull_request.merged ? 'merged' : 'closed',
-        },
-      };
-    }
-    // Preserve the more specific status set by the abandon action.
-    if (feature.status === 'abandoned') {
-      return { body: { ok: true, feature: feature.id, ignored: 'already abandoned' } };
-    }
-    await updateFeature(feature.id, { status: p.pull_request.merged ? 'merged' : 'pr_closed' });
-    return {
-      body: {
-        ok: true,
-        change: change.id,
-        feature: feature.id,
-        status: p.pull_request.merged ? 'merged' : 'pr_closed',
-      },
-    };
-  }
-  if (p.action !== 'opened' && p.action !== 'ready_for_review' && p.action !== 'synchronize') {
-    return { body: { ok: true, ignored: p.action } };
-  }
-  if (feature && isDeliveryProcessProfile(repo.process_profile)) {
-    return { body: { ok: true, change: change.id, skipped: 'factory lifecycle owns delivery' } };
-  }
-  if (p.action === 'synchronize' && !repo.review_on_push) {
-    return { body: { ok: true, skipped: 'push reviews disabled for repo' } };
-  }
-
-  const scheduled = await scheduleChangeReview({
-    changeId: change.id,
-    trigger: p.action,
-    idempotencyKey: [
-      'github-review',
-      change.id,
-      p.action,
-      change.source_head ?? change.provider_updated_at ?? 'unknown-head',
-    ].join(':'),
-    enqueue: enqueueLifecycle,
+  if (status !== 'open' || event.pull_request.draft)
+    return { body: { ok: true, change: change.id } };
+  const settings = isJsonObject(repository.settings) ? repository.settings : {};
+  if (event.action === 'synchronize' && settings.reviewOnPush !== true)
+    return { body: { ok: true, skipped: 'push reviews disabled' } };
+  if (!['opened', 'ready_for_review', 'synchronize'].includes(event.action))
+    return { body: { ok: true, ignored: event.action } };
+  const revision = event.pull_request.head?.sha ?? 'unknown';
+  if (revision !== 'unknown') await syncGithubChangeRevision(repository, change, revision);
+  const key = `github-review:${change.id}:${revision}`;
+  const created = await createFactoryRunWithStage(
+    {
+      organizationId: change.organization_id,
+      flowKey: REVIEW_FLOW.key,
+      flowVersion: REVIEW_FLOW.version,
+      changeId: change.id,
+      trigger: event.action,
+      idempotencyKey: key,
+    },
+    {
+      stageKey: REVIEW_FLOW.initialStage,
+      idempotencyKey: `${key}:${REVIEW_FLOW.initialStage}`,
+    },
+  );
+  await enqueue({
+    kind: 'run_factory',
+    factoryRunId: created.factoryRun.id,
+    stageRunId: created.stageRun.id,
   });
-  if (!scheduled.stageRunId) {
-    const skipped =
-      scheduled.decision.kind === 'ignore' || scheduled.decision.kind === 'handoff'
-        ? scheduled.decision.reason
-        : scheduled.decision.kind;
-    return { body: { ok: true, change: change.id, run: scheduled.runId, skipped } };
-  }
+  return { body: { ok: true, change: change.id, factoryRun: created.factoryRun.id } };
+}
+
+export function createGithubWebhookService(dependencies: GithubWebhookDependencies = {}) {
+  const enqueue = dependencies.enqueueFactory ?? enqueueFactoryMessage;
   return {
-    body: {
-      ok: true,
-      review: `${p.repository.full_name}#${p.number}`,
-      run: scheduled.runId,
-      stage_run: scheduled.stageRunId,
+    async handle(name: string, payload: JsonValue): Promise<WebhookHandlerResult> {
+      if (!isJsonObject(payload))
+        return { body: { ok: false, error: 'invalid payload' }, status: 400 };
+      if (name === 'installation' || name === 'installation_repositories') {
+        const parsed = installationEvent.safeParse(payload);
+        return parsed.success
+          ? handleInstallation(parsed.data)
+          : { body: { ok: false, error: 'invalid installation payload' }, status: 400 };
+      }
+      if (name === 'repository') {
+        const parsed = repositoryEvent.safeParse(payload);
+        return parsed.success
+          ? handleRepository(parsed.data)
+          : { body: { ok: false, error: 'invalid repository payload' }, status: 400 };
+      }
+      if (name === 'pull_request') {
+        const parsed = pullRequestEvent.safeParse(payload);
+        return parsed.success
+          ? handlePullRequest(parsed.data, enqueue)
+          : { body: { ok: false, error: 'invalid pull request payload' }, status: 400 };
+      }
+      return { body: { ok: true, ignored: name } };
     },
   };
-}
-
-async function handlePullRequestReview(
-  p: PullRequestReviewEvent,
-  enqueueFix: FixEnqueuer,
-): Promise<WebhookHandlerResult> {
-  if (p.action !== 'submitted') return { body: { ok: true, ignored: p.action } };
-  if (p.review.state !== 'changes_requested') {
-    return { body: { ok: true, ignored: `review state ${p.review.state}` } };
-  }
-  const botLogin = `${env.GITHUB_APP_SLUG || 'turbodiff'}[bot]`;
-  if (p.review.user?.type !== 'Bot' || p.review.user.login !== botLogin) {
-    return { body: { ok: true, ignored: 'not our review' } };
-  }
-  if (p.pull_request.state !== 'open' || p.pull_request.draft) {
-    return { body: { ok: true, skipped: 'PR closed or draft' } };
-  }
-
-  const repo = await getRepoById(p.repository.id);
-  if (!repo) return { body: { ok: true, skipped: 'repo not tracked' } };
-  if (repo.process_profile !== 'legacy_factory') {
-    return { body: { ok: true, skipped: 'repair is owned by the lifecycle coordinator' } };
-  }
-  if (!repo.enabled || !repo.auto_fix) {
-    return { body: { ok: true, skipped: 'auto-fix disabled for repo' } };
-  }
-  const installation = await getInstallation(repo.installation_id);
-  if (!installation || installation.suspended) {
-    return { body: { ok: true, skipped: 'installation missing or suspended' } };
-  }
-  const attempts = await countFixAttempts(repo.id, p.pull_request.number);
-  if (attempts >= FIX_MAX_ATTEMPTS) {
-    return { body: { ok: true, skipped: `fix cap reached (${attempts})` } };
-  }
-
-  await enqueueFix({
-    kind: 'fix',
-    repoId: repo.id,
-    prNumber: p.pull_request.number,
-    trigger: 'blocking_review',
-  });
-  return { body: { ok: true, fix_enqueued: `${p.repository.full_name}#${p.pull_request.number}` } };
-}
-
-async function handleWorkflowRun(
-  p: WorkflowRunEvent,
-  enqueueFix: FixEnqueuer,
-): Promise<WebhookHandlerResult> {
-  if (p.action !== 'completed') return { body: { ok: true, ignored: p.action } };
-  if (p.workflow_run.conclusion !== 'failure') {
-    return { body: { ok: true, ignored: `conclusion ${p.workflow_run.conclusion}` } };
-  }
-  const prNumber = p.workflow_run.pull_requests[0]?.number;
-  if (!prNumber) return { body: { ok: true, skipped: 'no associated pull request' } };
-
-  const repo = await getRepoById(p.repository.id);
-  if (!repo) return { body: { ok: true, skipped: 'repo not tracked' } };
-  if (repo.process_profile !== 'legacy_factory') {
-    return { body: { ok: true, skipped: 'repair is owned by the lifecycle coordinator' } };
-  }
-  if (!repo.enabled || !repo.auto_fix) {
-    return { body: { ok: true, skipped: 'auto-fix disabled for repo' } };
-  }
-  const installation = await getInstallation(repo.installation_id);
-  if (!installation || installation.suspended) {
-    return { body: { ok: true, skipped: 'installation missing or suspended' } };
-  }
-
-  const feature = await getFeatureByRepoPr(repo.id, prNumber);
-  if (!feature || feature.status !== 'pr_opened') {
-    return { body: { ok: true, skipped: 'not an open factory PR' } };
-  }
-
-  const attempts = await countFixAttempts(repo.id, prNumber);
-  if (attempts >= FIX_MAX_ATTEMPTS) {
-    return { body: { ok: true, skipped: `fix cap reached (${attempts})` } };
-  }
-
-  await enqueueFix({
-    kind: 'fix',
-    repoId: repo.id,
-    prNumber,
-    trigger: 'ci_failure',
-    workflowRunId: p.workflow_run.id,
-  });
-  return { body: { ok: true, fix_enqueued: `${p.repository.full_name}#${prNumber}` } };
 }

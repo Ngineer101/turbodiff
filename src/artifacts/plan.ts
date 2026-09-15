@@ -55,6 +55,11 @@ const planArtifactBaseSchema = z
   })
   .strict();
 
+export const storedPlanArtifactSchema = planArtifactBaseSchema.transform((artifact) => ({
+  ...artifact,
+  summary: artifact.summary ?? null,
+}));
+
 export function planArtifactSchema(tier: PlanningTier) {
   const acceptanceLimit = tier === 'trivial' ? 4 : 8;
   return planArtifactBaseSchema
@@ -79,6 +84,16 @@ export function planArtifactSchema(tier: PlanningTier) {
 }
 
 export type PlanArtifact = z.output<ReturnType<typeof planArtifactSchema>>;
+
+export const acceptanceContractArtifactSchema = z
+  .object({
+    kind: z.literal('acceptance-contract'),
+    planArtifactId: z.number().int().positive(),
+    criteria: z.array(text(2_000)).max(8),
+  })
+  .strict();
+
+export type AcceptanceContractArtifact = z.infer<typeof acceptanceContractArtifactSchema>;
 
 export const planFeedbackSchema = z
   .array(

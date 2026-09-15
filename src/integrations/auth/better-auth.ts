@@ -218,13 +218,6 @@ function createAuth(database: Database) {
       organization({
         ac: orgAc,
         roles: orgRoles,
-        schema: {
-          organization: {
-            additionalFields: {
-              installationId: { type: 'number', required: true },
-            },
-          },
-        },
         sendInvitationEmail: async (data) => {
           // SAFETY: better-auth's static user type erases the additionalFields
           // (login, githubId) configured on the user schema below; every user

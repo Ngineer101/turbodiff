@@ -1,25 +1,55 @@
-import { computeNextRunAt, type ScheduleInput } from '../../domain/automation-schedule.ts';
-import { claimAutomation, listDueAutomations } from '../../data/db.ts';
+import {
+  claimAutomation,
+  createFactoryRunWithStage,
+  createWorkItem,
+  listDueAutomations,
+} from '../../data/db.ts';
+import { withTransaction } from '../../data/database.ts';
 import { enqueueFactoryMessage } from '../factory/queue.ts';
+import { AUTOMATION_FLOW } from '../factory/flows.ts';
+import { nextAutomationRunAt } from '../../domain/automation-schedule.ts';
 
 export async function pollAutomations(): Promise<void> {
   const now = new Date();
-  const nowIso = now.toISOString();
-  const due = await listDueAutomations(nowIso);
-  for (const automation of due) {
+  for (const automation of await listDueAutomations(now.toISOString())) {
+    const nextRunAt = nextAutomationRunAt(automation.schedule, now);
+    if (!nextRunAt || !automation.next_run_at) continue;
+    const created = await withTransaction(async () => {
+      if (!(await claimAutomation(automation.id, automation.next_run_at!, nextRunAt))) return null;
+      const workItem = await createWorkItem({
+        organizationId: automation.organization_id,
+        origin: 'automation',
+        title: automation.name,
+        description: JSON.stringify(automation.input_template),
+        createdByUserId: automation.created_by_user_id,
+        repositoryIds: automation.repository_id ? [automation.repository_id] : [],
+      });
+      const key = `automation:${automation.id}:${automation.next_run_at}`;
+      return createFactoryRunWithStage(
+        {
+          organizationId: automation.organization_id,
+          flowKey: AUTOMATION_FLOW.key,
+          flowVersion: AUTOMATION_FLOW.version,
+          workItemId: workItem.id,
+          automationId: automation.id,
+          trigger: 'schedule',
+          idempotencyKey: key,
+        },
+        {
+          stageKey: AUTOMATION_FLOW.initialStage,
+          idempotencyKey: `${key}:${AUTOMATION_FLOW.initialStage}`,
+        },
+      );
+    });
+    if (!created) continue;
     try {
-      const schedule: ScheduleInput = {
-        // SAFETY: persisted schedule kinds are validated before writes.
-        kind: automation.schedule_kind as ScheduleInput['kind'],
-        timeOfDay: automation.time_of_day,
-        dayOfWeek: automation.day_of_week,
-      };
-      const nextRunAt = computeNextRunAt(schedule, now);
-      const claimed = await claimAutomation(automation.id, nextRunAt, nowIso);
-      if (!claimed) continue; // another poll already claimed this one
-      await enqueueFactoryMessage({ kind: 'automation', automationId: automation.id });
-    } catch (err) {
-      console.error(`turbodiff: automation poll failed for automation ${automation.id}:`, err);
+      await enqueueFactoryMessage({
+        kind: 'run_factory',
+        factoryRunId: created.factoryRun.id,
+        stageRunId: created.stageRun.id,
+      });
+    } catch (error) {
+      console.warn('turbodiff: automation factory enqueue deferred to recovery', error);
     }
   }
 }

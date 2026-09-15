@@ -1,50 +1,53 @@
 import {
-  addRepositories,
-  claimInstallationRepoSync,
-  finishInstallationRepoSync,
-  getInstallation,
-  listRepositoryIdsForInstallation,
+  finishIntegrationSync,
+  getIntegration,
+  listRepositories,
   removeRepositories,
-  upsertInstallation,
+  upsertRepositories,
 } from '../../data/db.ts';
-import { installationDetails, installationToken } from '../../integrations/github/app.ts';
+import { installationToken } from '../../integrations/github/app.ts';
 import { githubPaginate } from '../../integrations/github/client.ts';
 
-export async function syncInstallationRepos(installationId: number): Promise<void> {
-  // Artifacts installations have no GitHub repository source to reconcile.
-  const installation = await getInstallation(installationId);
-  if (installation?.provider === 'artifacts') return;
-  if (!installation) {
-    const remote = await installationDetails(installationId);
-    await upsertInstallation(installationId, remote.account);
-  }
-  if (!(await claimInstallationRepoSync(installationId))) return;
-
+export async function syncGithubRepositories(integrationId: number): Promise<void> {
+  const integration = await getIntegration(integrationId);
+  if (!integration || integration.provider !== 'github' || !integration.external_account_id) return;
   try {
-    const token = await installationToken(installationId);
-    const live = await githubPaginate<
-      { repositories: { id: number; name: string; full_name: string }[] },
-      { id: number; name: string; full_name: string }
+    const token = await installationToken(Number(integration.external_account_id));
+    const remote = await githubPaginate<
+      { repositories: { id: number; name: string; full_name: string; default_branch: string }[] },
+      { id: number; name: string; full_name: string; default_branch: string }
     >(token, '/installation/repositories?per_page=100', (page) => page.repositories, {
-      // Reconciliation must see the complete repo list: a capped listing would
-      // permanently wedge large installations.
       maxPages: Infinity,
     });
-
-    await addRepositories(installationId, live);
-    const liveIds = new Set(live.map((r) => r.id));
-    const stale = (await listRepositoryIdsForInstallation(installationId)).filter(
-      (id) => !liveIds.has(id),
+    await upsertRepositories(
+      integration,
+      remote.map((repository) => {
+        const [owner = '', name = repository.name] = repository.full_name.split('/');
+        return {
+          externalId: String(repository.id),
+          owner,
+          name,
+          defaultBranch: repository.default_branch,
+        };
+      }),
     );
-    if (stale.length > 0) {
-      console.log(
-        `turbodiff: repo sync removed ${stale.length} stale repos for installation ${installationId}`,
-      );
-      await removeRepositories(stale);
-    }
-    await finishInstallationRepoSync(installationId, true);
-  } catch (err) {
-    await finishInstallationRepoSync(installationId, false);
-    throw err;
+    const live = new Set(remote.map((repository) => String(repository.id)));
+    const stale = (await listRepositories([integration.organization_id]))
+      .filter(
+        (repository) =>
+          repository.source_integration_id === integration.id &&
+          repository.external_id &&
+          !live.has(repository.external_id),
+      )
+      .map((repository) => repository.id);
+    await removeRepositories(stale);
+    await finishIntegrationSync(integration.id, null);
+  } catch (failure) {
+    await finishIntegrationSync(
+      integration.id,
+      null,
+      failure instanceof Error ? failure.message : 'sync failed',
+    );
+    throw failure;
   }
 }
