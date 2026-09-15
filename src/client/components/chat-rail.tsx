@@ -25,8 +25,9 @@ import {
 } from 'react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { toast } from 'sonner';
-import type { ApiChatList, ApiChatMessage, ApiMe } from '../../shared/api-types.ts';
-import { api, ApiError } from '../lib/api.ts';
+import type { ApiChatList, ApiChatMessage, ApiMe } from '../types.ts';
+import { ApiError } from '../lib/api.ts';
+import { sendDeliveryMessage } from '../lib/backend.ts';
 import {
   agoShort,
   chatLedger,
@@ -170,8 +171,7 @@ function useChat(featureId: number, visible: boolean): ChatState {
   }, [body, featureId]);
 
   const send = useMutation({
-    mutationFn: (text: string) =>
-      api.post(`/api/factory/features/${featureId}/chat`, { body: text }),
+    mutationFn: (text: string) => sendDeliveryMessage(featureId, text),
     // The message appears in the transcript on Send; 'queued' status also
     // flips the in-flight state, so the working pill reacts instantly too.
     onMutate: async (text) => {

@@ -1,4 +1,4 @@
-import type { ApiProcessProfile } from '../../shared/api-types.ts';
+import type { ApiProcessProfile } from '../types.ts';
 
 // The process-profile ladder as the UI presents it: a single choice per repo,
 // in escalating order of autonomy, with a one-line description. `artifactsOnly`

@@ -13,9 +13,10 @@ import {
 import { lazy, Suspense, useMemo, useRef, useState } from 'react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { toast } from 'sonner';
-import type { ApiFileSave, ApiRepoCode } from '../../shared/api-types.ts';
+import type { ApiRepoCode } from '../types.ts';
 import { binaryPreviewKind, isSvgPath } from '../../shared/binary-preview.ts';
-import { api, ApiError } from '../lib/api.ts';
+import { ApiError } from '../lib/api.ts';
+import { saveRepositoryFile } from '../lib/backend.ts';
 import {
   DIFF_PREVIEW_MAX_LINES,
   diffLines,
@@ -346,17 +347,7 @@ function FilePane({
 
   const save = useMutation({
     mutationFn: () =>
-      api.put<
-        ApiFileSave,
-        {
-          path: string;
-          ref: string;
-          base_sha: string | null;
-          content: string;
-          message: string;
-          mode: SaveMode;
-        }
-      >(`/api/repos/${repoId}/file`, {
+      saveRepositoryFile(repoId, {
         path,
         ref: refName,
         base_sha: editBase.current?.sha ?? file?.sha ?? null,

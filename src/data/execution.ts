@@ -17,6 +17,7 @@ export interface FactoryRunRow {
   organization_id: string;
   flow_key: string;
   flow_version: number;
+  model_id: number | null;
   work_item_id: number | null;
   delivery_id: number | null;
   change_id: number | null;
@@ -88,6 +89,7 @@ export async function createFactoryRun(input: {
   organizationId: string;
   flowKey: string;
   flowVersion: number;
+  modelId?: number;
   workItemId?: number;
   deliveryId?: number;
   changeId?: number;
@@ -99,10 +101,10 @@ export async function createFactoryRun(input: {
 }): Promise<FactoryRunRow> {
   const row = await queryOne<FactoryRunRow>(sql`
     INSERT INTO app.factory_runs (
-      organization_id, flow_key, flow_version, work_item_id, delivery_id, change_id,
+      organization_id, flow_key, flow_version, model_id, work_item_id, delivery_id, change_id,
       automation_id, parent_run_id, trigger, actor_user_id, idempotency_key
     ) VALUES (
-      ${input.organizationId}, ${input.flowKey}, ${input.flowVersion},
+      ${input.organizationId}, ${input.flowKey}, ${input.flowVersion}, ${input.modelId ?? null},
       ${input.workItemId ?? null}, ${input.deliveryId ?? null}, ${input.changeId ?? null},
       ${input.automationId ?? null}, ${input.parentRunId ?? null}, ${input.trigger},
       ${input.actorUserId ?? null}, ${input.idempotencyKey}
@@ -260,6 +262,17 @@ export async function listAgentRunsForStage(stageRunId: number): Promise<AgentRu
   `);
 }
 
+export async function listAgentRunsForFactoryRun(factoryRunId: number): Promise<AgentRunRow[]> {
+  return queryRows<AgentRunRow>(sql`
+    SELECT agent_run.*
+    FROM app.agent_runs agent_run
+    JOIN app.stage_runs stage_run ON stage_run.id = agent_run.stage_run_id
+      AND stage_run.organization_id = agent_run.organization_id
+    WHERE stage_run.factory_run_id = ${factoryRunId}
+    ORDER BY agent_run.id
+  `);
+}
+
 export async function artifactWasProducedForWorkItem(
   artifactId: number,
   workItemId: number,
@@ -278,6 +291,73 @@ export async function artifactWasProducedForWorkItem(
     ) AS produced
   `);
   return row?.produced ?? false;
+}
+
+export async function findWaitingRunForWorkItemPlan(
+  workItemId: number,
+  artifactId: number,
+  flow: { flowKey: string; flowVersion: number; stageKey: string },
+): Promise<{ factoryRun: FactoryRunRow; stageRun: StageRunRow } | null> {
+  const row = await queryOne<FactoryRunRow & { stage_run_id: number }>(sql`
+    SELECT factory_run.*, stage_run.id AS stage_run_id
+    FROM app.agent_runs agent_run
+    JOIN app.stage_runs stage_run ON stage_run.id = agent_run.stage_run_id
+      AND stage_run.organization_id = agent_run.organization_id
+    JOIN app.factory_runs factory_run ON factory_run.id = stage_run.factory_run_id
+      AND factory_run.organization_id = stage_run.organization_id
+    WHERE agent_run.output_artifact_id = ${artifactId}
+      AND agent_run.status = 'succeeded'
+      AND factory_run.work_item_id = ${workItemId}
+      AND factory_run.flow_key = ${flow.flowKey}
+      AND factory_run.flow_version = ${flow.flowVersion}
+      AND factory_run.status = 'waiting'
+      AND stage_run.stage_key = ${flow.stageKey}
+      AND stage_run.status = 'waiting'
+    ORDER BY factory_run.id DESC
+    LIMIT 1
+  `);
+  if (!row) return null;
+  const stageRun = await getStageRun(row.stage_run_id);
+  if (!stageRun) return null;
+  return { factoryRun: row, stageRun };
+}
+
+export async function resumeFactoryRunAtStage(input: {
+  factoryRunId: number;
+  waitingStageRunId: number;
+  nextStageKey: string;
+  gate: string;
+}): Promise<StageRunRow> {
+  return withTransaction(async () => {
+    const run = await queryOne<FactoryRunRow>(sql`
+      SELECT * FROM app.factory_runs WHERE id = ${input.factoryRunId} FOR UPDATE
+    `);
+    if (!run || run.status !== 'waiting') throw new Error('factory run is not waiting');
+    const waiting = await queryOne<StageRunRow>(sql`
+      SELECT * FROM app.stage_runs
+      WHERE id = ${input.waitingStageRunId} AND factory_run_id = ${run.id}
+      FOR UPDATE
+    `);
+    if (!waiting || waiting.status !== 'waiting') throw new Error('factory stage is not waiting');
+
+    await finishStageRun(waiting.id, 'succeeded');
+    const next = await createStageRun({
+      organizationId: run.organization_id,
+      factoryRunId: run.id,
+      stageKey: input.nextStageKey,
+      attempt: 1,
+      idempotencyKey: `${run.id}:${input.nextStageKey}:1`,
+    });
+    await updateFactoryRunStatus(run.id, 'queued');
+    await recordLifecycleEvent({
+      organizationId: run.organization_id,
+      factoryRunId: run.id,
+      stageRunId: waiting.id,
+      kind: 'gate_passed',
+      payload: { gate: input.gate, nextStage: input.nextStageKey },
+    });
+    return next;
+  });
 }
 
 export async function claimAgentRun(id: number): Promise<boolean> {

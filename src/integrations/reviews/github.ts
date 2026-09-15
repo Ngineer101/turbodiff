@@ -1,8 +1,17 @@
 import type { ReviewFinding } from '../../artifacts/review.ts';
 import type { RepositoryRow } from '../../data/repositories.ts';
+import type { ReviewPublicationPlan } from '../../domain/review-publication.ts';
 import { installationToken } from '../github/app.ts';
 import { githubJson, githubRequest } from '../github/client.ts';
-import type { ReviewPublication, ReviewPublicationPlan } from './types.ts';
+
+export type ReviewPublication =
+  | {
+      kind: 'published';
+      url: string | null;
+      fallback: string | null;
+      inlineFindings: number;
+    }
+  | { kind: 'stale'; currentRevision: string | null };
 
 interface GithubReviewComment {
   path: string;

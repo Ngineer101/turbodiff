@@ -14,7 +14,7 @@ function isAuthType(value: string): value is AuthType {
 }
 
 export interface IntegrationFormValues {
-  installation_id: number;
+  organization_id: string;
   kind: string;
   name: string;
   url: string;
@@ -81,14 +81,14 @@ const SECRET_HINT = 'stored encrypted, never shown again';
 // Shared create form for a connection (MCP server or stored-credential API).
 // Server-side validation is authoritative; the caller surfaces its message.
 export function IntegrationForm({
-  installations,
+  organizations,
   encryptionConfigured,
   error,
   busy,
   onSubmit,
   onCancel,
 }: {
-  installations: { id: number; account_login: string }[];
+  organizations: { id: string; name: string }[];
   encryptionConfigured: boolean;
   error: string | null;
   busy: boolean;
@@ -96,7 +96,7 @@ export function IntegrationForm({
   onCancel: () => void;
 }) {
   const [form, setForm] = useState<IntegrationFormValues>({
-    installation_id: installations[0]?.id ?? 0,
+    organization_id: organizations[0]?.id ?? '',
     kind: 'mcp',
     name: '',
     url: '',
@@ -126,7 +126,7 @@ export function IntegrationForm({
     <EntityFormLayout
       kind="integration"
       title="New integration"
-      subtitle="Connect an MCP server (its tools mount on repo runs) or a stored-credential API, once per installation."
+      subtitle="Connect an MCP server (its tools mount on repo runs) or a stored-credential API, once per organization."
       back={
         <Link
           to="/integrations"
@@ -154,15 +154,15 @@ export function IntegrationForm({
               })
             }
           />
-          {installations.length > 1 ? (
-            <Field label="Installation" className="mt-0">
+          {organizations.length > 1 ? (
+            <Field label="Organization" className="mt-0">
               <Select
-                value={form.installation_id}
-                onChange={(e) => set({ installation_id: Number(e.target.value) })}
+                value={form.organization_id}
+                onChange={(e) => set({ organization_id: e.target.value })}
               >
-                {installations.map((i) => (
-                  <option key={i.id} value={i.id}>
-                    {i.account_login}
+                {organizations.map((organization) => (
+                  <option key={organization.id} value={organization.id}>
+                    {organization.name}
                   </option>
                 ))}
               </Select>

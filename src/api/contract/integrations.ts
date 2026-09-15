@@ -19,12 +19,18 @@ export const Integration = Schema.Struct({
   config: Schema.Unknown,
   hasCredentials: Schema.Boolean,
   needsReauthorization: Schema.Boolean,
+  authorizationStatus: Schema.NullOr(
+    Schema.Literal('not_connected', 'connected', 'expired', 'needs_reauth'),
+  ),
   enabled: Schema.Boolean,
   createdAt: Schema.String,
   updatedAt: Schema.String,
 });
 export type Integration = typeof Integration.Type;
-export const IntegrationCollection = Schema.Struct({ items: Schema.Array(Integration) });
+export const IntegrationCollection = Schema.Struct({
+  items: Schema.Array(Integration),
+  credentialStorageConfigured: Schema.Boolean,
+});
 export type IntegrationCollection = typeof IntegrationCollection.Type;
 export const CreateIntegration = Schema.Struct({
   organizationId: Schema.String,
@@ -43,6 +49,13 @@ export const UpdateIntegration = Schema.Struct({
   enabled: Schema.optional(Schema.Boolean),
 });
 export type UpdateIntegration = typeof UpdateIntegration.Type;
+export const IntegrationTest = Schema.Struct({
+  ok: Schema.Boolean,
+  detail: Schema.String,
+  tools: Schema.Array(Schema.String),
+  reauthorizationRequired: Schema.Boolean,
+});
+export type IntegrationTest = typeof IntegrationTest.Type;
 
 export const IntegrationsApi = HttpApiGroup.make('integrations')
   .add(
@@ -65,6 +78,11 @@ export const IntegrationsApi = HttpApiGroup.make('integrations')
     HttpApiEndpoint.patch('updateIntegration')`/integrations/${integrationId}`
       .setPayload(UpdateIntegration)
       .addSuccess(Integration)
+      .addError(DomainError),
+  )
+  .add(
+    HttpApiEndpoint.post('testIntegration')`/integrations/${integrationId}/tests`
+      .addSuccess(IntegrationTest)
       .addError(DomainError),
   )
   .add(

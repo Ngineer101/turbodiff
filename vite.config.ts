@@ -1,11 +1,10 @@
 import { cloudflare } from '@cloudflare/vite-plugin';
-import { flue, flueWorkerConfig } from '@flue/vite';
 import { defineConfig, lazyPlugins } from 'vite-plus';
 
 export default defineConfig({
   // lazyPlugins keeps check/lint/fmt from booting the Cloudflare plugin
   // (which needs Docker/bindings); dev/build load it as before.
-  plugins: lazyPlugins(() => [flue(), cloudflare({ config: flueWorkerConfig() })]),
+  plugins: lazyPlugins(() => [cloudflare()]),
   // Repo style: tabs + single quotes (configured so a future `vp fmt` run
   // doesn't reindent the codebase as a side effect).
   fmt: {

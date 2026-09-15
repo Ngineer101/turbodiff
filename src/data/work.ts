@@ -12,6 +12,30 @@ export type WorkItemStatus =
   | 'completed'
   | 'cancelled';
 
+export interface WorkItemAttachmentRow {
+  work_item_id: number;
+  artifact_id: number;
+  name: string;
+}
+
+export async function listWorkItemAttachments(
+  workItemIds: number[],
+): Promise<WorkItemAttachmentRow[]> {
+  if (workItemIds.length === 0) return [];
+  return queryRows<WorkItemAttachmentRow>(sql`
+    SELECT DISTINCT factory.work_item_id, (attachment->>'artifactId')::bigint AS artifact_id,
+      attachment->>'name' AS name
+    FROM app.factory_runs factory
+    JOIN app.lifecycle_events event ON event.factory_run_id = factory.id
+      AND event.organization_id = factory.organization_id
+    CROSS JOIN LATERAL jsonb_array_elements(event.payload->'attachments') attachment
+    WHERE factory.work_item_id IN (${sqlValueList(workItemIds)})
+      AND event.kind = 'factory_run_requested'
+      AND jsonb_typeof(event.payload->'attachments') = 'array'
+    ORDER BY factory.work_item_id, artifact_id
+  `);
+}
+
 export interface WorkItemRow {
   id: number;
   organization_id: string;

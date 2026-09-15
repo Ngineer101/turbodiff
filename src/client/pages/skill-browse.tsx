@@ -3,8 +3,9 @@ import { Link } from '@tanstack/react-router';
 import { ArrowLeft, Link2, Search } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
-import type { ApiSkillCatalogEntry, ApiSkillImportPreview } from '../../shared/api-types.ts';
-import { api, ApiError } from '../lib/api.ts';
+import type { ApiSkillCatalogEntry, ApiSkillImportPreview } from '../types.ts';
+import { ApiError } from '../lib/api.ts';
+import { previewSkillImport } from '../lib/backend.ts';
 import { skillCatalogQuery } from '../lib/queries.ts';
 import { EntityCard, EntityGrid, EntityListHeader } from '../components/entity-list.tsx';
 import { EmptyState } from '../components/section.tsx';
@@ -42,11 +43,7 @@ export function SkillBrowsePage() {
 
   const loadPreview = useMutation({
     mutationFn: (ref: string) =>
-      api
-        .post<ApiSkillImportPreview, { reference: string }>('/api/skills/import/preview', {
-          reference: ref,
-        })
-        .then((result) => ({ reference: ref, result })),
+      previewSkillImport(ref).then((result) => ({ reference: ref, result })),
     onSuccess: setPreview,
     onError: (err) => toast.error(err instanceof ApiError ? err.message : 'request failed'),
   });

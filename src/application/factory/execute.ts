@@ -20,6 +20,7 @@ import {
   getStageRun,
   recordLifecycleEvent,
   updateFactoryRunStatus,
+  waitStageRun,
   type FactoryRunRow,
   type StageRunRow,
 } from '../../data/execution.ts';
@@ -29,19 +30,14 @@ import {
   acceptanceContractArtifactSchema,
   storedPlanArtifactSchema,
 } from '../../artifacts/plan.ts';
-import { isSandboxTransportError } from '../../ai/runtime/sandbox.ts';
+import { isSandboxTransportError } from '../../integrations/agent-runtime/sandbox.ts';
 import { notifyOrganizationsLive } from '../notifications/live-updates.ts';
 import { loadJsonArtifact, persistJsonArtifact } from '../artifacts.ts';
 import { executeDeliveryStage } from './stages/delivery.ts';
 import { executePlanningStage } from './stages/planning.ts';
 import { executeReviewStage } from './stages/review.ts';
-import {
-  AUTOMATION_FLOW,
-  DELIVERY_FLOW,
-  DISPATCH_FLOW,
-  PLANNING_FLOW,
-  REVIEW_FLOW,
-} from './flows.ts';
+import { executeExplanationStage } from './stages/explanation.ts';
+import { DELIVERY_FLOW, factoryFlow, factoryStage } from './flows.ts';
 import { enqueueFactoryMessages } from './queue.ts';
 
 async function finishSucceeded(
@@ -58,6 +54,33 @@ async function finishSucceeded(
     stageRunId: stage.id,
     kind,
     payload,
+  });
+  await notifyOrganizationsLive([run.organization_id]);
+}
+
+async function finishAtGate(
+  run: FactoryRunRow,
+  stage: StageRunRow,
+  kind: string,
+  payload: JsonObject,
+  gate: string,
+  nextStage: string,
+): Promise<void> {
+  await waitStageRun(stage.id);
+  await updateFactoryRunStatus(run.id, 'waiting');
+  await recordLifecycleEvent({
+    organizationId: run.organization_id,
+    factoryRunId: run.id,
+    stageRunId: stage.id,
+    kind,
+    payload,
+  });
+  await recordLifecycleEvent({
+    organizationId: run.organization_id,
+    factoryRunId: run.id,
+    stageRunId: stage.id,
+    kind: 'gate_waiting',
+    payload: { gate, nextStage },
   });
   await notifyOrganizationsLive([run.organization_id]);
 }
@@ -98,6 +121,7 @@ async function dispatchWorkItem(
         organizationId: run.organization_id,
         flowKey: DELIVERY_FLOW.key,
         flowVersion: DELIVERY_FLOW.version,
+        modelId: run.model_id ?? undefined,
         deliveryId: delivery.id,
         automationId: run.automation_id ?? undefined,
         parentRunId: run.id,
@@ -166,14 +190,19 @@ export async function executeFactoryStage(message: RunFactoryMessage): Promise<v
   });
 
   try {
-    if (
-      run.work_item_id &&
-      ((run.flow_key === DISPATCH_FLOW.key && stage.stage_key === DISPATCH_FLOW.initialStage) ||
-        (run.flow_key === AUTOMATION_FLOW.key && stage.stage_key === AUTOMATION_FLOW.initialStage))
-    ) {
+    const flow = factoryFlow(run.flow_key, run.flow_version);
+    const definition = flow ? factoryStage(flow, stage.stage_key) : undefined;
+    if (!flow || !definition) {
+      throw new Error(
+        `unknown factory stage ${run.flow_key}@${run.flow_version}/${stage.stage_key}`,
+      );
+    }
+
+    if (definition.operation === 'dispatch' || definition.operation === 'invoke_automation') {
+      if (!run.work_item_id) throw new Error('factory run has no work item');
       const workItem = await getWorkItem(run.work_item_id);
       if (!workItem) throw new Error('work item is missing');
-      if (run.flow_key === AUTOMATION_FLOW.key) {
+      if (definition.operation === 'invoke_automation') {
         if (!run.automation_id) throw new Error('automation run has no automation');
         const automation = await getAutomation(run.automation_id);
         if (!automation || automation.organization_id !== run.organization_id) {
@@ -205,22 +234,35 @@ export async function executeFactoryStage(message: RunFactoryMessage): Promise<v
       return;
     }
 
-    if (run.flow_key === PLANNING_FLOW.key && stage.stage_key === PLANNING_FLOW.initialStage) {
+    if (definition.operation === 'plan') {
       const result = await executePlanningStage(run, stage);
-      await finishSucceeded(run, stage, 'plan_created', result);
+      if (definition.success.kind !== 'gate') throw new Error('planning stage must end at a gate');
+      await finishAtGate(
+        run,
+        stage,
+        'plan_created',
+        result,
+        definition.success.gate,
+        definition.success.nextStage,
+      );
       return;
     }
-    if (run.flow_key === DELIVERY_FLOW.key && stage.stage_key === DELIVERY_FLOW.initialStage) {
+    if (definition.operation === 'implement') {
       const result = await executeDeliveryStage(run, stage);
       await finishSucceeded(run, stage, result.outcome, result);
       return;
     }
-    if (run.flow_key === REVIEW_FLOW.key && stage.stage_key === REVIEW_FLOW.initialStage) {
+    if (definition.operation === 'review') {
       const result = await executeReviewStage(run, stage);
       await finishSucceeded(run, stage, 'review_completed', result);
       return;
     }
-    throw new Error(`unknown factory stage ${run.flow_key}/${stage.stage_key}`);
+    if (definition.operation === 'explain') {
+      const result = await executeExplanationStage(run, stage);
+      await finishSucceeded(run, stage, 'explanation_completed', result);
+      return;
+    }
+    throw new Error('Unsupported factory operation');
   } catch (failure) {
     if (isSandboxTransportError(failure)) throw failure;
     const detail = failure instanceof Error ? failure.message : 'Factory stage failed';

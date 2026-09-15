@@ -17,8 +17,9 @@ import type {
   ApiIntegration,
   ApiIntegrationRepo,
   ApiIntegrations,
-} from '../../shared/api-types.ts';
-import { api, ApiError } from '../lib/api.ts';
+} from '../types.ts';
+import { ApiError } from '../lib/api.ts';
+import { deleteIntegration, setRepositoryIntegration, testIntegration } from '../lib/backend.ts';
 import { applyOptimistic } from '../lib/optimistic.ts';
 import { integrationsQuery } from '../lib/queries.ts';
 import { cn } from '../lib/utils.ts';
@@ -155,7 +156,7 @@ function IntegrationCard({ conn, repos }: { conn: ApiIntegration; repos: ApiInte
   const [test, setTest] = useState<ApiConnectionTest | null>(null);
 
   const runTest = useMutation({
-    mutationFn: () => api.post<ApiConnectionTest>(`/api/integrations/${conn.id}/test`),
+    mutationFn: () => testIntegration(conn.id),
     onSuccess: (result) => {
       if (result.reauth_required && conn.auth_type === 'oauth') {
         refresh();
@@ -167,7 +168,7 @@ function IntegrationCard({ conn, repos }: { conn: ApiIntegration; repos: ApiInte
     onError: onApiError,
   });
   const remove = useMutation({
-    mutationFn: () => api.delete(`/api/integrations/${conn.id}`),
+    mutationFn: () => deleteIntegration(conn.id),
     onSuccess: () => {
       toast.success('Integration removed');
       refresh();
@@ -175,8 +176,8 @@ function IntegrationCard({ conn, repos }: { conn: ApiIntegration; repos: ApiInte
     onError: onApiError,
   });
   const toggleRepo = useMutation({
-    mutationFn: ({ repoId, attached, reviews, automations }: RepoLinkUpdate) =>
-      api.put(`/api/integrations/${conn.id}/repos/${repoId}`, { attached, reviews, automations }),
+    mutationFn: ({ repoId, attached }: RepoLinkUpdate) =>
+      setRepositoryIntegration(repoId, conn.id, attached),
     // Chips flip on click; the refetch below reconciles.
     onMutate: ({ repoId, attached, reviews, automations }) =>
       applyOptimistic<ApiIntegrations>(queryClient, ['integrations'], (prev) => ({
@@ -400,17 +401,16 @@ export function IntegrationsPage() {
   const { data } = useSuspenseQuery(integrationsQuery);
   useOAuthCallbackToast();
 
-  // Connections and repos are both per-installation, and a connection may
-  // only attach to its own installation's repos — so group the list and hand
-  // each card just that installation's factory-enabled repos.
-  const groups = data.installations
-    .map((inst) => ({
-      installation: inst,
-      connections: data.connections.filter((c) => c.installation_id === inst.id),
-      repos: data.repos.filter((r) => r.installation_id === inst.id),
+  const groups = data.organizations
+    .map((organization) => ({
+      organization,
+      connections: data.connections.filter(
+        (connection) => connection.organization_id === organization.id,
+      ),
+      repos: data.repos.filter((repository) => repository.organization_id === organization.id),
     }))
     .filter((g) => g.connections.length > 0);
-  const multiInstall = data.installations.length > 1;
+  const multiOrganization = data.organizations.length > 1;
 
   return (
     <>
@@ -447,11 +447,9 @@ export function IntegrationsPage() {
         <EmptyState>No integrations yet — add your first with “New integration”.</EmptyState>
       ) : (
         <div className="flex flex-col gap-4">
-          {groups.map(({ installation, connections, repos }) => (
-            <section key={installation.id} className="flex flex-col gap-2">
-              {multiInstall ? (
-                <Placard className="px-0.5">{installation.account_login}</Placard>
-              ) : null}
+          {groups.map(({ organization, connections, repos }) => (
+            <section key={organization.id} className="flex flex-col gap-2">
+              {multiOrganization ? <Placard className="px-0.5">{organization.name}</Placard> : null}
               {connections.map((conn) => (
                 <IntegrationCard key={conn.id} conn={conn} repos={repos} />
               ))}

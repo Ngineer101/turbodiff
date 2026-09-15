@@ -3,9 +3,10 @@ import { useNavigate } from '@tanstack/react-router';
 import { Download, ShieldAlert } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
-import type { ApiSkillImportPreview } from '../../shared/api-types.ts';
+import type { ApiSkillImportPreview } from '../types.ts';
 import { classifyAuditVerdict, overallAuditOutcome } from '../../domain/skill-import.ts';
-import { api, ApiError } from '../lib/api.ts';
+import { ApiError } from '../lib/api.ts';
+import { importSkill as importSkillFromCatalog } from '../lib/backend.ts';
 import { cn } from '../lib/utils.ts';
 import { Stamp } from './identity.tsx';
 import { Markdown } from './markdown.tsx';
@@ -44,11 +45,7 @@ export function SkillImportDialog({
   const auditOutcome = overallAuditOutcome(preview.audit);
 
   const importSkill = useMutation({
-    mutationFn: () =>
-      api.post<{ ok: boolean; id: number | null }, { reference: string; slug: string }>(
-        '/api/skills/import',
-        { reference, slug },
-      ),
+    mutationFn: () => importSkillFromCatalog(reference, slug),
     onSuccess: ({ id }) => {
       toast.success('skill imported');
       void queryClient.invalidateQueries({ queryKey: ['skills'] });

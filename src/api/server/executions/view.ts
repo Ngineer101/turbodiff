@@ -3,6 +3,7 @@ import { getFactoryRun, listAgentRunsForStage, listStageRuns } from '../../../da
 import type { FactoryRun } from '../../contract/executions.ts';
 import { notFound, type DomainError } from '../../contract/errors.ts';
 import { dataEffect } from '../authorization.ts';
+import { canonicalModelId, getModel } from '../../../data/models.ts';
 
 export const loadFactoryRun = (
   organizationIds: readonly string[],
@@ -14,6 +15,8 @@ export const loadFactoryRun = (
       return yield* Effect.fail(notFound('Unknown factory run'));
     }
     const stages = yield* dataEffect(() => listStageRuns(row.id));
+    const modelId = row.model_id;
+    const model = modelId ? yield* dataEffect(() => getModel(modelId)) : null;
     const agentRuns = yield* dataEffect(() =>
       Promise.all(stages.map((stage) => listAgentRunsForStage(stage.id))),
     );
@@ -22,6 +25,8 @@ export const loadFactoryRun = (
       organizationId: row.organization_id,
       flowKey: row.flow_key,
       flowVersion: row.flow_version,
+      modelId: row.model_id,
+      model: model ? canonicalModelId(model) : null,
       workItemId: row.work_item_id,
       deliveryId: row.delivery_id,
       changeId: row.change_id,

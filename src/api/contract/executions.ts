@@ -41,6 +41,8 @@ export const FactoryRun = Schema.Struct({
   organizationId: Schema.String,
   flowKey: Schema.String,
   flowVersion: PositiveInt,
+  modelId: Schema.NullOr(PositiveInt),
+  model: Schema.NullOr(Schema.String),
   workItemId: Schema.NullOr(PositiveInt),
   deliveryId: Schema.NullOr(PositiveInt),
   changeId: Schema.NullOr(PositiveInt),

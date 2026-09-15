@@ -16,9 +16,16 @@ import {
 import { useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { toast } from 'sonner';
-import type { ApiBoard, ApiPlan, ApiTodo } from '../../shared/api-types.ts';
-import { isJsonObject, isString } from '../../shared/json.ts';
-import { api, ApiError } from '../lib/api.ts';
+import type { ApiBoard, ApiPlan, ApiTodo } from '../types.ts';
+import { ApiError } from '../lib/api.ts';
+import {
+  archiveWorkItem,
+  createWorkItem,
+  deleteWorkItem,
+  startWorkItem,
+  uploadWorkItemAttachment,
+  updateWorkItemTargets,
+} from '../lib/backend.ts';
 import { useDictation } from '../lib/dictation.ts';
 import { ago, fmtUsd } from '../lib/format.ts';
 import { applyOptimistic, optimisticId, optimisticNow } from '../lib/optimistic.ts';
@@ -60,24 +67,26 @@ function onApiError<T>(err: T) {
 // The optional repo target for a *new* todo — the create-side mirror of the
 // card's RepoPickerPopover, but over local state (no todo id yet). Repo stays
 // optional (you can pick it later, before Start), so "Any repo" is a valid,
-// first-class choice. When multiple installations exist and no repo is picked
-// yet, a small installation selector decides where an "Any repo" todo lands.
+// first-class choice. With multiple organizations, the selector determines
+// where an "Any repo" work item belongs.
 function TargetPicker({
   board,
-  installationId,
-  onInstallationChange,
+  organizationId,
+  onOrganizationChange,
   selected,
   onChange,
 }: {
   board: ApiBoard;
-  installationId: number;
-  onInstallationChange: (id: number) => void;
+  organizationId: string;
+  onOrganizationChange: (id: string) => void;
   selected: number[];
   onChange: (ids: number[]) => void;
 }) {
   const [query, setQuery] = useState('');
-  const multiInstall = board.installations.length > 1;
-  const available = board.repos.filter((r) => r.installation_id === installationId);
+  const multiOrganization = board.organizations.length > 1;
+  const available = board.repos.filter(
+    (repository) => repository.organization_id === organizationId,
+  );
   const filtered = query.trim()
     ? available.filter((r) => `${r.owner}/${r.name}`.toLowerCase().includes(query.toLowerCase()))
     : available;
@@ -90,8 +99,8 @@ function TargetPicker({
   const first = board.repos.find((r) => r.id === selected[0]);
   const label =
     selected.length === 0
-      ? multiInstall
-        ? `${board.installations.find((i) => i.id === installationId)?.account_login ?? 'Any'} · any repo`
+      ? multiOrganization
+        ? `${board.organizations.find((organization) => organization.id === organizationId)?.name ?? 'Any'} · any repo`
         : 'Any repo'
       : selected.length === 1
         ? (first?.name ?? '1 repo')
@@ -120,17 +129,17 @@ function TargetPicker({
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" onKeyDown={onListboxKeyDown}>
-        {multiInstall && selected.length === 0 ? (
+        {multiOrganization && selected.length === 0 ? (
           <div className="mb-1.5">
             <Select
-              value={installationId}
-              onChange={(e) => onInstallationChange(Number(e.target.value))}
-              aria-label="Installation"
+              value={organizationId}
+              onChange={(e) => onOrganizationChange(e.target.value)}
+              aria-label="Organization"
               className="text-xs sm:py-1.5"
             >
-              {board.installations.map((i) => (
-                <option key={i.id} value={i.id}>
-                  {i.account_login}
+              {board.organizations.map((organization) => (
+                <option key={organization.id} value={organization.id}>
+                  {organization.name}
                 </option>
               ))}
             </Select>
@@ -225,21 +234,20 @@ function QuickAdd({
   // the user edits it, we stop mirroring the filter (touched). Render-time
   // sync, the codebase's no-effect pattern.
   const [touched, setTouched] = useState(false);
-  const [manualInstall, setManualInstall] = useState<number | null>(null);
+  const [manualOrganization, setManualOrganization] = useState<string | null>(null);
   const [prevActive, setPrevActive] = useState(activeRepoId);
   if (activeRepoId !== prevActive) {
     setPrevActive(activeRepoId);
     if (!touched) setTargetRepoIds(activeRepoId ? [activeRepoId] : []);
   }
-  const repoInstall = (id: number) => board.repos.find((r) => r.id === id)?.installation_id;
-  // A todo's repos must share one installation; derive it from the target,
-  // falling back to a manual pick, the active filter, then the first install.
-  const installationId =
-    (targetRepoIds.length ? repoInstall(targetRepoIds[0]) : undefined) ??
-    manualInstall ??
-    (activeRepoId ? repoInstall(activeRepoId) : undefined) ??
-    board.installations[0]?.id ??
-    0;
+  const repoOrganization = (id: number) =>
+    board.repos.find((repository) => repository.id === id)?.organization_id;
+  const organizationId =
+    (targetRepoIds.length ? repoOrganization(targetRepoIds[0]) : undefined) ??
+    manualOrganization ??
+    (activeRepoId ? repoOrganization(activeRepoId) : undefined) ??
+    board.organizations[0]?.id ??
+    '';
 
   // Power-user affordance: "/" focuses the quick-add from anywhere on the
   // board (form-tag suppression is the library default). Desktop-gated like
@@ -252,15 +260,8 @@ function QuickAdd({
     [isDesktop],
   );
   const add = useMutation({
-    mutationFn: (vars: { title: string; installationId: number; repoIds: number[] }) =>
-      api.post<
-        { ok: boolean; todo_id: number },
-        { installation_id: number; title: string; repository_ids: number[] }
-      >('/api/todos', {
-        installation_id: vars.installationId,
-        title: vars.title,
-        repository_ids: vars.repoIds,
-      }),
+    mutationFn: (vars: { title: string; organizationId: string; repoIds: number[] }) =>
+      createWorkItem(vars.organizationId, vars.title, vars.repoIds),
     mutationKey: TODO_ADD_MUTATION,
     // The card appears (and the input clears, in submit) the moment Enter is
     // pressed — with its target repos already attached so it matches the
@@ -272,7 +273,7 @@ function QuickAdd({
         todos: [
           {
             id: tempId,
-            installation_id: vars.installationId,
+            organization_id: vars.organizationId,
             title: vars.title,
             notes: null,
             created_at: optimisticNow(),
@@ -315,7 +316,7 @@ function QuickAdd({
     const t = title.trim();
     if (!t) return;
     const repoIds = targetRepoIds;
-    add.mutate({ title: t, installationId, repoIds });
+    add.mutate({ title: t, organizationId, repoIds });
     // Transparent hand-off: if a repo filter is active and the new card won't
     // match it, say so (and offer to clear it) — never let a card silently
     // vanish, and never wipe the filter without asking.
@@ -327,7 +328,7 @@ function QuickAdd({
     }
     setTitle('');
     setTouched(false);
-    setManualInstall(null);
+    setManualOrganization(null);
   };
   return (
     <form onSubmit={submit} className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -351,9 +352,9 @@ function QuickAdd({
       </div>
       <TargetPicker
         board={board}
-        installationId={installationId}
-        onInstallationChange={(id) => {
-          setManualInstall(id);
+        organizationId={organizationId}
+        onOrganizationChange={(id) => {
+          setManualOrganization(id);
           setTarget([]);
         }}
         selected={targetRepoIds}
@@ -391,30 +392,20 @@ function StartDialog({
   const [files, setFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const start = useMutation({
-    // Attachments (pdf/images) upload first — in parallel — then ride the
-    // start payload so the planning agent reads them alongside the
-    // requirements.
     mutationFn: async () => {
       const attachments = await Promise.all(
-        files.map(async (file) => {
-          const fd = new FormData();
-          fd.append('file', file);
-          const res = await fetch('/api/uploads', { method: 'POST', body: fd });
-          const body = await res.json().catch(() => null);
-          const data = isJsonObject(body) ? body : null;
-          const key = data && isString(data.key) ? data.key : null;
-          if (!res.ok || !key) {
-            const message = data && isString(data.error) ? data.error : null;
-            throw new ApiError(message ?? `upload failed for ${file.name}`, res.status);
-          }
-          return {
-            key,
-            name: data && isString(data.name) ? data.name : file.name,
-            content_type: data && isString(data.content_type) ? data.content_type : file.type,
-          };
-        }),
+        files.map((file) => uploadWorkItemAttachment(file, todo.organization_id)),
       );
-      return api.post(`/api/todos/${todo.id}/start`, { title, requirements, attachments, model });
+      return startWorkItem(
+        todo.id,
+        title,
+        requirements,
+        model || undefined,
+        attachments.map((attachment) => ({
+          artifactId: attachment.artifactId,
+          name: attachment.name,
+        })),
+      );
     },
     // With nothing to upload the dialog closes on click — the request is a
     // single POST and the board reconciles in the background. With files the
@@ -554,13 +545,15 @@ function StartDialog({
 function RepoPickerPopover({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
   const queryClient = useQueryClient();
   const [query, setQuery] = useState('');
-  const available = board.repos.filter((r) => r.installation_id === todo.installation_id);
+  const available = board.repos.filter(
+    (repository) => repository.organization_id === todo.organization_id,
+  );
   const filtered = query.trim()
     ? available.filter((r) => `${r.owner}/${r.name}`.toLowerCase().includes(query.toLowerCase()))
     : available;
   const selectedIds = todo.repos.map((r) => r.id);
   const setRepos = useMutation({
-    mutationFn: (ids: number[]) => api.post(`/api/todos/${todo.id}/repos`, { repository_ids: ids }),
+    mutationFn: (ids: number[]) => updateWorkItemTargets(todo.id, ids),
     onMutate: async (ids) => {
       await queryClient.cancelQueries({ queryKey: ['board'] });
       const prev = queryClient.getQueryData<ApiBoard>(['board']);
@@ -693,7 +686,7 @@ function TodoCard({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
     () => todo.id < 0 || queryClient.isMutating({ mutationKey: TODO_ADD_MUTATION }) === 0,
   );
   const remove = useMutation({
-    mutationFn: () => api.delete(`/api/todos/${todo.id}`),
+    mutationFn: () => deleteWorkItem(todo.id),
     // The card leaves the board on confirm, not after the round-trip.
     onMutate: () =>
       applyOptimistic<ApiBoard>(queryClient, ['board'], (prev) => ({
@@ -768,7 +761,7 @@ function TaskCard({ task }: { task: ApiPlan }) {
   const column = taskColumn(task);
   const done = column === 'done';
   const archive = useMutation({
-    mutationFn: () => api.post(`/api/tasks/${task.id}/archive`, { archived: true }),
+    mutationFn: () => archiveWorkItem(task.id, true),
     // The card leaves the board on confirm, not after the round-trip.
     onMutate: () =>
       applyOptimistic<ApiBoard>(queryClient, ['board'], (prev) => ({

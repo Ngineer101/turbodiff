@@ -20,6 +20,9 @@ export const IntegrationsHandlers = HttpApiBuilder.group(
       .handle('updateIntegration', ({ path, payload }) =>
         Effect.flatMap(CurrentUser, (user) => service.update(user, path.integrationId, payload)),
       )
+      .handle('testIntegration', ({ path }) =>
+        Effect.flatMap(CurrentUser, (user) => service.test(user, path.integrationId)),
+      )
       .handle('deleteIntegration', ({ path }) =>
         Effect.flatMap(CurrentUser, (user) => service.remove(user, path.integrationId)),
       );

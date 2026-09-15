@@ -273,9 +273,8 @@ const configRoute = createRoute({
 
 const membersRoute = createRoute({
   getParentRoute: () => shellRoute,
-  path: '/settings/members/$installationId',
-  loader: ({ params }) =>
-    queryClient.ensureQueryData(orgMembersQuery(Number(params.installationId))),
+  path: '/settings/members/$organizationId',
+  loader: ({ params }) => queryClient.ensureQueryData(orgMembersQuery(params.organizationId)),
   component: lazyRouteComponent(() => import('./pages/members.tsx'), 'MembersPage'),
 });
 

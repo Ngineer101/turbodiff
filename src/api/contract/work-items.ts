@@ -30,6 +30,7 @@ export const WorkItem = Schema.Struct({
   description: Schema.String,
   status: WorkItemStatus,
   approvedPlanArtifactId: Schema.NullOr(PositiveInt),
+  attachments: Schema.Array(Schema.Struct({ artifactId: PositiveInt, name: Schema.String })),
   targets: Schema.Array(WorkItemTarget),
   createdAt: Schema.String,
   updatedAt: Schema.String,
@@ -79,6 +80,15 @@ export const WorkItemDeliveries = Schema.Struct({ items: Schema.Array(WorkItemDe
 
 export const StartWorkItemFactoryRun = Schema.Struct({
   flow: Schema.Literal('planning', 'delivery'),
+  model: Schema.optional(Schema.String),
+  attachments: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        artifactId: PositiveInt,
+        name: Schema.String,
+      }),
+    ),
+  ),
 });
 export const WorkItemFactoryRunAccepted = Schema.Struct({
   factoryRunId: PositiveInt,

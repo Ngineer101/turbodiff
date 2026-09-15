@@ -1,7 +1,7 @@
 import { Link } from '@tanstack/react-router';
 import { ArrowLeft, Check } from 'lucide-react';
 import { useState, type FormEvent, type ReactNode } from 'react';
-import type { ApiModelOption } from '../../shared/api-types.ts';
+import type { ApiModelOption } from '../types.ts';
 import { EntityFormLayout, FormSection } from './entity-form.tsx';
 import { ModelCombobox } from './model-combobox.tsx';
 import { Button } from './ui/button.tsx';

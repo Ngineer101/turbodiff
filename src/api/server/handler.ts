@@ -34,14 +34,15 @@ import { WorkItemServiceLive } from './work-items/service.ts';
 import { ArtifactsHandlers } from './artifacts/handlers.ts';
 import { ArtifactServiceLive } from './artifacts/service.ts';
 
-export function createEffectApiHandler() {
-  const dependencies: ApiRuntimeDependencies = {
+export function createEffectApiHandler(
+  dependencies: ApiRuntimeDependencies = {
     authenticate: requireUser,
     enqueueFactory: enqueueFactoryMessage,
     githubAppSlug: env.GITHUB_APP_SLUG ?? '',
     vapidPublicKey: env.VAPID_PUBLIC_KEY ?? '',
     skillsSh: createSkillsShClient(env.SKILLS_SH_API_TOKEN),
-  };
+  },
+) {
   const DependenciesLive = Layer.succeed(ApiDependencies, dependencies);
   const ServicesLive = Layer.mergeAll(
     AgentServiceLive,

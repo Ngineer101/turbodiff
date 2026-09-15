@@ -1,9 +1,8 @@
-import { env } from 'cloudflare:workers';
 import type { ZodType } from 'zod';
 import { runAgent } from '../../agents/run.ts';
 import type { AgentDefinition, AgentExecutionRequest } from '../../agents/types.ts';
-import type { CodingAgentRun } from '../../ai/runtime/coding-agent.ts';
-import { isSandboxTransportError } from '../../ai/runtime/sandbox.ts';
+import type { CodingAgentRun } from '../../integrations/agent-runtime/coding-agent.ts';
+import { isSandboxTransportError } from '../../integrations/agent-runtime/sandbox.ts';
 import {
   claimAgentRun,
   completeAgentRun,
@@ -14,8 +13,7 @@ import {
 } from '../../data/execution.ts';
 import type { AgentRow } from '../../data/agents.ts';
 import { getArtifact } from '../../data/artifacts.ts';
-import { canonicalModelId, resolveModel } from '../../data/models.ts';
-import { transcriptKey } from '../../ai/runtime/agent-runs.ts';
+import { canonicalModelId, getModel, resolveModel } from '../../data/models.ts';
 import { loadJsonArtifact, persistArtifactBody, persistJsonArtifact } from '../artifacts.ts';
 
 export interface AgentInvocation<Output> {
@@ -60,7 +58,11 @@ export async function runTrackedAgent<Input, Output>(input: {
     schema: input.definition.input,
     value: input.value,
   });
-  const model = await resolveModel(input.model);
+  const selected = input.factoryRun.model_id
+    ? await getModel(input.factoryRun.model_id)
+    : await resolveModel(input.model);
+  if (!selected?.enabled) throw new Error('factory run model is unavailable');
+  const model = selected;
   const agentRun = await createAgentRun({
     organizationId: input.factoryRun.organization_id,
     stageRunId: input.stageRun.id,
@@ -107,11 +109,6 @@ export async function runTrackedAgent<Input, Output>(input: {
       contentType: 'text/plain; charset=utf-8',
       body: sanitize(`${completed.run.resultText}\n${completed.run.stderr}`.trim()),
     });
-    await env.ARTIFACTS.put(
-      transcriptKey(logArtifact.storage_key),
-      sanitize(completed.run.stdout),
-      { httpMetadata: { contentType: 'application/x-ndjson' } },
-    );
     const outputArtifact = await persistJsonArtifact({
       organizationId: input.factoryRun.organization_id,
       kind: input.outputKind,

@@ -1,7 +1,7 @@
 import type { Sandbox } from '@cloudflare/sandbox';
-import { redactSecrets } from '../../ai/runtime/redaction.ts';
-import { prepareFullMirror } from '../../ai/runtime/repository-workspace.ts';
-import { generationSandbox } from '../../ai/runtime/sandbox.ts';
+import { redactSecrets } from '../agent-runtime/redaction.ts';
+import { prepareFullMirror } from '../agent-runtime/repository-workspace.ts';
+import { generationSandbox } from '../agent-runtime/sandbox.ts';
 import {
   recordRepositoryRef,
   repositoryRef,

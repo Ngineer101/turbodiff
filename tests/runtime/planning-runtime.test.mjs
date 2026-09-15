@@ -6,12 +6,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { test } from 'node:test';
-import { runCodingAgent } from '../../src/ai/runtime/coding-agent.ts';
+import { runCodingAgent } from '../../src/integrations/agent-runtime/coding-agent.ts';
 import {
   exportPlanningSession,
   importPlanningSession,
   PLANNING_CONFIG,
-} from '../../src/ai/runtime/planning-session.ts';
+} from '../../src/integrations/agent-runtime/planning-session.ts';
 import { proxyAiGatewayRequest } from '../../src/http/ai-gateway-proxy.ts';
 import { createAiGatewayGrant } from '../../src/integrations/security/ai-gateway-grant.ts';
 

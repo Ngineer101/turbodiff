@@ -3,13 +3,13 @@ import type { ZodType } from 'zod';
 import { reviewerAgent, type ReviewerInput } from '../../../agents/reviewer.ts';
 import { changeRevisionArtifactSchema } from '../../../artifacts/change.ts';
 import type { ReviewArtifact } from '../../../artifacts/review.ts';
-import { redactSecrets } from '../../../ai/runtime/redaction.ts';
-import { resolveRunnerAuth } from '../../../ai/runtime/runner-auth.ts';
-import { reviewSandbox } from '../../../ai/runtime/sandbox.ts';
-import { mountSkills } from '../../../ai/runtime/skills.ts';
-import { runStructuredAgent } from '../../../ai/runtime/structured-agent.ts';
-import { prepareReviewWorkspace } from '../../../ai/runtime/review-workspace.ts';
-import { reviewWorkspacePath } from '../../../ai/runtime/review-workspace-policy.ts';
+import { redactSecrets } from '../../../integrations/agent-runtime/redaction.ts';
+import { resolveRunnerAuth } from '../runner-auth.ts';
+import { reviewSandbox } from '../../../integrations/agent-runtime/sandbox.ts';
+import { mountSkills } from '../../../integrations/agent-runtime/skills.ts';
+import { runStructuredAgent } from '../../../integrations/agent-runtime/structured-agent.ts';
+import { prepareReviewWorkspace } from '../../../integrations/agent-runtime/review-workspace.ts';
+import { reviewWorkspacePath } from '../../../integrations/agent-runtime/review-workspace-policy.ts';
 import {
   ensureBuiltinAgents,
   getAgentBySlug,
@@ -28,7 +28,7 @@ import {
 } from '../../../data/skills.ts';
 import { planReviewPublication } from '../../../domain/review-publication.ts';
 import { remoteSourceOf, resolveWorkspaceRemote } from '../../../integrations/git/provider.ts';
-import { buildSandboxMcpConfig } from '../../../integrations/mcp/proxy.ts';
+import { buildSandboxMcpConfig } from '../../integrations/mcp-proxy.ts';
 import { publishGithubReview } from '../../../integrations/reviews/github.ts';
 import { loadJsonArtifact } from '../../artifacts.ts';
 import { syncGithubChangeRevision } from '../../changes/github-revision.ts';
@@ -141,7 +141,8 @@ export async function executeReviewStage(
     workDir = reviewWorkspacePath(`stage-${stageRun.id}`);
     const remote = await resolveWorkspaceRemote(remoteSourceOf(repository), 'read');
     scrub = (value) => redactSecrets(value, [remote.token]);
-    const { prepareCachedWorktree } = await import('../../../ai/runtime/repository-workspace.ts');
+    const { prepareCachedWorktree } =
+      await import('../../../integrations/agent-runtime/repository-workspace.ts');
     await prepareCachedWorktree({
       sandbox,
       cacheDir: `/workspace/review-cache-${repository.id}`,

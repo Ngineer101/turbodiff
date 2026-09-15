@@ -27,13 +27,16 @@ export async function listIntegrations(organizationIds: string[]): Promise<Integ
   `);
 }
 
-export async function listGithubInstallationIds(organizationIds: string[]): Promise<number[]> {
-  const integrations = await listIntegrations(organizationIds);
-  return integrations.flatMap((integration) => {
-    if (integration.provider !== 'github' || !integration.enabled) return [];
-    const id = Number(integration.external_account_id);
-    return Number.isSafeInteger(id) && id > 0 ? [id] : [];
-  });
+export async function hasEnabledGithubIntegration(organizationIds: string[]): Promise<boolean> {
+  if (organizationIds.length === 0) return false;
+  const row = await queryOne<{ connected: boolean }>(sql`
+    SELECT EXISTS(
+      SELECT 1 FROM app.integrations
+      WHERE organization_id IN (${sqlValueList(organizationIds)})
+        AND kind = 'scm' AND provider = 'github' AND enabled
+    ) AS connected
+  `);
+  return row?.connected ?? false;
 }
 
 export async function getIntegration(id: number): Promise<IntegrationRow | null> {
@@ -127,33 +130,21 @@ export async function updateIntegrationAuth(
   `);
 }
 
+export async function tryClaimIntegrationAuthRefresh(
+  id: number,
+  expectedExpiresAt: string | null,
+  claimUntil: string,
+): Promise<boolean> {
+  const changes = await execute(sql`
+    UPDATE app.integrations SET auth_expires_at = ${claimUntil}, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ${id}
+      AND auth_expires_at IS NOT DISTINCT FROM ${expectedExpiresAt}::timestamptz
+  `);
+  return changes > 0;
+}
+
 export async function deleteIntegration(id: number): Promise<void> {
   await execute(sql`DELETE FROM app.integrations WHERE id = ${id}`);
-}
-
-export async function claimIntegrationSync(id: number, leaseUntil: string): Promise<boolean> {
-  const row = await queryOne<{ integration_id: number }>(sql`
-    INSERT INTO app.integration_sync_state (integration_id, lease_expires_at)
-    VALUES (${id}, ${leaseUntil})
-    ON CONFLICT(integration_id) DO UPDATE SET lease_expires_at = excluded.lease_expires_at
-    WHERE integration_sync_state.lease_expires_at IS NULL
-       OR integration_sync_state.lease_expires_at < CURRENT_TIMESTAMP
-    RETURNING integration_id
-  `);
-  return row !== null;
-}
-
-export async function finishIntegrationSync(
-  id: number,
-  cursor: string | null,
-  error: string | null = null,
-): Promise<void> {
-  await execute(sql`
-    UPDATE app.integration_sync_state SET
-      cursor = ${cursor}, synced_at = CURRENT_TIMESTAMP,
-      lease_expires_at = NULL, error = ${error}
-    WHERE integration_id = ${id}
-  `);
 }
 
 export async function replaceRepositoryIntegrationLinks(

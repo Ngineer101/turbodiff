@@ -2,7 +2,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { api, ApiError } from '../lib/api.ts';
+import { ApiError } from '../lib/api.ts';
+import { createSkill } from '../lib/backend.ts';
 import { SkillForm, type SkillFormValues } from '../components/skill-form.tsx';
 
 // Skills are generic — the server creates the skill for every installation,
@@ -13,7 +14,7 @@ export function SkillNewPage() {
   const [error, setError] = useState<string | null>(null);
 
   const create = useMutation({
-    mutationFn: (values: SkillFormValues) => api.post('/api/skills', values),
+    mutationFn: (values: SkillFormValues) => createSkill(values),
     onSuccess: () => {
       toast.success('skill created');
       void queryClient.invalidateQueries({ queryKey: ['skills'] });

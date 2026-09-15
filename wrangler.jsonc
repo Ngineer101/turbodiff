@@ -1,6 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "turbodiff",
+  "main": "src/cloudflare.ts",
   "compatibility_date": "2026-08-08",
   // Deployment-specific variables are managed in Cloudflare and retained
   // across deploys. See `.dev.vars.example` for the self-hosting checklist.
@@ -14,13 +15,9 @@
   // Permit preview URLs for manually uploaded Worker versions. Production
   // routing is configured independently from this switch.
   "preview_urls": true,
-  // Workers Traces shows each agent response as a trace with agent-level
-  // spans: https://flueframework.com/docs/guide/observability/#cloudflare
-  // Traces for agent spans; invocation logs persisted for debugging (Workers
-  // Logs — queryable in the dash after incidents, unlike live-only tail).
+  // Workers Traces and invocation logs retain production execution evidence.
   "observability": { "enabled": true, "traces": { "enabled": true } },
-  // Workers AI binding — model calls dispatch through env.AI into the named
-  // AI Gateway (see setProvider in src/app.ts).
+  // Workers AI binding for provider-backed application services.
   "ai": { "binding": "AI" },
   // Exposes the live Worker version (id/tag) to GET /version — see
   // https://developers.cloudflare.com/workers/configuration/version-metadata/
@@ -116,12 +113,13 @@
       },
     ],
   },
-  // Flue agents and application Durable Objects require migration history.
+  // Durable Object migrations are append-only deployment history.
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["FluePrReviewerAgent"] },
     { "tag": "v2", "new_sqlite_classes": ["Sandbox"] },
     { "tag": "v3", "new_sqlite_classes": ["LiveUpdates"] },
     { "tag": "v4", "new_sqlite_classes": ["FlueExplainerAgent"] },
     { "tag": "v5", "deleted_classes": ["FluePrReviewerAgent"] },
+    { "tag": "v6", "deleted_classes": ["FlueExplainerAgent"] },
   ],
 }

@@ -1,7 +1,30 @@
 import type { ReviewerInput } from '../agents/reviewer.ts';
 import type { ReviewArtifact, ReviewFinding } from '../artifacts/review.ts';
-import type { ReviewPublicationPlan } from '../integrations/reviews/types.ts';
-import { missingReviewFiles, reviewConclusion, reviewPublicationEvent } from './review-context.ts';
+import {
+  missingReviewFiles,
+  reviewConclusion,
+  reviewPublicationEvent,
+  type ReviewConclusion,
+  type ReviewPublicationEvent,
+} from './review-context.ts';
+
+export interface ReviewReadiness {
+  conclusion: ReviewConclusion;
+  coverageStatus: 'complete' | 'incomplete' | 'stale';
+  reviewableFileCount: number;
+  coveredFileCount: number;
+  missingPaths: string[];
+  coverageHeadSha: string;
+  publishedHeadSha: string | null;
+}
+
+export interface ReviewPublicationPlan {
+  artifact: ReviewArtifact;
+  findings: ReviewFinding[];
+  event: ReviewPublicationEvent;
+  verdict: 'approve' | 'comment' | 'request_changes';
+  readiness: ReviewReadiness;
+}
 
 function findingFingerprint(finding: ReviewFinding): string {
   return [

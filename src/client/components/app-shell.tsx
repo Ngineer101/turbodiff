@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { lazy, Suspense, useState, type ReactNode } from 'react';
 import { useHotkeys } from 'react-hotkeys-hook';
-import type { ApiMe } from '../../shared/api-types.ts';
+import type { ApiMe } from '../types.ts';
 import { codeRoute } from '../lib/layout.ts';
 import { RailSlotContext } from '../lib/rail-slot.ts';
 import { navShortcuts, noOverlayOpen } from '../lib/shortcuts.ts';
@@ -295,7 +295,7 @@ export function AppShell({ me, children }: { me: ApiMe; children: ReactNode }) {
   const isDesktop = useIsDesktop();
   // App-wide live updates: one tiny version poll instead of per-page
   // full-payload polling (see use-live-refresh.ts).
-  useLiveRefresh(me.installationIds);
+  useLiveRefresh(me.organizationIds);
   useHotkeys(
     NAV_SHORTCUTS.map((s) => s.key).join(','),
     (_e, hk) => {

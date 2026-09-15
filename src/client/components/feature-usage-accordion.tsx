@@ -1,4 +1,4 @@
-import type { ApiFeatureUsage, ApiFeatureUsageSession } from '../../shared/api-types.ts';
+import type { ApiFeatureUsage, ApiFeatureUsageSession } from '../types.ts';
 import { fmtDuration, fmtTokens, fmtUsd, sentence } from '../lib/format.ts';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from './ui/accordion.tsx';
 import { Muted } from './section.tsx';

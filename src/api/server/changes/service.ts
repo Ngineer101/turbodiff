@@ -4,19 +4,35 @@ import {
   latestChangeRevision,
   listChangesForRepository,
   listReviewOutcomes,
+  updateChangeStatus,
   type ChangeRevisionRow,
   type ChangeRow,
   type ReviewOutcomeRow,
 } from '../../../data/changes.ts';
-import { createFactoryRunWithStage } from '../../../data/execution.ts';
+import {
+  createFactoryRunWithStage,
+  listAgentRunsForFactoryRun,
+  listFactoryRuns,
+  listStageRuns,
+} from '../../../data/execution.ts';
 import { getRepository } from '../../../data/repositories.ts';
-import { REVIEW_FLOW } from '../../../application/factory/flows.ts';
+import { closeGithubChange, mergeGithubChange } from '../../../integrations/changes/github.ts';
+import { EXPLANATION_FLOW, REVIEW_FLOW } from '../../../application/factory/flows.ts';
+import { getArtifact } from '../../../data/artifacts.ts';
+import { explanationArtifactSchema } from '../../../artifacts/explanation.ts';
+import { loadJsonArtifact } from '../../../application/artifacts.ts';
 import type { CurrentUserIdentity } from '../../contract/auth.ts';
-import type { Change, ChangeCollection } from '../../contract/changes.ts';
+import type {
+  Change,
+  ChangeCollection,
+  ChangeExplanation,
+  ChangeTransition,
+} from '../../contract/changes.ts';
 import {
   conflict,
   internalServerError,
   notFound,
+  upstreamFailure,
   type DomainError,
 } from '../../contract/errors.ts';
 import { requireOrganizationWrite } from '../authorization.ts';
@@ -28,6 +44,15 @@ const dataEffect = <A>(run: () => Promise<A>): Effect.Effect<A, DomainError> =>
     catch: (failure) => {
       console.error('turbodiff: change operation failed', failure);
       return internalServerError();
+    },
+  });
+
+const providerEffect = <A>(run: () => Promise<A>): Effect.Effect<A, DomainError> =>
+  Effect.tryPromise({
+    try: run,
+    catch: (failure) => {
+      console.error('turbodiff: change provider operation failed', failure);
+      return upstreamFailure('Change provider operation failed');
     },
   });
 
@@ -94,6 +119,23 @@ export interface ChangeOperations {
   readonly createReviewRun: (
     user: CurrentUserIdentity,
     id: number,
+  ) => Effect.Effect<{ factoryRunId: number; stageRunId: number; status: 'queued' }, DomainError>;
+  readonly merge: (
+    user: CurrentUserIdentity,
+    id: number,
+  ) => Effect.Effect<ChangeTransition, DomainError>;
+  readonly close: (
+    user: CurrentUserIdentity,
+    id: number,
+  ) => Effect.Effect<ChangeTransition, DomainError>;
+  readonly getExplanation: (
+    user: CurrentUserIdentity,
+    id: number,
+  ) => Effect.Effect<ChangeExplanation, DomainError>;
+  readonly createExplanationRun: (
+    user: CurrentUserIdentity,
+    id: number,
+    force: boolean,
   ) => Effect.Effect<{ factoryRunId: number; stageRunId: number; status: 'queued' }, DomainError>;
 }
 
@@ -163,6 +205,179 @@ export const ChangeServiceLive = Layer.effect(
               {
                 stageKey: REVIEW_FLOW.initialStage,
                 idempotencyKey: `${key}:${REVIEW_FLOW.initialStage}:1`,
+              },
+            ),
+          );
+          yield* dataEffect(() =>
+            dependencies.enqueueFactory({
+              kind: 'run_factory',
+              factoryRunId: started.factoryRun.id,
+              stageRunId: started.stageRun.id,
+            }),
+          );
+          return {
+            factoryRunId: started.factoryRun.id,
+            stageRunId: started.stageRun.id,
+            status: 'queued' as const,
+          };
+        }),
+      merge: (user, id) =>
+        Effect.gen(function* () {
+          const change = yield* owned(user, id);
+          yield* requireOrganizationWrite(user, change.organization_id);
+          if (change.status === 'merged') return { status: 'merged' as const };
+          if (change.status !== 'open') {
+            return yield* Effect.fail(conflict(`Change is ${change.status}`));
+          }
+          const repository = yield* dataEffect(() => getRepository(change.repository_id));
+          if (!repository) return yield* Effect.fail(notFound('Unknown repository'));
+          if (repository.source_provider !== 'github') {
+            return yield* Effect.fail(conflict('This change provider does not support merging'));
+          }
+          yield* providerEffect(() => mergeGithubChange(repository, change));
+          yield* dataEffect(() => updateChangeStatus(change.id, 'merged'));
+          return { status: 'merged' as const };
+        }),
+      close: (user, id) =>
+        Effect.gen(function* () {
+          const change = yield* owned(user, id);
+          yield* requireOrganizationWrite(user, change.organization_id);
+          if (change.status === 'closed') {
+            return { status: 'closed' as const, branchDeleted: false };
+          }
+          if (change.status !== 'open') {
+            return yield* Effect.fail(conflict(`Change is ${change.status}`));
+          }
+          const repository = yield* dataEffect(() => getRepository(change.repository_id));
+          if (!repository) return yield* Effect.fail(notFound('Unknown repository'));
+          if (repository.source_provider !== 'github') {
+            return yield* Effect.fail(conflict('This change provider does not support closing'));
+          }
+          const result = yield* providerEffect(() => closeGithubChange(repository, change));
+          yield* dataEffect(() => updateChangeStatus(change.id, 'closed'));
+          return { status: 'closed' as const, branchDeleted: result.branchDeleted };
+        }),
+      getExplanation: (user, id) =>
+        Effect.gen(function* () {
+          yield* owned(user, id);
+          const revision = yield* dataEffect(() => latestChangeRevision(id));
+          if (!revision) {
+            return {
+              revisionId: null,
+              headSha: null,
+              status: 'none' as const,
+              artifactId: null,
+              document: null,
+              error: null,
+              createdAt: null,
+              completedAt: null,
+            };
+          }
+          const runs = (yield* dataEffect(() => listFactoryRuns({ changeId: id }))).filter(
+            (run) => run.flow_key === EXPLANATION_FLOW.key,
+          );
+          for (const run of runs) {
+            const agentRuns = yield* dataEffect(() => listAgentRunsForFactoryRun(run.id));
+            const completed = agentRuns.find(
+              (agentRun) => agentRun.status === 'succeeded' && agentRun.output_artifact_id,
+            );
+            const outputArtifactId = completed?.output_artifact_id;
+            if (outputArtifactId) {
+              const artifactRow = yield* dataEffect(() => getArtifact(outputArtifactId));
+              if (artifactRow) {
+                const artifact = yield* dataEffect(() =>
+                  loadJsonArtifact(artifactRow, explanationArtifactSchema),
+                );
+                if (artifact.revisionId === revision.id) {
+                  return {
+                    revisionId: revision.id,
+                    headSha: revision.head_sha,
+                    status: 'ready' as const,
+                    artifactId: artifactRow.id,
+                    document: artifact.document,
+                    error: null,
+                    createdAt: run.created_at,
+                    completedAt: run.completed_at,
+                  };
+                }
+              }
+            }
+            if (run.status === 'queued' || run.status === 'running') {
+              return {
+                revisionId: revision.id,
+                headSha: revision.head_sha,
+                status: run.status,
+                artifactId: null,
+                document: null,
+                error: null,
+                createdAt: run.created_at,
+                completedAt: null,
+              };
+            }
+            if (run.status === 'failed') {
+              return {
+                revisionId: revision.id,
+                headSha: revision.head_sha,
+                status: 'failed' as const,
+                artifactId: null,
+                document: null,
+                error: 'Explanation run failed',
+                createdAt: run.created_at,
+                completedAt: run.completed_at,
+              };
+            }
+          }
+          return {
+            revisionId: revision.id,
+            headSha: revision.head_sha,
+            status: 'none' as const,
+            artifactId: null,
+            document: null,
+            error: null,
+            createdAt: null,
+            completedAt: null,
+          };
+        }),
+      createExplanationRun: (user, id, force) =>
+        Effect.gen(function* () {
+          const change = yield* owned(user, id);
+          yield* requireOrganizationWrite(user, change.organization_id);
+          const revision = yield* dataEffect(() => latestChangeRevision(id));
+          if (!revision) return yield* Effect.fail(conflict('Change has no revision to explain'));
+          if (!force) {
+            const runs = (yield* dataEffect(() => listFactoryRuns({ changeId: id }))).filter(
+              (run) =>
+                run.flow_key === EXPLANATION_FLOW.key &&
+                (run.status === 'queued' || run.status === 'running'),
+            );
+            const existing = runs[0];
+            if (existing) {
+              const stages = yield* dataEffect(() => listStageRuns(existing.id));
+              const stage = stages.at(-1);
+              if (stage) {
+                return {
+                  factoryRunId: existing.id,
+                  stageRunId: stage.id,
+                  status: 'queued' as const,
+                };
+              }
+            }
+          }
+          const key = `explanation:${change.id}:${revision.head_sha}:${crypto.randomUUID()}`;
+          const started = yield* dataEffect(() =>
+            createFactoryRunWithStage(
+              {
+                organizationId: change.organization_id,
+                flowKey: EXPLANATION_FLOW.key,
+                flowVersion: EXPLANATION_FLOW.version,
+                changeId: change.id,
+                trigger: 'manual',
+                actorUserId: user.session.authUserId,
+                idempotencyKey: key,
+              },
+              {
+                stageKey: EXPLANATION_FLOW.initialStage,
+                idempotencyKey: `${key}:${EXPLANATION_FLOW.initialStage}:1`,
               },
             ),
           );

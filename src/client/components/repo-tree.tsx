@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import type { ApiTreeEntry } from '../../shared/api-types.ts';
+import type { ApiTreeEntry } from '../types.ts';
 import { repoTreeQuery } from '../lib/queries.ts';
 import { cn } from '../lib/utils.ts';
 

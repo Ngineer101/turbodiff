@@ -1,13 +1,22 @@
 import { env } from 'cloudflare:workers';
 import { Hono } from 'hono';
-import { transcriptKey } from '../ai/runtime/agent-runs.ts';
 import { requireUser, type AuthedUser } from '../application/auth/session.ts';
 import { getArtifact } from '../data/artifacts.ts';
 import { getAgentRun } from '../data/execution.ts';
+import { persistArtifactBody } from '../application/artifacts.ts';
+import { isString } from '../shared/json.ts';
 
 type ProtocolEnv = { Variables: { user: AuthedUser } };
 
 const TRANSCRIPTION_LIMIT = 15 * 1024 * 1024;
+const ATTACHMENT_LIMIT = 10 * 1024 * 1024;
+const ATTACHMENT_TYPES = new Set([
+  'application/pdf',
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+]);
 
 export function createProtocolRoutes(authenticate: typeof requireUser = requireUser) {
   const app = new Hono<ProtocolEnv>();
@@ -78,6 +87,39 @@ export function createProtocolRoutes(authenticate: typeof requireUser = requireU
     }
   });
 
+  app.post('/work-item-attachments', async (context) => {
+    const body = await context.req.parseBody();
+    const file = body.file;
+    const organizationId = body.organizationId;
+    if (!(file instanceof File) || !isString(organizationId)) {
+      return context.json({ error: 'multipart file and organizationId fields are required' }, 400);
+    }
+    if (!context.get('user').organizationIds.includes(organizationId)) {
+      return context.json({ error: 'unknown organization' }, 404);
+    }
+    if (!ATTACHMENT_TYPES.has(file.type)) {
+      return context.json({ error: 'only PDF and image attachments are supported' }, 400);
+    }
+    if (file.size > ATTACHMENT_LIMIT) {
+      return context.json({ error: 'attachment exceeds 10MB' }, 400);
+    }
+    if (file.size === 0) return context.json({ error: 'attachment is empty' }, 400);
+
+    const safeName = file.name.replace(/[^\w.-]/g, '_').slice(-80) || 'attachment';
+    const artifact = await persistArtifactBody({
+      organizationId,
+      kind: 'work_item_attachment',
+      storageKey: `work-item-attachments/${crypto.randomUUID()}/${safeName}`,
+      contentType: file.type,
+      body: new Uint8Array(await file.arrayBuffer()),
+    });
+    return context.json({
+      artifactId: artifact.id,
+      name: file.name.slice(-120),
+      contentType: file.type,
+    });
+  });
+
   app.get('/agent-runs/:id/log', async (context) => {
     const id = Number(context.req.param('id'));
     const run = await getAgentRun(id);
@@ -92,22 +134,6 @@ export function createProtocolRoutes(authenticate: typeof requireUser = requireU
     if (!object) return context.json({ error: 'log no longer available' }, 404);
 
     return context.body(object.body, 200, { 'content-type': 'text/plain; charset=utf-8' });
-  });
-
-  app.get('/agent-runs/:id/transcript', async (context) => {
-    const id = Number(context.req.param('id'));
-    const run = await getAgentRun(id);
-    if (!run || !context.get('user').organizationIds.includes(run.organization_id)) {
-      return context.json({ error: 'unknown agent run' }, 404);
-    }
-
-    const artifact = run.log_artifact_id ? await getArtifact(run.log_artifact_id) : null;
-    if (!artifact) return context.json({ error: 'transcript no longer available' }, 404);
-
-    const object = await env.ARTIFACTS.get(transcriptKey(artifact.storage_key));
-    if (!object) return context.json({ error: 'transcript no longer available' }, 404);
-
-    return context.body(object.body, 200, { 'content-type': 'application/x-ndjson' });
   });
 
   return app;

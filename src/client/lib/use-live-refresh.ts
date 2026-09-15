@@ -1,7 +1,6 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { useCallback, useEffect, useState } from 'react';
 import { isJsonObject } from '../../shared/json.ts';
-import { api } from './api.ts';
 
 // Cheap live updates: poll the one-row change counter (GET
 // /api/factory-state, maintained by PostgreSQL triggers) and refetch the real
@@ -18,9 +17,9 @@ const MAX_UNOPENED_ATTEMPTS = 5;
 // Query keys that mirror live factory state.
 const LIVE_KEYS = ['board', 'task', 'feature', 'chat', 'automation-runs', 'automation-run'];
 
-export function useLiveRefresh(installationIds: number[]): void {
+export function useLiveRefresh(organizationIds: string[]): void {
   const queryClient = useQueryClient();
-  const idsKey = [...new Set(installationIds)].sort((a, b) => a - b).join(',');
+  const idsKey = [...new Set(organizationIds)].sort().join(',');
   const [fullyConnected, setFullyConnected] = useState(false);
   const invalidate = useCallback(() => {
     for (const key of LIVE_KEYS) {
@@ -29,7 +28,7 @@ export function useLiveRefresh(installationIds: number[]): void {
   }, [queryClient]);
 
   useEffect(() => {
-    const ids = idsKey.split(',').filter(Boolean).map(Number);
+    const ids = idsKey.split(',').filter(Boolean);
     if (ids.length === 0) return;
     let stopped = false;
     let connected = 0;
@@ -38,11 +37,11 @@ export function useLiveRefresh(installationIds: number[]): void {
     const heartbeatTimers = new Map<WebSocket, number>();
     const updateConnectionState = () => setFullyConnected(connected === ids.length);
 
-    const connect = (installationId: number, attempt: number) => {
+    const connect = (organizationId: string, attempt: number) => {
       if (stopped) return;
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
       const socket = new WebSocket(
-        `${protocol}//${location.host}/protocol/installations/${installationId}/events`,
+        `${protocol}//${location.host}/protocol/organizations/${encodeURIComponent(organizationId)}/events`,
       );
       sockets.add(socket);
       let opened = false;
@@ -75,13 +74,13 @@ export function useLiveRefresh(installationIds: number[]): void {
         const delay = Math.min(30_000, 1_000 * 2 ** Math.min(attempt, 5));
         const timer = window.setTimeout(() => {
           reconnectTimers.delete(timer);
-          connect(installationId, opened ? 0 : attempt + 1);
+          connect(organizationId, opened ? 0 : attempt + 1);
         }, delay);
         reconnectTimers.add(timer);
       });
     };
 
-    for (const installationId of ids) connect(installationId, 0);
+    for (const organizationId of ids) connect(organizationId, 0);
     return () => {
       stopped = true;
       setFullyConnected(false);
@@ -91,25 +90,9 @@ export function useLiveRefresh(installationIds: number[]): void {
     };
   }, [idsKey, invalidate]);
 
-  // A deliberately slow global counter remains as a safety net during
-  // deploys, offline transitions, or browsers where WebSockets are blocked.
-  const { data } = useQuery({
-    queryKey: ['factory-state'],
-    queryFn: () => api.get<{ version: number }>('/api/factory-state'),
-    enabled: !fullyConnected,
-    refetchInterval: fullyConnected ? false : FALLBACK_POLL_MS,
-    // Version numbers are meaningless across reloads — never persist, and
-    // don't let a cached value suppress the first real read.
-    gcTime: 0,
-    staleTime: 0,
-  });
-  const prev = useRef<number | null>(null);
   useEffect(() => {
-    const v = data?.version;
-    if (v === undefined) return;
-    if (prev.current !== null && v !== prev.current) {
-      invalidate();
-    }
-    prev.current = v;
-  }, [data?.version, invalidate]);
+    if (fullyConnected) return;
+    const timer = window.setInterval(invalidate, FALLBACK_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [fullyConnected, invalidate]);
 }

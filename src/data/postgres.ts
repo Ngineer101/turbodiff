@@ -17,6 +17,7 @@ type DatabaseExecutor = Database | DatabaseTransaction;
 
 interface DatabaseScope {
   database?: Promise<DatabaseExecutor>;
+  operationTail?: Promise<void>;
 }
 
 const databaseScope = new AsyncLocalStorage<DatabaseScope>();
@@ -89,7 +90,19 @@ export async function withDatabase<Result>(
 ): Promise<Result> {
   const scope = databaseScope.getStore();
   if (scope) {
-    return operation(await scopedDatabase(scope));
+    const database = await scopedDatabase(scope);
+    const previous = scope.operationTail ?? Promise.resolve();
+    let release: () => void = () => undefined;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    scope.operationTail = previous.then(() => current);
+    await previous;
+    try {
+      return await operation(database);
+    } finally {
+      release();
+    }
   }
 
   const { connection, database } = await connectDatabase();

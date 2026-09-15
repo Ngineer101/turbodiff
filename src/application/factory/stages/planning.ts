@@ -1,5 +1,6 @@
 import type { Sandbox } from '@cloudflare/sandbox';
-import type { ZodType } from 'zod';
+import { env } from 'cloudflare:workers';
+import { z, type ZodType } from 'zod';
 import {
   plannerAgent,
   PLANNER_OUTPUT_DIR,
@@ -7,12 +8,12 @@ import {
   type PlannerDraftInput,
 } from '../../../agents/planner.ts';
 import type { AgentExecutionRequest } from '../../../agents/types.ts';
-import { runCodingAgent } from '../../../ai/runtime/coding-agent.ts';
-import { PLANNING_CONFIG } from '../../../ai/runtime/planning-session.ts';
-import { redactSecrets } from '../../../ai/runtime/redaction.ts';
-import { resolveRunnerAuth } from '../../../ai/runtime/runner-auth.ts';
-import { runnerSandbox } from '../../../ai/runtime/sandbox.ts';
-import { mountSkills } from '../../../ai/runtime/skills.ts';
+import { runCodingAgent } from '../../../integrations/agent-runtime/coding-agent.ts';
+import { PLANNING_CONFIG } from '../../../integrations/agent-runtime/planning-session.ts';
+import { redactSecrets } from '../../../integrations/agent-runtime/redaction.ts';
+import { resolveRunnerAuth } from '../runner-auth.ts';
+import { runnerSandbox } from '../../../integrations/agent-runtime/sandbox.ts';
+import { mountSkills } from '../../../integrations/agent-runtime/skills.ts';
 import {
   getAgent,
   getAgentBySlug,
@@ -31,13 +32,24 @@ import {
   type SkillRow,
 } from '../../../data/skills.ts';
 import { getWorkItem, listWorkItemTargets, updateWorkItem } from '../../../data/work.ts';
-import { type FactoryRunRow, type StageRunRow } from '../../../data/execution.ts';
+import {
+  listLifecycleEvents,
+  type FactoryRunRow,
+  type StageRunRow,
+} from '../../../data/execution.ts';
+import { getArtifact } from '../../../data/artifacts.ts';
 import { remoteSourceOf, resolveWorkspaceRemote } from '../../../integrations/git/provider.ts';
-import { buildSandboxMcpConfig, type SandboxMcpBinding } from '../../../integrations/mcp/proxy.ts';
+import { buildSandboxMcpConfig, type SandboxMcpBinding } from '../../integrations/mcp-proxy.ts';
+import { signArtifactKey } from '../../../integrations/security/crypto.ts';
 import { runTrackedAgent, type AgentInvocation } from '../agent-run.ts';
 
 const PROMPT_FILE = `${PLANNER_OUTPUT_DIR}/task.md`;
 const AGENT_TIMEOUT_MS = 25 * 60_000;
+const factoryRunRequestSchema = z.object({
+  attachments: z
+    .array(z.object({ artifactId: z.number().int().positive(), name: z.string() }).strict())
+    .default([]),
+});
 
 function runtimeSkills(rows: SkillRow[]) {
   return [...new Map(rows.map((row) => [row.id, row])).values()].map((row) => ({
@@ -60,6 +72,43 @@ async function optionalText(sandbox: Sandbox, path: string): Promise<string | nu
   } catch {
     return null;
   }
+}
+
+async function mountAttachments(
+  sandbox: Sandbox,
+  factoryRun: FactoryRunRow,
+  workspaceRoot: string,
+): Promise<string[]> {
+  const events = await listLifecycleEvents(factoryRun.id);
+  const requested = events.find((event) => event.kind === 'factory_run_requested');
+  const parsed = factoryRunRequestSchema.safeParse(requested?.payload ?? {});
+  if (!parsed.success || parsed.data.attachments.length === 0) return [];
+
+  const directory = `${workspaceRoot}/attachments`;
+  await sandbox.exec(`mkdir -p ${directory}`);
+  const paths: string[] = [];
+  for (const [index, input] of parsed.data.attachments.entries()) {
+    const artifact = await getArtifact(input.artifactId);
+    if (
+      !artifact ||
+      artifact.organization_id !== factoryRun.organization_id ||
+      artifact.kind !== 'work_item_attachment'
+    ) {
+      throw new Error(`attachment artifact ${input.artifactId} is unavailable`);
+    }
+    const name = input.name.replace(/[^\w.-]/g, '_').slice(-60) || 'attachment';
+    const path = `${directory}/${index + 1}-${name}`;
+    const signature = await signArtifactKey(artifact.storage_key);
+    const baseUrl = env.PUBLIC_BASE_URL.replace(/\/$/, '');
+    const url = `${baseUrl}/artifacts/${artifact.storage_key}?sig=${signature}`;
+    const downloaded = await sandbox.exec(`curl -fsSL -o "${path}" "$ATTACHMENT_URL"`, {
+      env: { ATTACHMENT_URL: url },
+      timeout: 60_000,
+    });
+    if (!downloaded.success) throw new Error(`attachment ${input.name} could not be downloaded`);
+    paths.push(path);
+  }
+  return paths;
 }
 
 async function invokePlanner(
@@ -132,6 +181,7 @@ export async function executePlanningStage(
   const secrets: string[] = [];
   const mcpBindings: SandboxMcpBinding[] = [];
   try {
+    const attachments = await mountAttachments(sandbox, factoryRun, workspaceRoot);
     for (const target of targets) {
       const repository = await getRepository(target.repository_id);
       if (!repository?.enabled || repository.organization_id !== factoryRun.organization_id) {
@@ -185,7 +235,7 @@ export async function executePlanningStage(
       title: workItem.title,
       requirements: workItem.description,
       repositories,
-      attachments: [],
+      attachments,
       analysis: null,
       tier: 'standard',
       answers: [],

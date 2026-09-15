@@ -31,7 +31,7 @@ export const WorkItemsHandlers = HttpApiBuilder.group(
       )
       .handle('startWorkItemFactoryRun', ({ path, payload }) =>
         Effect.flatMap(CurrentUser, (user) =>
-          service.startRun(user, path.workItemId, payload.flow),
+          service.startRun(user, path.workItemId, payload.flow, payload.model, payload.attachments),
         ),
       )
       .handle('approveWorkItemPlan', ({ path, payload }) =>

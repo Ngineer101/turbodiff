@@ -1,11 +1,10 @@
-import { setProvider } from '@flue/runtime';
-import { cloudflareBindingProvider } from '@flue/runtime/cloudflare/workers-ai';
 import { env } from 'cloudflare:workers';
-import { sql } from 'drizzle-orm';
-import { execute, withDatabaseScope } from './data/postgres.ts';
+import { withDatabaseScope } from './data/postgres.ts';
+import { databaseIsHealthy } from './data/health.ts';
 import { Hono } from 'hono';
 import { handleEffectApi } from './api/server/handler.ts';
 import { createProtocolRoutes } from './http/protocol.ts';
+import { createIntegrationOAuthRoutes } from './http/integration-oauth.ts';
 import { handleEmailSignUp } from './http/auth-email.ts';
 import { createMcpRoutes } from './http/mcp.ts';
 import { handleMcpProxy } from './http/mcp-proxy.ts';
@@ -15,16 +14,6 @@ import { createWebhookRoutes } from './http/webhooks.ts';
 import { oAuthDiscoveryMetadata, oAuthProtectedResourceMetadata } from 'better-auth/plugins';
 import { withAuth } from './integrations/auth/better-auth.ts';
 import { verifyArtifactSig } from './integrations/security/crypto.ts';
-
-// Route every model call through the Workers AI binding and the named
-// AI Gateway (set AI_GATEWAY_ID in wrangler.jsonc). The gateway holds the
-// provider keys (BYOK) — no ANTHROPIC_API_KEY ever enters this Worker.
-setProvider(
-  cloudflareBindingProvider({
-    binding: env.AI,
-    gateway: { id: env.AI_GATEWAY_ID, metadata: { app: 'turbodiff' } },
-  }),
-);
 
 const startedAt = Date.now();
 
@@ -68,7 +57,7 @@ app.use('*', async (c, next) => {
 
 app.get('/healthz', async (c) => {
   try {
-    await execute(sql`SELECT 1`);
+    await databaseIsHealthy();
   } catch (err) {
     console.error('turbodiff: healthz PostgreSQL check failed', err);
     return c.json({ ok: false, db: false }, 503);
@@ -105,7 +94,7 @@ app.get('/artifacts/*', async (c) => {
 app.route('/webhooks', createWebhookRoutes());
 
 // MCP relay for sandbox runs — authenticated by a short-lived sealed grant
-// minted per run, not by session or bearer secret (see lib/mcp-proxy.ts).
+// minted per run, not by session or bearer secret.
 app.on(['GET', 'POST', 'DELETE'], '/mcp-proxy/:id', handleMcpProxy);
 
 // Model relay for sandbox coding runs. The permanent Cloudflare API token
@@ -145,6 +134,8 @@ app.on(['GET', 'POST'], '/api/auth/update-user', (c) => c.json({ error: 'not fou
 app.post('/api/auth/sign-up/email', handleEmailSignUp);
 
 app.on(['GET', 'POST'], '/api/auth/*', (c) => withAuth((instance) => instance.handler(c.req.raw)));
+
+app.route('/api/integrations', createIntegrationOAuthRoutes());
 
 // Effect owns the complete JSON data plane. Unknown /api routes are contract
 // 404s; there is no legacy fallback with a second authorization stack.

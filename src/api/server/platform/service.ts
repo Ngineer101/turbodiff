@@ -1,5 +1,4 @@
 import { Context, Effect, Layer } from 'effect';
-import { listGithubInstallationIds } from '../../../data/integrations.ts';
 import {
   deletePushSubscription,
   upsertPushSubscription,
@@ -41,19 +40,16 @@ export const PlatformServiceLive = Layer.effect(
     const dependencies = yield* ApiDependencies;
     return {
       currentUser: (user) =>
-        databaseEffect(() => listGithubInstallationIds(user.organizationIds)).pipe(
-          Effect.map((githubInstallationIds) => ({
-            login: user.githubConnected ? user.session.login : null,
-            name: user.name,
-            githubConnected: user.githubConnected,
-            githubStatus: user.githubStatus,
-            githubAppSlug: dependencies.githubAppSlug,
-            vapidPublicKey: dependencies.vapidPublicKey,
-            activeOrganizationId: user.activeOrganizationId,
-            organizationIds: user.organizationIds,
-            githubInstallationIds,
-          })),
-        ),
+        Effect.succeed({
+          login: user.githubConnected ? user.session.login : null,
+          name: user.name,
+          githubConnected: user.githubConnected,
+          githubStatus: user.githubStatus,
+          githubAppSlug: dependencies.githubAppSlug,
+          vapidPublicKey: dependencies.vapidPublicKey,
+          activeOrganizationId: user.activeOrganizationId,
+          organizationIds: user.organizationIds,
+        }),
       subscribe: (user, input) =>
         Effect.gen(function* () {
           const endpoint = input.endpoint.trim();

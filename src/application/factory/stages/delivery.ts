@@ -6,14 +6,14 @@ import {
   type RepositoryChangeArtifact,
 } from '../../../artifacts/change.ts';
 import { storedPlanArtifactSchema } from '../../../artifacts/plan.ts';
-import { runCodingAgent } from '../../../ai/runtime/coding-agent.ts';
-import { runCheckCommand } from '../../../ai/runtime/check-command.ts';
-import { readRepositoryChangeArtifact } from '../../../ai/runtime/repository-change-artifact.ts';
-import { redactSecrets } from '../../../ai/runtime/redaction.ts';
-import { resolveRunnerAuth } from '../../../ai/runtime/runner-auth.ts';
-import { generationSandbox } from '../../../ai/runtime/sandbox.ts';
-import { NPM_CACHE_ENV } from '../../../ai/runtime/sandbox-deps.ts';
-import { mountSkills } from '../../../ai/runtime/skills.ts';
+import { runCodingAgent } from '../../../integrations/agent-runtime/coding-agent.ts';
+import { runCheckCommand } from '../../../integrations/agent-runtime/check-command.ts';
+import { readRepositoryChangeArtifact } from '../../../integrations/agent-runtime/repository-change-artifact.ts';
+import { redactSecrets } from '../../../integrations/agent-runtime/redaction.ts';
+import { resolveRunnerAuth } from '../runner-auth.ts';
+import { generationSandbox } from '../../../integrations/agent-runtime/sandbox.ts';
+import { NPM_CACHE_ENV } from '../../../integrations/agent-runtime/sandbox-deps.ts';
+import { mountSkills } from '../../../integrations/agent-runtime/skills.ts';
 import {
   completeWorkItemWhenDelivered,
   getDelivery,
@@ -49,7 +49,7 @@ import { buildReviewDiffSnapshot } from '../../../domain/review-context.ts';
 import { remoteSourceOf, resolveWorkspaceRemote } from '../../../integrations/git/provider.ts';
 import { installationToken } from '../../../integrations/github/app.ts';
 import { githubJson } from '../../../integrations/github/client.ts';
-import { buildSandboxMcpConfig } from '../../../integrations/mcp/proxy.ts';
+import { buildSandboxMcpConfig } from '../../integrations/mcp-proxy.ts';
 import { isJsonObject, isString } from '../../../shared/json.ts';
 import { loadJsonArtifact, persistJsonArtifact } from '../../artifacts.ts';
 import { runTrackedAgent, type AgentInvocation } from '../agent-run.ts';
@@ -226,7 +226,7 @@ export async function executeDeliveryStage(
     workflows: true,
   });
   const { prepareCachedWorktree, pushHeadCommand } =
-    await import('../../../ai/runtime/repository-workspace.ts');
+    await import('../../../integrations/agent-runtime/repository-workspace.ts');
   await prepareCachedWorktree({ sandbox, cacheDir, workDir, remote, base, branch });
   let completed = false;
   try {

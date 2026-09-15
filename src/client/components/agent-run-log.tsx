@@ -1,14 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import type { ApiAgentRun } from '../../shared/api-types.ts';
+import type { ApiAgentRun } from '../types.ts';
 import { ago } from '../lib/format.ts';
 import { agentRunLogQuery } from '../lib/queries.ts';
 import { SectionHeading } from './section.tsx';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from './ui/accordion.tsx';
 
-// Collapsed per-run session log — the full stdout+stderr of one sandboxed
-// agent-CLI invocation. Not fetched until the user expands it: most runs are
-// never inspected, and the transcripts can be large.
+// Logs are fetched only when a run is expanded.
 const KIND_LABEL = {
   plan_analyze: 'Plan analyze',
   plan_refine: 'Plan refine',

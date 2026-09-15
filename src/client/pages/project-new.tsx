@@ -3,7 +3,8 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { Bot, FolderPlus, GitBranch, Plug, Sparkles, type LucideIcon } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { api, ApiError } from '../lib/api.ts';
+import { ApiError } from '../lib/api.ts';
+import { createCloneCredential, createProject } from '../lib/backend.ts';
 import { PROCESS_PROFILES } from '../lib/process-profiles.ts';
 import { meQuery } from '../lib/queries.ts';
 import { Button, buttonVariants } from '../components/ui/button.tsx';
@@ -14,11 +15,7 @@ import { Lamp } from '../components/identity.tsx';
 import { PageTitle, SectionHeading } from '../components/section.tsx';
 import { cn } from '../lib/utils.ts';
 import { cloneCommand, PROJECT_SEGMENT } from '../../shared/projects.ts';
-import type {
-  ApiCloneCredential,
-  ApiCreatedProject,
-  ApiProcessProfile,
-} from '../../shared/api-types.ts';
+import type { ApiCloneCredential, ApiCreatedProject, ApiProcessProfile } from '../types.ts';
 
 // Create a turbodiff-hosted project (docs/artifacts-provider.md): the repo
 // lives on Cloudflare Artifacts in turbodiff's account — no GitHub App, no
@@ -51,15 +48,7 @@ export function ProjectNewPage() {
 
   const create = useMutation({
     mutationFn: () =>
-      api.post<
-        ApiCreatedProject,
-        { owner: string; name: string; description?: string; process_profile: ApiProcessProfile }
-      >('/api/projects', {
-        owner: owner.trim().toLowerCase(),
-        name: name.trim(),
-        description: description.trim() || undefined,
-        process_profile: processProfile,
-      }),
+      createProject(owner.trim().toLowerCase(), name.trim(), description.trim() || undefined),
     onSuccess: (project) => {
       toast.success('Project created');
       setCreated(project);
@@ -199,13 +188,7 @@ export function ProjectNewPage() {
 function ProjectCreated({ project }: { project: ApiCreatedProject }) {
   const [credential, setCredential] = useState<ApiCloneCredential | null>(null);
   const mint = useMutation({
-    mutationFn: () =>
-      api.post<ApiCloneCredential, { scope: string }>(
-        `/api/repos/${project.repository_id}/clone-token`,
-        {
-          scope: 'read',
-        },
-      ),
+    mutationFn: () => createCloneCredential(project.repository_id, 'read'),
     onSuccess: setCredential,
     onError: (err) =>
       toast.error(err instanceof ApiError ? err.message : 'Could not mint a clone token'),

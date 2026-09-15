@@ -2,7 +2,8 @@ import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-q
 import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { api, ApiError } from '../lib/api.ts';
+import { ApiError } from '../lib/api.ts';
+import { createAutomation } from '../lib/backend.ts';
 import { automationsQuery } from '../lib/queries.ts';
 import { AutomationForm, type AutomationSubmitValues } from '../components/automation-form.tsx';
 
@@ -13,7 +14,7 @@ export function AutomationNewPage() {
   const [error, setError] = useState<string | null>(null);
 
   const create = useMutation({
-    mutationFn: (values: AutomationSubmitValues) => api.post('/api/automations', values),
+    mutationFn: (values: AutomationSubmitValues) => createAutomation(values),
     onSuccess: () => {
       toast.success('automation created');
       void queryClient.invalidateQueries({ queryKey: ['automations'] });

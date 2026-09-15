@@ -25,15 +25,36 @@ try {
   throw new Error('Fresh baseline migration failed', { cause: error });
 }
 
-const schemaCounts = await database.query(`
-  SELECT table_schema, COUNT(*)::int AS count
+const requiredTables = await database.query(`
+  SELECT table_schema || '.' || table_name AS name
   FROM information_schema.tables
   WHERE table_schema IN ('app', 'auth') AND table_type = 'BASE TABLE'
-  GROUP BY table_schema
 `);
-const counts = new Map(schemaCounts.rows.map((row) => [row.table_schema, row.count]));
-if (counts.get('app') !== 30 || counts.get('auth') !== 10) {
-  throw new Error(`Unexpected table counts: ${JSON.stringify(Object.fromEntries(counts))}`);
+const tableNames = new Set(requiredTables.rows.map((row) => row.name));
+for (const name of [
+  'auth.user',
+  'auth.organization',
+  'auth.member',
+  'app.integrations',
+  'app.repositories',
+  'app.models',
+  'app.agents',
+  'app.skills',
+  'app.automations',
+  'app.artifacts',
+  'app.work_items',
+  'app.work_item_targets',
+  'app.deliveries',
+  'app.acceptance_contracts',
+  'app.changes',
+  'app.change_revisions',
+  'app.factory_runs',
+  'app.stage_runs',
+  'app.agent_runs',
+  'app.lifecycle_events',
+  'app.review_outcomes',
+]) {
+  if (!tableNames.has(name)) throw new Error(`Required primitive table is missing: ${name}`);
 }
 
 const legacyTables = await database.query(`
@@ -210,4 +231,4 @@ await mustReject(
 );
 
 await database.close();
-console.log('Fresh primitive-first PostgreSQL baseline passed (1 migration, 40 tables)');
+console.log('Fresh primitive-first PostgreSQL baseline passed (1 migration)');

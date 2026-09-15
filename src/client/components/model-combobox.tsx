@@ -1,6 +1,6 @@
 import { Check, ChevronsUpDown } from 'lucide-react';
 import { useId, useMemo, useState } from 'react';
-import type { ApiModelOption } from '../../shared/api-types.ts';
+import type { ApiModelOption } from '../types.ts';
 import { cn } from '../lib/utils.ts';
 import { Button } from './ui/button.tsx';
 import {

@@ -297,22 +297,6 @@ export const integrations = appSchema.table(
   ],
 );
 
-export const integrationSyncState = appSchema.table(
-  'integration_sync_state',
-  {
-    integrationId: bigint('integration_id', { mode: 'number' }).primaryKey(),
-    cursor: text(),
-    syncedAt: timestamp('synced_at', { withTimezone: true, mode: 'string' }),
-    leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true, mode: 'string' }),
-    error: text(),
-  },
-  (table) => [
-    foreignKey({ columns: [table.integrationId], foreignColumns: [integrations.id] }).onDelete(
-      'cascade',
-    ),
-  ],
-);
-
 export const repositories = appSchema.table(
   'repositories',
   {
@@ -758,6 +742,7 @@ export const factoryRuns = appSchema.table(
     organizationId: text('organization_id').notNull(),
     flowKey: text('flow_key').notNull(),
     flowVersion: integer('flow_version').notNull(),
+    modelId: bigint('model_id', { mode: 'number' }),
     workItemId: bigint('work_item_id', { mode: 'number' }),
     deliveryId: bigint('delivery_id', { mode: 'number' }),
     changeId: bigint('change_id', { mode: 'number' }),
@@ -780,9 +765,11 @@ export const factoryRuns = appSchema.table(
     index('factory_runs_automation_idx').on(table.automationId, table.createdAt.desc()),
     index('factory_runs_parent_idx').on(table.parentRunId),
     index('factory_runs_actor_idx').on(table.actorUserId),
+    index('factory_runs_model_idx').on(table.modelId),
     foreignKey({ columns: [table.organizationId], foreignColumns: [organization.id] }).onDelete(
       'restrict',
     ),
+    foreignKey({ columns: [table.modelId], foreignColumns: [models.id] }).onDelete('restrict'),
     factoryRunParentForeignKey(table),
     foreignKey({
       columns: [table.workItemId, table.organizationId],

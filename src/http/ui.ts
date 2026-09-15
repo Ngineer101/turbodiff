@@ -10,7 +10,7 @@ import { renderLanding } from './landing.tsx';
 // Signed-in HTTP UI: a TanStack Router SPA (src/client, built into public/app by
 // vite.client.config.ts). This module only owns sign-in/out and serving the
 // shell — sessions are better-auth's (src/integrations/auth/better-auth.ts), and all data
-// flows through the JSON API in ./api.ts. Logged-out / serves the landing
+// flows through the contract-derived Effect client. Logged-out / serves the landing
 // page.
 
 // The pre-better-auth stateless session cookie — deleted on sign-out so
@@ -167,16 +167,16 @@ ${assets.styles.map((path) => `\t\t<link rel="stylesheet" href="${path}" />`).jo
 async function shellForPath(c: Context, path: string): Promise<string> {
   const preload = ['/api/me'];
   if (path === '/') preload.push('/api/work-items');
-  else if (path === '/settings') preload.push('/api/installations');
+  else if (path === '/settings') preload.push('/api/repositories');
   else if (path === '/usage') preload.push('/api/usage-summary');
-  else if (path === '/integrations') preload.push('/api/connections');
+  else if (path === '/integrations') preload.push('/api/integrations');
   else if (path === '/agents') preload.push('/api/agents');
   else if (path === '/skills') preload.push('/api/skills');
   // Exact query string the browse route's loader fetches first.
   else if (path === '/skills/browse') preload.push('/api/skills/catalog?q=&sort=trending');
   else if (path === '/automations') preload.push('/api/automations');
   else if (/^\/tasks\/\d+$/.test(path)) {
-    preload.push(`/api/planning-runs/${path.slice('/tasks/'.length)}`);
+    preload.push(`/api/work-items/${path.slice('/tasks/'.length)}`);
   } else if (/^\/factory\/features\/\d+$/.test(path)) {
     preload.push(`/api/deliveries/${path.slice('/factory/features/'.length)}`);
   } else {

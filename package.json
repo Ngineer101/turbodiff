@@ -17,7 +17,6 @@
     "@codemirror/state": "^6.5.2",
     "@codemirror/view": "^6.38.1",
     "@effect/platform": "0.97.2",
-    "@flue/runtime": "^2.0.1",
     "@lezer/highlight": "^1.2.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@pierre/diffs": "^1.3.4",
@@ -54,8 +53,6 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.39.2",
     "@electric-sql/pglite": "^0.3.14",
-    "@flue/cli": "^2.0.1",
-    "@flue/vite": "^2.0.1",
     "@oxlint/plugins": "1.78.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^22.10.10",

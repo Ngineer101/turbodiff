@@ -28,7 +28,7 @@ import {
   readTreeArtifacts,
 } from '../../integrations/source-code/artifacts.ts';
 import type { AuthedUser } from '../auth/session.ts';
-import { DISPATCH_FLOW, PLANNING_FLOW } from '../factory/flows.ts';
+import { WORK_ITEM_FLOW } from '../factory/flows.ts';
 import type { enqueueFactoryMessage } from '../factory/queue.ts';
 
 export class McpToolError extends Error {}
@@ -244,19 +244,21 @@ export async function startFactoryRun(
   if (input.flow === 'delivery' && !workItem.approved_plan_artifact_id) {
     throw new McpToolError('approve a plan artifact before delivery');
   }
-  const flow = input.flow === 'planning' ? PLANNING_FLOW : DISPATCH_FLOW;
-  const key = `${flow.key}:${workItem.id}:${crypto.randomUUID()}`;
+  const planningStage = WORK_ITEM_FLOW.stages[WORK_ITEM_FLOW.initialStage];
+  const stageKey =
+    input.flow === 'planning' ? WORK_ITEM_FLOW.initialStage : planningStage.success.nextStage;
+  const key = `${WORK_ITEM_FLOW.key}:${workItem.id}:${crypto.randomUUID()}`;
   const started = await createFactoryRunWithStage(
     {
       organizationId: workItem.organization_id,
-      flowKey: flow.key,
-      flowVersion: flow.version,
+      flowKey: WORK_ITEM_FLOW.key,
+      flowVersion: WORK_ITEM_FLOW.version,
       workItemId: workItem.id,
       trigger: 'mcp',
       actorUserId: user.session.authUserId,
       idempotencyKey: key,
     },
-    { stageKey: flow.initialStage, idempotencyKey: `${key}:${flow.initialStage}:1` },
+    { stageKey, idempotencyKey: `${key}:${stageKey}:1` },
   );
   await updateWorkItem(workItem.id, {
     status: input.flow === 'planning' ? 'planning' : 'in_progress',

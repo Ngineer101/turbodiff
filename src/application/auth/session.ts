@@ -1,6 +1,6 @@
-import { sql } from 'drizzle-orm';
-import { queryOne, sqlValueList } from '../../data/postgres.ts';
 import { ensureBuiltinAgents } from '../../data/agents.ts';
+import { hasEnabledGithubIntegration } from '../../data/integrations.ts';
+import { getAuthUser } from '../../data/auth-users.ts';
 import {
   claimGithubOrganizations,
   ensurePersonalOrganization,
@@ -30,18 +30,6 @@ export type GitHubStatus =
   | 'syncing'
   | 'ready';
 
-async function hasGithubIntegration(organizationIds: string[]): Promise<boolean> {
-  if (organizationIds.length === 0) return false;
-  const row = await queryOne<{ connected: boolean }>(sql`
-    SELECT EXISTS(
-      SELECT 1 FROM app.integrations
-      WHERE organization_id IN (${sqlValueList(organizationIds)})
-        AND kind = 'scm' AND provider = 'github' AND enabled
-    ) AS connected
-  `);
-  return row?.connected ?? false;
-}
-
 async function resolveAuthedUser(
   identity: AuthUser,
   preferredOrganizationId?: string | null,
@@ -64,7 +52,7 @@ async function resolveAuthedUser(
   const login = identity.login ?? null;
   const githubUserId = identity.githubId ?? null;
   const githubConnected = login !== null && githubUserId !== null;
-  const integrationConnected = await hasGithubIntegration(organizationIds);
+  const integrationConnected = await hasEnabledGithubIntegration(organizationIds);
   return {
     session: { authUserId: identity.id, githubUserId, login },
     organizationIds,
@@ -102,10 +90,6 @@ export async function requireMcpUser(request: Request): Promise<AuthedUser | nul
     instance.api.getMcpSession({ headers: request.headers }),
   );
   if (!token?.userId) return null;
-  const identity = await queryOne<AuthUser>(sql`
-    SELECT id, name, email, login, "githubId" AS "githubId"
-    FROM auth."user"
-    WHERE id = ${token.userId}
-  `);
+  const identity = await getAuthUser(token.userId);
   return identity ? resolveAuthedUser(identity) : null;
 }

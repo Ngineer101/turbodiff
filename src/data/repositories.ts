@@ -45,12 +45,6 @@ export async function listRepositories(organizationIds: string[]): Promise<Repos
   `);
 }
 
-export async function listRepositoriesWithIntegration(
-  organizationIds: string[],
-): Promise<RepositoryRow[]> {
-  return listRepositories(organizationIds);
-}
-
 export async function getRepository(id: number): Promise<RepositoryRow | null> {
   return queryOne<RepositoryRow>(sql`
     SELECT r.*, i.kind AS source_kind, i.provider AS source_provider,
@@ -59,10 +53,6 @@ export async function getRepository(id: number): Promise<RepositoryRow | null> {
     JOIN app.integrations i ON i.id = r.source_integration_id
     WHERE r.id = ${id}
   `);
-}
-
-export async function getRepositoryWithIntegration(id: number): Promise<RepositoryRow | null> {
-  return getRepository(id);
 }
 
 export async function getRepositoryByFullName(

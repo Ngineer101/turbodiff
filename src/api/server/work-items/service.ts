@@ -5,22 +5,26 @@ import {
   deleteUnstartedWorkItem,
   getWorkItem,
   listDeliveriesForWorkItem,
+  listWorkItemAttachments,
   listWorkItems,
   listWorkItemTargets,
   replaceWorkItemTargets,
   updateWorkItem,
   type WorkItemRow,
   type WorkItemTargetRow,
+  type WorkItemAttachmentRow,
 } from '../../../data/work.ts';
 import { getArtifact } from '../../../data/artifacts.ts';
 import {
-  artifactWasProducedForWorkItem,
   createFactoryRunWithStage,
+  findWaitingRunForWorkItemPlan,
   listFactoryRuns,
+  recordLifecycleEvent,
+  resumeFactoryRunAtStage,
   type FactoryRunRow,
 } from '../../../data/execution.ts';
 import { getRepository } from '../../../data/repositories.ts';
-import { DISPATCH_FLOW, PLANNING_FLOW } from '../../../application/factory/flows.ts';
+import { WORK_ITEM_FLOW } from '../../../application/factory/flows.ts';
 import type { CurrentUserIdentity } from '../../contract/auth.ts';
 import type {
   CreateWorkItem,
@@ -37,6 +41,7 @@ import {
 } from '../../contract/errors.ts';
 import { requireOrganizationWrite } from '../authorization.ts';
 import { ApiDependencies } from '../context.ts';
+import { resolveModel } from '../../../data/models.ts';
 
 const dataEffect = <A>(run: () => Promise<A>): Effect.Effect<A, DomainError> =>
   Effect.tryPromise({
@@ -57,7 +62,11 @@ const targetsFor = (rows: WorkItemTargetRow[], workItemId: number): WorkItem['ta
       position: row.position,
     }));
 
-const serialize = (row: WorkItemRow, targets: WorkItemTargetRow[]): WorkItem => ({
+const serialize = (
+  row: WorkItemRow,
+  targets: WorkItemTargetRow[],
+  attachments: WorkItemAttachmentRow[],
+): WorkItem => ({
   id: row.id,
   organizationId: row.organization_id,
   origin: row.origin,
@@ -65,6 +74,9 @@ const serialize = (row: WorkItemRow, targets: WorkItemTargetRow[]): WorkItem => 
   description: row.description,
   status: row.status,
   approvedPlanArtifactId: row.approved_plan_artifact_id,
+  attachments: attachments
+    .filter((attachment) => attachment.work_item_id === row.id)
+    .map((attachment) => ({ artifactId: attachment.artifact_id, name: attachment.name })),
   targets: targetsFor(targets, row.id),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -146,6 +158,8 @@ export interface WorkItemOperations {
     user: CurrentUserIdentity,
     id: number,
     flow: 'planning' | 'delivery',
+    model?: string,
+    attachments?: ReadonlyArray<{ readonly artifactId: number; readonly name: string }>,
   ) => Effect.Effect<{ factoryRunId: number; stageRunId: number; status: 'queued' }, DomainError>;
   readonly approvePlan: (
     user: CurrentUserIdentity,
@@ -167,16 +181,21 @@ export const WorkItemServiceLive = Layer.effect(
     const load = (user: CurrentUserIdentity, id: number) =>
       Effect.gen(function* () {
         const row = yield* owned(user, id);
-        const targets = yield* dataEffect(() => listWorkItemTargets([id]));
-        return serialize(row, targets);
+        const [targets, attachments] = yield* dataEffect(() =>
+          Promise.all([listWorkItemTargets([id]), listWorkItemAttachments([id])]),
+        );
+        return serialize(row, targets, attachments);
       });
 
     return {
       list: (user) =>
         Effect.gen(function* () {
           const rows = yield* dataEffect(() => listWorkItems(user.organizationIds));
-          const targets = yield* dataEffect(() => listWorkItemTargets(rows.map((row) => row.id)));
-          return { items: rows.map((row) => serialize(row, targets)) };
+          const ids = rows.map((row) => row.id);
+          const [targets, attachments] = yield* dataEffect(() =>
+            Promise.all([listWorkItemTargets(ids), listWorkItemAttachments(ids)]),
+          );
+          return { items: rows.map((row) => serialize(row, targets, attachments)) };
         }),
       get: load,
       create: (user, input) =>
@@ -256,7 +275,7 @@ export const WorkItemServiceLive = Layer.effect(
             })),
           };
         }),
-      startRun: (user, id, requestedFlow) =>
+      startRun: (user, id, requestedFlow, requestedModel, requestedAttachments = []) =>
         Effect.gen(function* () {
           const workItem = yield* owned(user, id);
           yield* requireOrganizationWrite(user, workItem.organization_id);
@@ -266,28 +285,62 @@ export const WorkItemServiceLive = Layer.effect(
           if (requestedFlow === 'delivery' && !workItem.approved_plan_artifact_id) {
             return yield* Effect.fail(conflict('Approve a plan artifact before delivery'));
           }
-          const flow = requestedFlow === 'planning' ? PLANNING_FLOW : DISPATCH_FLOW;
-          const key = `${flow.key}:${workItem.id}:${crypto.randomUUID()}`;
+          if (requestedFlow !== 'planning' && requestedAttachments.length > 0) {
+            return yield* Effect.fail(badRequest('Attachments are only accepted for planning'));
+          }
+          if (requestedAttachments.length > 5) {
+            return yield* Effect.fail(badRequest('At most five attachments are allowed'));
+          }
+          const attachments = yield* Effect.forEach(requestedAttachments, (attachment) =>
+            dataEffect(() => getArtifact(attachment.artifactId)).pipe(
+              Effect.flatMap((artifact) =>
+                artifact?.organization_id === workItem.organization_id &&
+                artifact.kind === 'work_item_attachment'
+                  ? Effect.succeed({
+                      artifactId: artifact.id,
+                      name: attachment.name.trim().slice(-120) || 'attachment',
+                    })
+                  : Effect.fail(notFound('Unknown attachment artifact')),
+              ),
+            ),
+          );
+          const planningStage = WORK_ITEM_FLOW.stages[WORK_ITEM_FLOW.initialStage];
+          const stageKey =
+            requestedFlow === 'planning'
+              ? WORK_ITEM_FLOW.initialStage
+              : planningStage.success.nextStage;
+          const model = yield* dataEffect(() => resolveModel(requestedModel));
+          const key = `${WORK_ITEM_FLOW.key}:${workItem.id}:${crypto.randomUUID()}`;
           const started = yield* dataEffect(() =>
             createFactoryRunWithStage(
               {
                 organizationId: workItem.organization_id,
-                flowKey: flow.key,
-                flowVersion: flow.version,
+                flowKey: WORK_ITEM_FLOW.key,
+                flowVersion: WORK_ITEM_FLOW.version,
+                modelId: model.id,
                 workItemId: workItem.id,
                 trigger: 'manual',
                 actorUserId: user.session.authUserId,
                 idempotencyKey: key,
               },
               {
-                stageKey: flow.initialStage,
-                idempotencyKey: `${key}:${flow.initialStage}:1`,
+                stageKey,
+                idempotencyKey: `${key}:${stageKey}:1`,
               },
             ),
           );
           yield* dataEffect(() =>
             updateWorkItem(workItem.id, {
               status: requestedFlow === 'planning' ? 'planning' : 'in_progress',
+            }),
+          );
+          yield* dataEffect(() =>
+            recordLifecycleEvent({
+              organizationId: workItem.organization_id,
+              factoryRunId: started.factoryRun.id,
+              stageRunId: started.stageRun.id,
+              kind: 'factory_run_requested',
+              payload: { attachments },
             }),
           );
           yield* dataEffect(() =>
@@ -311,12 +364,35 @@ export const WorkItemServiceLive = Layer.effect(
           if (
             !artifact ||
             artifact.organization_id !== workItem.organization_id ||
-            artifact.kind !== 'plan' ||
-            !(yield* dataEffect(() => artifactWasProducedForWorkItem(artifactId, workItem.id)))
+            artifact.kind !== 'plan'
           ) {
             return yield* Effect.fail(notFound('Unknown plan artifact'));
           }
+          const waiting = yield* dataEffect(() =>
+            findWaitingRunForWorkItemPlan(workItem.id, artifactId, {
+              flowKey: WORK_ITEM_FLOW.key,
+              flowVersion: WORK_ITEM_FLOW.version,
+              stageKey: WORK_ITEM_FLOW.initialStage,
+            }),
+          );
+          if (!waiting) return yield* Effect.fail(conflict('The plan is not awaiting approval'));
+          const transition = WORK_ITEM_FLOW.stages[WORK_ITEM_FLOW.initialStage].success;
           yield* dataEffect(() => approveWorkItemPlan(workItem.id, artifact));
+          const nextStage = yield* dataEffect(() =>
+            resumeFactoryRunAtStage({
+              factoryRunId: waiting.factoryRun.id,
+              waitingStageRunId: waiting.stageRun.id,
+              nextStageKey: transition.nextStage,
+              gate: transition.gate,
+            }),
+          );
+          yield* dataEffect(() =>
+            dependencies.enqueueFactory({
+              kind: 'run_factory',
+              factoryRunId: waiting.factoryRun.id,
+              stageRunId: nextStage.id,
+            }),
+          );
           return { artifactId: artifact.id, status: 'approved' as const };
         }),
     } satisfies WorkItemOperations;

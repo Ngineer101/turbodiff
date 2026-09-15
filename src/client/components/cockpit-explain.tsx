@@ -7,7 +7,7 @@ import type {
   ExplanationRef,
   ExplanationSequenceBlock,
   ExplanationSketchBlock,
-} from '../../shared/api-types.ts';
+} from '../types.ts';
 import { ago } from '../lib/format.ts';
 import { cn } from '../lib/utils.ts';
 import { Lamp } from './identity.tsx';

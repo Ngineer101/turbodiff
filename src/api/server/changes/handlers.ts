@@ -20,6 +20,20 @@ export const ChangesHandlers = HttpApiBuilder.group(
       )
       .handle('createReviewRun', ({ path }) =>
         Effect.flatMap(CurrentUser, (user) => service.createReviewRun(user, path.changeId)),
+      )
+      .handle('mergeChange', ({ path }) =>
+        Effect.flatMap(CurrentUser, (user) => service.merge(user, path.changeId)),
+      )
+      .handle('closeChange', ({ path }) =>
+        Effect.flatMap(CurrentUser, (user) => service.close(user, path.changeId)),
+      )
+      .handle('getChangeExplanation', ({ path }) =>
+        Effect.flatMap(CurrentUser, (user) => service.getExplanation(user, path.changeId)),
+      )
+      .handle('createExplanationRun', ({ path, payload }) =>
+        Effect.flatMap(CurrentUser, (user) =>
+          service.createExplanationRun(user, path.changeId, payload.force ?? false),
+        ),
       );
   }),
 );

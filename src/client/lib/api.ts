@@ -1,6 +1,6 @@
-// Thin fetch wrapper for the Worker's /api routes. Recoverable GitHub account
-// states are 200 responses on /api/me; a 401 now means the application session
-// itself is missing/expired.
+import { Effect } from 'effect';
+import { makeAppApiClient, type AppApiClient } from '../../api/client/app-api.ts';
+import { isJsonObject, isNumber, isString } from '../../shared/json.ts';
 
 export class ApiError extends Error {
   status: number;
@@ -11,6 +11,7 @@ export class ApiError extends Error {
 }
 
 let redirectingToLogin = false;
+const client = Effect.runPromise(makeAppApiClient());
 
 function restartAuthentication(): void {
   if (redirectingToLogin) return;
@@ -21,39 +22,34 @@ function restartAuthentication(): void {
   window.location.replace('/auth/login?expired=1');
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers);
-  if (!headers.has('accept')) headers.set('accept', 'application/json');
-  if (init?.body && !headers.has('content-type')) {
-    headers.set('content-type', 'application/json');
-  }
-  const res = await fetch(path, {
-    ...init,
-    headers,
-  });
-  if (res.status === 401) {
-    restartAuthentication();
-    throw new ApiError('signed out', 401);
-  }
-  // SAFETY: the Worker's /api routes respond with JSON matching the caller-declared T and put
-  // an `error` string on failure bodies; null stands in for empty or non-JSON bodies.
-  const data = (await res.json().catch(() => null)) as ({ error?: string } & T) | null;
-  if (!res.ok) throw new ApiError(data?.error ?? `request failed (${res.status})`, res.status);
-  // SAFETY: ok /api responses carry a body matching T; null only occurs for endpoints whose
-  // callers never read the body.
-  return data as T;
+function apiFailure(cause: unknown): ApiError {
+  const value = isJsonObject(cause) ? cause : {};
+  const status = isNumber(value.status) ? value.status : 500;
+  const message = isString(value.detail)
+    ? value.detail
+    : isString(value.message)
+      ? value.message
+      : `request failed (${status})`;
+  if (status === 401) restartAuthentication();
+  return new ApiError(message, status);
 }
 
-export const api = {
-  get: <T>(path: string) => request<T>(path),
-  post: <T = { ok: boolean }, B = never>(path: string, body?: B) =>
-    request<T>(path, {
-      method: 'POST',
-      body: body === undefined ? undefined : JSON.stringify(body),
-    }),
-  put: <T = { ok: boolean }, B = never>(path: string, body: B) =>
-    request<T>(path, { method: 'PUT', body: JSON.stringify(body) }),
-  patch: <T = { ok: boolean }, B = never>(path: string, body: B) =>
-    request<T>(path, { method: 'PATCH', body: JSON.stringify(body) }),
-  delete: <T = { ok: boolean }>(path: string) => request<T>(path, { method: 'DELETE' }),
-};
+export async function runApi<Value, Failure>(
+  operation: (client: AppApiClient) => Effect.Effect<Value, Failure>,
+): Promise<Value> {
+  try {
+    return await Effect.runPromise(operation(await client));
+  } catch (failure) {
+    throw apiFailure(failure);
+  }
+}
+
+export async function protocolJson<Value>(path: string, init?: RequestInit): Promise<Value> {
+  const response = await fetch(path, init);
+  if (response.status === 401) restartAuthentication();
+  const body: unknown = await response.json().catch(() => null);
+  if (!response.ok) throw apiFailure(isJsonObject(body) ? body : { status: response.status });
+  // SAFETY: non-JSON protocols validate their own boundaries; this helper is only used by
+  // same-origin JSON protocol routes whose response type is declared at the call site.
+  return body as Value;
+}

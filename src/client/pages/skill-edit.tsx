@@ -3,7 +3,8 @@ import { useNavigate, useParams } from '@tanstack/react-router';
 import { Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { api, ApiError } from '../lib/api.ts';
+import { ApiError } from '../lib/api.ts';
+import { deleteSkill, updateSkill } from '../lib/backend.ts';
 import { skillQuery } from '../lib/queries.ts';
 import { SkillForm, type SkillFormValues } from '../components/skill-form.tsx';
 import { ConfirmButton } from '../components/confirm-button.tsx';
@@ -22,21 +23,21 @@ export function SkillEditPage() {
   const [error, setError] = useState<string | null>(null);
 
   const save = useMutation({
-    mutationFn: (values: SkillFormValues) => api.put(`/api/skills/${id}`, values),
+    mutationFn: (values: SkillFormValues) => updateSkill(id, values),
     onSuccess: () => {
       toast.success('skill saved');
-      queryClient.invalidateQueries({ queryKey: ['skills'] });
-      queryClient.invalidateQueries({ queryKey: ['skill', id] });
-      navigate({ to: '/skills' });
+      void queryClient.invalidateQueries({ queryKey: ['skills'] });
+      void queryClient.invalidateQueries({ queryKey: ['skill', id] });
+      void navigate({ to: '/skills' });
     },
     onError: (err) => setError(err instanceof ApiError ? err.message : 'request failed'),
   });
   const remove = useMutation({
-    mutationFn: () => api.delete(`/api/skills/${id}`),
+    mutationFn: () => deleteSkill(id),
     onSuccess: () => {
       toast.success('skill deleted');
-      queryClient.invalidateQueries({ queryKey: ['skills'] });
-      navigate({ to: '/skills' });
+      void queryClient.invalidateQueries({ queryKey: ['skills'] });
+      void navigate({ to: '/skills' });
     },
     onError: onApiError,
   });

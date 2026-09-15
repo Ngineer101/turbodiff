@@ -6,14 +6,16 @@ export default defineConfig({
     alias: [
       {
         find: 'cloudflare:workers',
-        replacement: fileURLToPath(
-          new URL('../../src/api/server/__tests__/support/cloudflare-workers.ts', import.meta.url),
-        ),
+        replacement: fileURLToPath(new URL('../support/cloudflare-workers.ts', import.meta.url)),
+      },
+      {
+        find: '@cloudflare/sandbox',
+        replacement: fileURLToPath(new URL('../support/cloudflare-sandbox.ts', import.meta.url)),
       },
     ],
   },
   test: {
-    include: ['src/api/server/__tests__/integration/**/*.integration.test.ts'],
+    include: ['tests/integration/**/*.integration.test.ts'],
     fileParallelism: false,
   },
 });

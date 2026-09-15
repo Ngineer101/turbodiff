@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
-import { redactSecrets } from '../../ai/runtime/redaction.ts';
-import { runnerSandbox } from '../../ai/runtime/sandbox.ts';
+import { redactSecrets } from '../../integrations/agent-runtime/redaction.ts';
+import { runnerSandbox } from '../../integrations/agent-runtime/sandbox.ts';
 import {
   deleteRepositoryRef,
   getRepositoryByExternalId,
