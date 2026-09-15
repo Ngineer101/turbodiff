@@ -4,7 +4,25 @@ import { defineConfig, lazyPlugins } from 'vite-plus';
 export default defineConfig({
   // lazyPlugins keeps check/lint/fmt from booting the Cloudflare plugin
   // (which needs Docker/bindings); dev/build load it as before.
-  plugins: lazyPlugins(() => [cloudflare()]),
+  plugins: lazyPlugins(() => [
+    cloudflare({
+      config(config) {
+        const hyperdriveId = process.env.TURBODIFF_HYPERDRIVE_ID?.trim();
+        if (!hyperdriveId) {
+          if (process.env.TURBODIFF_REQUIRE_HYPERDRIVE_ID === 'true') {
+            throw new Error('TURBODIFF_HYPERDRIVE_ID is required for deployment');
+          }
+          return;
+        }
+        if (!/^[0-9a-f]{32}$/.test(hyperdriveId)) {
+          throw new Error('TURBODIFF_HYPERDRIVE_ID must be a 32-character lowercase hex ID');
+        }
+        const binding = config.hyperdrive?.find(({ binding }) => binding === 'HYPERDRIVE');
+        if (!binding) throw new Error('The HYPERDRIVE binding is missing from wrangler.jsonc');
+        binding.id = hyperdriveId;
+      },
+    }),
+  ]),
   // Repo style: tabs + single quotes (configured so a future `vp fmt` run
   // doesn't reindent the codebase as a side effect).
   fmt: {

@@ -27,7 +27,7 @@
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE",
-      "id": "00e793ecaf2c44b292e069861623dc3f",
+      "id": "00000000000000000000000000000000",
       "localConnectionString": "postgres://turbodiff:turbodiff@localhost:5432/turbodiff",
     },
   ],

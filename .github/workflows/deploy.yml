@@ -3,10 +3,11 @@
 # PlanetScale database before deploying the Worker + sandbox image. It never
 # provisions a database or Hyperdrive configuration.
 #
-# Requires three repository secrets:
+# Requires four repository secrets:
 #   CLOUDFLARE_API_TOKEN   — Workers Scripts:Edit, Containers:Edit
 #   CLOUDFLARE_ACCOUNT_ID
 #   POSTGRES_DATABASE_URL  — direct PlanetScale PostgreSQL connection
+#   TURBODIFF_HYPERDRIVE_ID — production Hyperdrive configuration
 name: Deploy
 
 on:
@@ -103,8 +104,17 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.POSTGRES_DATABASE_URL }}
 
+      - name: Build application
+        run: pnpm vp run build:app
+
+      - name: Build Worker deployment
+        run: pnpm vp build
+        env:
+          TURBODIFF_HYPERDRIVE_ID: ${{ secrets.TURBODIFF_HYPERDRIVE_ID }}
+          TURBODIFF_REQUIRE_HYPERDRIVE_ID: 'true'
+
       - name: Deploy
-        run: pnpm vp run deploy
+        run: pnpm wrangler deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
