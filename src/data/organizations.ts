@@ -115,12 +115,18 @@ export async function ensurePersonalOrganization(
   userId: string,
   name: string,
 ): Promise<OrganizationRow> {
-  const existing = (await listOrganizationsForUser(userId))[0];
-  if (existing) return existing;
+  return withTransaction(async (transaction) => {
+    await transaction.execute(sql`
+      SELECT pg_advisory_xact_lock(
+        hashtextextended(${`turbodiff:personal-organization:${userId}`}, 0)
+      )
+    `);
 
-  const organizationId = crypto.randomUUID();
-  const now = new Date().toISOString();
-  await withTransaction(async (transaction) => {
+    const existing = (await listOrganizationsForUser(userId))[0];
+    if (existing) return existing;
+
+    const organizationId = crypto.randomUUID();
+    const now = new Date().toISOString();
     await transaction.execute(sql`
       INSERT INTO auth."organization" (id, name, slug, "createdAt")
       VALUES (
@@ -131,10 +137,10 @@ export async function ensurePersonalOrganization(
       INSERT INTO auth."member" (id, "organizationId", "userId", role, "createdAt")
       VALUES (${crypto.randomUUID()}, ${organizationId}, ${userId}, 'owner', ${now})
     `);
+    const created = await getOrganization(organizationId);
+    if (!created) throw new Error('organization insert returned no row');
+    return created;
   });
-  const created = await getOrganization(organizationId);
-  if (!created) throw new Error('organization insert returned no row');
-  return created;
 }
 
 export async function addOrganizationOwner(organizationId: string, userId: string): Promise<void> {
