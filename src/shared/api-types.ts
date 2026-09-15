@@ -22,7 +22,7 @@ export interface ApiFeatureUsageSession {
   total_tokens: number;
   duration_s: number | null;
   created_at: string;
-  url: string | null; // review_url / PR url / certificate url
+  url: string | null; // review or pull-request URL
 }
 
 // A shipped feature and every session (generation, reviews, fix attempts,
@@ -281,8 +281,6 @@ export interface ApiFeatureDetail {
   reviews: { state: string; body: string; author: string | null }[];
   comments: ApiCockpitComment[];
   demo: { url: string; caption: string | null } | null;
-  // Public shareable "Proof of Build" page; null until a PR exists.
-  certificate_url: string | null;
   criteria: {
     text: string;
     verdict: string | null;
@@ -523,7 +521,9 @@ export interface ApiMe {
     | 'ready';
   githubAppSlug: string;
   vapidPublicKey: string;
-  installationIds: number[];
+  activeOrganizationId: string;
+  organizationIds: string[];
+  githubInstallationIds: number[];
 }
 
 // Native organization roles, scoped per
@@ -561,19 +561,15 @@ export interface ApiInvitationPreview {
   id: string;
   email: string;
   role: ApiRole;
-  org_name: string;
-  // The GitHub installation behind the organization — the members page the
-  // recipient lands on after accepting, if GitHub also lists them on it.
-  installation_id: number | null;
-  // "@login" for a GitHub inviter, their display name for a password
-  // account, null when the inviter's account no longer exists.
-  invited_by: string | null;
-  expires_at: string | null;
+  organizationId: string;
+  organizationName: string;
+  invitedBy: string | null;
+  expiresAt: string | null;
 }
 
 export interface ApiInvitationAccepted {
-  org_name: string;
-  installation_id: number | null;
+  organizationId: string;
+  organizationName: string;
 }
 
 export interface ApiError {

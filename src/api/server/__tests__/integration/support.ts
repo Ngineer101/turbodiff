@@ -4,7 +4,7 @@ import type { CurrentUserIdentity } from '../../../contract/auth.ts';
 import { ApiDependencies } from '../../context.ts';
 import { execute, queryOne, withTransaction } from '../../../../data/postgres.ts';
 import { createSkillsShClient } from '../../../../integrations/skills-sh/client.ts';
-import type { RunFactoryMessage } from '../../../../shared/factory-messages.ts';
+import type { RunFactoryMessage } from '../../../../application/factory/message.ts';
 
 const rollback = Symbol('rollback service integration test');
 

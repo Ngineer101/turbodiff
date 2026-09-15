@@ -5,7 +5,7 @@ import { claimAgentRun, completeAgentRun, createAgentRun } from '../../../../dat
 import { recordArtifact } from '../../../../data/artifacts.ts';
 import { getWorkItem } from '../../../../data/work.ts';
 import { queryOne } from '../../../../data/postgres.ts';
-import type { RunFactoryMessage } from '../../../../shared/factory-messages.ts';
+import type { RunFactoryMessage } from '../../../../application/factory/message.ts';
 import { WorkItemService, WorkItemServiceLive } from '../../work-items/service.ts';
 import { createTenant, recordingApiDependencies, rollbackAfter } from './support.ts';
 

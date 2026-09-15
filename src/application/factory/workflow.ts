@@ -1,24 +1,11 @@
 import { env, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { withDatabaseScope } from '../../data/postgres.ts';
-import type { RunFactoryMessage } from '../../shared/factory-messages.ts';
 import { executeFactoryStage, failFactoryStageInfrastructure } from './execute.ts';
-
-function validateMessage(value: RunFactoryMessage): RunFactoryMessage {
-  if (
-    value.kind !== 'run_factory' ||
-    !Number.isSafeInteger(value.factoryRunId) ||
-    value.factoryRunId <= 0 ||
-    !Number.isSafeInteger(value.stageRunId) ||
-    value.stageRunId <= 0
-  ) {
-    throw new Error('invalid factory workflow message');
-  }
-  return value;
-}
+import { parseRunFactoryMessage, type RunFactoryMessage } from './message.ts';
 
 export class FactoryStageWorkflow extends WorkflowEntrypoint<unknown, RunFactoryMessage> {
   async run(event: WorkflowEvent<RunFactoryMessage>, step: WorkflowStep): Promise<string> {
-    const message = validateMessage(event.payload);
+    const message = parseRunFactoryMessage(event.payload);
     try {
       await step.do(
         `execute factory stage ${message.stageRunId}`,
@@ -35,7 +22,7 @@ export class FactoryStageWorkflow extends WorkflowEntrypoint<unknown, RunFactory
 }
 
 export async function startFactoryStageWorkflow(message: RunFactoryMessage): Promise<void> {
-  const validated = validateMessage(message);
+  const validated = parseRunFactoryMessage(message);
   const id = `factory-stage-${validated.stageRunId}`;
   const instance = await env.FACTORY_STAGE_WORKFLOW.get(id);
   const status = await instance.status();

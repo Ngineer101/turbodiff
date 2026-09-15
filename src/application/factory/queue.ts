@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import type { RunFactoryMessage } from '../../shared/factory-messages.ts';
+import type { RunFactoryMessage } from './message.ts';
 
 export async function enqueueFactoryMessage(
   message: RunFactoryMessage,

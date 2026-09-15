@@ -23,7 +23,7 @@ import {
   type FactoryRunRow,
   type StageRunRow,
 } from '../../data/execution.ts';
-import type { RunFactoryMessage } from '../../shared/factory-messages.ts';
+import type { RunFactoryMessage } from './message.ts';
 import { isJsonObject, isString, type JsonObject } from '../../shared/json.ts';
 import {
   acceptanceContractArtifactSchema,
