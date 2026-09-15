@@ -20,9 +20,15 @@ import {
 } from 'lucide-react';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { toast } from 'sonner';
-import type { ApiRepoSettings, ApiSettings } from '../../shared/api-types.ts';
+import type { ApiRepoSettings, ApiSettings } from '../types.ts';
 import { cloneCommand } from '../../shared/projects.ts';
-import { api, ApiError } from '../lib/api.ts';
+import { ApiError } from '../lib/api.ts';
+import {
+  createCloneCredential,
+  setRepositoryAgent,
+  setRepositorySkill,
+  updateRepositorySettings,
+} from '../lib/backend.ts';
 import { PROCESS_PROFILES } from '../lib/process-profiles.ts';
 import { pushSupported, subscribeToPush, unsubscribeFromPush } from '../lib/push.ts';
 import { meQuery, settingsQuery } from '../lib/queries.ts';
@@ -45,16 +51,16 @@ function usePatchRepo(repoId: number) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (patch: Partial<ApiRepoSettings> & { check_command?: string }) =>
-      api.patch(`/api/repos/${repoId}`, patch),
+      updateRepositorySettings(repoId, patch),
     onMutate: async (patch) => {
       await queryClient.cancelQueries({ queryKey: ['settings'] });
       const prev = queryClient.getQueryData<ApiSettings>(['settings']);
       if (prev) {
         queryClient.setQueryData<ApiSettings>(['settings'], {
           ...prev,
-          installations: prev.installations.map((inst) => ({
-            ...inst,
-            repos: inst.repos.map((r) => (r.id === repoId ? { ...r, ...patch } : r)),
+          organizations: prev.organizations.map((organization) => ({
+            ...organization,
+            repos: organization.repos.map((r) => (r.id === repoId ? { ...r, ...patch } : r)),
           })),
         });
       }
@@ -211,16 +217,16 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
   const patchRepo = usePatchRepo(repo.id);
   const toggleAgent = useMutation({
     mutationFn: ({ agentId, enabled }: { agentId: number; enabled: boolean }) =>
-      api.put(`/api/repos/${repo.id}/agents/${agentId}`, { enabled }),
+      setRepositoryAgent(repo.id, agentId, enabled),
     onMutate: async ({ agentId, enabled }) => {
       await queryClient.cancelQueries({ queryKey: ['settings'] });
       const prev = queryClient.getQueryData<ApiSettings>(['settings']);
       if (prev) {
         queryClient.setQueryData<ApiSettings>(['settings'], {
           ...prev,
-          installations: prev.installations.map((inst) => ({
-            ...inst,
-            repos: inst.repos.map((r) =>
+          organizations: prev.organizations.map((organization) => ({
+            ...organization,
+            repos: organization.repos.map((r) =>
               r.id === repo.id
                 ? { ...r, agents: r.agents.map((a) => (a.id === agentId ? { ...a, enabled } : a)) }
                 : r,
@@ -238,16 +244,16 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
   });
   const toggleSkill = useMutation({
     mutationFn: ({ skillId, enabled }: { skillId: number; enabled: boolean }) =>
-      api.put(`/api/repos/${repo.id}/skills/${skillId}`, { enabled }),
+      setRepositorySkill(repo.id, skillId, enabled),
     onMutate: async ({ skillId, enabled }) => {
       await queryClient.cancelQueries({ queryKey: ['settings'] });
       const prev = queryClient.getQueryData<ApiSettings>(['settings']);
       if (prev) {
         queryClient.setQueryData<ApiSettings>(['settings'], {
           ...prev,
-          installations: prev.installations.map((inst) => ({
-            ...inst,
-            repos: inst.repos.map((r) =>
+          organizations: prev.organizations.map((organization) => ({
+            ...organization,
+            repos: organization.repos.map((r) =>
               r.id === repo.id
                 ? { ...r, skills: r.skills.map((s) => (s.id === skillId ? { ...s, enabled } : s)) }
                 : r,
@@ -265,13 +271,7 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
   });
 
   const cloneToken = useMutation({
-    mutationFn: () =>
-      api.post<{ remote: string; token: string }, { scope: string }>(
-        `/api/repos/${repo.id}/clone-token`,
-        {
-          scope: 'read',
-        },
-      ),
+    mutationFn: () => createCloneCredential(repo.id, 'read'),
     onSuccess: (credential) => {
       void navigator.clipboard.writeText(cloneCommand(credential.remote, credential.token));
       toast.success('Clone command copied to clipboard (token valid 24h)');
@@ -502,7 +502,7 @@ function NotificationsSettings() {
         await unsubscribeFromPush();
         return { next, ok: true };
       }
-      return { next, ok: await subscribeToPush(me.vapid_public_key) };
+      return { next, ok: await subscribeToPush(me.vapidPublicKey) };
     },
     onSuccess: ({ next, ok }) => {
       if (!ok) {
@@ -520,7 +520,7 @@ function NotificationsSettings() {
   });
 
   if (!pushSupported()) return null;
-  const unconfigured = !me.vapid_public_key;
+  const unconfigured = !me.vapidPublicKey;
 
   return (
     <>
@@ -560,18 +560,18 @@ export function SettingsPage() {
   const [query, setQuery] = useState('');
 
   const q = query.trim().toLowerCase();
-  const installations = data.installations
-    .map((inst) => ({
-      ...inst,
+  const organizations = data.organizations
+    .map((organization) => ({
+      ...organization,
       repos: q
-        ? inst.repos.filter((r) => `${r.owner}/${r.name}`.toLowerCase().includes(q))
-        : inst.repos,
+        ? organization.repos.filter((r) => `${r.owner}/${r.name}`.toLowerCase().includes(q))
+        : organization.repos,
     }))
-    // While searching, orgs with no matches drop out entirely.
-    .filter((inst) => !q || inst.repos.length > 0);
-  const repoCount = data.installations.reduce((n, i) => n + i.repos.length, 0);
-  // Org installations get a Members admin page; personal installations don't.
-  const orgs = data.installations.filter((inst) => inst.account_type === 'Organization');
+    .filter((organization) => !q || organization.repos.length > 0);
+  const repoCount = data.organizations.reduce(
+    (count, organization) => count + organization.repos.length,
+    0,
+  );
 
   return (
     <>
@@ -618,18 +618,18 @@ export function SettingsPage() {
         <NotificationsSettings />
       </div>
 
-      {orgs.length > 0 ? (
+      {data.organizations.length > 0 ? (
         <>
           <SectionHeading>Members</SectionHeading>
-          {orgs.map((inst) => (
-            <Card key={inst.id} className="mt-2 p-0">
+          {data.organizations.map((organization) => (
+            <Card key={organization.id} className="mt-2 p-0">
               <Link
-                to="/settings/members/$installationId"
-                params={{ installationId: String(inst.id) }}
+                to="/settings/members/$organizationId"
+                params={{ organizationId: organization.id }}
                 className="flex items-center gap-3 px-3.5 py-3 text-[0.85rem] font-medium"
               >
                 <IconTile icon={Users} size="sm" />
-                <span className="flex-1">{inst.account_login}</span>
+                <span className="flex-1">{organization.name}</span>
                 <ChevronRight className="size-4 text-mute" aria-hidden />
               </Link>
             </Card>
@@ -653,33 +653,31 @@ export function SettingsPage() {
         </div>
       ) : null}
 
-      {data.installations.length === 0 ? (
+      {data.organizations.length === 0 ? (
         <div className="mt-6">
-          <EmptyState>
-            No installations yet — install the app on an organization or account, then come back
-            here.
-          </EmptyState>
+          <EmptyState>No organizations yet.</EmptyState>
         </div>
-      ) : installations.length === 0 ? (
+      ) : organizations.length === 0 ? (
         <div className="mt-6">
           <EmptyState>No repositories match “{query.trim()}”.</EmptyState>
         </div>
       ) : (
-        installations.map((inst) => (
-          <section key={inst.id}>
+        organizations.map((organization) => (
+          <section key={organization.id}>
             <SectionHeading
               aside={
                 <Muted className="text-xs">
-                  {inst.repos.length} {inst.repos.length === 1 ? 'repo' : 'repos'}
+                  {organization.repos.length} {organization.repos.length === 1 ? 'repo' : 'repos'}
                 </Muted>
               }
             >
-              {inst.account_login} {inst.suspended ? <Pill tone="red">Suspended</Pill> : null}
+              {organization.name}{' '}
+              {organization.suspended ? <Pill tone="red">Suspended</Pill> : null}
             </SectionHeading>
-            {inst.repos.length === 0 ? (
-              <Muted>No repositories selected in this installation.</Muted>
+            {organization.repos.length === 0 ? (
+              <Muted>No repositories in this organization.</Muted>
             ) : (
-              inst.repos.map((r) => <RepoRow key={r.id} repo={r} />)
+              organization.repos.map((r) => <RepoRow key={r.id} repo={r} />)
             )}
           </section>
         ))

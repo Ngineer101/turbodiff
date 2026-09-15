@@ -8,7 +8,6 @@ import { defineConfig } from 'vite-plus/test/config';
 // plugin-free config instead, covering both the Worker and client sources.
 export default defineConfig({
   test: {
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
-    exclude: ['src/**/*.worker.test.ts'],
+    include: ['tests/unit/**/*.test.ts', 'tests/unit/**/*.test.tsx'],
   },
 });

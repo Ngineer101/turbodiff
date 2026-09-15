@@ -2,8 +2,9 @@ import { useMutation, useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { Loader2, LogOut, UserPlus } from 'lucide-react';
 import { toast } from 'sonner';
-import type { ApiInvitationAccepted, ApiInvitationPreview } from '../../shared/api-types.ts';
-import { api, ApiError } from '../lib/api.ts';
+import type { ApiInvitationPreview } from '../types.ts';
+import { ApiError } from '../lib/api.ts';
+import { acceptInvitation } from '../lib/backend.ts';
 import { invitationQuery, meQuery, queryClient } from '../lib/queries.ts';
 import { Stamp } from '../components/identity.tsx';
 import { Button } from '../components/ui/button.tsx';
@@ -67,28 +68,16 @@ function Invitation({ id, invitation }: { id: string; invitation: ApiInvitationP
   const navigate = useNavigate();
   const { data: me } = useSuspenseQuery(meQuery);
   const accept = useMutation({
-    mutationFn: () =>
-      api.post<ApiInvitationAccepted>(`/api/invitations/${encodeURIComponent(id)}/accept`),
+    mutationFn: () => acceptInvitation(id),
     onSuccess: (accepted) => {
-      toast.success(`You joined ${accepted.org_name}`);
+      toast.success(`You joined ${accepted.organizationName}`);
       void queryClient.invalidateQueries({ queryKey: ['me'] });
-      // The members page needs GitHub-side installation access too; land on
-      // the board otherwise (an invited password account gets its connect
-      // prompt there).
-      const installationId = accepted.installation_id;
-      if (installationId !== null && me.installation_ids.includes(installationId)) {
-        void navigate({
-          to: '/settings/members/$installationId',
-          params: { installationId: String(installationId) },
-        });
-      } else {
-        void navigate({ to: '/' });
-      }
+      void navigate({ to: '/' });
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : 'Request failed'),
   });
-  const meta = [invitation.invited_by ? `Invited by ${invitation.invited_by}` : null]
-    .concat(daysLeft(invitation.expires_at))
+  const meta = [invitation.invitedBy ? `Invited by ${invitation.invitedBy}` : null]
+    .concat(daysLeft(invitation.expiresAt))
     .filter((part) => part !== null)
     .join(' · ');
 
@@ -97,11 +86,11 @@ function Invitation({ id, invitation }: { id: string; invitation: ApiInvitationP
       <div className="mb-3.5 pl-0.5">
         <Stamp>You&rsquo;re invited</Stamp>
       </div>
-      <Headline>Join {invitation.org_name} on Turbodiff</Headline>
+      <Headline>Join {invitation.organizationName} on Turbodiff</Headline>
       <p className="mt-2 text-[0.85rem] text-mute">
         You were invited as{' '}
         <Pill tone={invitation.role === 'member' ? 'neutral' : 'on'}>{invitation.role}</Pill> of the{' '}
-        {invitation.org_name} organization.
+        {invitation.organizationName} organization.
       </p>
       <Card className="mt-6 flex flex-col gap-3.5 p-4">
         <div className="flex items-center gap-3">

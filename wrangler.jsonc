@@ -1,6 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "turbodiff",
+  "main": "src/cloudflare.ts",
   "compatibility_date": "2026-08-08",
   // Deployment-specific variables are managed in Cloudflare and retained
   // across deploys. See `.dev.vars.example` for the self-hosting checklist.
@@ -14,23 +15,19 @@
   // Permit preview URLs for manually uploaded Worker versions. Production
   // routing is configured independently from this switch.
   "preview_urls": true,
-  // Workers Traces shows each agent response as a trace with agent-level
-  // spans: https://flueframework.com/docs/guide/observability/#cloudflare
-  // Traces for agent spans; invocation logs persisted for debugging (Workers
-  // Logs — queryable in the dash after incidents, unlike live-only tail).
+  // Workers Traces and invocation logs retain production execution evidence.
   "observability": { "enabled": true, "traces": { "enabled": true } },
-  // Workers AI binding — model calls dispatch through env.AI into the named
-  // AI Gateway (see setProvider in src/app.ts).
+  // Workers AI binding for provider-backed application services.
   "ai": { "binding": "AI" },
   // Exposes the live Worker version (id/tag) to GET /version — see
   // https://developers.cloudflare.com/workers/configuration/version-metadata/
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
   // PostgreSQL application store. Production connections are pooled by
-  // Hyperdrive; migrations use a direct DATABASE_URL (docs/postgres.md).
+  // Hyperdrive; migrations use a direct DATABASE_URL
   "hyperdrive": [
     {
       "binding": "HYPERDRIVE",
-      "id": "00e793ecaf2c44b292e069861623dc3f",
+      "id": "00000000000000000000000000000000",
       "localConnectionString": "postgres://turbodiff:turbodiff@localhost:5432/turbodiff",
     },
   ],
@@ -38,14 +35,14 @@
   // here and are served publicly via GET /artifacts/*. Create once per account:
   //   npx wrangler r2 bucket create turbodiff-artifacts
   "r2_buckets": [{ "binding": "ARTIFACTS", "bucket_name": "turbodiff-artifacts" }],
-  // Git hosting for turbodiff-owned projects (docs/artifacts-provider.md).
+  // Git hosting for turbodiff-owned projects.
   // Named GIT_ARTIFACTS because ARTIFACTS is the R2 evidence bucket. The
   // namespace must match ARTIFACTS_NAMESPACE in src/integrations/git/provider.ts
   // and the triggers.events filters below. Requires the Artifacts closed beta
   // on this account.
   "artifacts": [{ "binding": "GIT_ARTIFACTS", "namespace": "turbodiff-repos" }],
   "dev": { "enable_containers": false },
-  // Factory sandbox (docs/coding-harness.md): repository-changing stages run
+  // Factory sandbox: repository-changing stages run
   // pinned OpenCode inside an isolated container. Local dev needs Docker.
   "containers": [
     {
@@ -68,40 +65,11 @@
       { "class_name": "LiveUpdates", "name": "LIVE_UPDATES" },
     ],
   },
-  // Generation runs as a durable Workflow (src/ai/workflows/generation.ts):
-  // each stage is a memoized step with bounded retries, so a killed isolate
-  // resumes instead of stranding, and the paid agent step can never be
-  // silently re-run. The queue message only creates the instance.
   "workflows": [
     {
-      "binding": "GEN_WORKFLOW",
-      "name": "turbodiff-generation",
-      "class_name": "GenerationWorkflow",
-    },
-    {
-      "binding": "VERIFY_WORKFLOW",
-      "name": "turbodiff-verification",
-      "class_name": "VerificationWorkflow",
-    },
-    {
-      "binding": "FIX_WORKFLOW",
-      "name": "turbodiff-fix",
-      "class_name": "FixWorkflow",
-    },
-    {
-      "binding": "CHAT_WORKFLOW",
-      "name": "turbodiff-chat",
-      "class_name": "ChatWorkflow",
-    },
-    {
-      "binding": "AUTOMATION_WORKFLOW",
-      "name": "turbodiff-automation",
-      "class_name": "AutomationWorkflow",
-    },
-    {
-      "binding": "CONFLICT_RESOLVE_WORKFLOW",
-      "name": "turbodiff-resolve-conflict",
-      "class_name": "ConflictResolveWorkflow",
+      "binding": "FACTORY_STAGE_WORKFLOW",
+      "name": "turbodiff-factory-stage",
+      "class_name": "FactoryStageWorkflow",
     },
     {
       "binding": "ARTIFACTS_EVENTS_WORKFLOW",
@@ -109,32 +77,26 @@
       "class_name": "ArtifactsEventsWorkflow",
     },
   ],
-  // Decouples factory runs (minutes) from the requests that trigger them
-  // (seconds). One queue for both fix and generation messages, discriminated
-  // by a `kind` field — the local dev plugin hangs at boot with two consumers
-  // on one worker. Create once per account:
+  // Durable factory transitions carry only persisted run identifiers.
   //   npx wrangler queues create turbodiff-factory
   "queues": {
     "producers": [{ "binding": "FACTORY_QUEUE", "queue": "turbodiff-factory" }],
     "consumers": [
       {
         "queue": "turbodiff-factory",
-        // One run per invocation so each gets the full 15-minute consumer
-        // wall clock; the fixer/generator record failures themselves, so a
-        // single redelivery only re-runs infra-level crashes.
         "max_batch_size": 1,
         "max_retries": 1,
       },
     ],
   },
-  // Polls for due automations (src/services/automation-poll.ts, `scheduled`
+  // Polls for due automations (src/application/automations/poll.ts, `scheduled`
   // handler in src/cloudflare.ts). Per-tenant "run daily at 9am" schedules
   // aren't expressible as static Cron Triggers, so this fires often and the
   // handler itself finds and claims whatever's due — schedule precision is
   // bounded by this interval.
   "triggers": {
     "crons": ["*/15 * * * *"],
-    // Artifacts event ingestion (docs/artifacts-provider.md): the platform
+    // Artifacts event ingestion: the platform
     // starts one ArtifactsEventsWorkflow instance per matching event. No
     // repo_name filter — one entry covers every repo in the namespace,
     // including repos created after this deploy.
@@ -151,14 +113,13 @@
       },
     ],
   },
-  // Every agent generates a Durable Object class named after its identity
-  // (PrReviewer -> FluePrReviewerAgent), and Cloudflare requires a migration
-  // entry for each one. Append a new tag when you add an agent:
-  // https://flueframework.com/docs/guide/cloudflare-target/#managing-migrations
+  // Durable Object migrations are append-only deployment history.
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["FluePrReviewerAgent"] },
     { "tag": "v2", "new_sqlite_classes": ["Sandbox"] },
     { "tag": "v3", "new_sqlite_classes": ["LiveUpdates"] },
     { "tag": "v4", "new_sqlite_classes": ["FlueExplainerAgent"] },
+    { "tag": "v5", "deleted_classes": ["FluePrReviewerAgent"] },
+    { "tag": "v6", "deleted_classes": ["FlueExplainerAgent"] },
   ],
 }

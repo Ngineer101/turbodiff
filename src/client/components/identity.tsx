@@ -4,7 +4,7 @@ import { cn } from '../lib/utils.ts';
 // The B+A identity kit. Two vocabularies, one rule:
 //   - Control Room (Lamp, Placard, StageLights, TelemetryStrip) renders LIVE
 //     state — things still moving.
-//   - Job Ticket (Serial, Stamp, Ledger, CertStrip) renders OUTCOMES — things
+//   - Job Ticket (Serial, Stamp, Ledger) renders OUTCOMES — things
 //     finished and proven.
 // Every element also carries its meaning as text, so nothing depends on
 // color or glow alone. Colour rule: yellow (accent/hold) is live or asks for a
@@ -73,8 +73,7 @@ export function Placard({
   );
 }
 
-// Serial: the job-ticket number. Tasks and features are numbered work, and
-// the number is the identity that survives onto the certificate.
+// Serial: the stable job-ticket number for numbered work.
 export function Serial({ n, className }: { n: number; className?: string }) {
   return (
     <span
@@ -229,43 +228,6 @@ export function TelemetryStrip({
           {it.label} <span className="text-ink-dim">{it.value}</span>
         </span>
       ))}
-    </div>
-  );
-}
-
-// CertStrip: the sealed paper object a merged, verified feature earns.
-// `ceremony` plays a quiet seal fade-in — set it only on a live transition
-// to sealed, never on an already-sealed page load.
-export function CertStrip({
-  sealed,
-  ceremony = false,
-  children,
-  className,
-}: {
-  sealed: boolean;
-  ceremony?: boolean;
-  children: ReactNode;
-  className?: string;
-}) {
-  return (
-    <div
-      className={cn(
-        'cert-hatch flex items-center gap-2.5 rounded-md border px-3 py-2 font-mono text-[10.5px]',
-        sealed ? 'border-line-2 text-ink-dim' : 'border-dashed border-line-2 text-mute',
-        className,
-      )}
-    >
-      <span
-        aria-hidden
-        className={cn(
-          'grid size-5 shrink-0 place-items-center rounded-full border text-[10px]',
-          sealed ? 'border-accent text-accent' : 'border-line-2 text-mute',
-          ceremony && sealed && 'seal-ceremony',
-        )}
-      >
-        {sealed ? '✓' : '…'}
-      </span>
-      <span className="min-w-0 truncate">{children}</span>
     </div>
   );
 }

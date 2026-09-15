@@ -137,63 +137,15 @@ const CSS = `
 	}
 	.stage .who.you { color: var(--accent); }
 
-	/* --- certificate --- */
-	.cert { border-top: 1px solid var(--line); }
-	.cert .wrap {
-		display: grid; grid-template-columns: minmax(0, 440px) minmax(0, 1fr); gap: 4rem; align-items: center;
-		padding: clamp(3rem, 6vw, 5rem) 0 clamp(3.5rem, 7vw, 6rem);
-	}
-	.cert-copy { display: flex; flex-direction: column; align-items: flex-start; gap: 1.2rem; }
-	.cert-copy p { color: var(--ink-dim); line-height: 1.6; }
-	.ghost {
-		display: inline-flex; align-items: center; gap: 0.5em;
-		padding: 0.7rem 1.2rem; border-radius: 8px; border: 1.5px solid var(--accent);
-		color: var(--accent); font-weight: 700; font-size: 0.9rem;
-		transition: background 0.15s;
-	}
-	.ghost:hover { background: rgba(255, 199, 44, 0.1); }
-	.certificate {
-		padding: 1.75rem; display: flex; flex-direction: column; gap: 1.1rem;
-		border-radius: 12px; border-width: 1.5px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-	}
-	.certificate .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
-	.certificate .meta { font-family: var(--mono); font-size: 0.66rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--mute); }
-	.certificate h3 { font-weight: 700; font-size: 1.35rem; letter-spacing: -0.02em; line-height: 1.25; margin: 0.3rem 0 0.35rem; }
-	.certificate .sha { font-family: var(--mono); font-size: 0.72rem; color: var(--mute); }
-	.seal {
-		flex-shrink: 0;
-		padding: 0.35em 0.8em; border-radius: 5px;
-		background: var(--accent); color: var(--accent-ink);
-		font-family: var(--mono); font-size: 0.8rem; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase;
-	}
-	.criteria { padding: 0.9rem; border-radius: 8px; background: var(--bg); border: 1px solid var(--line-2); display: flex; flex-direction: column; gap: 0.55rem; }
-	.criteria .meta { font-size: 0.6rem; }
-	.criteria li { list-style: none; display: flex; align-items: center; gap: 0.65rem; font-size: 0.88rem; }
-	.criteria .ok {
-		display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
-		width: 18px; height: 18px; border-radius: 50%; background: var(--go); color: #04140a;
-		font-size: 0.6rem; font-weight: 700;
-	}
-	.criteria .shot { margin-left: auto; width: 52px; height: 32px; border-radius: 4px; background: var(--line); border: 1px solid var(--line-2); flex-shrink: 0; }
-	.ledger { display: flex; gap: 1.5rem; flex-wrap: wrap; padding-top: 0.8rem; border-top: 1px solid var(--line-2); font-family: var(--mono); font-size: 0.72rem; }
-	.ledger div { display: flex; flex-direction: column; gap: 0.15rem; }
-	.ledger em { font-style: normal; }
-	.ledger span { font-size: 0.56rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--mute); }
-	.ledger .go { color: var(--go-bright); }
-	.ledger .hot { color: var(--accent); }
-
 	@keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
 	@media (max-width: 899px) {
 		.tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 		.stages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-		.cert .wrap { grid-template-columns: 1fr; gap: 2rem; }
-		.certificate { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35); }
 		.proof .head, .how .head { flex-direction: column; align-items: flex-start; gap: 0.8rem; }
 	}
 	@media (max-width: 600px) {
 		.tiles, .stages { grid-template-columns: 1fr; }
 		.cta { width: 100%; justify-content: center; padding: 0.95rem 1.4rem; }
-		.criteria .shot { display: none; }
 	}
 	@media (prefers-reduced-motion: reduce) {
 		.hero-copy > *, .term.boot { animation: none; }
@@ -307,7 +259,7 @@ const STAGES = [
     n: '04',
     label: 'Ship',
     lamp: 'off',
-    body: 'You read the receipts and merge. The feature earns a certificate with its serial, checks, and screenshots.',
+    body: 'You review the plan, diff, checks, and agent findings, then decide whether to merge.',
     who: 'you merge →',
     you: true,
   },
@@ -448,68 +400,6 @@ function Landing() {
                     <span class={s.you ? 'who you' : 'who'}>{s.who}</span>
                   </div>
                 ))}
-              </div>
-            </div>
-          </section>
-
-          <section class="cert">
-            <div class="wrap">
-              <div class="cert-copy">
-                <span class="tag flat">proof of build</span>
-                <h2>Every merged feature earns a certificate.</h2>
-                <p>
-                  Serial, plan, diff, checks, and a screenshot for each acceptance criterion, sealed
-                  at merge time. Share the link instead of explaining what shipped.
-                </p>
-                <a class="ghost" href={REPO_URL}>
-                  See how it's built &rarr;
-                </a>
-              </div>
-              <div class="card certificate" aria-label="example proof of build">
-                <div class="top">
-                  <div>
-                    <div class="meta">proof of build &middot; TD-0130</div>
-                    <h3>Fix PNG previews in the chat rail</h3>
-                    <div class="sha">Ngineer101/turbodiff &middot; merged 3f63d45</div>
-                  </div>
-                  <span class="seal">shipped</span>
-                </div>
-                <ul class="criteria">
-                  <li class="meta">acceptance criteria</li>
-                  <li>
-                    <span class="ok">&#10003;</span>
-                    PNG attachments render inline at their natural size
-                    <span class="shot" aria-hidden="true"></span>
-                  </li>
-                  <li>
-                    <span class="ok">&#10003;</span>
-                    Broken images show the filename, never a blank box
-                    <span class="shot" aria-hidden="true"></span>
-                  </li>
-                  <li>
-                    <span class="ok">&#10003;</span>
-                    Mobile rail does not overflow with a wide image
-                    <span class="shot" aria-hidden="true"></span>
-                  </li>
-                </ul>
-                <div class="ledger">
-                  <div>
-                    <span>checks</span>
-                    <em class="go">14 / 14</em>
-                  </div>
-                  <div>
-                    <span>diff</span>
-                    <em>+212 &minus;48 &middot; 6 files</em>
-                  </div>
-                  <div>
-                    <span>review</span>
-                    <em>1 finding, fixed</em>
-                  </div>
-                  <div>
-                    <span>human time</span>
-                    <em class="hot">4 min</em>
-                  </div>
-                </div>
               </div>
             </div>
           </section>

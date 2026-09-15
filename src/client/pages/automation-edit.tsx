@@ -3,8 +3,9 @@ import { Link, useNavigate, useParams } from '@tanstack/react-router';
 import { Play, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
-import type { ApiAutomationRunSummary } from '../../shared/api-types.ts';
-import { api, ApiError } from '../lib/api.ts';
+import type { ApiAutomationRunSummary } from '../types.ts';
+import { ApiError } from '../lib/api.ts';
+import { deleteAutomation, runAutomation, updateAutomation } from '../lib/backend.ts';
 import { ago } from '../lib/format.ts';
 import { automationQuery, automationRunsQuery } from '../lib/queries.ts';
 import { AutomationForm, type AutomationSubmitValues } from '../components/automation-form.tsx';
@@ -64,29 +65,29 @@ export function AutomationEditPage() {
   const [error, setError] = useState<string | null>(null);
 
   const save = useMutation({
-    mutationFn: (values: AutomationSubmitValues) => api.put(`/api/automations/${id}`, values),
+    mutationFn: (values: AutomationSubmitValues) => updateAutomation(id, values),
     onSuccess: () => {
       toast.success('automation saved');
-      queryClient.invalidateQueries({ queryKey: ['automations'] });
-      queryClient.invalidateQueries({ queryKey: ['automation', id] });
-      navigate({ to: '/automations' });
+      void queryClient.invalidateQueries({ queryKey: ['automations'] });
+      void queryClient.invalidateQueries({ queryKey: ['automation', id] });
+      void navigate({ to: '/automations' });
     },
     onError: (err) => setError(err instanceof ApiError ? err.message : 'request failed'),
   });
   const remove = useMutation({
-    mutationFn: () => api.delete(`/api/automations/${id}`),
+    mutationFn: () => deleteAutomation(id),
     onSuccess: () => {
       toast.success('automation deleted');
-      queryClient.invalidateQueries({ queryKey: ['automations'] });
-      navigate({ to: '/automations' });
+      void queryClient.invalidateQueries({ queryKey: ['automations'] });
+      void navigate({ to: '/automations' });
     },
     onError: onApiError,
   });
   const runNow = useMutation({
-    mutationFn: () => api.post(`/api/automations/${id}/run`),
+    mutationFn: () => runAutomation(id),
     onSuccess: () => {
       toast.success('run started');
-      queryClient.invalidateQueries({ queryKey: ['automation-runs', id] });
+      void queryClient.invalidateQueries({ queryKey: ['automation-runs', id] });
     },
     onError: onApiError,
   });

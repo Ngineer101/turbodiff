@@ -3,8 +3,13 @@ import { useParams } from '@tanstack/react-router';
 import { CircleUserRound, Trash2, UserPlus, Users } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
-import type { ApiInvitation, ApiMember, ApiOrgMembers, ApiRole } from '../../shared/api-types.ts';
-import { api, ApiError } from '../lib/api.ts';
+import type { ApiInvitation, ApiMember, ApiOrgMembers, ApiRole } from '../types.ts';
+import { ApiError } from '../lib/api.ts';
+import {
+  createOrganizationInvitation,
+  deleteOrganizationMember,
+  updateOrganizationMember,
+} from '../lib/backend.ts';
 import { applyOptimistic } from '../lib/optimistic.ts';
 import { orgMembersQuery } from '../lib/queries.ts';
 import { EmptyState, Muted, SectionHeading } from '../components/section.tsx';
@@ -30,23 +35,22 @@ function roleTone(role: ApiRole): 'on' | 'neutral' {
 
 function MemberRow({
   member,
-  installationId,
+  organizationId,
   canManage,
 }: {
   member: ApiMember;
-  installationId: number;
+  organizationId: string;
   canManage: boolean;
 }) {
   const queryClient = useQueryClient();
   const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: ['org-members', installationId] });
+    queryClient.invalidateQueries({ queryKey: ['org-members', organizationId] });
 
   const updateRole = useMutation({
-    mutationFn: (role: ApiRole) =>
-      api.patch(`/api/organizations/${installationId}/members/${member.id}`, { role }),
+    mutationFn: (role: ApiRole) => updateOrganizationMember(organizationId, member.id, role),
     // The select reflects the new role immediately; the refetch reconciles.
     onMutate: (role) =>
-      applyOptimistic<ApiOrgMembers>(queryClient, ['org-members', installationId], (prev) => ({
+      applyOptimistic<ApiOrgMembers>(queryClient, ['org-members', organizationId], (prev) => ({
         ...prev,
         members: prev.members.map((m) => (m.id === member.id ? { ...m, role } : m)),
       })),
@@ -59,7 +63,7 @@ function MemberRow({
   });
 
   const remove = useMutation({
-    mutationFn: () => api.delete(`/api/organizations/${installationId}/members/${member.id}`),
+    mutationFn: () => deleteOrganizationMember(organizationId, member.id),
     onError: onApiError,
     onSuccess: () => toast.success(`Removed ${member.login ?? member.email}`),
     onSettled: invalidate,
@@ -124,19 +128,19 @@ function InvitationRow({ invitation }: { invitation: ApiInvitation }) {
   );
 }
 
-function InviteForm({ installationId }: { installationId: number }) {
+function InviteForm({ organizationId }: { organizationId: string }) {
   const queryClient = useQueryClient();
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<ApiRole>('member');
 
   const invite = useMutation({
-    mutationFn: () => api.post(`/api/organizations/${installationId}/invitations`, { email, role }),
+    mutationFn: () => createOrganizationInvitation(organizationId, email, role),
     onError: onApiError,
     onSuccess: () => {
       toast.success(`Invited ${email}`);
       setEmail('');
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['org-members', installationId] }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['org-members', organizationId] }),
   });
 
   const submit = (e: FormEvent) => {
@@ -180,9 +184,8 @@ function InviteForm({ installationId }: { installationId: number }) {
 }
 
 export function MembersPage() {
-  const { installationId } = useParams({ from: '/shell/settings/members/$installationId' });
-  const id = Number(installationId);
-  const { data } = useSuspenseQuery(orgMembersQuery(id));
+  const { organizationId } = useParams({ from: '/shell/settings/members/$organizationId' });
+  const { data } = useSuspenseQuery(orgMembersQuery(organizationId));
   const canManage = data.my_role !== 'member';
 
   return (
@@ -197,14 +200,16 @@ export function MembersPage() {
         </div>
       </div>
 
-      <div className="mt-6">{canManage ? <InviteForm installationId={id} /> : null}</div>
+      <div className="mt-6">
+        {canManage ? <InviteForm organizationId={organizationId} /> : null}
+      </div>
 
       <SectionHeading>Members</SectionHeading>
       {data.members.length === 0 ? (
         <EmptyState>No members yet.</EmptyState>
       ) : (
         data.members.map((m) => (
-          <MemberRow key={m.id} member={m} installationId={id} canManage={canManage} />
+          <MemberRow key={m.id} member={m} organizationId={organizationId} canManage={canManage} />
         ))
       )}
 

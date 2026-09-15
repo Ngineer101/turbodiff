@@ -18,16 +18,18 @@ import { toast } from 'sonner';
 import type {
   ApiCockpitComment,
   ApiFeatureDetail,
-  ApiFeatureExplanation,
   ApiMe,
   ApiVerificationSummary,
-} from '../../shared/api-types.ts';
+} from '../types.ts';
+import { ApiError } from '../lib/api.ts';
 import {
-  canResumeLifecycleRun,
-  isRepairBudgetPause,
-  resumeTargetStage,
-} from '../../domain/lifecycle-resume.ts';
-import { api, ApiError } from '../lib/api.ts';
+  closeDeliveryChange,
+  generateFeatureExplanation,
+  mergeDeliveryChange,
+  reviewDelivery,
+  retryDelivery,
+  sendDeliveryMessage,
+} from '../lib/backend.ts';
 import { useDictation } from '../lib/dictation.ts';
 import { sentence } from '../lib/format.ts';
 import { applyOptimistic, optimisticId, optimisticNow } from '../lib/optimistic.ts';
@@ -46,7 +48,7 @@ import { cn } from '../lib/utils.ts';
 import { AgentRunLog } from '../components/agent-run-log.tsx';
 import { ConfirmButton } from '../components/confirm-button.tsx';
 import type { CockpitCommentMeta } from '../components/cockpit-patch-diff.tsx';
-import { CertStrip, Lamp, Serial, Stamp, type LampTone } from '../components/identity.tsx';
+import { Lamp, Serial, Stamp, type LampTone } from '../components/identity.tsx';
 import { FILE_STATUS_DOT, FileTree } from '../components/file-tree.tsx';
 import { Markdown } from '../components/markdown.tsx';
 import { MicButton } from '../components/mic-button.tsx';
@@ -93,8 +95,8 @@ const CockpitDiffWorkspace = lazy(() =>
     default: module.CockpitDiffWorkspace,
   })),
 );
-// The agent chat rail is its own chunk (the route stays within its
-// performance budget); while it loads, RailPlaceholder holds its width.
+// The agent chat rail is its own chunk; while it loads, RailPlaceholder holds
+// its width.
 const ChatRail = lazy(() =>
   import('../components/chat-rail.tsx').then((module) => ({ default: module.ChatRail })),
 );
@@ -219,12 +221,14 @@ function CriteriaConflictCard({
   const queryClient = useQueryClient();
   const update = useMutation({
     mutationFn: () =>
-      api.post(`/api/factory/features/${featureId}/criteria`, {
-        criteria: draft
+      sendDeliveryMessage(
+        featureId,
+        `Acceptance contract feedback:\n${draft
           .split('\n')
           .map((line) => line.trim())
-          .filter(Boolean),
-      }),
+          .filter(Boolean)
+          .join('\n')}`,
+      ),
     onSuccess: () => {
       toast.success('Criteria updated — re-verifying against the new contract');
       void queryClient.invalidateQueries({ queryKey: ['feature', featureId] });
@@ -232,7 +236,7 @@ function CriteriaConflictCard({
     onError: onApiError,
   });
   const keep = useMutation({
-    mutationFn: () => api.post(`/api/factory/features/${featureId}/criteria/keep`),
+    mutationFn: () => retryDelivery(featureId),
     onSuccess: () => {
       toast.success('Restoring the planned behavior — the fix agent is on it');
       void queryClient.invalidateQueries({ queryKey: ['feature', featureId] });
@@ -380,7 +384,7 @@ function LifecycleHistory({
                   </li>
                 ))}
               </ol>
-              {canResumeLifecycleRun(run, run.stages.at(-1)) ? (
+              {run.status === 'failed' && run.stages.at(-1)?.status === 'failed' ? (
                 <div className="mt-3">
                   <Button
                     size="sm"
@@ -388,16 +392,8 @@ function LifecycleHistory({
                     onClick={() => onResume(run.id)}
                     loading={resuming}
                   >
-                    {isRepairBudgetPause(run, run.stages.at(-1))
-                      ? 'Resume checks'
-                      : `Retry ${sentence(resumeTargetStage(run.stages)?.stage ?? 'stage')}`}
+                    Retry {sentence(run.stages.at(-1)?.stage ?? 'stage')}
                   </Button>
-                  {isRepairBudgetPause(run, run.stages.at(-1)) ? (
-                    <p className="mt-2 text-xs text-mute">
-                      Fix the remaining issues manually, then resume checks. This does not reset the
-                      automated repair budget.
-                    </p>
-                  ) : null}
                 </div>
               ) : null}
               {run.handoff_reason ? (
@@ -464,12 +460,10 @@ function Composer({
   const queryClient = useQueryClient();
   const submit = useMutation({
     mutationFn: (text: string) =>
-      api.post(`/api/factory/features/${featureId}/comments`, {
-        path: selection.file,
-        line: selection.endLine,
-        side: selection.side,
-        body: text,
-      }),
+      sendDeliveryMessage(
+        featureId,
+        `${selection.file}:${selection.endLine} (${selection.side})\n${text}`,
+      ),
     // The comment bubble lands in the diff on click; the background
     // refetch swaps in the server row.
     onMutate: async (text) => {
@@ -809,11 +803,7 @@ export default function FeaturePage() {
     enabled: summary.pr !== null && summary.diff_version !== null,
   });
   const generateExplanation = useMutation({
-    mutationFn: (force: boolean) =>
-      api.post<ApiFeatureExplanation, { v: string | null; force: boolean }>(
-        `/api/factory/features/${id}/explain`,
-        { v: summary.diff_version, force },
-      ),
+    mutationFn: (force: boolean) => generateFeatureExplanation(id, force),
     onSuccess: (result) => {
       queryClient.setQueryData(['feature-explain', id, summary.diff_version], result);
     },
@@ -862,10 +852,7 @@ export default function FeaturePage() {
   }, [data.files]);
 
   const merge = useMutation({
-    mutationFn: () =>
-      api.post<{ ok: boolean; conflict?: boolean; resolving?: boolean; queued?: boolean }>(
-        `/api/factory/features/${id}/merge`,
-      ),
+    mutationFn: () => mergeDeliveryChange(id),
     onSuccess: (result) => {
       toast.success(
         result.resolving
@@ -879,8 +866,7 @@ export default function FeaturePage() {
     onError: onApiError,
   });
   const resumeStage = useMutation({
-    mutationFn: (runId: number) =>
-      api.post(`/api/factory/features/${id}/lifecycle/${runId}/resume`),
+    mutationFn: (_runId: number) => retryDelivery(id),
     onSuccess: () => {
       toast.success('Stage retried — it runs again on the same delivery');
       refresh();
@@ -888,7 +874,7 @@ export default function FeaturePage() {
     onError: onApiError,
   });
   const rereview = useMutation({
-    mutationFn: () => api.post(`/api/factory/features/${id}/review`),
+    mutationFn: () => reviewDelivery(id),
     onSuccess: () => {
       toast.success('Review dispatched — the verdict lands here when it completes');
       refresh();
@@ -896,8 +882,7 @@ export default function FeaturePage() {
     onError: onApiError,
   });
   const abandon = useMutation({
-    mutationFn: () =>
-      api.post<{ ok: boolean; branchDeleted?: boolean }>(`/api/factory/features/${id}/abandon`),
+    mutationFn: () => closeDeliveryChange(id),
     onSuccess: (result) => {
       toast.success(
         result.branchDeleted === false
@@ -909,7 +894,7 @@ export default function FeaturePage() {
     onError: onApiError,
   });
   const retryGeneration = useMutation({
-    mutationFn: () => api.post(`/api/factory/features/${id}/retry`),
+    mutationFn: () => retryDelivery(id),
     onSuccess: () => {
       toast.success('Generation retried — the run is queued');
       refresh();
@@ -917,7 +902,7 @@ export default function FeaturePage() {
     onError: onApiError,
   });
   const submitBatch = useMutation({
-    mutationFn: () => api.post(`/api/factory/features/${id}/comments/submit`),
+    mutationFn: () => retryDelivery(id),
     onSuccess: () => {
       toast.success('Comments submitted — the fix agent is dispatched');
       refresh();
@@ -1158,23 +1143,6 @@ export default function FeaturePage() {
             railSlot,
           )
         : null}
-
-      {/* The paper the work earns: sealed once the PR merges. */}
-      {data.certificate_url ? (
-        <a
-          href={data.certificate_url}
-          target="_blank"
-          rel="noopener"
-          className="block max-w-xl hover:opacity-90"
-        >
-          <CertStrip sealed={prState === 'merged'} ceremony={justMerged}>
-            BUILD CERTIFICATE №{String(data.feature.id).padStart(4, '0')} —{' '}
-            {prState === 'merged'
-              ? 'sealed · view →'
-              : 'issues when this PR is verified and merged'}
-          </CertStrip>
-        </a>
-      ) : null}
 
       {/* Evidence: criteria fills the width in two columns; the rest are
           collapsible full-width sections. */}

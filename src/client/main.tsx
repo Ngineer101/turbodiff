@@ -38,8 +38,6 @@ import {
   orgMembersQuery,
   queryClient,
   repoCodeQuery,
-  reviewQualityQuery,
-  reviewsQuery,
   settingsQuery,
   skillCatalogQuery,
   skillQuery,
@@ -166,17 +164,6 @@ const usageRoute = createRoute({
   component: lazyRouteComponent(() => import('./pages/usage.tsx'), 'UsagePage'),
 });
 
-const reviewQualityRoute = createRoute({
-  getParentRoute: () => shellRoute,
-  path: '/review-quality',
-  loader: () =>
-    Promise.all([
-      queryClient.ensureQueryData(reviewQualityQuery),
-      queryClient.ensureQueryData(reviewsQuery),
-    ]),
-  component: lazyRouteComponent(() => import('./pages/review-quality.tsx'), 'ReviewQualityPage'),
-});
-
 const integrationsRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: '/integrations',
@@ -286,9 +273,8 @@ const configRoute = createRoute({
 
 const membersRoute = createRoute({
   getParentRoute: () => shellRoute,
-  path: '/settings/members/$installationId',
-  loader: ({ params }) =>
-    queryClient.ensureQueryData(orgMembersQuery(Number(params.installationId))),
+  path: '/settings/members/$organizationId',
+  loader: ({ params }) => queryClient.ensureQueryData(orgMembersQuery(params.organizationId)),
   component: lazyRouteComponent(() => import('./pages/members.tsx'), 'MembersPage'),
 });
 
@@ -327,7 +313,6 @@ const routeTree = rootRoute.addChildren([
     boardRoute,
     taskRoute,
     usageRoute,
-    reviewQualityRoute,
     integrationsRoute,
     integrationNewRoute,
     featureRoute,
@@ -373,17 +358,6 @@ declare module '@tanstack/react-router' {
 }
 
 void registerServiceWorker();
-// Monitoring is a post-boot concern: keep it out of the interaction-critical
-// graph and initialize it only when the browser has idle time.
-const startMonitoring = () =>
-  void import('./lib/performance.ts').then(({ startPerformanceMonitoring }) =>
-    startPerformanceMonitoring(),
-  );
-if ('requestIdleCallback' in window) {
-  window.requestIdleCallback(startMonitoring, { timeout: 5_000 });
-} else {
-  setTimeout(startMonitoring, 2_000);
-}
 
 // Warm-boot persistence: the last-known payloads of the cheap, list-shaped
 // queries hydrate from localStorage before first render, so a reload paints

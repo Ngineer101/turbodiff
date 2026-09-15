@@ -51,22 +51,6 @@ export function artifactsWorkspaceRemote(remoteUrl: string, token: string): Work
   };
 }
 
-// Generation, plans, reviews, verification, fixes, and merges run natively
-// on Artifacts change requests. What still assumes GitHub pull requests:
-// automations and the operator PR-URL fix endpoint — those intakes reject
-// up front instead of stranding a run mid-flow.
-export function factoryUnsupportedReason(repo: {
-  provider: string;
-  owner: string;
-  name: string;
-}): string | null {
-  if (repo.provider === 'github') return null;
-  return (
-    `${repo.owner}/${repo.name} is hosted on Cloudflare Artifacts; this flow still assumes ` +
-    'GitHub pull requests (automations on native change requests are next)'
-  );
-}
-
 // Artifacts repo names allow [A-Za-z0-9._-] after an alphanumeric, max 64
 // chars. Project identity is `<owner>--<name>`, sanitized; the caller
 // appends a numeric suffix on collision (attempt 1 → "-2", etc.).

@@ -2,7 +2,8 @@ import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-q
 import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { api, ApiError } from '../lib/api.ts';
+import { ApiError } from '../lib/api.ts';
+import { createIntegration } from '../lib/backend.ts';
 import { integrationsQuery } from '../lib/queries.ts';
 import { IntegrationForm, type IntegrationFormValues } from '../components/integration-form.tsx';
 
@@ -15,7 +16,7 @@ export function IntegrationNewPage() {
   const [error, setError] = useState<string | null>(null);
 
   const create = useMutation({
-    mutationFn: (values: IntegrationFormValues) => api.post('/api/integrations', values),
+    mutationFn: (values: IntegrationFormValues) => createIntegration(values),
     onSuccess: () => {
       toast.success('Integration added');
       void queryClient.invalidateQueries({ queryKey: ['integrations'] });
@@ -26,7 +27,7 @@ export function IntegrationNewPage() {
 
   return (
     <IntegrationForm
-      installations={data.installations}
+      organizations={data.organizations}
       encryptionConfigured={data.encryption_configured}
       error={error}
       busy={create.isPending}

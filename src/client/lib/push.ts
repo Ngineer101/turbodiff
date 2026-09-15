@@ -1,6 +1,6 @@
 // Thin Web Push helpers, mirroring the thin-wrapper style of ./api.ts.
 
-import { api } from './api.ts';
+import { createPushSubscription, deletePushSubscription } from './backend.ts';
 
 export function pushSupported(): boolean {
   return 'serviceWorker' in navigator && 'PushManager' in window;
@@ -54,7 +54,7 @@ export async function subscribeToPush(vapidPublicKey: string): Promise<boolean> 
       `The browser refused the push subscription: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
-  await api.post('/api/push/subscribe', subscription.toJSON());
+  await createPushSubscription(subscription.toJSON());
   return true;
 }
 
@@ -63,6 +63,6 @@ export async function unsubscribeFromPush(): Promise<void> {
   const registration = await navigator.serviceWorker.getRegistration();
   const subscription = await registration?.pushManager.getSubscription();
   if (!subscription) return;
-  await api.post('/api/push/unsubscribe', { endpoint: subscription.endpoint });
+  await deletePushSubscription(subscription.endpoint);
   await subscription.unsubscribe();
 }

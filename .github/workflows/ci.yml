@@ -44,9 +44,6 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
-      - name: Review submission runtime
-        run: pnpm vp run test:review-runtime
-
       - name: Planning runtime (pinned OpenCode)
         run: pnpm vp run test:planning
 
@@ -56,8 +53,8 @@ jobs:
       - name: Fresh PostgreSQL schema test
         run: pnpm vp run test:schema
 
-      - name: Worker and PostgreSQL integration tests
-        run: pnpm vp run test:worker
+      - name: Service and PostgreSQL integration tests
+        run: pnpm vp run test:integration
 
       - name: Build
         run: pnpm vp run build

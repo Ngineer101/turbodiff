@@ -7,4 +7,5 @@ worker-configuration.d.ts
 *.pem
 public/cockpit/
 public/app/
+.vercel
 .DS_Store

@@ -1,1 +1,0 @@
-ALTER TABLE "app"."automations" ADD COLUMN "runner_model" text;

@@ -2,7 +2,8 @@ import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-q
 import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { api, ApiError } from '../lib/api.ts';
+import { ApiError } from '../lib/api.ts';
+import { createAgent } from '../lib/backend.ts';
 import { modelsQuery } from '../lib/queries.ts';
 import { AgentForm, type AgentFormValues } from '../components/agent-form.tsx';
 
@@ -15,7 +16,7 @@ export function AgentNewPage() {
   const [error, setError] = useState<string | null>(null);
 
   const create = useMutation({
-    mutationFn: (values: AgentFormValues) => api.post('/api/agents', values),
+    mutationFn: (values: AgentFormValues) => createAgent(values),
     onSuccess: () => {
       toast.success('Agent created');
       void queryClient.invalidateQueries({ queryKey: ['agents'] });

@@ -1,380 +1,216 @@
-import { inArray, sql } from 'drizzle-orm';
-import { execute, queryOne, queryRows, withDatabase, withTransaction } from './database.ts';
-import { repositories } from './schema.ts';
-import { bigintArray } from './sql.ts';
-import type { ReviewIntakeMode } from '../domain/review-intake.ts';
-import type { ProcessProfileKey } from '../domain/lifecycle-contract.ts';
-import type { AdoptableProcessProfileKey } from '../domain/process-profiles.ts';
+import { sql } from 'drizzle-orm';
+import type { JsonValue } from '../shared/json.ts';
+import { execute, queryOne, queryRows, sqlValueList, withTransaction } from './postgres.ts';
+import type { IntegrationRow } from './integrations.ts';
 
-// Thin typed layer over the PostgreSQL application schema.
-
-export interface InstallationRow {
-  id: number;
-  account_login: string;
-  account_id: number;
-  account_type: string;
-  suspended: boolean;
-  provider: string; // 'github' | 'artifacts' (synthetic tenancy rows)
-  installer_github_id: number | null; // App installer (webhook sender); feeds the deferred owner bootstrap
+export interface RepositorySettings {
+  reviewOnPush?: boolean;
+  checkCommand?: string;
 }
 
 export interface RepositoryRow {
   id: number;
-  installation_id: number;
+  organization_id: string;
+  source_integration_id: number;
+  external_id: string | null;
   owner: string;
   name: string;
-  provider: string; // 'github' | 'artifacts'
-  artifacts_repo: string | null; // repo name in turbodiff's Artifacts namespace
-  default_branch: string | null; // stored for Artifacts repos; NULL for GitHub
-  last_push_at: string | null; // maintained by Artifacts event ingestion
+  default_branch: string | null;
   enabled: boolean;
-  review_on_push: boolean; // re-dispatch tiered agents on pushes to open PRs
-  review_push_debounce_minutes: number; // trailing window before a push review runs (0 = now)
-  review_intake: ReviewIntakeMode;
-  process_profile: ProcessProfileKey;
-  blocking_reviews: boolean; // P1 → REQUEST_CHANGES, clean → APPROVE
-  auto_fix: boolean; // dispatch the fix agent when a blocking review lands
-  auto_merge: boolean; // merge factory PRs when verification + review are clean
-  auto_resolve_conflicts: boolean; // dispatch the fix agent to resolve a merge conflict
-  demo_videos: boolean; // record a verification demo video (runtime auto-detected)
-  launchable: boolean | null; // cached detection: null unknown
-  check_command: string | null; // sandbox verification gate before factory pushes
-  run_command: string | null; // how to launch the app for runtime verification
-  app_port: number | null; // port the launched app listens on
-  model: string | null;
-  created_at: string; // when the repo was connected
+  settings: JsonValue;
+  created_at: string;
+  updated_at: string;
+  source_kind: IntegrationRow['kind'];
+  source_provider: string;
+  source_external_account_id: string | null;
+  source_config: JsonValue;
 }
 
-interface WebhookAccount {
-  login: string;
-  id: number;
-  type: string;
+export interface RepositoryRefRow {
+  repository_id: number;
+  ref: string;
+  head_sha: string;
+  updated_at: string;
 }
 
-interface WebhookRepo {
-  id: number;
-  name: string;
-  full_name: string;
-}
-
-export async function upsertInstallation(
-  id: number,
-  account: WebhookAccount,
-  installerGithubId?: number,
-): Promise<void> {
-  // COALESCE keeps a recorded installer through deliveries that carry no
-  // sender (installation_repositories) — only the `installation created`
-  // delivery may set it. A reinstall receives a new installation id; remove
-  // a stale row for the same GitHub account first so the provider/account
-  // uniqueness constraints cannot permanently reject webhook retries.
-  await withTransaction(async (transaction) => {
-    await transaction.execute(sql`
-        DELETE FROM app.installations
-        WHERE provider = 'github' AND id <> ${id}
-          AND (account_id = ${account.id} OR account_login = ${account.login})
-      `);
-    await transaction.execute(sql`
-        INSERT INTO app.installations
-          (id, account_login, account_id, account_type, suspended, installer_github_id)
-        VALUES (
-          ${id}, ${account.login}, ${account.id}, ${account.type}, FALSE, ${installerGithubId ?? null}
-        )
-        ON CONFLICT(id) DO UPDATE SET
-          account_login = excluded.account_login,
-          account_id = excluded.account_id,
-          account_type = excluded.account_type,
-          suspended = FALSE,
-          installer_github_id = COALESCE(
-            excluded.installer_github_id,
-            installations.installer_github_id
-          )
-      `);
-  });
-}
-
-export async function deleteInstallation(id: number): Promise<void> {
-  await execute(sql`DELETE FROM app.installations WHERE id = ${id}`);
-}
-
-export async function setInstallationSuspended(id: number, suspended: boolean): Promise<void> {
-  await execute(sql`
-    UPDATE app.installations SET suspended = ${suspended} WHERE id = ${id}
+export async function listRepositories(organizationIds: string[]): Promise<RepositoryRow[]> {
+  if (organizationIds.length === 0) return [];
+  return queryRows<RepositoryRow>(sql`
+    SELECT r.*, i.kind AS source_kind, i.provider AS source_provider,
+      i.external_account_id AS source_external_account_id, i.config AS source_config
+    FROM app.repositories r
+    JOIN app.integrations i ON i.id = r.source_integration_id
+    WHERE r.organization_id IN (${sqlValueList(organizationIds)})
+    ORDER BY r.owner, r.name, r.id
   `);
 }
 
-export async function addRepositories(installationId: number, repos: WebhookRepo[]): Promise<void> {
-  if (repos.length === 0) return;
-  await withDatabase(async (database) => {
-    await database
-      .insert(repositories)
-      .values(
-        repos.map((repo) => {
-          const [owner = '', name = ''] = repo.full_name.split('/');
-          return { id: repo.id, installationId, owner, name };
-        }),
-      )
-      .onConflictDoUpdate({
-        target: repositories.id,
-        set: {
-          installationId: sql`excluded.installation_id`,
-          owner: sql`excluded.owner`,
-          name: sql`excluded.name`,
-        },
-      });
-  });
-}
-
-export async function listRepositoryIdsForInstallation(installationId: number): Promise<number[]> {
-  const rows = await queryRows<{ id: number }>(sql`
-    SELECT id FROM app.repositories WHERE installation_id = ${installationId}
+export async function getRepository(id: number): Promise<RepositoryRow | null> {
+  return queryOne<RepositoryRow>(sql`
+    SELECT r.*, i.kind AS source_kind, i.provider AS source_provider,
+      i.external_account_id AS source_external_account_id, i.config AS source_config
+    FROM app.repositories r
+    JOIN app.integrations i ON i.id = r.source_integration_id
+    WHERE r.id = ${id}
   `);
-  return rows.map((row) => row.id);
 }
 
-export async function removeRepositories(repoIds: number[]): Promise<void> {
-  if (repoIds.length === 0) return;
-  await withDatabase(async (database) => {
-    await database.delete(repositories).where(inArray(repositories.id, repoIds));
-  });
-}
-
-export async function getRepoByFullName(
+export async function getRepositoryByFullName(
   owner: string,
   name: string,
+  provider = 'github',
 ): Promise<RepositoryRow | null> {
   return queryOne<RepositoryRow>(sql`
-    SELECT * FROM app.repositories WHERE owner = ${owner} AND name = ${name}
+    SELECT r.*, i.kind AS source_kind, i.provider AS source_provider,
+      i.external_account_id AS source_external_account_id, i.config AS source_config
+    FROM app.repositories r
+    JOIN app.integrations i ON i.id = r.source_integration_id
+    WHERE r.owner = ${owner} AND r.name = ${name} AND i.provider = ${provider}
+    ORDER BY r.id
+    LIMIT 1
   `);
 }
 
-export async function getInstallation(id: number): Promise<InstallationRow | null> {
-  return queryOne<InstallationRow>(sql`SELECT * FROM app.installations WHERE id = ${id}`);
-}
-
-// ── Artifacts-hosted projects (docs/artifacts-provider.md) ─────────────────
-// Artifacts rows reuse the installation-scoped access model. A dedicated
-// high-range sequence allocates collision-free ids without the old MIN(id)-1
-// scan/race or overloaded negative-id convention.
-
-export async function getArtifactsInstallationByLogin(
-  accountLogin: string,
-): Promise<InstallationRow | null> {
-  return queryOne<InstallationRow>(sql`
-    SELECT * FROM app.installations
-    WHERE account_login = ${accountLogin} AND provider = 'artifacts'
-  `);
-}
-
-export async function createArtifactsInstallation(accountLogin: string): Promise<InstallationRow> {
-  const row = await queryOne<InstallationRow>(sql`
-    WITH allocated AS (SELECT nextval('app.native_entity_id_seq') AS id)
-    INSERT INTO app.installations (id, account_login, account_id, account_type, provider)
-    SELECT id, ${accountLogin}, id, 'Organization', 'artifacts' FROM allocated
-    RETURNING *
-  `);
-  if (!row) throw new Error('artifacts installation insert returned no row');
-  return row;
-}
-
-export async function createArtifactsRepository(input: {
-  installationId: number;
-  owner: string;
-  name: string;
-  artifactsRepo: string;
-  defaultBranch: string;
-  // Chosen at creation on the new-project form; falls back to the column
-  // default when omitted.
-  processProfile?: ProcessProfileKey;
-}): Promise<RepositoryRow> {
-  const row = await queryOne<RepositoryRow>(sql`
-    INSERT INTO app.repositories
-      (installation_id, owner, name, provider, artifacts_repo, default_branch, process_profile)
-    VALUES (
-      ${input.installationId}, ${input.owner}, ${input.name},
-      'artifacts', ${input.artifactsRepo}, ${input.defaultBranch},
-      ${input.processProfile ?? 'legacy_factory'}
-    )
-    RETURNING *
-  `);
-  if (!row) throw new Error('artifacts repository insert returned no row');
-  return row;
-}
-
-export async function getRepoByArtifactsName(artifactsRepo: string): Promise<RepositoryRow | null> {
-  return queryOne<RepositoryRow>(sql`
-    SELECT * FROM app.repositories WHERE artifacts_repo = ${artifactsRepo}
-  `);
-}
-
-export async function recordArtifactsPush(
-  artifactsRepo: string,
-  pushedAt: string,
+export async function getRepositoryByExternalId(
+  integrationId: number,
+  externalId: string,
 ): Promise<RepositoryRow | null> {
   return queryOne<RepositoryRow>(sql`
-    UPDATE app.repositories SET last_push_at = ${pushedAt}
-    WHERE artifacts_repo = ${artifactsRepo}
-    RETURNING *
+    SELECT r.*, i.kind AS source_kind, i.provider AS source_provider,
+      i.external_account_id AS source_external_account_id, i.config AS source_config
+    FROM app.repositories r
+    JOIN app.integrations i ON i.id = r.source_integration_id
+    WHERE r.source_integration_id = ${integrationId} AND r.external_id = ${externalId}
   `);
 }
 
-export async function listInstallationsWithRepos(
-  installationIds: number[],
-): Promise<{ installation: InstallationRow; repos: RepositoryRow[] }[]> {
-  if (installationIds.length === 0) return [];
-  const [installations, repos] = await Promise.all([
-    queryRows<InstallationRow>(sql`
-      SELECT * FROM app.installations
-      WHERE id = ANY(${bigintArray(installationIds)})
-      ORDER BY account_login
-    `),
-    queryRows<RepositoryRow>(sql`
-      SELECT * FROM app.repositories
-      WHERE installation_id = ANY(${bigintArray(installationIds)})
-      ORDER BY owner, name
-    `),
-  ]);
-  return installations.map((installation) => ({
-    installation,
-    repos: repos.filter((repo) => repo.installation_id === installation.id),
-  }));
-}
-
-export interface OrgMemberRow {
-  id: string;
-  login: string | null;
-  email: string;
-  role: string;
-  created_at: string;
-}
-
-export interface OrgInvitationRow {
-  id: string;
-  email: string;
-  role: string;
-  status: string;
-  expires_at: string | null;
-}
-
-// The members page's read side: joins better-auth's member/user tables for
-// display (login isn't on `member` itself). Written here rather than
-// through the organization plugin's own listMembers endpoint because that
-// endpoint requires the caller to already have a member row in the org —
-// the hybrid access model reads (GET /organizations/:id/members) with plain
-// installation membership instead, same bar as every other GET route.
-export async function listMembersWithGithubLogin(organizationId: string): Promise<OrgMemberRow[]> {
-  return queryRows<OrgMemberRow>(sql`
-    SELECT member.id, "user".login, "user".email,
-      member.role, member."createdAt" AS created_at
-    FROM auth."member" AS member
-    JOIN auth."user" AS "user" ON "user".id = member."userId"
-    WHERE member."organizationId" = ${organizationId}
-    ORDER BY member."createdAt"
+export async function getRepositoryByProviderExternalId(
+  provider: string,
+  externalId: string,
+): Promise<RepositoryRow | null> {
+  return queryOne<RepositoryRow>(sql`
+    SELECT r.*, i.kind AS source_kind, i.provider AS source_provider,
+      i.external_account_id AS source_external_account_id, i.config AS source_config
+    FROM app.repositories r
+    JOIN app.integrations i ON i.id = r.source_integration_id
+    WHERE i.provider = ${provider} AND r.external_id = ${externalId}
+    ORDER BY r.id
+    LIMIT 1
   `);
 }
 
-export async function listPendingInvitations(organizationId: string): Promise<OrgInvitationRow[]> {
-  return queryRows<OrgInvitationRow>(sql`
-    SELECT id, email, role, status, "expiresAt" AS expires_at
-    FROM auth."invitation"
-    WHERE "organizationId" = ${organizationId} AND status = 'pending'
-    ORDER BY "createdAt"
-  `);
-}
-
-export async function getRepoById(id: number): Promise<RepositoryRow | null> {
-  return queryOne<RepositoryRow>(sql`SELECT * FROM app.repositories WHERE id = ${id}`);
-}
-
-export async function setRepoEnabled(id: number, enabled: boolean): Promise<void> {
-  await execute(sql`UPDATE app.repositories SET enabled = ${enabled} WHERE id = ${id}`);
-}
-
-export async function setRepoReviewOnPush(id: number, on: boolean): Promise<void> {
-  await execute(sql`UPDATE app.repositories SET review_on_push = ${on} WHERE id = ${id}`);
-}
-
-export async function setRepoReviewPushDebounceMinutes(id: number, minutes: number): Promise<void> {
-  await execute(sql`
-    UPDATE app.repositories SET review_push_debounce_minutes = ${minutes} WHERE id = ${id}
-  `);
-}
-
-export async function setRepoReviewIntake(id: number, mode: ReviewIntakeMode): Promise<void> {
-  const profile =
-    mode === 'on_demand'
-      ? 'review_on_demand'
-      : mode === 'all_changes'
-        ? 'automatic_review'
-        : 'legacy_factory';
-  await execute(sql`
-    UPDATE app.repositories SET review_intake = ${mode}, process_profile = ${profile}
-    WHERE id = ${id}
-  `);
-}
-
-export async function setRepoProcessProfile(
-  id: number,
-  profile: AdoptableProcessProfileKey,
+export async function upsertRepositories(
+  integration: IntegrationRow,
+  repos: Array<{
+    externalId?: string | null;
+    owner: string;
+    name: string;
+    defaultBranch?: string | null;
+  }>,
 ): Promise<void> {
-  const intake: ReviewIntakeMode =
-    profile === 'legacy_factory'
-      ? 'factory_only'
-      : profile === 'review_on_demand' || profile === 'idea_to_pr'
-        ? 'on_demand'
-        : 'all_changes';
+  await withTransaction(async (transaction) => {
+    for (const repo of repos) {
+      const existing = await transaction.execute(sql`
+        SELECT id FROM app.repositories
+        WHERE source_integration_id = ${integration.id}
+          AND (
+            (${repo.externalId ?? null}::text IS NOT NULL AND external_id = ${repo.externalId ?? null})
+            OR (owner = ${repo.owner} AND name = ${repo.name})
+          )
+      `);
+      const id = existing.rows[0]?.id;
+      if (id) {
+        await transaction.execute(sql`
+          UPDATE app.repositories SET
+            external_id = COALESCE(${repo.externalId ?? null}, external_id),
+            owner = ${repo.owner}, name = ${repo.name},
+            default_branch = COALESCE(${repo.defaultBranch ?? null}, default_branch),
+            enabled = TRUE, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ${Number(id)}
+        `);
+      } else {
+        await transaction.execute(sql`
+          INSERT INTO app.repositories (
+            organization_id, source_integration_id, external_id, owner, name, default_branch
+          ) VALUES (
+            ${integration.organization_id}, ${integration.id}, ${repo.externalId ?? null},
+            ${repo.owner}, ${repo.name},
+            ${repo.defaultBranch ?? null}
+          )
+        `);
+      }
+    }
+  });
+}
+
+export async function removeRepositories(ids: number[]): Promise<void> {
+  if (ids.length === 0) return;
+  await execute(sql`DELETE FROM app.repositories WHERE id IN (${sqlValueList(ids)})`);
+}
+
+export async function disableRepositoriesForIntegration(integrationId: number): Promise<void> {
   await execute(sql`
-    UPDATE app.repositories SET process_profile = ${profile}, review_intake = ${intake}
-    WHERE id = ${id}
+    UPDATE app.repositories SET enabled = FALSE, updated_at = CURRENT_TIMESTAMP
+    WHERE source_integration_id = ${integrationId}
   `);
 }
 
-export async function setRepoBlockingReviews(id: number, on: boolean): Promise<void> {
-  await execute(sql`UPDATE app.repositories SET blocking_reviews = ${on} WHERE id = ${id}`);
-}
-
-export async function setRepoAutoFix(id: number, on: boolean): Promise<void> {
-  await execute(sql`UPDATE app.repositories SET auto_fix = ${on} WHERE id = ${id}`);
-}
-
-export async function setRepoAutoMerge(id: number, on: boolean): Promise<void> {
-  await execute(sql`UPDATE app.repositories SET auto_merge = ${on} WHERE id = ${id}`);
-}
-
-export async function setRepoAutoResolveConflicts(id: number, on: boolean): Promise<void> {
-  await execute(sql`
-    UPDATE app.repositories SET auto_resolve_conflicts = ${on} WHERE id = ${id}
-  `);
-}
-
-// The sandbox verification gate for factory pushes. Empty string clears it.
-export async function setRepoLaunchable(id: number, launchable: boolean): Promise<void> {
-  await execute(sql`
-    UPDATE app.repositories SET launchable = ${launchable} WHERE id = ${id}
-  `);
-}
-
-export async function setRepoDemoVideos(id: number, on: boolean): Promise<void> {
-  await execute(sql`UPDATE app.repositories SET demo_videos = ${on} WHERE id = ${id}`);
-}
-
-export async function setRepoCheckCommand(id: number, command: string): Promise<void> {
-  const trimmed = command.trim();
-  await execute(sql`
-    UPDATE app.repositories SET check_command = ${trimmed || null} WHERE id = ${id}
-  `);
-}
-
-// How the verify step launches the repo's app for runtime/visual checks.
-// Empty command clears both fields (static verification only).
-export async function setRepoRunCommand(
+export async function updateRepository(
   id: number,
-  command: string,
-  port: number | null,
+  input: { enabled?: boolean; settings?: JsonValue; defaultBranch?: string | null },
 ): Promise<void> {
-  const trimmed = command.trim();
   await execute(sql`
-    UPDATE app.repositories
-    SET run_command = ${trimmed || null}, app_port = ${trimmed ? port : null}
+    UPDATE app.repositories SET
+      enabled = COALESCE(${input.enabled ?? null}, enabled),
+      settings = COALESCE(${input.settings ? JSON.stringify(input.settings) : null}::jsonb, settings),
+      default_branch = CASE
+        WHEN ${input.defaultBranch === undefined} THEN default_branch
+        ELSE ${input.defaultBranch ?? null}
+      END,
+      updated_at = CURRENT_TIMESTAMP
     WHERE id = ${id}
+  `);
+}
+
+export async function replaceRepositorySettings(id: number, settings: JsonValue): Promise<void> {
+  await execute(sql`
+    UPDATE app.repositories SET settings = ${JSON.stringify(settings)}::jsonb,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ${id}
+  `);
+}
+
+export async function recordRepositoryRef(
+  repositoryId: number,
+  ref: string,
+  headSha: string,
+): Promise<void> {
+  await execute(sql`
+    INSERT INTO app.repository_refs (repository_id, organization_id, ref, head_sha)
+    SELECT id, organization_id, ${ref}, ${headSha}
+    FROM app.repositories WHERE id = ${repositoryId}
+    ON CONFLICT(repository_id, ref) DO UPDATE
+    SET head_sha = excluded.head_sha, updated_at = CURRENT_TIMESTAMP
+  `);
+}
+
+export async function deleteRepositoryRef(repositoryId: number, ref: string): Promise<void> {
+  await execute(sql`
+    DELETE FROM app.repository_refs WHERE repository_id = ${repositoryId} AND ref = ${ref}
+  `);
+}
+
+export async function repositoryRef(
+  repositoryId: number,
+  ref: string,
+): Promise<RepositoryRefRow | null> {
+  return queryOne<RepositoryRefRow>(sql`
+    SELECT * FROM app.repository_refs WHERE repository_id = ${repositoryId} AND ref = ${ref}
+  `);
+}
+
+export async function repositoryRefs(repositoryId: number): Promise<RepositoryRefRow[]> {
+  return queryRows<RepositoryRefRow>(sql`
+    SELECT * FROM app.repository_refs WHERE repository_id = ${repositoryId} ORDER BY ref
   `);
 }

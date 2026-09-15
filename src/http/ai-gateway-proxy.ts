@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 import type { Context } from 'hono';
-import { proxyAiGatewayRequest } from '../services/ai-gateway-proxy.ts';
+import { proxyAiGatewayRequest } from '../integrations/ai-gateway/proxy.ts';
 
 export function handleAiGatewayProxy(context: Context): Promise<Response> {
   return proxyAiGatewayRequest(context.req.raw, {

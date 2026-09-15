@@ -57,8 +57,7 @@ rather than a public issue.
   fail.
 - **Webhooks and operator endpoints.** GitHub webhooks are authenticated
   solely by HMAC signature. Operator endpoints require a bearer secret
-  compared in constant time. The local-dev fake login is honored only on
-  loopback hosts.
+  compared in constant time.
 - **Push gating.** Generated and fixed code must pass the repo's
   `check_command` before it is pushed; agent changes are committed before
   checks run so check-side working-tree mutations cannot leak into commits.

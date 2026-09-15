@@ -16,5 +16,5 @@
       "@/*": ["./src/client/*"]
     }
   },
-  "include": ["src/client", "src/shared"]
+  "include": ["src/client", "src/shared", "src/api/client", "src/api/contract"]
 }

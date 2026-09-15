@@ -1,11 +1,28 @@
 import { cloudflare } from '@cloudflare/vite-plugin';
-import { flue, flueWorkerConfig } from '@flue/vite';
 import { defineConfig, lazyPlugins } from 'vite-plus';
 
 export default defineConfig({
   // lazyPlugins keeps check/lint/fmt from booting the Cloudflare plugin
   // (which needs Docker/bindings); dev/build load it as before.
-  plugins: lazyPlugins(() => [flue(), cloudflare({ config: flueWorkerConfig() })]),
+  plugins: lazyPlugins(() => [
+    cloudflare({
+      config(config) {
+        const hyperdriveId = process.env.TURBODIFF_HYPERDRIVE_ID?.trim();
+        if (!hyperdriveId) {
+          if (process.env.TURBODIFF_REQUIRE_HYPERDRIVE_ID === 'true') {
+            throw new Error('TURBODIFF_HYPERDRIVE_ID is required for deployment');
+          }
+          return;
+        }
+        if (!/^[0-9a-f]{32}$/.test(hyperdriveId)) {
+          throw new Error('TURBODIFF_HYPERDRIVE_ID must be a 32-character lowercase hex ID');
+        }
+        const binding = config.hyperdrive?.find(({ binding }) => binding === 'HYPERDRIVE');
+        if (!binding) throw new Error('The HYPERDRIVE binding is missing from wrangler.jsonc');
+        binding.id = hyperdriveId;
+      },
+    }),
+  ]),
   // Repo style: tabs + single quotes (configured so a future `vp fmt` run
   // doesn't reindent the codebase as a side effect).
   fmt: {
@@ -90,31 +107,23 @@ export default defineConfig({
       'db:check': { command: 'drizzle-kit check' },
       'db:verify': { command: 'node scripts/db-verify.mjs', cache: false },
       'db:reset-test': {
-        command: 'node scripts/db-reset-test.mjs',
+        command: 'node tests/support/reset-database.mjs',
         dependsOn: ['db:migrate'],
         cache: false,
       },
       'test:planning': {
         command:
-          "pnpm --package=opencode-ai@1.18.29 dlx -c 'node --test scripts/planning-runtime.test.mjs'",
+          "pnpm --package=opencode-ai@1.18.29 dlx -c 'node --test tests/runtime/planning-runtime.test.mjs'",
         cache: false,
       },
-      'test:review-runtime': {
-        command: 'node --test scripts/review-submission-runtime.test.mjs',
+      'test:schema': { command: 'node tests/schema/baseline.mjs' },
+      'test:integration': {
+        command: 'vp test --config tests/config/vitest.integration.ts --run',
+        dependsOn: ['db:migrate'],
         cache: false,
-      },
-      'test:schema': { command: 'node scripts/db-schema-test.mjs' },
-      'test:worker': {
-        command: 'vp test --config vitest.worker.config.ts',
-        dependsOn: ['db:reset-test'],
-        cache: false,
-      },
-      'test:review-evals': {
-        command: 'vp test --run src/evals/review-quality.test.ts',
       },
       'check:types': {
-        command:
-          'wrangler types && tsc --noEmit && tsc -p tsconfig.client.json --noEmit && tsc -p tsconfig.worker-tests.json --noEmit',
+        command: 'wrangler types && tsc --noEmit && tsc -p tsconfig.client.json --noEmit',
       },
     },
   },

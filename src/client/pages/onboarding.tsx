@@ -51,7 +51,7 @@ export function OnboardingPage() {
       )}
 
       <Card className="mt-6 space-y-4">
-        {me.github_status === 'not_connected' ? (
+        {me.githubStatus === 'not_connected' ? (
           <>
             <div className="flex items-center gap-2 text-[0.85rem] text-ink-dim">
               <Lamp tone="hold" />
@@ -69,7 +69,7 @@ export function OnboardingPage() {
               in the app.
             </p>
           </>
-        ) : me.github_status === 'reauthorization_required' ? (
+        ) : me.githubStatus === 'reauthorization_required' ? (
           <>
             <div className="flex items-center gap-2 text-[0.85rem] text-ink-dim">
               <Lamp tone="hold" />
@@ -87,7 +87,7 @@ export function OnboardingPage() {
               Re-authorize GitHub
             </a>
           </>
-        ) : me.github_status === 'temporarily_unavailable' ? (
+        ) : me.githubStatus === 'temporarily_unavailable' ? (
           <>
             <div className="flex items-center gap-2 text-[0.85rem] text-ink-dim">
               <Lamp tone="hold" />
@@ -113,7 +113,7 @@ export function OnboardingPage() {
               Re-authorize GitHub
             </a>
           </>
-        ) : me.github_status === 'app_not_installed' ? (
+        ) : me.githubStatus === 'app_not_installed' ? (
           <>
             <div className="flex items-center gap-2 text-[0.85rem] text-ink-dim">
               <Lamp tone="go" />
@@ -125,7 +125,7 @@ export function OnboardingPage() {
               grant you access.
             </p>
             <a
-              href={`https://github.com/apps/${me.github_app_slug}/installations/new`}
+              href={`https://github.com/apps/${me.githubAppSlug}/installations/new`}
               className={cn(buttonVariants({ variant: 'default' }), 'w-full')}
             >
               <GitHubMark className="size-4" />
@@ -139,7 +139,7 @@ export function OnboardingPage() {
               — the factory builds, reviews, and merges it natively.
             </p>
           </>
-        ) : me.github_status === 'syncing' ? (
+        ) : me.githubStatus === 'syncing' ? (
           <>
             <div className="flex items-center gap-2 text-[0.85rem] text-ink-dim">
               <RefreshCw className="size-4 animate-spin text-accent-bright" aria-hidden />
@@ -168,7 +168,7 @@ export function OnboardingPage() {
         href="/"
         className="mt-5 inline-flex items-center gap-1.5 self-start text-[0.85rem] text-mute hover:text-ink"
       >
-        {me.github_status === 'not_connected' ? 'Skip for now' : 'Go to the board'}
+        {me.githubStatus === 'not_connected' ? 'Skip for now' : 'Go to the board'}
         <ArrowRight className="size-3.5" aria-hidden />
       </a>
     </div>

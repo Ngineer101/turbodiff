@@ -238,21 +238,9 @@ svg.lucide {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .stamp-ceremony,
-  .seal-ceremony {
+  .stamp-ceremony {
     animation: none;
   }
-}
-
-/* Certificate strip hatching: the paper object a merged feature earns. */
-.cert-hatch {
-  background: repeating-linear-gradient(
-    -45deg,
-    var(--color-surface),
-    var(--color-surface) 6px,
-    var(--color-surface-2) 6px,
-    var(--color-surface-2) 7px
-  );
 }
 
 /* @pierre/diffs core CSS is injected at runtime rescoped from :host to

@@ -3,7 +3,8 @@ import { useNavigate, useParams } from '@tanstack/react-router';
 import { Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { api, ApiError } from '../lib/api.ts';
+import { ApiError } from '../lib/api.ts';
+import { deleteAgent, updateAgent } from '../lib/backend.ts';
 import { agentQuery, modelsQuery } from '../lib/queries.ts';
 import { AgentForm, type AgentFormValues } from '../components/agent-form.tsx';
 import { ConfirmButton } from '../components/confirm-button.tsx';
@@ -22,7 +23,7 @@ export function AgentEditPage() {
   const [error, setError] = useState<string | null>(null);
 
   const save = useMutation({
-    mutationFn: (values: AgentFormValues) => api.put(`/api/agents/${id}`, values),
+    mutationFn: (values: AgentFormValues) => updateAgent(id, values),
     onSuccess: () => {
       toast.success('Agent saved');
       void queryClient.invalidateQueries({ queryKey: ['agents'] });
@@ -32,7 +33,7 @@ export function AgentEditPage() {
     onError: (err) => setError(err instanceof ApiError ? err.message : 'Request failed'),
   });
   const remove = useMutation({
-    mutationFn: () => api.delete(`/api/agents/${id}`),
+    mutationFn: () => deleteAgent(id),
     onSuccess: () => {
       toast.success('Agent deleted — its review history stays');
       void queryClient.invalidateQueries({ queryKey: ['agents'] });

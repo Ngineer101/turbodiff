@@ -4,7 +4,7 @@ import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { mcp } from 'better-auth/plugins';
 import { organization } from 'better-auth/plugins/organization';
 import { eq, or, sql } from 'drizzle-orm';
-import { withDatabase, type Database } from '../../data/database.ts';
+import { withDatabase, type Database } from '../../data/postgres.ts';
 import { isNoreplyEmail } from '../../domain/attribution.ts';
 import { isNumber, isString } from '../../shared/json.ts';
 import {
@@ -93,7 +93,7 @@ import { orgAc, orgRoles } from './organization-access.ts';
 //     unauthenticated authorize hit redirects to loginPage with the OAuth
 //     query intact (ui.ts resumes the authorize after sign-in); consent is
 //     skipped unless a client sends prompt=consent, so no consent UI exists.
-//     requireMcpUser in services/auth.ts is the bearer-token consumer.
+//     requireMcpUser in application/auth/session.ts is the bearer-token consumer.
 
 const SESSION_DAYS = 30;
 
@@ -203,7 +203,7 @@ function createAuth(database: Database) {
     },
     // Teams & orgs: one organization row
     // per Organization-type installation, linked by installationId. Rows are
-    // written by hand from src/services/access-control.ts (webhook provisioning,
+    // written by hand from src/application/auth/access-control.ts (webhook provisioning,
     // never this plugin's own createOrganization/addMember endpoints — those
     // require an existing signed-in creator, which the installing webhook
     // doesn't have) — ac/roles here matter because the plugin's own
@@ -218,13 +218,6 @@ function createAuth(database: Database) {
       organization({
         ac: orgAc,
         roles: orgRoles,
-        schema: {
-          organization: {
-            additionalFields: {
-              installationId: { type: 'number', required: true },
-            },
-          },
-        },
         sendInvitationEmail: async (data) => {
           // SAFETY: better-auth's static user type erases the additionalFields
           // (login, githubId) configured on the user schema below; every user

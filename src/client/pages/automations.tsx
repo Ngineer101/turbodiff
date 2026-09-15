@@ -1,7 +1,7 @@
 import { useSuspenseQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { Clock, Plus } from 'lucide-react';
-import type { ApiAutomationSummary } from '../../shared/api-types.ts';
+import type { ApiAutomationSummary } from '../types.ts';
 import { ago, sentence } from '../lib/format.ts';
 import { automationsQuery } from '../lib/queries.ts';
 import { EntityCard, EntityGrid, EntityListHeader } from '../components/entity-list.tsx';

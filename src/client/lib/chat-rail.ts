@@ -1,4 +1,4 @@
-import type { ApiChatMessage } from '../../shared/api-types.ts';
+import type { ApiChatMessage } from '../types.ts';
 import { parseUtc } from '../../shared/time.ts';
 
 // DOM-free helpers behind the cockpit's chat rail (chat-rail.tsx): the

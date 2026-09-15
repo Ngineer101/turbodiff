@@ -1,8 +1,8 @@
 import { env } from 'cloudflare:workers';
 import { Hono } from 'hono';
 import { handleMcpPost } from '../integrations/mcp/server.ts';
-import { requireMcpUser } from '../services/auth.ts';
-import { enqueueFactoryMessage } from '../services/factory-queue.ts';
+import { requireMcpUser } from '../application/auth/session.ts';
+import { enqueueFactoryMessage } from '../application/factory/queue.ts';
 
 // Inbound MCP endpoint (turbodiff.dev/mcp): OAuth 2.1 bearer auth resolved by
 // requireMcpUser, protocol handling in integrations/mcp/server.ts. Stateless

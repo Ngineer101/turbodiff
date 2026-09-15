@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import type { RepositoryRow } from '../../data/db.ts';
+import type { RepositoryRow } from '../../data/repositories.ts';
 import { sandboxGitToken } from '../github/app.ts';
 import {
   artifactsWorkspaceRemote,
@@ -15,7 +15,6 @@ export {
   ARTIFACTS_NAMESPACE,
   artifactsWorkspaceRemote,
   deriveArtifactsRepoName,
-  factoryUnsupportedReason,
   githubWorkspaceRemote,
   type GitProviderKind,
   type WorkspaceRemote,
@@ -43,11 +42,11 @@ export function artifactsRemoteUrl(artifactsRepo: string): string {
 // The subset of RepositoryRow the resolver needs; workflow RunContexts carry
 // this shape so a step can resolve a remote without re-reading the repo row.
 export interface RemoteSource {
-  provider: string;
-  installation_id: number;
+  source_provider: string;
+  source_external_account_id: string | null;
   owner: string;
   name: string;
-  artifacts_repo: string | null;
+  external_id: string | null;
 }
 
 // Mints a run-scoped credential and returns the remote for the repo's
@@ -57,24 +56,28 @@ export async function resolveWorkspaceRemote(
   scope: 'read' | 'write',
   opts?: { workflows?: boolean },
 ): Promise<WorkspaceRemote> {
-  if (repo.provider === 'artifacts') {
-    if (!repo.artifacts_repo) {
-      throw new Error(`${repo.owner}/${repo.name} is an artifacts repo without artifacts_repo set`);
+  if (repo.source_provider === 'artifacts') {
+    if (!repo.external_id) {
+      throw new Error(`${repo.owner}/${repo.name} has no Artifacts repository identifier`);
     }
-    const handle = await env.GIT_ARTIFACTS.get(repo.artifacts_repo);
+    const handle = await env.GIT_ARTIFACTS.get(repo.external_id);
     const token = await handle.createToken(scope, ARTIFACTS_TOKEN_TTL_SECONDS);
-    return artifactsWorkspaceRemote(artifactsRemoteUrl(repo.artifacts_repo), token.plaintext);
+    return artifactsWorkspaceRemote(artifactsRemoteUrl(repo.external_id), token.plaintext);
   }
-  const token = await sandboxGitToken(repo.installation_id, repo.name, scope, opts);
+  const installationId = Number(repo.source_external_account_id);
+  if (!Number.isSafeInteger(installationId) || installationId <= 0) {
+    throw new Error(`${repo.owner}/${repo.name} has no GitHub installation identifier`);
+  }
+  const token = await sandboxGitToken(installationId, repo.name, scope, opts);
   return githubWorkspaceRemote(`${repo.owner}/${repo.name}`, token);
 }
 
 export function remoteSourceOf(repo: RepositoryRow): RemoteSource {
   return {
-    provider: repo.provider,
-    installation_id: repo.installation_id,
+    source_provider: repo.source_provider,
+    source_external_account_id: repo.source_external_account_id,
     owner: repo.owner,
     name: repo.name,
-    artifacts_repo: repo.artifacts_repo,
+    external_id: repo.external_id,
   };
 }

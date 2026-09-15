@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
-import type { RepositoryRow } from '../../data/db.ts';
-import type { ApiRepoTree, ApiTreeEntry } from '../../shared/api-types.ts';
+import type { RepositoryRow } from '../../data/repositories.ts';
 import { isJsonObject, isNumber, isString, type JsonValue } from '../../shared/json.ts';
+import type { RepositoryTreeEntry, RepositoryTreeResult } from '../source-code/types.ts';
 
 // Cloudflare's live Artifacts binding documentation includes these content
 // methods, but Wrangler 4.120's generated declarations lag that surface. Keep
@@ -19,7 +19,7 @@ declare global {
 interface ContentEntry {
   name: string;
   sha: string;
-  type: ApiTreeEntry['type'];
+  type: RepositoryTreeEntry['type'];
   size: number | null;
 }
 
@@ -68,7 +68,7 @@ function contentEntries(tree: JsonValue): ContentEntry[] | null {
     const sha = stringField(row, 'hash', 'sha', 'id', 'oid');
     const rawType = stringField(row, 'type', 'kind') ?? '';
     if (!name || !sha) return null;
-    const type: ApiTreeEntry['type'] =
+    const type: RepositoryTreeEntry['type'] =
       rawType === 'tree' || rawType === 'dir'
         ? 'dir'
         : rawType === 'commit' || rawType === 'submodule'
@@ -97,10 +97,10 @@ export async function readArtifactsTreeDirect(
   ref: string,
   path: string,
   knownHeadSha?: string,
-): Promise<ApiRepoTree | null> {
-  if (!repo.artifacts_repo) return null;
+): Promise<RepositoryTreeResult | null> {
+  if (!repo.external_id) return null;
   try {
-    const handle = await env.GIT_ARTIFACTS.get(repo.artifacts_repo);
+    const handle = await env.GIT_ARTIFACTS.get(repo.external_id);
     const head = knownHeadSha ?? commitHash(await handle.log({ ref, limit: 1, offset: 0 }));
     if (!head) return null;
     let treeHash = commitTreeHash(await handle.readCommit(head));
@@ -115,7 +115,7 @@ export async function readArtifactsTreeDirect(
 
     const children = contentEntries(await handle.readTree(treeHash));
     if (!children) return null;
-    const entries = children.map<ApiTreeEntry>((entry) => ({
+    const entries = children.map<RepositoryTreeEntry>((entry) => ({
       name: entry.name,
       path: path ? `${path}/${entry.name}` : entry.name,
       type: entry.type,
@@ -131,7 +131,7 @@ export async function readArtifactsTreeDirect(
     console.warn(
       JSON.stringify({
         message: 'artifacts binding content read fell back to sandbox mirror',
-        repo: repo.artifacts_repo,
+        repo: repo.external_id,
         detail: err instanceof Error ? err.message : String(err),
       }),
     );

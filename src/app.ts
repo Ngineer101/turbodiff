@@ -1,15 +1,11 @@
-import { setProvider } from '@flue/runtime';
-import { cloudflareBindingProvider } from '@flue/runtime/cloudflare/workers-ai';
 import { env } from 'cloudflare:workers';
-import { sql } from 'drizzle-orm';
-import { execute, withDatabaseScope } from './data/database.ts';
+import { withDatabaseScope } from './data/postgres.ts';
+import { databaseIsHealthy } from './data/health.ts';
 import { Hono } from 'hono';
-import { registerExplainMetering } from './ai/explain/metering.ts';
-import { registerReviewMetering } from './ai/review/metering.ts';
-import { createApiRoutes } from './http/api.ts';
+import { handleEffectApi } from './api/server/handler.ts';
+import { createProtocolRoutes } from './http/protocol.ts';
+import { createIntegrationOAuthRoutes } from './http/integration-oauth.ts';
 import { handleEmailSignUp } from './http/auth-email.ts';
-import { renderCertificatePage } from './http/certificate-page.tsx';
-import { createInternalRoutes } from './http/internal.ts';
 import { createMcpRoutes } from './http/mcp.ts';
 import { handleMcpProxy } from './http/mcp-proxy.ts';
 import { handleAiGatewayProxy } from './http/ai-gateway-proxy.ts';
@@ -18,21 +14,6 @@ import { createWebhookRoutes } from './http/webhooks.ts';
 import { oAuthDiscoveryMetadata, oAuthProtectedResourceMetadata } from 'better-auth/plugins';
 import { withAuth } from './integrations/auth/better-auth.ts';
 import { verifyArtifactSig } from './integrations/security/crypto.ts';
-import { certificateSigKey, loadCertificateData } from './services/certificates.ts';
-
-// Route every model call through the Workers AI binding and the named
-// AI Gateway (set AI_GATEWAY_ID in wrangler.jsonc). The gateway holds the
-// provider keys (BYOK) — no ANTHROPIC_API_KEY ever enters this Worker.
-setProvider(
-  cloudflareBindingProvider({
-    binding: env.AI,
-    gateway: { id: env.AI_GATEWAY_ID, metadata: { app: 'turbodiff' } },
-  }),
-);
-
-// Accumulate per-turn token usage and cost onto review rows in PostgreSQL.
-registerReviewMetering();
-registerExplainMetering();
 
 const startedAt = Date.now();
 
@@ -76,7 +57,7 @@ app.use('*', async (c, next) => {
 
 app.get('/healthz', async (c) => {
   try {
-    await execute(sql`SELECT 1`);
+    await databaseIsHealthy();
   } catch (err) {
     console.error('turbodiff: healthz PostgreSQL check failed', err);
     return c.json({ ok: false, db: false }, 503);
@@ -90,9 +71,7 @@ app.get('/version', (c) => {
   return c.json({ id: env.CF_VERSION_METADATA.id, tag: env.CF_VERSION_METADATA.tag });
 });
 
-// Verification evidence (Phase 4): screenshots from verify runs, stored in R2
-// and embedded in PR comments — public so GitHub can render them inline. Keys
-// are harness-generated (verify/<featureId>/<name>.png), never user input.
+// Artifacts may be shared through signed capability URLs.
 app.get('/artifacts/*', async (c) => {
   const key = c.req.path.replace(/^\/artifacts\//, '');
   if (!key || key.includes('..')) return c.notFound();
@@ -111,24 +90,11 @@ app.get('/artifacts/*', async (c) => {
   });
 });
 
-// Shareable "Proof of Build" certificate for a factory feature: the latest
-// verification evidence rendered as a public page. Same capability-URL scheme
-// as /artifacts/* — the signature over cert/<id> is the only credential.
-app.get('/b/:id', async (c) => {
-  const id = Number(c.req.param('id'));
-  if (!Number.isInteger(id) || id <= 0) return c.notFound();
-  const sig = c.req.query('sig') ?? '';
-  if (!(await verifyArtifactSig(certificateSigKey(id), sig))) return c.notFound();
-  const data = await loadCertificateData(id);
-  if (!data) return c.notFound();
-  return c.html(renderCertificatePage(data));
-});
-
 // GitHub App webhooks — authenticated by HMAC signature, not the bearer secret.
 app.route('/webhooks', createWebhookRoutes());
 
 // MCP relay for sandbox runs — authenticated by a short-lived sealed grant
-// minted per run, not by session or bearer secret (see lib/mcp-proxy.ts).
+// minted per run, not by session or bearer secret.
 app.on(['GET', 'POST', 'DELETE'], '/mcp-proxy/:id', handleMcpProxy);
 
 // Model relay for sandbox coding runs. The permanent Cloudflare API token
@@ -169,12 +135,16 @@ app.post('/api/auth/sign-up/email', handleEmailSignUp);
 
 app.on(['GET', 'POST'], '/api/auth/*', (c) => withAuth((instance) => instance.handler(c.req.raw)));
 
-// SPA data plane (session cookie auth, JSON in/out).
-app.route('/api', createApiRoutes());
+app.route('/api/integrations', createIntegrationOAuthRoutes());
+
+// Effect owns the complete JSON data plane. Unknown /api routes are contract
+// 404s; there is no legacy fallback with a second authorization stack.
+app.all('/api/*', (c) => handleEffectApi(c.req.raw));
+
+// Hono only owns transports whose mechanics are not JSON domain endpoints.
+app.route('/protocol', createProtocolRoutes());
 
 // SPA shell + landing + OAuth sign-in (session cookie auth).
 app.route('/', createUiRoutes());
-
-app.route('/internal', createInternalRoutes());
 
 export default app;

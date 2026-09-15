@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { ApiPlanQuestion } from '../../shared/api-types.ts';
+import type { ApiPlanQuestion } from '../types.ts';
 import { Button } from './ui/button.tsx';
 import { Field, Input } from './ui/input.tsx';
 import { OptionCard } from './ui/option-card.tsx';

@@ -23,7 +23,7 @@ const MAX_RECORDING_MS = 120000;
 async function postAudio(blob: Blob, signal: AbortSignal): Promise<string> {
   const fd = new FormData();
   fd.append('audio', blob, 'dictation.webm');
-  const res = await fetch('/api/transcribe', { method: 'POST', body: fd, signal });
+  const res = await fetch('/protocol/transcriptions', { method: 'POST', body: fd, signal });
   const body = await res.json().catch(() => null);
   const data = isJsonObject(body) ? body : null;
   if (!res.ok) {

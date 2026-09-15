@@ -7,7 +7,7 @@ import {
 } from '@pierre/diffs/react';
 import DiffWorker from '@pierre/diffs/worker/worker.js?worker';
 import type { ReactNode } from 'react';
-import type { ApiCockpitComment } from '../../shared/api-types.ts';
+import type { ApiCockpitComment } from '../types.ts';
 import { ensureDiffStyles } from './diff-styles.ts';
 
 export interface CockpitCommentMeta {

@@ -15,15 +15,7 @@ export function UsagePage() {
 
   return (
     <>
-      <PageTitle
-        aside={
-          <Link to="/review-quality" className="text-[0.85rem] text-accent-bright hover:underline">
-            Review quality &rarr;
-          </Link>
-        }
-      >
-        Usage
-      </PageTitle>
+      <PageTitle>Usage</PageTitle>
 
       <div className="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile
@@ -191,7 +183,7 @@ export function UsagePage() {
         <EmptyState>
           No installations yet —{' '}
           <a
-            href={`https://github.com/apps/${me.github_app_slug}/installations/new`}
+            href={`https://github.com/apps/${me.githubAppSlug}/installations/new`}
             className="text-accent-bright hover:underline"
           >
             install the app

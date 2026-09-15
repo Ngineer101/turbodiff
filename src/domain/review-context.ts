@@ -2,18 +2,13 @@ import { REVIEW_NOISE_PATTERNS, splitDiffSegments } from './review-diff.ts';
 
 export interface ReviewDiffFile {
   path: string;
-  chars: number;
   reviewable: boolean;
   omittedReason: string | null;
-  included: boolean;
 }
 
 export interface ReviewDiffSnapshot {
   diff: string;
   files: ReviewDiffFile[];
-  includedFiles: string[];
-  remainingFiles: string[];
-  complete: boolean;
 }
 
 function generatedReason(path: string, segment: string): string | null {
@@ -36,57 +31,25 @@ export function reviewDiffOmissionReason(path: string, segment: string): string 
   );
 }
 
-// Builds an initial, whole-file review packet. It never slices through a file:
-// every reviewable path that did not fit remains visible in the manifest and
-// can be requested with fetch_diff. This avoids the old alphabetical-prefix
-// blind spot where later files disappeared inside one truncated string.
-export function buildReviewDiffSnapshot(diff: string, maxChars: number): ReviewDiffSnapshot {
+// Produces the complete review patch and manifest. Machine-generated noise is
+// replaced by an explicit marker; reviewable files are never paged or hidden.
+export function buildReviewDiffSnapshot(diff: string): ReviewDiffSnapshot {
   const output: string[] = [];
   const files: ReviewDiffFile[] = [];
-  const includedFiles: string[] = [];
-  const remainingFiles: string[] = [];
-  let used = 0;
 
   for (const entry of splitDiffSegments(diff)) {
     const omittedReason = reviewDiffOmissionReason(entry.path, entry.segment);
     if (omittedReason) {
-      const marker = `[turbodiff: diff for ${entry.path} omitted — ${omittedReason}]\n`;
-      output.push(marker);
-      used += marker.length;
-      files.push({
-        path: entry.path,
-        chars: entry.segment.length,
-        reviewable: false,
-        omittedReason,
-        included: false,
-      });
+      output.push(`[turbodiff: diff for ${entry.path} omitted — ${omittedReason}]\n`);
+      files.push({ path: entry.path, reviewable: false, omittedReason });
       continue;
     }
 
-    const included = used + entry.segment.length <= maxChars;
-    files.push({
-      path: entry.path,
-      chars: entry.segment.length,
-      reviewable: true,
-      omittedReason: null,
-      included,
-    });
-    if (included) {
-      output.push(entry.segment);
-      includedFiles.push(entry.path);
-      used += entry.segment.length;
-    } else {
-      remainingFiles.push(entry.path);
-    }
+    output.push(entry.segment);
+    files.push({ path: entry.path, reviewable: true, omittedReason: null });
   }
 
-  return {
-    diff: output.join(''),
-    files,
-    includedFiles,
-    remainingFiles,
-    complete: remainingFiles.length === 0,
-  };
+  return { diff: output.join(''), files };
 }
 
 export function missingReviewFiles(
@@ -116,9 +79,8 @@ export function reviewConclusion(
   hasP1: boolean,
   hasP2: boolean,
   coverageComplete: boolean,
-  verificationComplete = true,
 ): ReviewConclusion {
-  if (!coverageComplete || !verificationComplete) return 'inconclusive';
+  if (!coverageComplete) return 'inconclusive';
   if (hasP1) return 'not_ready';
   return hasP2 ? 'ready_with_warnings' : 'ready';
 }
@@ -127,9 +89,8 @@ export function reviewPublicationEvent(
   blockingReviews: boolean,
   hasP1: boolean,
   coverageComplete: boolean,
-  verificationComplete = true,
 ): ReviewPublicationEvent {
   if (!blockingReviews) return 'COMMENT';
   if (hasP1) return 'REQUEST_CHANGES';
-  return coverageComplete && verificationComplete ? 'APPROVE' : 'COMMENT';
+  return coverageComplete ? 'APPROVE' : 'COMMENT';
 }

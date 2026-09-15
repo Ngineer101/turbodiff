@@ -3,9 +3,8 @@
 <img src="public/logo-small.png" alt="Turbodiff logo" width="64" align="center" />
 
 Turbodiff is an open-source software factory. Give it a task and it
-can plan the work, write the code, open a pull request, review the change, fix
-problems, and check the result. You decide where automation starts and stops,
-and which steps need a human input.
+can plan the work, write the code, open a pull request, and review the change.
+You decide where automation starts and stops and which steps need human input.
 
 You can also use the pull request reviewer on its own. Turbodiff works with
 your existing repositories and GitHub workflow rather than asking you to move
@@ -26,45 +25,34 @@ Turbodiff covers the path from an idea to a finished pull request:
 2. **Build** — write the code in an isolated container, run the repository's
    checks, and open a pull request.
 3. **Review** — inspect the whole change and publish clear GitHub reviews.
-4. **Repair** — try to fix important review findings, failed checks, and merge
-   conflicts.
-5. **Verify** — compare the finished work with the approved plan. Turbodiff can
-   run the app and attach screenshots when visual proof is useful.
-6. **Merge** — leave the pull request ready for a person, or merge it
-   automatically when the repository allows that.
-
-Each step records its result, so a person can take over or let the next step
-continue. Repositories can use the full factory or only the parts they need.
+   Each step records its result, so a person can take over or let the next step
+   continue. Repositories can use the full factory or only the parts they need.
 
 ### Pull request reviews
 
 The reviewer also works with pull requests created outside Turbodiff. It can:
 
 - Review automatically or only when asked.
-- Remember earlier findings when new commits are pushed.
-- Spend more time on large or sensitive changes and less on small ones.
 - Request changes for serious problems and approve clean pull requests.
 - Run custom review agents for different areas of a codebase.
-- Track whether findings were useful, fixed, or dismissed.
 
 ## Open source and self-hostable
 
 Turbodiff uses:
 
 - **Cloudflare Workers** for the web app and API.
-- **Cloudflare Containers** for code-writing and verification jobs.
+- **Cloudflare Containers** for isolated agent jobs.
 - **Cloudflare AI Gateway** to connect to AI models.
-- **PostgreSQL** on Planetscale for users, repositories, tasks, reviews, and settings - connected via Hyperdrive.
-- **Cloudflare R2** for logs, screenshots, and other files.
-- **Cloudflare Queues and Workflows** for jobs that take longer than a web
-  request.
+- **PostgreSQL** on PlanetScale for organizations, repositories, work, execution state, and configuration, connected through Hyperdrive.
+- **Cloudflare R2** for immutable agent inputs, outputs, revisions, and logs.
+- **Cloudflare Queues and Workflows** for work that outlives a web request.
+- **Cloudflare Artifacts** for repositories created and hosted by Turbodiff.
 
 More detail is available in the [architecture guide](docs/architecture.md).
 
-To get started with self-hosting you need:
+To get started with the full self-hosted factory you need:
 
-- A Cloudflare account with Workers, Containers, AI Gateway, Hyperdrive,
-  Queues, and R2 available.
+- A Cloudflare account with Workers, Containers, AI Gateway, Hyperdrive, Queues, Workflows, and R2. Cloudflare Artifacts is needed only if Turbodiff will host repositories.
 - A PostgreSQL database. The project uses PlanetScale in production, but other
   PostgreSQL providers can work.
 - A GitHub account that can create a GitHub App.
@@ -91,11 +79,6 @@ future deployments. The complete list is in
 [Environment variables](#environment-variables), with local examples in
 [.dev.vars.example](.dev.vars.example).
 
-The optional Cloudflare Artifacts binding is for repositories created inside
-Turbodiff. It requires access to Cloudflare Artifacts. If you only use GitHub
-repositories, remove the `artifacts` binding, its event triggers, and the
-`ARTIFACTS_REMOTE_BASE` variable from your Cloudflare Worker.
-
 ### 3. Set up PostgreSQL
 
 Create a database, then apply and check the schema using a direct database
@@ -118,10 +101,10 @@ vp exec wrangler hyperdrive create turbodiff-postgres \
 ```
 
 Use a database account with only read and write access for Hyperdrive. Keep the
-more powerful migration account separate. See [the PostgreSQL guide](docs/postgres.md)
-for local Docker setup, recommended permissions, and credential rotation.
+more powerful migration account separate. The [architecture guide](docs/architecture.md#data-and-storage)
+documents the schema, storage boundaries, and migration workflow.
 
-### 4. Create the queue and file bucket
+### 4. Create the queue and artifact bucket
 
 ```sh
 vp exec wrangler queues create turbodiff-factory
@@ -129,6 +112,10 @@ vp exec wrangler r2 bucket create turbodiff-artifacts
 ```
 
 If you use different names, update `wrangler.jsonc`.
+
+The separate `GIT_ARTIFACTS` binding is only used for repositories hosted by
+Turbodiff and requires access to the Cloudflare Artifacts namespace configured
+in `wrangler.jsonc`.
 
 ### 5. Create a GitHub App
 
@@ -139,8 +126,7 @@ with these values:
 - **Callback URL:** `https://<your-domain>/auth/callback`
 - **Repository permissions:** Contents (read and write), Pull requests (read
   and write), Issues (read and write), and Actions (read)
-- **Events:** Pull request, Pull request review, Issue comment, Repository, and
-  Workflow run
+- **Events:** Installation, Installation repositories, Repository, and Pull request
 
 Create a webhook secret, note the app ID and OAuth client details, and generate
 a private key. Convert the private key to the format Cloudflare accepts:
@@ -170,9 +156,13 @@ Never commit `.dev.vars` or any production secret.
 Check the project before the first deployment:
 
 ```sh
-vp lint
+vp check
 vp run check:types
-vp test
+vp test --run
+vp run test:planning
+vp run db:check
+vp run test:schema
+vp run test:integration
 vp run build
 ```
 
@@ -201,7 +191,7 @@ Turbodiff has three kinds of configuration:
 - **Shell and CI variables** are used by setup and deployment commands. They
   are not read by the running Worker.
 
-Cloudflare bindings such as Hyperdrive, R2, Queues, Containers, and Workflows
+Cloudflare bindings such as Hyperdrive, R2, Queues, and Containers
 are also configured in `wrangler.jsonc`, but they are resources rather than
 environment variables.
 
@@ -226,9 +216,8 @@ These values are required for the full GitHub software factory:
 | `HYPERDRIVE_DATABASE_URL`    | Shell         | PostgreSQL URL used when creating or updating Hyperdrive.    |
 
 Generate `SESSION_SECRET` with `openssl rand -hex 32`.
-`AI_GATEWAY_API_TOKEN` needs Cloudflare's **Account / Workers AI / Read**
-permission. Use a limited database account for `HYPERDRIVE_DATABASE_URL`, not
-the more powerful account used for migrations.
+Use a limited database account for `HYPERDRIVE_DATABASE_URL`, not the more
+powerful account used for migrations.
 
 Use [.dev.vars.example](.dev.vars.example) as the local configuration template.
 
@@ -236,30 +225,22 @@ Use [.dev.vars.example](.dev.vars.example) as the local configuration template.
 
 Leave these out unless you use the related feature:
 
-| Name                     | Where         | Used for                                                                 |
-| ------------------------ | ------------- | ------------------------------------------------------------------------ |
-| `ARTIFACTS_REMOTE_BASE`  | Worker var    | Git address for repositories stored in Cloudflare Artifacts.             |
-| `RESEND_FROM_ADDRESS`    | Worker var    | Sender address for organization invitation emails.                       |
-| `REVIEW_DAILY_LIMIT`     | Worker var    | Maximum automatic reviews per installation in 24 hours; defaults to 50.  |
-| `TRIVIAL_MODEL`          | Worker var    | Cheaper model for very small pull requests; empty disables it.           |
-| `REVIEW_SECRET`          | Worker secret | Protects operator-only HTTP endpoints.                                   |
-| `TOKEN_ENCRYPTION_KEY`   | Worker secret | Encrypts credentials for connected tools.                                |
-| `RESEND_API_KEY`         | Worker secret | Sends organization invitation emails.                                    |
-| `SKILLS_SH_API_TOKEN`    | Worker secret | Enables browsing the skills.sh catalog.                                  |
-| `VAPID_PUBLIC_KEY`       | Worker secret | Enables browser notifications; set all three `VAPID_*` values.           |
-| `VAPID_PRIVATE_KEY`      | Worker secret | Enables browser notifications; set all three `VAPID_*` values.           |
-| `VAPID_SUBJECT`          | Worker secret | Contact URI for browser notifications, such as `mailto:you@example.com`. |
-| `DEV_FAKE_INSTALLATIONS` | Local only    | Comma-separated installation IDs for local sign-in without GitHub.       |
-| `POSTGRES_DATABASE_URL`  | CI secret     | Production migration URL used by the GitHub Actions deploy workflow.     |
-| `CLOUDFLARE_API_TOKEN`   | CI secret     | Lets the GitHub Actions deploy workflow publish to Cloudflare.           |
-| `CLOUDFLARE_ACCOUNT_ID`  | CI secret     | Selects the Cloudflare account used by the deploy workflow.              |
+| Name                    | Where         | Used for                                                             |
+| ----------------------- | ------------- | -------------------------------------------------------------------- |
+| `ARTIFACTS_REMOTE_BASE` | Worker var    | Clone base URL for Turbodiff-hosted repositories.                    |
+| `RESEND_FROM_ADDRESS`   | Worker var    | Sender address for organization invitation emails.                   |
+| `VAPID_PUBLIC_KEY`      | Worker var    | Enables browser push subscription.                                   |
+| `VAPID_SUBJECT`         | Worker var    | Contact URI included in Web Push authorization.                      |
+| `TOKEN_ENCRYPTION_KEY`  | Worker secret | Encrypts credentials for connected tools.                            |
+| `RESEND_API_KEY`        | Worker secret | Sends organization invitation emails.                                |
+| `SKILLS_SH_API_TOKEN`   | Worker secret | Enables skills.sh catalog browsing.                                  |
+| `VAPID_PRIVATE_KEY`     | Worker secret | Signs Web Push notifications.                                        |
+| `POSTGRES_DATABASE_URL` | CI secret     | Production migration URL used by the GitHub Actions deploy workflow. |
+| `CLOUDFLARE_API_TOKEN`  | CI secret     | Lets the GitHub Actions deploy workflow publish to Cloudflare.       |
+| `CLOUDFLARE_ACCOUNT_ID` | CI secret     | Selects the Cloudflare account used by the deploy workflow.          |
 
-Generate `REVIEW_SECRET` and `TOKEN_ENCRYPTION_KEY` with
-`openssl rand -hex 32`. `TOKEN_ENCRYPTION_KEY` is required before anyone can
+Generate `TOKEN_ENCRYPTION_KEY` with `openssl rand -hex 32`. It is required before anyone can
 save credentials for connected tools.
-
-The three `VAPID_*` values must be configured together. If they are absent,
-only browser notifications are disabled.
 
 `.dev.vars` is local-only and is never a source for production Worker values.
 Use the address printed by the development server for its `PUBLIC_BASE_URL`.
@@ -295,11 +276,6 @@ check.
 ## Learn more
 
 - [Architecture](docs/architecture.md)
-- [PostgreSQL setup](docs/postgres.md)
-- [How code-writing agents run](docs/coding-harness.md)
-- [How pull request reviews work](docs/review-quality.md)
-- [Software factory lifecycle](docs/software-factory-lifecycle.md)
-- [Cloudflare Artifacts repositories](docs/artifacts-provider.md)
 
 ## Contributing
 

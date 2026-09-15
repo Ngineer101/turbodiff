@@ -1,4 +1,4 @@
-import type { ApiPlan } from '../../shared/api-types.ts';
+import type { ApiPlan } from '../types.ts';
 import type { StageState } from '../components/identity.tsx';
 import { sentence } from './format.ts';
 import { GENERATION_STOPPED } from './queries.ts';

@@ -11,8 +11,16 @@ import {
 } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { toast } from 'sonner';
-import type { ApiBoard, ApiPlan, ApiTaskDetail } from '../../shared/api-types.ts';
-import { api, ApiError } from '../lib/api.ts';
+import type { ApiBoard, ApiPlan, ApiTaskDetail } from '../types.ts';
+import { ApiError } from '../lib/api.ts';
+import {
+  approveWorkItem,
+  archiveWorkItem,
+  restartPlanning,
+  retryDelivery,
+  reviseWorkItem,
+  selectWorkItemModel,
+} from '../lib/backend.ts';
 import { useDictation } from '../lib/dictation.ts';
 import { ago } from '../lib/format.ts';
 import { applyOptimistic } from '../lib/optimistic.ts';
@@ -85,7 +93,7 @@ function NotificationsRailButton({ vapidPublicKey }: { vapidPublicKey: string })
 function AnswersForm({ task, onDone }: { task: ApiPlan; onDone: () => void }) {
   const submit = useMutation({
     mutationFn: (answers: string[]) =>
-      api.post(`/api/factory/plans/${task.id}/answers`, { answers }),
+      reviseWorkItem(task.id, `Clarifying answers:\n${answers.join('\n')}`),
     onSuccess: () => {
       toast.success('Answers submitted — refining the plan');
       onDone();
@@ -122,7 +130,7 @@ export function TaskPage() {
   };
 
   const approve = useMutation({
-    mutationFn: () => api.post(`/api/factory/plans/${task.id}/approve`),
+    mutationFn: () => approveWorkItem(task.id),
     // The page flips to the approved state on click; the refetch reconciles.
     onMutate: () =>
       applyOptimistic<ApiTaskDetail>(queryClient, ['task', id], (prev) => ({
@@ -141,7 +149,7 @@ export function TaskPage() {
   // Each repo's feature retries independently — the mutation takes the
   // feature id so the correct button can show its own loading state.
   const retry = useMutation({
-    mutationFn: (featureId: number) => api.post(`/api/factory/features/${featureId}/retry`),
+    mutationFn: (featureId: number) => retryDelivery(featureId),
     onSuccess: () => {
       toast.success('Generation retried');
       refresh();
@@ -149,7 +157,7 @@ export function TaskPage() {
     onError: onApiError,
   });
   const retryPlan = useMutation({
-    mutationFn: () => api.post(`/api/factory/plans/${task.id}/retry`),
+    mutationFn: () => restartPlanning(task.id, task.model || undefined),
     onSuccess: () => {
       toast.success('Planning restarted');
       refresh();
@@ -157,7 +165,7 @@ export function TaskPage() {
     onError: onApiError,
   });
   const setModel = useMutation({
-    mutationFn: (model: string) => api.post(`/api/tasks/${task.id}/model`, { model }),
+    mutationFn: (model: string) => selectWorkItemModel(task.id, model),
     // The select reflects the choice immediately instead of snapping back
     // until the refetch lands.
     onMutate: (model) =>
@@ -172,7 +180,7 @@ export function TaskPage() {
     },
   });
   const archive = useMutation({
-    mutationFn: (archived: boolean) => api.post(`/api/tasks/${task.id}/archive`, { archived }),
+    mutationFn: (archived: boolean) => archiveWorkItem(task.id, archived),
     // Archiving leaves for the board immediately, with the card already
     // gone; the background refetch reconciles (or the rollback restores it).
     onMutate: (archived) => {
@@ -203,7 +211,11 @@ export function TaskPage() {
   );
   const [comments, setComments] = useState<{ snippet: string; comment: string }[]>([]);
   const sendFeedback = useMutation({
-    mutationFn: () => api.post(`/api/factory/plans/${task.id}/feedback`, { comments }),
+    mutationFn: () =>
+      reviseWorkItem(
+        task.id,
+        `Plan feedback:\n${comments.map((item) => `- ${item.snippet}: ${item.comment}`).join('\n')}`,
+      ),
     onSuccess: () => {
       setComments([]);
       toast.success('Feedback sent — revising the plan');
@@ -581,7 +593,7 @@ export function TaskPage() {
           <div>
             <BlockLabel className="mb-2">Task</BlockLabel>
             <div className="flex flex-col gap-1.5">
-              {showNotify ? <NotificationsRailButton vapidPublicKey={me.vapid_public_key} /> : null}
+              {showNotify ? <NotificationsRailButton vapidPublicKey={me.vapidPublicKey} /> : null}
               {task.archived ? (
                 <Button
                   variant="secondary"

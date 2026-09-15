@@ -1,2 +1,0 @@
-ALTER TABLE "app"."repositories" ADD COLUMN "review_intake" text DEFAULT 'factory_only' NOT NULL;--> statement-breakpoint
-ALTER TABLE "app"."repositories" ADD CONSTRAINT "repositories_review_intake_check" CHECK (review_intake = ANY (ARRAY['factory_only'::text, 'on_demand'::text, 'all_changes'::text]));

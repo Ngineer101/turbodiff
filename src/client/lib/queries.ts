@@ -1,36 +1,33 @@
 import { keepPreviousData, QueryClient, queryOptions } from '@tanstack/react-query';
-import { api } from './api.ts';
+import {
+  getAgent,
+  getAgents,
+  getAutomation,
+  getAutomationRun,
+  getAutomationRuns,
+  getAutomations,
+  getBoard,
+  getCurrentUser,
+  getDeliveryChat,
+  getFeature,
+  getFeatureDiff,
+  getFeatureExplanation,
+  getIntegrations,
+  getInvitation,
+  getModels,
+  getOrganizationMembers,
+  getRepositoryCode,
+  getRepositoryFile,
+  getRepositoryTree,
+  getSettings,
+  getSkill,
+  getSkillCatalog,
+  getSkills,
+  getTask,
+  getUsage,
+} from './backend.ts';
 import { CHAT_TURN_PENDING } from './chat-rail.ts';
-import type {
-  ApiAgentDetail,
-  ApiAgentsList,
-  ApiAutomationDetail,
-  ApiAutomationRunDetail,
-  ApiAutomationRunsList,
-  ApiAutomationsList,
-  ApiBoard,
-  ApiChatList,
-  ApiFeatureDetail,
-  ApiFeatureDiff,
-  ApiFeatureExplanation,
-  ApiIntegrations,
-  ApiInvitationPreview,
-  ApiMe,
-  ApiModels,
-  ApiOrgMembers,
-  ApiPlan,
-  ApiRepoCode,
-  ApiRepoFile,
-  ApiRepoTree,
-  ApiReviewQuality,
-  ApiReviewsPage,
-  ApiSettings,
-  ApiSkillCatalog,
-  ApiSkillDetail,
-  ApiSkillsList,
-  ApiTaskDetail,
-  ApiUsage,
-} from '../../shared/api-types.ts';
+import type { ApiPlan } from '../types.ts';
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -63,7 +60,7 @@ export const GENERATION_STOPPED = new Set(['failed', 'checks_failed', 'no_change
 // 'generating', so the stopped state is momentary — keep polling it, and
 // don't offer (or colour as an error) another retry.
 export function retryQueued(error: string | null | undefined): boolean {
-  return error === 'retry queued' || /^retry scheduled in /.test(error ?? '');
+  return error === 'retry queued' || error?.startsWith('retry scheduled in ') === true;
 }
 
 export function taskIsLive(p: ApiPlan): boolean {
@@ -83,10 +80,10 @@ export function taskIsLive(p: ApiPlan): boolean {
 
 export const meQuery = queryOptions({
   queryKey: ['me'],
-  queryFn: () => api.get<ApiMe>('/api/me'),
+  queryFn: getCurrentUser,
   staleTime: 60_000,
   refetchInterval: (query) => {
-    const status = query.state.data?.github_status;
+    const status = query.state.data?.githubStatus;
     if (status === 'syncing') return 2_000;
     if (status === 'reauthorization_required') return 5_000;
     if (status === 'temporarily_unavailable') return 15_000;
@@ -98,33 +95,21 @@ export const meQuery = queryOptions({
 
 export const boardQuery = queryOptions({
   queryKey: ['board'],
-  queryFn: () => api.get<ApiBoard>('/api/board'),
+  queryFn: getBoard,
   refetchInterval: (query) => (query.state.data?.tasks.some(taskIsLive) ? LIVE_POLL_MS : false),
 });
 
 export const taskQuery = (id: number) =>
   queryOptions({
     queryKey: ['task', id],
-    queryFn: () => api.get<ApiTaskDetail>(`/api/tasks/${id}`),
+    queryFn: () => getTask(id),
     refetchInterval: (query) =>
       query.state.data && taskIsLive(query.state.data) ? LIVE_POLL_MS : false,
   });
 
 export const usageQuery = queryOptions({
   queryKey: ['usage'],
-  queryFn: () => api.get<ApiUsage>('/api/usage'),
-});
-
-export const reviewQualityQuery = queryOptions({
-  queryKey: ['review-quality'],
-  queryFn: () => api.get<ApiReviewQuality>('/api/review-quality'),
-});
-
-export const reviewsQuery = queryOptions({
-  queryKey: ['reviews', 1],
-  queryFn: () => api.get<ApiReviewsPage>('/api/reviews?page=1'),
-  refetchInterval: (query) =>
-    query.state.data?.reviews.some((review) => review.state === 'running') ? LIVE_POLL_MS : false,
+  queryFn: getUsage,
 });
 
 // Terminal fix-run outcomes for a cockpit comment's linked batch — anything
@@ -134,7 +119,7 @@ export const FIX_TERMINAL = new Set(['fixed', 'no_changes', 'tests_failed', 'fai
 export const featureQuery = (id: number) =>
   queryOptions({
     queryKey: ['feature', id],
-    queryFn: () => api.get<ApiFeatureDetail>(`/api/factory/features/${id}`),
+    queryFn: () => getFeature(id),
     refetchInterval: (query) => {
       const d = query.state.data;
       if (!d) return false;
@@ -156,10 +141,7 @@ export const featureQuery = (id: number) =>
 export const featureDiffQuery = (id: number, version: string | null) =>
   queryOptions({
     queryKey: ['feature-diff', id, version],
-    queryFn: () =>
-      api.get<ApiFeatureDiff>(
-        `/api/factory/features/${id}/diff${version ? `?v=${encodeURIComponent(version)}` : ''}`,
-      ),
+    queryFn: () => getFeatureDiff(id),
     // A PR/CR diff is a snapshot. Mutations that push a new commit explicitly
     // invalidate this key; status/comment refreshes leave it untouched.
     staleTime: Infinity,
@@ -171,10 +153,7 @@ export const featureDiffQuery = (id: number, version: string | null) =>
 export const featureExplainQuery = (id: number, version: string | null) =>
   queryOptions({
     queryKey: ['feature-explain', id, version],
-    queryFn: () =>
-      api.get<ApiFeatureExplanation>(
-        `/api/factory/features/${id}/explain${version ? `?v=${encodeURIComponent(version)}` : ''}`,
-      ),
+    queryFn: () => getFeatureExplanation(id),
     refetchInterval: (query) => (query.state.data?.status === 'running' ? EXPLAIN_POLL_MS : false),
     staleTime: (query) => (query.state.data?.status === 'ready' ? Infinity : 0),
   });
@@ -184,42 +163,47 @@ export const EXPLAIN_POLL_MS = 4_000;
 export const chatQuery = (featureId: number) =>
   queryOptions({
     queryKey: ['chat', featureId],
-    queryFn: () => api.get<ApiChatList>(`/api/factory/features/${featureId}/chat`),
+    queryFn: () => getDeliveryChat(featureId),
     refetchInterval: (query) =>
       query.state.data?.messages.some((m) => m.role === 'user' && CHAT_TURN_PENDING.has(m.status))
         ? LIVE_POLL_MS
         : false,
   });
 
-// Full transcript for one agent-session run — fetched lazily (enabled: open)
-// by AgentRunLog, not on page load. Immutable once written, so no refetch.
+// Immutable agent logs are fetched lazily when expanded.
 export const agentRunLogQuery = (id: number) =>
   queryOptions({
     queryKey: ['agent-run-log', id],
-    queryFn: () => api.get<{ log: string }>(`/api/factory/runs/${id}/log`),
+    queryFn: async () => {
+      const response = await fetch(`/protocol/agent-runs/${id}/log`, {
+        headers: { accept: 'text/plain' },
+      });
+      if (!response.ok) throw new Error(`agent log request failed (${response.status})`);
+      return { log: await response.text() };
+    },
     staleTime: Infinity,
   });
 
 export const modelsQuery = queryOptions({
   queryKey: ['models'],
-  queryFn: () => api.get<ApiModels>('/api/models'),
+  queryFn: getModels,
   staleTime: 5 * 60_000, // operator SQL edits are rare; no need to poll
 });
 
 export const agentsQuery = queryOptions({
   queryKey: ['agents'],
-  queryFn: () => api.get<ApiAgentsList>('/api/agents'),
+  queryFn: getAgents,
 });
 
 export const agentQuery = (id: number) =>
   queryOptions({
     queryKey: ['agent', id],
-    queryFn: () => api.get<ApiAgentDetail>(`/api/agents/${id}`),
+    queryFn: () => getAgent(id),
   });
 
 export const skillsQuery = queryOptions({
   queryKey: ['skills'],
-  queryFn: () => api.get<ApiSkillsList>('/api/skills'),
+  queryFn: getSkills,
 });
 
 // Server-side skills.sh proxy for the browse page. keepPreviousData keeps
@@ -227,10 +211,7 @@ export const skillsQuery = queryOptions({
 export const skillCatalogQuery = (q: string, sort: string) =>
   queryOptions({
     queryKey: ['skill-catalog', q, sort],
-    queryFn: () =>
-      api.get<ApiSkillCatalog>(
-        `/api/skills/catalog?q=${encodeURIComponent(q)}&sort=${encodeURIComponent(sort)}`,
-      ),
+    queryFn: () => getSkillCatalog(q, sort),
     staleTime: 60_000,
     placeholderData: keepPreviousData,
   });
@@ -238,18 +219,18 @@ export const skillCatalogQuery = (q: string, sort: string) =>
 export const skillQuery = (id: number) =>
   queryOptions({
     queryKey: ['skill', id],
-    queryFn: () => api.get<ApiSkillDetail>(`/api/skills/${id}`),
+    queryFn: () => getSkill(id),
   });
 
 export const settingsQuery = queryOptions({
   queryKey: ['settings'],
-  queryFn: () => api.get<ApiSettings>('/api/settings'),
+  queryFn: getSettings,
 });
 
-export const orgMembersQuery = (installationId: number) =>
+export const orgMembersQuery = (organizationId: string) =>
   queryOptions({
-    queryKey: ['org-members', installationId],
-    queryFn: () => api.get<ApiOrgMembers>(`/api/organizations/${installationId}/members`),
+    queryKey: ['org-members', organizationId],
+    queryFn: () => getOrganizationMembers(organizationId),
   });
 
 // Never retried: every failure here (not found, expired, wrong account) is a
@@ -257,31 +238,31 @@ export const orgMembersQuery = (installationId: number) =>
 export const invitationQuery = (id: string) =>
   queryOptions({
     queryKey: ['invitation', id],
-    queryFn: () => api.get<ApiInvitationPreview>(`/api/invitations/${encodeURIComponent(id)}`),
+    queryFn: () => getInvitation(id),
     retry: false,
     staleTime: 0,
   });
 
 export const integrationsQuery = queryOptions({
   queryKey: ['integrations'],
-  queryFn: () => api.get<ApiIntegrations>('/api/integrations'),
+  queryFn: getIntegrations,
 });
 
 export const automationsQuery = queryOptions({
   queryKey: ['automations'],
-  queryFn: () => api.get<ApiAutomationsList>('/api/automations'),
+  queryFn: getAutomations,
 });
 
 export const automationQuery = (id: number) =>
   queryOptions({
     queryKey: ['automation', id],
-    queryFn: () => api.get<ApiAutomationDetail>(`/api/automations/${id}`),
+    queryFn: () => getAutomation(id),
   });
 
 export const automationRunsQuery = (id: number) =>
   queryOptions({
     queryKey: ['automation-runs', id],
-    queryFn: () => api.get<ApiAutomationRunsList>(`/api/automations/${id}/runs`),
+    queryFn: () => getAutomationRuns(id),
     refetchInterval: (query) =>
       query.state.data?.runs.some((r) => r.status === 'running') ? LIVE_POLL_MS : false,
   });
@@ -291,33 +272,27 @@ export const automationRunsQuery = (id: number) =>
 export const repoCodeQuery = (repoId: number) =>
   queryOptions({
     queryKey: ['repo-code', repoId],
-    queryFn: () => api.get<ApiRepoCode>(`/api/repos/${repoId}/code`),
+    queryFn: () => getRepositoryCode(repoId),
     staleTime: 60_000,
   });
 
 export const repoTreeQuery = (repoId: number, ref: string, path: string) =>
   queryOptions({
     queryKey: ['repo-tree', repoId, ref, path],
-    queryFn: () =>
-      api.get<ApiRepoTree>(
-        `/api/repos/${repoId}/tree?ref=${encodeURIComponent(ref)}&path=${encodeURIComponent(path)}`,
-      ),
+    queryFn: () => getRepositoryTree(repoId, ref, path),
     staleTime: 60_000,
   });
 
 export const repoFileQuery = (repoId: number, ref: string, path: string) =>
   queryOptions({
     queryKey: ['repo-file', repoId, ref, path],
-    queryFn: () =>
-      api.get<ApiRepoFile>(
-        `/api/repos/${repoId}/file?ref=${encodeURIComponent(ref)}&path=${encodeURIComponent(path)}`,
-      ),
+    queryFn: () => getRepositoryFile(repoId, ref, path),
     staleTime: 60_000,
   });
 
 export const automationRunQuery = (id: number) =>
   queryOptions({
     queryKey: ['automation-run', id],
-    queryFn: () => api.get<ApiAutomationRunDetail>(`/api/automations/runs/${id}`),
+    queryFn: () => getAutomationRun(id),
     refetchInterval: (query) => (query.state.data?.run.status === 'running' ? LIVE_POLL_MS : false),
   });
