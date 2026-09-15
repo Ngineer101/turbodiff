@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { execute, queryRows } from './database.ts';
+import { execute, queryRows } from './postgres.ts';
 
 export interface PushSubscriptionRow {
   id: number;

@@ -1,5 +1,5 @@
 import type { ReviewFinding } from '../../artifacts/review.ts';
-import type { RepositoryRow } from '../../data/db.ts';
+import type { RepositoryRow } from '../../data/repositories.ts';
 import { installationToken } from '../github/app.ts';
 import { githubJson, githubRequest } from '../github/client.ts';
 import type { ReviewPublication, ReviewPublicationPlan } from './types.ts';

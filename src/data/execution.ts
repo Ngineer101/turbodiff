@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { execute, queryOne, queryRows, withTransaction } from './database.ts';
+import { execute, queryOne, queryRows, withTransaction } from './postgres.ts';
 
 export type FactoryRunStatus =
   | 'queued'

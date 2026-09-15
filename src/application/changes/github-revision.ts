@@ -1,10 +1,6 @@
 import { changeRevisionArtifactSchema } from '../../artifacts/change.ts';
-import {
-  createChangeRevision,
-  latestChangeRevision,
-  type ChangeRow,
-  type RepositoryRow,
-} from '../../data/db.ts';
+import { createChangeRevision, latestChangeRevision, type ChangeRow } from '../../data/changes.ts';
+import type { RepositoryRow } from '../../data/repositories.ts';
 import { buildReviewDiffSnapshot } from '../../domain/review-context.ts';
 import { installationToken } from '../../integrations/github/app.ts';
 import { githubJson, githubRequest } from '../../integrations/github/client.ts';

@@ -1,9 +1,9 @@
 import { Context, Effect, Layer } from 'effect';
+import { listGithubInstallationIds } from '../../../data/integrations.ts';
 import {
   deletePushSubscription,
-  listGithubInstallationIds,
   upsertPushSubscription,
-} from '../../../data/db.ts';
+} from '../../../data/push-subscriptions.ts';
 import type { CurrentUserIdentity } from '../../contract/auth.ts';
 import type { CurrentUserView, PushSubscriptionInput } from '../../contract/platform.ts';
 import { badRequest, internalServerError, type DomainError } from '../../contract/errors.ts';

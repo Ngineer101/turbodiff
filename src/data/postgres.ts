@@ -1,8 +1,8 @@
 import { env } from 'cloudflare:workers';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { sql, type SQL } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Client, types, type QueryResultRow } from 'pg';
-import type { SQL } from 'drizzle-orm';
 import * as schema from './schema.ts';
 
 // Keep raw SQL results aligned with the application's transport types. Drizzle's
@@ -125,4 +125,11 @@ export async function queryOne<Row extends QueryResultRow>(query: SQL): Promise<
 
 export async function execute(query: SQL): Promise<number> {
   return withDatabase(async (database) => (await database.execute(query)).rowCount ?? 0);
+}
+
+export function sqlValueList(values: readonly (number | string)[]): SQL {
+  return sql.join(
+    values.map((value) => sql`${value}`),
+    sql`, `,
+  );
 }

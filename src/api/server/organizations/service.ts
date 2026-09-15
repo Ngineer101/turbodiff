@@ -7,7 +7,7 @@ import {
   listOrganizationMembershipsForUser,
   listPendingInvitations,
   memberRole,
-} from '../../../data/db.ts';
+} from '../../../data/organizations.ts';
 import { withAuth } from '../../../integrations/auth/better-auth.ts';
 import type { CurrentUserIdentity } from '../../contract/auth.ts';
 import type {

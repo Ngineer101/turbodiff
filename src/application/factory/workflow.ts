@@ -1,5 +1,5 @@
 import { env, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import { withDatabaseScope } from '../../data/database.ts';
+import { withDatabaseScope } from '../../data/postgres.ts';
 import type { RunFactoryMessage } from '../../shared/factory-messages.ts';
 import { executeFactoryStage, failFactoryStageInfrastructure } from './execute.ts';
 

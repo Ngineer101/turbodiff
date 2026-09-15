@@ -1,7 +1,7 @@
 import { pollAutomations } from './application/automations/poll.ts';
 import { recoverFactoryStages } from './application/factory/recover.ts';
 import { FactoryStageWorkflow, startFactoryStageWorkflow } from './application/factory/workflow.ts';
-import { withDatabaseScope } from './data/database.ts';
+import { withDatabaseScope } from './data/postgres.ts';
 import type { RunFactoryMessage } from './shared/factory-messages.ts';
 
 export { Sandbox } from '@cloudflare/sandbox';

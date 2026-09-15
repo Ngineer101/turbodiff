@@ -1,28 +1,34 @@
 import { Context, Effect, Layer } from 'effect';
 import {
   createAutomation,
-  createFactoryRunWithStage,
-  createWorkItem,
   deleteAutomation,
-  getAgent,
   getAutomation,
-  getFactoryRun,
-  getIntegration,
-  getRepository,
-  getSkill,
-  listAutomationIntegrationIds,
-  listAutomationSkillIds,
   listAutomations,
-  listFactoryRuns,
-  replaceAutomationIntegrationLinks,
-  replaceAutomationSkillLinks,
   updateAutomation,
   type AutomationRow,
+} from '../../../data/automations.ts';
+import { getAgent } from '../../../data/agents.ts';
+import {
+  createFactoryRunWithStage,
+  getFactoryRun,
+  listFactoryRuns,
   type FactoryRunRow,
-} from '../../../data/db.ts';
+} from '../../../data/execution.ts';
+import {
+  getIntegration,
+  listAutomationIntegrationIds,
+  replaceAutomationIntegrationLinks,
+} from '../../../data/integrations.ts';
+import { getRepository } from '../../../data/repositories.ts';
+import {
+  getSkill,
+  listAutomationSkillIds,
+  replaceAutomationSkillLinks,
+} from '../../../data/skills.ts';
+import { createWorkItem } from '../../../data/work.ts';
 import { nextAutomationRunAt } from '../../../domain/automation-schedule.ts';
 import { AUTOMATION_FLOW } from '../../../application/factory/flows.ts';
-import { withTransaction } from '../../../data/database.ts';
+import { withTransaction } from '../../../data/postgres.ts';
 import { isJsonObject, isString, type JsonValue } from '../../../shared/json.ts';
 import type {
   Automation,

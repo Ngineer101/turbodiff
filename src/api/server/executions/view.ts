@@ -1,5 +1,5 @@
 import { Effect } from 'effect';
-import { getFactoryRun, listAgentRunsForStage, listStageRuns } from '../../../data/db.ts';
+import { getFactoryRun, listAgentRunsForStage, listStageRuns } from '../../../data/execution.ts';
 import type { FactoryRun } from '../../contract/executions.ts';
 import { notFound, type DomainError } from '../../contract/errors.ts';
 import { dataEffect } from '../authorization.ts';

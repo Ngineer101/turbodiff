@@ -1,6 +1,6 @@
 import { Context, Effect, Layer } from 'effect';
 import { loadArtifactBody } from '../../../application/artifacts.ts';
-import { getArtifact } from '../../../data/db.ts';
+import { getArtifact } from '../../../data/artifacts.ts';
 import type { Artifact } from '../../contract/artifacts.ts';
 import type { CurrentUserIdentity } from '../../contract/auth.ts';
 import { internalServerError, notFound, type DomainError } from '../../contract/errors.ts';

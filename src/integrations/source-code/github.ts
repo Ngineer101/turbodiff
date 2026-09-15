@@ -1,4 +1,4 @@
-import type { RepositoryRow } from '../../data/db.ts';
+import type { RepositoryRow } from '../../data/repositories.ts';
 import { githubJson, githubJsonCached, githubPaginate } from '../github/client.ts';
 import { binaryPreviewKind } from '../../shared/binary-preview.ts';
 import { isString } from '../../shared/json.ts';

@@ -4,11 +4,11 @@ import {
   deleteSkill,
   getSkill,
   getSkillBySlug,
-  listIntegrations,
   listSkills,
   updateSkill,
   type SkillRow,
-} from '../../../data/db.ts';
+} from '../../../data/skills.ts';
+import { listIntegrations } from '../../../data/integrations.ts';
 import { parseSkillReference } from '../../../domain/skill-import.ts';
 import { validateSkillSlug } from '../../../domain/skill-definition.ts';
 import { SkillsShApiError } from '../../../integrations/skills-sh/client.ts';

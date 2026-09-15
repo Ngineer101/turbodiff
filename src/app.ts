@@ -2,7 +2,7 @@ import { setProvider } from '@flue/runtime';
 import { cloudflareBindingProvider } from '@flue/runtime/cloudflare/workers-ai';
 import { env } from 'cloudflare:workers';
 import { sql } from 'drizzle-orm';
-import { execute, withDatabaseScope } from './data/database.ts';
+import { execute, withDatabaseScope } from './data/postgres.ts';
 import { Hono } from 'hono';
 import { handleEffectApi } from './api/server/handler.ts';
 import { createProtocolRoutes } from './http/protocol.ts';

@@ -14,23 +14,24 @@ import { resolveRunnerAuth } from '../../../ai/runtime/runner-auth.ts';
 import { runnerSandbox } from '../../../ai/runtime/sandbox.ts';
 import { mountSkills } from '../../../ai/runtime/skills.ts';
 import {
-  getAgentBySlug,
   getAgent,
-  getRepository,
-  getWorkItem,
+  getAgentBySlug,
+  ensureBuiltinAgents,
+  type AgentRow,
+} from '../../../data/agents.ts';
+import {
+  listAutomationIntegrations,
+  listRepositoryIntegrations,
+} from '../../../data/integrations.ts';
+import { getRepository } from '../../../data/repositories.ts';
+import {
   listSkillsForAgent,
   listSkillsForAutomation,
   listSkillsForRepository,
-  listAutomationIntegrations,
-  listRepositoryIntegrations,
-  listWorkItemTargets,
-  updateWorkItem,
-  type AgentRow,
-  type FactoryRunRow,
   type SkillRow,
-  type StageRunRow,
-} from '../../../data/db.ts';
-import { ensureBuiltinAgents } from '../../../data/agents.ts';
+} from '../../../data/skills.ts';
+import { getWorkItem, listWorkItemTargets, updateWorkItem } from '../../../data/work.ts';
+import { type FactoryRunRow, type StageRunRow } from '../../../data/execution.ts';
 import { remoteSourceOf, resolveWorkspaceRemote } from '../../../integrations/git/provider.ts';
 import { buildSandboxMcpConfig, type SandboxMcpBinding } from '../../../integrations/mcp/proxy.ts';
 import { runTrackedAgent, type AgentInvocation } from '../agent-run.ts';

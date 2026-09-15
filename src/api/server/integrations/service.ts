@@ -7,7 +7,7 @@ import {
   updateIntegration,
   updateIntegrationAuth,
   type IntegrationRow,
-} from '../../../data/db.ts';
+} from '../../../data/integrations.ts';
 import { sealToken } from '../../../integrations/security/crypto.ts';
 import { isJsonObject, type JsonObject } from '../../../shared/json.ts';
 import type { CurrentUserIdentity } from '../../contract/auth.ts';

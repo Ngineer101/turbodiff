@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import type { JsonValue } from '../shared/json.ts';
-import { execute, queryOne, queryRows, sqlValueList } from './database.ts';
+import { execute, queryOne, queryRows, sqlValueList } from './postgres.ts';
 
 export interface AutomationRow {
   id: number;

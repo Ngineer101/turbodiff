@@ -1,5 +1,5 @@
 import type { Sandbox } from '@cloudflare/sandbox';
-import type { RepositoryRow } from '../../data/db.ts';
+import type { RepositoryRow } from '../../data/repositories.ts';
 import { resolveWorkspaceRemote, remoteSourceOf } from '../../integrations/git/provider.ts';
 import { redactSecrets } from './redaction.ts';
 import { reviewSandbox } from './sandbox.ts';

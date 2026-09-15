@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { execute, queryOne, queryRows, sqlValueList, withTransaction } from './database.ts';
+import { execute, queryOne, queryRows, sqlValueList, withTransaction } from './postgres.ts';
 
 export interface SkillRow {
   id: number;

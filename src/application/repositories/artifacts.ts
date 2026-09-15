@@ -3,14 +3,14 @@ import { redactSecrets } from '../../ai/runtime/redaction.ts';
 import { runnerSandbox } from '../../ai/runtime/sandbox.ts';
 import {
   deleteRepositoryRef,
-  getIntegration,
   getRepositoryByExternalId,
   getRepositoryByProviderExternalId,
   recordRepositoryRef,
   removeRepositories,
   upsertRepositories,
   type RepositoryRow,
-} from '../../data/db.ts';
+} from '../../data/repositories.ts';
+import { getIntegration } from '../../data/integrations.ts';
 import {
   artifactsRemoteUrl,
   artifactsWorkspaceRemote,

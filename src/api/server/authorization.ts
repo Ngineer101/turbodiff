@@ -1,5 +1,5 @@
 import { Effect } from 'effect';
-import { memberRole } from '../../data/db.ts';
+import { memberRole } from '../../data/organizations.ts';
 import type { CurrentUserIdentity } from '../contract/auth.ts';
 import { forbidden, internalServerError, notFound, type DomainError } from '../contract/errors.ts';
 

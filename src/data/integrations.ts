@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import type { JsonValue } from '../shared/json.ts';
-import { execute, queryOne, queryRows, sqlValueList, withTransaction } from './database.ts';
+import { execute, queryOne, queryRows, sqlValueList, withTransaction } from './postgres.ts';
 
 export interface IntegrationRow {
   id: number;

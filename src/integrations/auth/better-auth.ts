@@ -4,7 +4,7 @@ import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { mcp } from 'better-auth/plugins';
 import { organization } from 'better-auth/plugins/organization';
 import { eq, or, sql } from 'drizzle-orm';
-import { withDatabase, type Database } from '../../data/database.ts';
+import { withDatabase, type Database } from '../../data/postgres.ts';
 import { isNoreplyEmail } from '../../domain/attribution.ts';
 import { isNumber, isString } from '../../shared/json.ts';
 import {

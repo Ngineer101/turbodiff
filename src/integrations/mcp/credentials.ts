@@ -1,4 +1,4 @@
-import type { IntegrationRow } from '../../data/db.ts';
+import type { IntegrationRow } from '../../data/integrations.ts';
 import { isJsonArray, isJsonObject, isString } from '../../shared/json.ts';
 import { openToken } from '../security/crypto.ts';
 

@@ -1,10 +1,9 @@
+import { finishIntegrationSync, getIntegration } from '../../data/integrations.ts';
 import {
-  finishIntegrationSync,
-  getIntegration,
   listRepositories,
   removeRepositories,
   upsertRepositories,
-} from '../../data/db.ts';
+} from '../../data/repositories.ts';
 import { installationToken } from '../../integrations/github/app.ts';
 import { githubPaginate } from '../../integrations/github/client.ts';
 

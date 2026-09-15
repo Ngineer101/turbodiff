@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { queryOne, queryRows, sqlValueList } from './database.ts';
+import { queryOne, queryRows, sqlValueList } from './postgres.ts';
 
 export interface UsageTotalsRow {
   agent_runs: number;

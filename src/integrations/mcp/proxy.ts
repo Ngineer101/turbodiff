@@ -4,7 +4,7 @@ import {
   getIntegration,
   repositoryHasIntegration,
   type IntegrationRow,
-} from '../../data/db.ts';
+} from '../../data/integrations.ts';
 import { isJsonObject, isNumber, isString, parseJson, type JsonValue } from '../../shared/json.ts';
 import { encryptionConfigured, openJson, sealJson } from '../security/crypto.ts';
 import { mcpIntegrationConfig, resolveMcpIntegrationAuth } from './credentials.ts';

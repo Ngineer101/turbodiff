@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { BUILTIN_AGENTS } from '../domain/agent-definitions.ts';
-import { execute, queryOne, queryRows, sqlValueList, withTransaction } from './database.ts';
+import { execute, queryOne, queryRows, sqlValueList, withTransaction } from './postgres.ts';
 
 export interface AgentRow {
   id: number;

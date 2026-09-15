@@ -1,10 +1,7 @@
-import {
-  claimAutomation,
-  createFactoryRunWithStage,
-  createWorkItem,
-  listDueAutomations,
-} from '../../data/db.ts';
-import { withTransaction } from '../../data/database.ts';
+import { claimAutomation, listDueAutomations } from '../../data/automations.ts';
+import { createFactoryRunWithStage } from '../../data/execution.ts';
+import { createWorkItem } from '../../data/work.ts';
+import { withTransaction } from '../../data/postgres.ts';
 import { enqueueFactoryMessage } from '../factory/queue.ts';
 import { AUTOMATION_FLOW } from '../factory/flows.ts';
 import { nextAutomationRunAt } from '../../domain/automation-schedule.ts';

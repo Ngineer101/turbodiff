@@ -1,5 +1,5 @@
 import { Context, Effect, Layer } from 'effect';
-import { usageSummary } from '../../../data/db.ts';
+import { usageSummary } from '../../../data/reporting.ts';
 import type { CurrentUserIdentity } from '../../contract/auth.ts';
 import type { UsageSummary } from '../../contract/reporting.ts';
 import { internalServerError, type DomainError } from '../../contract/errors.ts';

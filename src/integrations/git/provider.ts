@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import type { RepositoryRow } from '../../data/db.ts';
+import type { RepositoryRow } from '../../data/repositories.ts';
 import { sandboxGitToken } from '../github/app.ts';
 import {
   artifactsWorkspaceRemote,

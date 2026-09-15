@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { queryOne, sqlValueList } from '../../data/database.ts';
+import { queryOne, sqlValueList } from '../../data/postgres.ts';
 import { ensureBuiltinAgents } from '../../data/agents.ts';
 import {
   claimGithubOrganizations,

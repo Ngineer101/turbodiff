@@ -1,23 +1,25 @@
 import { Context, Effect, Layer } from 'effect';
 import {
   approveWorkItemPlan,
-  artifactWasProducedForWorkItem,
-  createFactoryRunWithStage,
   createWorkItem,
   deleteUnstartedWorkItem,
-  getArtifact,
-  getRepository,
   getWorkItem,
-  listFactoryRuns,
   listDeliveriesForWorkItem,
   listWorkItems,
   listWorkItemTargets,
   replaceWorkItemTargets,
   updateWorkItem,
-  type FactoryRunRow,
   type WorkItemRow,
   type WorkItemTargetRow,
-} from '../../../data/db.ts';
+} from '../../../data/work.ts';
+import { getArtifact } from '../../../data/artifacts.ts';
+import {
+  artifactWasProducedForWorkItem,
+  createFactoryRunWithStage,
+  listFactoryRuns,
+  type FactoryRunRow,
+} from '../../../data/execution.ts';
+import { getRepository } from '../../../data/repositories.ts';
 import { DISPATCH_FLOW, PLANNING_FLOW } from '../../../application/factory/flows.ts';
 import type { CurrentUserIdentity } from '../../contract/auth.ts';
 import type {

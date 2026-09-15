@@ -7,7 +7,7 @@ import {
   repositoryRef,
   repositoryRefs,
   type RepositoryRow,
-} from '../../data/db.ts';
+} from '../../data/repositories.ts';
 import { readArtifactsTreeDirect } from '../artifacts/content.ts';
 import { resolveWorkspaceRemote } from '../git/provider.ts';
 import type { WorkspaceRemote } from '../git/remotes.ts';

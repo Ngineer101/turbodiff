@@ -16,29 +16,35 @@ import { NPM_CACHE_ENV } from '../../../ai/runtime/sandbox-deps.ts';
 import { mountSkills } from '../../../ai/runtime/skills.ts';
 import {
   completeWorkItemWhenDelivered,
-  createChangeRevision,
-  ensureBuiltinAgents,
-  getAgentBySlug,
-  getAgent,
-  getAutomation,
-  getArtifact,
   getDelivery,
-  getRepository,
   getWorkItem,
+  updateDeliveryStatus,
+} from '../../../data/work.ts';
+import {
+  ensureBuiltinAgents,
+  getAgent,
+  getAgentBySlug,
+  type AgentRow,
+} from '../../../data/agents.ts';
+import { getArtifact } from '../../../data/artifacts.ts';
+import { getAutomation } from '../../../data/automations.ts';
+import {
+  createChangeRevision,
   listChangesForDelivery,
+  upsertChange,
+} from '../../../data/changes.ts';
+import { type FactoryRunRow, type StageRunRow } from '../../../data/execution.ts';
+import {
   listAutomationIntegrations,
   listRepositoryIntegrations,
-  listSkillsForAutomation,
+} from '../../../data/integrations.ts';
+import { getRepository, type RepositoryRow } from '../../../data/repositories.ts';
+import {
   listSkillsForAgent,
+  listSkillsForAutomation,
   listSkillsForRepository,
-  updateDeliveryStatus,
-  upsertChange,
-  type AgentRow,
-  type FactoryRunRow,
-  type RepositoryRow,
   type SkillRow,
-  type StageRunRow,
-} from '../../../data/db.ts';
+} from '../../../data/skills.ts';
 import { buildReviewDiffSnapshot } from '../../../domain/review-context.ts';
 import { remoteSourceOf, resolveWorkspaceRemote } from '../../../integrations/git/provider.ts';
 import { installationToken } from '../../../integrations/github/app.ts';

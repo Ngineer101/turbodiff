@@ -1,4 +1,4 @@
-import { listRecoverableFactoryStages } from '../../data/db.ts';
+import { listRecoverableFactoryStages } from '../../data/execution.ts';
 import { enqueueFactoryMessages } from './queue.ts';
 
 export async function recoverFactoryStages(): Promise<void> {

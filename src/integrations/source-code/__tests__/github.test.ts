@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vite-plus/test';
-import type { RepositoryRow } from '../../../data/db.ts';
+import type { RepositoryRow } from '../../../data/repositories.ts';
 import { readFile } from '../github.ts';
 
 // SAFETY: readFile only reads owner/name off the row; the rest never leaves

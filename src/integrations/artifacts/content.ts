@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:workers';
-import type { RepositoryRow } from '../../data/db.ts';
+import type { RepositoryRow } from '../../data/repositories.ts';
 import { isJsonObject, isNumber, isString, type JsonValue } from '../../shared/json.ts';
 import type { RepositoryTreeEntry, RepositoryTreeResult } from '../source-code/types.ts';
 

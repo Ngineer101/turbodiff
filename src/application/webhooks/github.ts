@@ -1,19 +1,20 @@
 import { z } from 'zod';
+import { ensureGithubOrganization, findAuthUserByGithubId } from '../../data/organizations.ts';
 import {
-  createFactoryRunWithStage,
   disableRepositoriesForIntegration,
-  ensureGithubOrganization,
-  findAuthUserByGithubId,
-  getIntegration,
-  getIntegrationByExternalAccount,
   getRepositoryByExternalId,
   getRepositoryByProviderExternalId,
   removeRepositories,
-  updateIntegration,
-  upsertChange,
-  upsertExternalIntegration,
   upsertRepositories,
-} from '../../data/db.ts';
+} from '../../data/repositories.ts';
+import {
+  getIntegration,
+  getIntegrationByExternalAccount,
+  updateIntegration,
+  upsertExternalIntegration,
+} from '../../data/integrations.ts';
+import { upsertChange } from '../../data/changes.ts';
+import { createFactoryRunWithStage } from '../../data/execution.ts';
 import { isJsonObject, type JsonObject, type JsonValue } from '../../shared/json.ts';
 import { enqueueFactoryMessage } from '../factory/queue.ts';
 import { REVIEW_FLOW } from '../factory/flows.ts';

@@ -3,7 +3,7 @@ import {
   deletePushSubscriptionByEndpoint,
   listPushSubscriptions,
   type PushSubscriptionRow,
-} from '../../data/db.ts';
+} from '../../data/push-subscriptions.ts';
 
 export type PushSendResult = 'sent' | 'gone' | 'error';
 

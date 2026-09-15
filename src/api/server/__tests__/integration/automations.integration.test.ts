@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { Effect, Layer } from 'effect';
 import { describe, expect, it } from 'vite-plus/test';
-import { queryOne } from '../../../../data/database.ts';
+import { queryOne } from '../../../../data/postgres.ts';
 import type { RunFactoryMessage } from '../../../../shared/factory-messages.ts';
 import { AutomationService, AutomationServiceLive } from '../../automations/service.ts';
 import { createTenant, recordingApiDependencies, rollbackAfter } from './support.ts';

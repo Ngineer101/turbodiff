@@ -2,25 +2,27 @@ import {
   activeAcceptanceContract,
   approveWorkItemPlan,
   createAcceptanceContract,
-  claimStageRun,
-  createFactoryRunWithStage,
   createDeliveries,
-  finishStageRun,
-  getAgent,
-  getArtifact,
-  getAutomation,
-  getFactoryRun,
-  getStageRun,
   getWorkItem,
   listDeliveriesForWorkItem,
-  recordLifecycleEvent,
   updateDeliveryStatus,
-  updateFactoryRunStatus,
   updateWorkItem,
+  type WorkItemRow,
+} from '../../data/work.ts';
+import { getAgent } from '../../data/agents.ts';
+import { getArtifact } from '../../data/artifacts.ts';
+import { getAutomation } from '../../data/automations.ts';
+import {
+  claimStageRun,
+  createFactoryRunWithStage,
+  finishStageRun,
+  getFactoryRun,
+  getStageRun,
+  recordLifecycleEvent,
+  updateFactoryRunStatus,
   type FactoryRunRow,
   type StageRunRow,
-  type WorkItemRow,
-} from '../../data/db.ts';
+} from '../../data/execution.ts';
 import type { RunFactoryMessage } from '../../shared/factory-messages.ts';
 import { isJsonObject, isString, type JsonObject } from '../../shared/json.ts';
 import {

@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { queryOne } from './database.ts';
+import { queryOne } from './postgres.ts';
 
 export interface ArtifactRow {
   id: number;

@@ -13,20 +13,19 @@ import { reviewWorkspacePath } from '../../../ai/runtime/review-workspace-policy
 import {
   ensureBuiltinAgents,
   getAgentBySlug,
-  getArtifact,
-  getChange,
-  getRepository,
-  latestChangeRevision,
   listAgentsForRepository,
-  listRepositoryIntegrations,
+  type AgentRow,
+} from '../../../data/agents.ts';
+import { getArtifact } from '../../../data/artifacts.ts';
+import { getChange, latestChangeRevision, recordReviewOutcome } from '../../../data/changes.ts';
+import { type FactoryRunRow, type StageRunRow } from '../../../data/execution.ts';
+import { listRepositoryIntegrations } from '../../../data/integrations.ts';
+import { getRepository } from '../../../data/repositories.ts';
+import {
   listSkillsForAgent,
   listSkillsForRepository,
-  recordReviewOutcome,
-  type AgentRow,
-  type FactoryRunRow,
   type SkillRow,
-  type StageRunRow,
-} from '../../../data/db.ts';
+} from '../../../data/skills.ts';
 import { planReviewPublication } from '../../../domain/review-publication.ts';
 import { remoteSourceOf, resolveWorkspaceRemote } from '../../../integrations/git/provider.ts';
 import { buildSandboxMcpConfig } from '../../../integrations/mcp/proxy.ts';

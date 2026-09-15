@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { queryOne, queryRows } from './database.ts';
+import { queryOne, queryRows } from './postgres.ts';
 
 export interface DeliveryMessageRow {
   id: number;

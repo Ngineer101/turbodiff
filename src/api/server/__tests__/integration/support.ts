@@ -2,7 +2,7 @@ import { sql } from 'drizzle-orm';
 import { Layer } from 'effect';
 import type { CurrentUserIdentity } from '../../../contract/auth.ts';
 import { ApiDependencies } from '../../context.ts';
-import { execute, queryOne, withTransaction } from '../../../../data/database.ts';
+import { execute, queryOne, withTransaction } from '../../../../data/postgres.ts';
 import { createSkillsShClient } from '../../../../integrations/skills-sh/client.ts';
 import type { RunFactoryMessage } from '../../../../shared/factory-messages.ts';
 

@@ -9,13 +9,12 @@ import {
   completeAgentRun,
   createAgentRun,
   failAgentRun,
-  getArtifact,
-  resolveModel,
-  type AgentRow,
   type FactoryRunRow,
   type StageRunRow,
-} from '../../data/db.ts';
-import { canonicalModelId } from '../../data/models.ts';
+} from '../../data/execution.ts';
+import type { AgentRow } from '../../data/agents.ts';
+import { getArtifact } from '../../data/artifacts.ts';
+import { canonicalModelId, resolveModel } from '../../data/models.ts';
 import { transcriptKey } from '../../ai/runtime/agent-runs.ts';
 import { loadJsonArtifact, persistArtifactBody, persistJsonArtifact } from '../artifacts.ts';
 

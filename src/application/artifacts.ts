@@ -7,7 +7,7 @@ import {
   getArtifactByStorageKey,
   recordArtifact,
   type ArtifactRow,
-} from '../data/db.ts';
+} from '../data/artifacts.ts';
 
 const encoder = new TextEncoder();
 
