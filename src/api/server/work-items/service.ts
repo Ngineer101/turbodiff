@@ -105,8 +105,8 @@ const owned = (user: CurrentUserIdentity, id: number) =>
 const validateRepositoryIds = (organizationId: string, rawIds: readonly number[]) =>
   Effect.gen(function* () {
     const ids = [...new Set(rawIds)];
-    if (ids.length === 0 || ids.length > 3) {
-      return yield* Effect.fail(badRequest('Choose between one and three repositories'));
+    if (ids.length > 3) {
+      return yield* Effect.fail(badRequest('Choose no more than three repositories'));
     }
     const repositories = yield* dataEffect(() => Promise.all(ids.map(getRepository)));
     if (
@@ -291,6 +291,16 @@ export const WorkItemServiceLive = Layer.effect(
           if (requestedAttachments.length > 5) {
             return yield* Effect.fail(badRequest('At most five attachments are allowed'));
           }
+          const targets = yield* dataEffect(() => listWorkItemTargets([workItem.id]));
+          if (targets.length === 0) {
+            return yield* Effect.fail(
+              badRequest('Choose between one and three repositories before starting'),
+            );
+          }
+          yield* validateRepositoryIds(
+            workItem.organization_id,
+            targets.map((target) => target.repository_id),
+          );
           const attachments = yield* Effect.forEach(requestedAttachments, (attachment) =>
             dataEffect(() => getArtifact(attachment.artifactId)).pipe(
               Effect.flatMap((artifact) =>

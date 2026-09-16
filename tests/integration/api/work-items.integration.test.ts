@@ -85,6 +85,63 @@ describe('WorkItemService with PostgreSQL', () => {
       ]);
     }));
 
+  it('keeps targetless todos in the backlog and requires a repository only when starting', () =>
+    rollbackAfter(async () => {
+      const tenant = await createTenant();
+      const messages: RunFactoryMessage[] = [];
+      const layer = workItemLayer(messages);
+      const created = await Effect.runPromise(
+        Effect.gen(function* () {
+          const service = yield* WorkItemService;
+          return yield* service.create(tenant.user, {
+            organizationId: tenant.organizationId,
+            repositoryIds: [],
+            title: 'Choose the repository later',
+            description: 'Keep this todo on the board until it is ready to start',
+          });
+        }).pipe(Effect.provide(layer)),
+      );
+
+      expect(created).toMatchObject({
+        organizationId: tenant.organizationId,
+        status: 'open',
+        targets: [],
+      });
+      const rejectedStart = await Effect.runPromise(
+        Effect.gen(function* () {
+          const service = yield* WorkItemService;
+          return yield* service.startRun(tenant.user, created.id, 'planning');
+        }).pipe(Effect.provide(layer), Effect.either),
+      );
+      expect(rejectedStart).toMatchObject({
+        _tag: 'Left',
+        left: {
+          _tag: 'BadRequest',
+          detail: 'Choose between one and three repositories before starting',
+        },
+      });
+      expect(await getWorkItem(created.id)).toMatchObject({ status: 'open' });
+      expect(messages).toEqual([]);
+
+      const started = await Effect.runPromise(
+        Effect.gen(function* () {
+          const service = yield* WorkItemService;
+          yield* service.update(tenant.user, created.id, {
+            repositoryIds: [tenant.repositoryId],
+          });
+          return yield* service.startRun(tenant.user, created.id, 'planning');
+        }).pipe(Effect.provide(layer)),
+      );
+      expect(started.status).toBe('queued');
+      expect(messages).toEqual([
+        {
+          kind: 'run_factory',
+          factoryRunId: started.factoryRunId,
+          stageRunId: started.stageRunId,
+        },
+      ]);
+    }));
+
   it('rejects cross-organization targets and non-admin writes without partial rows', () =>
     rollbackAfter(async () => {
       const owner = await createTenant('owner');

@@ -233,6 +233,8 @@ function QuickAdd({
   const [focused, setFocused] = useState(false);
   const expanded = focused || title.trim() !== '' || body.trim() !== '';
   const [targetRepoIds, setTargetRepoIds] = useState<number[]>(activeRepoId ? [activeRepoId] : []);
+  const draftRef = useRef({ title, body });
+  draftRef.current = { title, body };
   // The target defaults to whatever repo you're filtered to — so filter → add
   // keeps the new card in view — but stays a visible, editable choice. Once
   // the user edits it, we stop mirroring the filter (touched). Render-time
@@ -309,8 +311,15 @@ function QuickAdd({
           : prev,
       );
     },
-    onError: (err, _vars, ctx) => {
+    onError: (err, vars, ctx) => {
       ctx?.rollback();
+      if (!draftRef.current.title.trim() && !draftRef.current.body.trim()) {
+        setTitle(vars.title);
+        setBody(vars.description);
+        setTargetRepoIds(vars.repoIds);
+        setTouched(true);
+        setManualOrganization(vars.organizationId);
+      }
       onApiError(err);
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['board'] }),
