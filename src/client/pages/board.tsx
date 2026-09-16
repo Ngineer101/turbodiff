@@ -400,7 +400,10 @@ function QuickAdd({
   return (
     <form onSubmit={submit}>
       <div
-        onFocus={() => setFocused(true)}
+        onFocus={(e) => {
+          const target = e.nativeEvent.target;
+          if (target === inputRef.current || target === bodyRef.current) setFocused(true);
+        }}
         onBlur={(e) => {
           if (!e.currentTarget.contains(e.relatedTarget)) setFocused(false);
         }}
