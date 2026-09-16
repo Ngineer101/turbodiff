@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Cause, Effect, Exit, Option } from 'effect';
 import { makeAppApiClient, type AppApiClient } from '../../api/client/app-api.ts';
 import { isJsonObject, isNumber, isString } from '../../shared/json.ts';
 
@@ -37,11 +37,10 @@ function apiFailure(cause: unknown): ApiError {
 export async function runApi<Value, Failure>(
   operation: (client: AppApiClient) => Effect.Effect<Value, Failure>,
 ): Promise<Value> {
-  try {
-    return await Effect.runPromise(operation(await client));
-  } catch (failure) {
-    throw apiFailure(failure);
-  }
+  const exit = await Effect.runPromiseExit(operation(await client));
+  if (Exit.isSuccess(exit)) return exit.value;
+  const failure = Cause.failureOption(exit.cause);
+  throw apiFailure(Option.isSome(failure) ? failure.value : Cause.squash(exit.cause));
 }
 
 export async function protocolJson<Value>(path: string, init?: RequestInit): Promise<Value> {
