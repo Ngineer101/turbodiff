@@ -34,6 +34,11 @@ import { nextIndex, noOverlayOpen, onListboxKeyDown } from '../lib/shortcuts.ts'
 import { taskColumn, taskStages, taskState } from '../lib/task-state.ts';
 import { useIsDesktop } from '../lib/use-is-desktop.ts';
 import { cn } from '../lib/utils.ts';
+import {
+  quickAddRepositoryGroups,
+  resolveQuickAddOrganizationId,
+  toggleQuickAddRepository,
+} from '../lib/work-item-targeting.ts';
 import { ConfirmButton } from '../components/confirm-button.tsx';
 import {
   Placard,
@@ -49,7 +54,7 @@ import { Muted, PageTitle } from '../components/section.tsx';
 import { Button } from '../components/ui/button.tsx';
 import { Card } from '../components/ui/card.tsx';
 import { Dialog, DialogContent, DialogTitle } from '../components/ui/dialog.tsx';
-import { Field, Input, Select, Textarea } from '../components/ui/input.tsx';
+import { Field, Input, Textarea } from '../components/ui/input.tsx';
 import { Kbd } from '../components/ui/kbd.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover.tsx';
@@ -67,8 +72,8 @@ function onApiError<T>(err: T) {
 // The optional repo target for a *new* todo — the create-side mirror of the
 // card's RepoPickerPopover, but over local state (no todo id yet). Repo stays
 // optional (you can pick it later, before Start), so "Any repo" is a valid,
-// first-class choice. With multiple organizations, the selector determines
-// where an "Any repo" work item belongs.
+// first-class choice. Repositories are grouped by organization because a work
+// item belongs to one tenant and cannot target repositories across tenants.
 function TargetPicker({
   board,
   organizationId,
@@ -84,17 +89,12 @@ function TargetPicker({
 }) {
   const [query, setQuery] = useState('');
   const multiOrganization = board.organizations.length > 1;
-  const available = board.repos.filter(
-    (repository) => repository.organization_id === organizationId,
-  );
-  const filtered = query.trim()
-    ? available.filter((r) => `${r.owner}/${r.name}`.toLowerCase().includes(query.toLowerCase()))
-    : available;
+  const groups = quickAddRepositoryGroups(board, query);
   const toggle = (id: number) => {
-    const isSel = selected.includes(id);
-    const next = isSel ? selected.filter((i) => i !== id) : [...selected, id];
-    if (next.length > 3) return;
-    onChange(next);
+    const repository = board.repos.find((candidate) => candidate.id === id);
+    if (!repository) return;
+    onOrganizationChange(repository.organization_id);
+    onChange(toggleQuickAddRepository(board.repos, selected, id));
   };
   const first = board.repos.find((r) => r.id === selected[0]);
   const label =
@@ -129,23 +129,7 @@ function TargetPicker({
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" onKeyDown={onListboxKeyDown}>
-        {multiOrganization && selected.length === 0 ? (
-          <div className="mb-1.5">
-            <Select
-              value={organizationId}
-              onChange={(e) => onOrganizationChange(e.target.value)}
-              aria-label="Organization"
-              className="text-xs sm:py-1.5"
-            >
-              {board.organizations.map((organization) => (
-                <option key={organization.id} value={organization.id}>
-                  {organization.name}
-                </option>
-              ))}
-            </Select>
-          </div>
-        ) : null}
-        {available.length > 6 ? (
+        {board.repos.length > 6 ? (
           <div className="relative mb-1.5">
             <Search
               className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-mute"
@@ -161,48 +145,75 @@ function TargetPicker({
           </div>
         ) : null}
         <div className="max-h-64 overflow-y-auto" role="listbox" aria-label="Repositories">
-          <button
-            type="button"
-            role="option"
-            aria-selected={selected.length === 0}
-            onClick={() => onChange([])}
-            className={optionClasses(selected.length === 0)}
-          >
-            <span className="flex size-4 shrink-0 items-center justify-center">
-              {selected.length === 0 ? <Check className="size-3.5" aria-hidden /> : null}
-            </span>
-            Any repo <span className="text-mute/70">— pick before Start</span>
-          </button>
-          {filtered.map((r) => {
-            const isSel = selected.includes(r.id);
-            const disabled = !isSel && selected.length >= 3;
-            return (
-              <button
-                key={r.id}
-                type="button"
-                role="option"
-                aria-selected={isSel}
-                disabled={disabled}
-                onClick={() => toggle(r.id)}
-                className={optionClasses(isSel)}
-              >
-                <span className="flex size-4 shrink-0 items-center justify-center">
-                  {isSel ? <Check className="size-3.5" aria-hidden /> : null}
-                </span>
-                <FolderGit2 className="size-3.5 shrink-0 text-mute" aria-hidden />
-                <span className="min-w-0 truncate">
-                  <span className="text-mute">{r.owner}/</span>
-                  {r.name}
-                </span>
-              </button>
-            );
-          })}
-          {filtered.length === 0 ? (
+          {groups.map(({ organization, repositories }, groupIndex) => (
+            <div
+              key={organization.id}
+              role="group"
+              aria-label={organization.name}
+              className={cn(groupIndex > 0 && 'mt-1.5 border-t border-line pt-1.5')}
+            >
+              <p className="px-2 py-1 text-[10px] font-semibold tracking-[0.14em] text-mute/70 uppercase">
+                {organization.name}
+              </p>
+              {!query.trim() ? (
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={selected.length === 0 && organizationId === organization.id}
+                  onClick={() => {
+                    onOrganizationChange(organization.id);
+                    onChange([]);
+                  }}
+                  className={optionClasses(
+                    selected.length === 0 && organizationId === organization.id,
+                  )}
+                >
+                  <span className="flex size-4 shrink-0 items-center justify-center">
+                    {selected.length === 0 && organizationId === organization.id ? (
+                      <Check className="size-3.5" aria-hidden />
+                    ) : null}
+                  </span>
+                  Any repo <span className="text-mute/70">— pick before Start</span>
+                </button>
+              ) : null}
+              {repositories.map((repository) => {
+                const isSelected = selected.includes(repository.id);
+                const selectedOrganizationId = first?.organization_id;
+                const sameOrganization =
+                  !selectedOrganizationId || selectedOrganizationId === organization.id;
+                const disabled = !isSelected && sameOrganization && selected.length >= 3;
+                return (
+                  <button
+                    key={repository.id}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    disabled={disabled}
+                    onClick={() => toggle(repository.id)}
+                    className={optionClasses(isSelected)}
+                  >
+                    <span className="flex size-4 shrink-0 items-center justify-center">
+                      {isSelected ? <Check className="size-3.5" aria-hidden /> : null}
+                    </span>
+                    <FolderGit2 className="size-3.5 shrink-0 text-mute" aria-hidden />
+                    <span className="min-w-0 truncate">
+                      <span className="text-mute">{repository.owner}/</span>
+                      {repository.name}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+          {groups.length === 0 ? (
             <p className="px-2 py-3 text-center text-xs text-mute">No repositories match.</p>
           ) : null}
         </div>
         <p className="mt-1.5 border-t border-line px-2 pt-1.5 text-[11px] text-mute/70">
-          {selected.length}/3 · optional — a task targets up to 3 repos.
+          {selected.length}/3 ·{' '}
+          {multiOrganization
+            ? 'targets stay within one organization'
+            : 'optional — a task targets up to 3 repos'}
         </p>
       </PopoverContent>
     </Popover>
@@ -246,14 +257,12 @@ function QuickAdd({
     setPrevActive(activeRepoId);
     if (!touched) setTargetRepoIds(activeRepoId ? [activeRepoId] : []);
   }
-  const repoOrganization = (id: number) =>
-    board.repos.find((repository) => repository.id === id)?.organization_id;
-  const organizationId =
-    (targetRepoIds.length ? repoOrganization(targetRepoIds[0]) : undefined) ??
-    manualOrganization ??
-    (activeRepoId ? repoOrganization(activeRepoId) : undefined) ??
-    board.organizations[0]?.id ??
-    '';
+  const organizationId = resolveQuickAddOrganizationId({
+    board,
+    targetRepositoryIds: targetRepoIds,
+    manualOrganizationId: manualOrganization,
+    activeRepositoryId: activeRepoId,
+  });
 
   // Power-user affordance: "/" focuses the quick-add from anywhere on the
   // board (form-tag suppression is the library default). Desktop-gated like
@@ -381,10 +390,7 @@ function QuickAdd({
     <TargetPicker
       board={board}
       organizationId={organizationId}
-      onOrganizationChange={(id) => {
-        setManualOrganization(id);
-        setTarget([]);
-      }}
+      onOrganizationChange={setManualOrganization}
       selected={targetRepoIds}
       onChange={setTarget}
     />
