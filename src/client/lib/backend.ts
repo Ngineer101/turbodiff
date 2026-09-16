@@ -870,14 +870,16 @@ export const createWorkItem = async (
   organizationId: string,
   title: string,
   repositoryIds: number[],
+  description?: string,
 ) => {
+  const details = description?.trim();
   const created = await call((client) =>
     client.workItems.createWorkItem({
       payload: {
         organizationId,
         repositoryIds,
         title,
-        description: title,
+        description: details ? details : title,
         origin: 'idea',
       },
     }),

@@ -13,7 +13,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { toast } from 'sonner';
 import type { ApiBoard, ApiPlan, ApiTodo } from '../types.ts';
@@ -227,7 +227,11 @@ function QuickAdd({
 }) {
   const queryClient = useQueryClient();
   const inputRef = useRef<HTMLInputElement>(null);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
   const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+  const [focused, setFocused] = useState(false);
+  const expanded = focused || title.trim() !== '' || body.trim() !== '';
   const [targetRepoIds, setTargetRepoIds] = useState<number[]>(activeRepoId ? [activeRepoId] : []);
   // The target defaults to whatever repo you're filtered to — so filter → add
   // keeps the new card in view — but stays a visible, editable choice. Once
@@ -260,8 +264,12 @@ function QuickAdd({
     [isDesktop],
   );
   const add = useMutation({
-    mutationFn: (vars: { title: string; organizationId: string; repoIds: number[] }) =>
-      createWorkItem(vars.organizationId, vars.title, vars.repoIds),
+    mutationFn: (vars: {
+      title: string;
+      description: string;
+      organizationId: string;
+      repoIds: number[];
+    }) => createWorkItem(vars.organizationId, vars.title, vars.repoIds, vars.description),
     mutationKey: TODO_ADD_MUTATION,
     // The card appears (and the input clears, in submit) the moment Enter is
     // pressed — with its target repos already attached so it matches the
@@ -275,7 +283,7 @@ function QuickAdd({
             id: tempId,
             organization_id: vars.organizationId,
             title: vars.title,
-            notes: null,
+            notes: vars.description.trim() || null,
             created_at: optimisticNow(),
             repos: prev.repos
               .filter((r) => vars.repoIds.includes(r.id))
@@ -311,12 +319,19 @@ function QuickAdd({
     setTouched(true);
     setTargetRepoIds(ids);
   };
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, [body, expanded]);
+
+  const submit = (e?: { preventDefault?: () => void }) => {
+    e?.preventDefault?.();
     const t = title.trim();
     if (!t) return;
     const repoIds = targetRepoIds;
-    add.mutate({ title: t, organizationId, repoIds });
+    add.mutate({ title: t, description: body.trim(), organizationId, repoIds });
     // Transparent hand-off: if a repo filter is active and the new card won't
     // match it, say so (and offer to clear it) — never let a card silently
     // vanish, and never wipe the filter without asking.
@@ -327,43 +342,117 @@ function QuickAdd({
       });
     }
     setTitle('');
+    setBody('');
     setTouched(false);
     setManualOrganization(null);
+    requestAnimationFrame(() => inputRef.current?.focus());
   };
+
+  const onTitleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      submit(e);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      bodyRef.current?.focus();
+    }
+  };
+  const onBodyKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      submit(e);
+    } else if (e.key === 'Backspace' && e.currentTarget.selectionStart === 0 && body.length === 0) {
+      e.preventDefault();
+      const el = inputRef.current;
+      el?.focus();
+      const end = el?.value.length ?? 0;
+      requestAnimationFrame(() => el?.setSelectionRange(end, end));
+    }
+  };
+
+  const targetPicker = (
+    <TargetPicker
+      board={board}
+      organizationId={organizationId}
+      onOrganizationChange={(id) => {
+        setManualOrganization(id);
+        setTarget([]);
+      }}
+      selected={targetRepoIds}
+      onChange={setTarget}
+    />
+  );
+  const addButton = (
+    <Button type="submit" disabled={!title.trim()} className="shrink-0">
+      <Plus className="size-4" aria-hidden />
+      Add
+      {expanded ? <span className="ml-1 font-mono text-[10px] opacity-70">⌘↵</span> : null}
+    </Button>
+  );
+
   return (
-    <form onSubmit={submit} className="flex flex-col gap-2 sm:flex-row sm:items-center">
-      {/* A composed create field (not the bare Input) so the leading + and the
-          "/" keycap sit inline without padding hacks — and it reads as create,
-          not search. */}
-      <div className="relative flex flex-1 items-center rounded-lg border border-line-2/70 bg-surface transition-colors focus-within:border-accent/50 sm:rounded-md">
-        <Plus className="ml-3 size-4 shrink-0 text-accent" aria-hidden />
-        <input
-          ref={inputRef}
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="Add a todo…"
-          aria-label="New todo title"
-          maxLength={200}
-          className="w-full bg-transparent px-2.5 py-2 text-base text-ink outline-none placeholder:text-mute/70 sm:py-1.5 sm:text-sm"
-        />
-        {!title ? (
-          <Kbd className="pointer-events-none mr-2.5 hidden shrink-0 md:inline-flex">/</Kbd>
-        ) : null}
-      </div>
-      <TargetPicker
-        board={board}
-        organizationId={organizationId}
-        onOrganizationChange={(id) => {
-          setManualOrganization(id);
-          setTarget([]);
+    <form onSubmit={submit}>
+      <div
+        onFocus={() => setFocused(true)}
+        onBlur={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget)) setFocused(false);
         }}
-        selected={targetRepoIds}
-        onChange={setTarget}
-      />
-      <Button type="submit">
-        <Plus className="size-4" aria-hidden />
-        Add
-      </Button>
+        className={cn(
+          'flex overflow-hidden rounded-lg border bg-surface transition-colors sm:rounded-md',
+          expanded ? 'border-accent/40' : 'border-line-2/70 focus-within:border-accent/50',
+        )}
+      >
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div
+            className={cn(
+              'flex items-center gap-2 px-2.5',
+              expanded ? 'pt-2 pb-1' : 'py-2 sm:py-1.5',
+            )}
+          >
+            {!expanded ? <Plus className="size-4 shrink-0 text-accent" aria-hidden /> : null}
+            <input
+              ref={inputRef}
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              onKeyDown={onTitleKeyDown}
+              placeholder="Add a todo…"
+              aria-label="New todo title"
+              maxLength={200}
+              className={cn(
+                'min-w-0 flex-1 bg-transparent text-ink outline-none placeholder:text-mute/70',
+                expanded ? 'text-[15px] leading-6 font-medium' : 'text-base sm:text-sm',
+              )}
+            />
+            {!expanded ? (
+              <>
+                {!title ? (
+                  <Kbd className="pointer-events-none hidden shrink-0 md:inline-flex">/</Kbd>
+                ) : null}
+                {targetPicker}
+                {addButton}
+              </>
+            ) : null}
+          </div>
+          {expanded ? (
+            <div className="px-2.5 pb-2">
+              <textarea
+                ref={bodyRef}
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                onKeyDown={onBodyKeyDown}
+                rows={1}
+                placeholder="Add details… ⌘↵ to add."
+                aria-label="Todo details"
+                className="block max-h-64 w-full resize-none bg-transparent text-sm leading-relaxed text-ink-dim outline-none placeholder:text-mute/60"
+              />
+            </div>
+          ) : null}
+          {expanded ? (
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-line bg-surface-2/40 px-2 py-1.5">
+              {targetPicker}
+              {addButton}
+            </div>
+          ) : null}
+        </div>
+      </div>
     </form>
   );
 }
