@@ -86,8 +86,15 @@ export async function readDesign(
     } else if (tools.length) {
       report.webMcp.error = 'no read-only tool matched; discovered tools listed';
     }
+  } else if (report.webMcp.probe && report.webMcp.probe.length === 0) {
+    // No MCP globals at all: the Browser Run lab harness was not injected. This
+    // is an account/feature gate, not a Paper auth problem.
+    report.webMcp.error =
+      'Browser Run lab harness absent (navigator.modelContextTesting not injected) — Browser Run lab / WebMCP is not provisioned for this session';
   } else {
-    report.webMcp.error = 'WebMCP surface unavailable (needs an authenticated Paper session + lab)';
+    // A page-registered WebMCP API exists but the lab harness we read through
+    // does not; the read path would need to target it directly.
+    report.webMcp.error = `WebMCP surface not usable; detected globals: ${(report.webMcp.probe ?? []).join(', ') || 'none'}`;
   }
 
   return report;
