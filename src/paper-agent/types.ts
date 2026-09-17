@@ -37,6 +37,10 @@ export interface WebMcpReadProbe {
   available: boolean;
   // Names of the WebMCP tools discovered (empty when unavailable).
   tools: string[];
+  // Diagnostic: MCP-related globals actually found on the page (e.g.
+  // "modelContextTesting", "modelContext"). Empty means neither the Browser Run
+  // lab harness nor a page-registered WebMCP API is present.
+  probe?: string[];
   // Result of invoking one read-only WebMCP tool, when a safe one was found.
   // The value is JSON-encoded so this report stays a shallow, serialisable
   // record across the Durable Object RPC boundary.

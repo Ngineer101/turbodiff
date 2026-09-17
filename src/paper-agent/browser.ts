@@ -27,6 +27,12 @@ interface PaperMcpSurface {
 interface PaperNavigator {
   modelContextTesting?: PaperMcpSurface;
 }
+// Loose shape for the capability probe: presence is checked with `in`, so the
+// declared optional fields only need to make the assertion from Navigator valid.
+interface ProbeNavigator {
+  modelContextTesting?: object;
+  modelContext?: object;
+}
 interface PaperDocument {
   body?: { innerText?: string };
   querySelector: (selector: string) => { innerText?: string } | null;
@@ -129,6 +135,20 @@ export class PaperSession {
       // SAFETY: this closure runs in the page, where `navigator` carries WebMCP.
       const surface = (globalThis as BrowserGlobals).navigator?.modelContextTesting;
       return Boolean(surface && surface.listTools instanceof Function);
+    });
+  }
+
+  /**
+   * Diagnostic: which MCP-related globals exist on the page. Empty means neither
+   * the Browser Run lab harness (`modelContextTesting`) nor a page-registered
+   * WebMCP API (`modelContext`) is present — i.e. lab/WebMCP is not active.
+   */
+  async probeWebMcp(): Promise<string[]> {
+    return this.page.evaluate(() => {
+      // SAFETY: this closure runs in the page, where `navigator` is the Navigator.
+      const nav = (globalThis as { navigator?: ProbeNavigator }).navigator;
+      const names = ['modelContextTesting', 'modelContext', 'mcp', 'agent'];
+      return names.filter((name) => Boolean(nav && name in nav));
     });
   }
 

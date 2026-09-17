@@ -63,6 +63,13 @@ export async function readDesign(
     // Leave the empty DOM proof in place.
   }
 
+  // Capability probe: what MCP-related globals actually exist (triage).
+  try {
+    report.webMcp.probe = await session.probeWebMcp();
+  } catch {
+    // Probe is diagnostic only.
+  }
+
   // Structural proof via WebMCP (read-only).
   if (await session.webMcpAvailable()) {
     report.webMcp.available = true;
