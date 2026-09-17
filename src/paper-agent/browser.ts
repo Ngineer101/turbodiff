@@ -97,6 +97,11 @@ export class PaperSession {
     return isString(shot) ? new TextEncoder().encode(shot) : new Uint8Array(shot);
   }
 
+  /** The current page title. */
+  async title(): Promise<string> {
+    return this.page.title();
+  }
+
   /** DOM fallback: return trimmed visible text for a selector (or the body). */
   async inspect(selector?: string): Promise<string> {
     return this.page.evaluate((sel: string | undefined) => {

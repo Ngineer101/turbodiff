@@ -26,10 +26,42 @@ export const TERMINAL_STATUSES: ReadonlySet<DesignJobStatus> = new Set<DesignJob
   'failed',
 ]);
 
+// A job either reads an existing Paper design and proves it is readable
+// ('read', the current proof-of-concept goal) or autonomously builds/iterates a
+// design ('design', the eventual factory flow). Read mode never writes to Paper.
+export type JobMode = 'read' | 'design';
+
+/** What a read-mode job discovered about a Paper design's readability. */
+export interface WebMcpReadProbe {
+  // Whether Paper's WebMCP surface was present on the page.
+  available: boolean;
+  // Names of the WebMCP tools discovered (empty when unavailable).
+  tools: string[];
+  // Result of invoking one read-only WebMCP tool, when a safe one was found.
+  // The value is JSON-encoded so this report stays a shallow, serialisable
+  // record across the Durable Object RPC boundary.
+  read?: { tool: string; result: string };
+  // Why a WebMCP read did not happen or failed.
+  error?: string;
+}
+
+/** Proof that a Paper design can be read through the browser/WebMCP setup. */
+export interface DesignReadReport {
+  paperUrl: string;
+  capturedAt: string;
+  // Visual proof: signed URL of a screenshot of the rendered design.
+  screenshot?: string;
+  // Structural proof (when authenticated + lab enabled): WebMCP discovery/read.
+  webMcp: WebMcpReadProbe;
+  // Text proof: visible text extracted from the page (layer/page names, copy).
+  dom: { title?: string; textSample: string; textLength: number };
+}
+
 /** Public view of a job, returned by the API and safe to show a client. */
 export interface DesignJob {
   id: string;
   objective: string;
+  mode: JobMode;
   status: DesignJobStatus;
   iteration: number;
   browserSessionId?: string;
@@ -39,6 +71,8 @@ export interface DesignJob {
     // captured during iteration, oldest first.
     screenshots: string[];
   };
+  // Populated by a read-mode job: the evidence that the design is readable.
+  readReport?: DesignReadReport;
   // Extensions beyond the design spec, useful while operating a proof of
   // concept: attribution, timing, the model's running notes, and the reason a
   // job paused or failed.
@@ -74,6 +108,9 @@ export interface CreateDesignJobInput {
   objective: string;
   organizationId: string;
   authUserId: string;
+  // 'read' (default) proves an existing design is readable without writing;
+  // 'design' runs the autonomous build/iterate loop.
+  mode?: JobMode;
   // The authenticated Paper document/share URL the agent should operate in.
   // Supplied per request so operators can point a job at any document they can
   // reach; falls back to the PAPER_BASE_URL env var when omitted.

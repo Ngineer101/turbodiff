@@ -54,12 +54,31 @@ same warm browser session by id.
 
 ## API
 
-- `POST /paper/jobs` — `{ objective, paperUrl?, model? }` → `DesignJob`
+- `POST /paper/jobs` — `{ mode?, objective?, paperUrl?, model? }` → `DesignJob`
 - `GET /paper/jobs/:id` — inspect a job
 - `POST /paper/jobs/:id/resume` — re-queue a paused/failed job (e.g. after auth)
 - `GET /paper/jobs/:id/live-view` — session id + Live View URL for auth
 
 All routes are session-authenticated and scoped to the caller's organization.
+
+## Modes
+
+- **`read`** (default) — the current proof-of-concept goal. Opens an existing
+  Paper design and proves it can be read **without writing anything**, then
+  completes with a `readReport`. It gathers three independent proofs:
+  1. `screenshot` — a signed URL of the rendered design (visual proof).
+  2. `dom` — extracted page title + visible text (layer/page names, copy).
+  3. `webMcp` — discovers Paper's WebMCP tools and, if a safe read-only tool is
+     found, invokes it for structured design data. Only tools whose names look
+     read-only (and never match a mutating verb) are called.
+
+  WebMCP needs an authenticated Paper session + Browser Run lab; when it is
+  absent the screenshot and DOM proofs still confirm readability and the report
+  records that WebMCP was unavailable. This is the capability the factory flow
+  depends on: a cloud agent reading a delegated design before implementing it.
+
+- **`design`** — the eventual autonomous build/iterate loop (`objective`
+  required). Drives Paper through WebMCP to create and refine a design.
 
 ## Tool groups
 

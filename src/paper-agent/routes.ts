@@ -55,11 +55,16 @@ export function createPaperRoutes(authenticate: typeof requireUser = requireUser
     if (!isJsonObject(body)) {
       return context.json({ error: 'JSON body required' }, 400);
     }
-    const objective = isString(body.objective) ? body.objective.trim() : '';
-    if (!objective) return context.json({ error: 'objective is required' }, 400);
-    if (objective.length > MAX_OBJECTIVE_LENGTH) {
+    const mode = body.mode === 'design' ? 'design' : body.mode === 'read' ? 'read' : undefined;
+    const rawObjective = isString(body.objective) ? body.objective.trim() : '';
+    // Read mode (the default) needs no objective; design mode requires one.
+    if ((mode ?? 'read') === 'design' && !rawObjective) {
+      return context.json({ error: 'objective is required for design mode' }, 400);
+    }
+    if (rawObjective.length > MAX_OBJECTIVE_LENGTH) {
       return context.json({ error: `objective exceeds ${MAX_OBJECTIVE_LENGTH} characters` }, 400);
     }
+    const objective = rawObjective || 'Read the existing Paper design and prove it is readable';
     const paperUrl = isString(body.paperUrl) ? body.paperUrl.trim() : undefined;
     const model = isString(body.model) ? body.model.trim() : undefined;
 
@@ -71,6 +76,7 @@ export function createPaperRoutes(authenticate: typeof requireUser = requireUser
         authUserId: user.session.authUserId,
         paperUrl,
         model,
+        mode,
       });
       return context.json(job, 201);
     } catch (error) {

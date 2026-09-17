@@ -18,6 +18,8 @@ import {
 } from './config.ts';
 import { runAgentTurn, seedMessages, type TurnState } from './agent-loop.ts';
 import { storeScreenshot } from './artifacts.ts';
+import { readDesign } from './read.ts';
+import { summariseReadReport } from './read-report.ts';
 import { buildToolCatalog } from './tools.ts';
 import type { Message } from './model.ts';
 import type { CreateDesignJobInput, DesignJob as DesignJobRecord } from './types.ts';
@@ -51,6 +53,7 @@ export class DesignJob extends DurableObject<Cloudflare.Env> {
       // The DO is addressed by name (see routes), so the public id is that name.
       id: this.ctx.id.name ?? crypto.randomUUID(),
       objective: input.objective,
+      mode: input.mode ?? 'read',
       status: 'queued',
       iteration: 0,
       artifacts: { screenshots: [] },
@@ -115,6 +118,14 @@ export class DesignJob extends DurableObject<Cloudflare.Env> {
       state.job.browserSessionId = session.sessionId();
 
       await session.ensureAt(state.paperUrl);
+
+      // Read mode: prove the existing design is readable and finish. It never
+      // writes to Paper and does not require WebMCP — a screenshot and DOM text
+      // still prove readability when the WebMCP surface is unavailable.
+      if (state.job.mode === 'read') {
+        await this.runReadMode(state, session);
+        return;
+      }
 
       // Discovering WebMCP tools is both the design surface and the readiness
       // signal: if the surface is absent, Paper is likely unauthenticated and a
@@ -188,6 +199,24 @@ export class DesignJob extends DurableObject<Cloudflare.Env> {
       state.job.browserSessionId = undefined;
       return PaperSession.open(binding);
     }
+  }
+
+  /** Run a single read pass, attach the proof report, and complete the job. */
+  private async runReadMode(state: Persisted, session: PaperSession): Promise<void> {
+    const report = await readDesign(session, state.job.id, state.job.iteration, state.paperUrl);
+    state.job.readReport = report;
+    if (report.screenshot) {
+      state.job.artifacts.screenshots = [
+        ...state.job.artifacts.screenshots,
+        report.screenshot,
+      ].slice(-MAX_SCREENSHOTS);
+    }
+    state.job.iteration += 1;
+    state.job.notes = [...state.job.notes, summariseReadReport(report)].slice(-50);
+    state.job.status = 'complete';
+    state.consecutiveErrors = 0;
+    state.job.updatedAt = new Date().toISOString();
+    await this.save(state);
   }
 
   /**
