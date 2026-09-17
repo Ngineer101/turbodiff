@@ -17,6 +17,7 @@ import {
   resolvePaperUrl,
 } from './config.ts';
 import { runAgentTurn, seedMessages, type TurnState } from './agent-loop.ts';
+import { storeScreenshot } from './artifacts.ts';
 import { buildToolCatalog } from './tools.ts';
 import type { Message } from './model.ts';
 import type { CreateDesignJobInput, DesignJob as DesignJobRecord } from './types.ts';
@@ -119,9 +120,13 @@ export class DesignJob extends DurableObject<Cloudflare.Env> {
       // signal: if the surface is absent, Paper is likely unauthenticated and a
       // human must sign in through Live View before the agent can proceed.
       if (!(await session.webMcpAvailable())) {
+        // Capture what the headless browser actually sees so an operator can
+        // tell a login wall (fixable via Live View sign-in) from a missing
+        // WebMCP surface (lab/partner access not active).
+        await this.captureDiagnostic(state, session);
         await this.pauseForUser(
           state,
-          'Paper WebMCP tools are not available. The document may need authentication — open Live View to sign in, then resume the job.',
+          'Paper WebMCP tools are not available. See the captured screenshot: a login screen means authentication is needed (open Live View, sign in, then resume); the Paper editor with no tools means Browser Run lab / WebMCP access is not active for this session.',
         );
         return;
       }
@@ -182,6 +187,24 @@ export class DesignJob extends DurableObject<Cloudflare.Env> {
       // re-authentication, which the WebMCP readiness check below detects.
       state.job.browserSessionId = undefined;
       return PaperSession.open(binding);
+    }
+  }
+
+  /**
+   * Best-effort snapshot of the current page (screenshot + a little visible
+   * text) so a paused job carries evidence of why WebMCP was unavailable.
+   */
+  private async captureDiagnostic(state: Persisted, session: PaperSession): Promise<void> {
+    try {
+      const png = await session.screenshot();
+      const stored = await storeScreenshot(state.job.id, state.job.iteration, png);
+      state.job.artifacts.screenshots = [...state.job.artifacts.screenshots, stored.url].slice(
+        -MAX_SCREENSHOTS,
+      );
+      const text = (await session.inspect()).replace(/\s+/g, ' ').trim().slice(0, 300);
+      if (text) state.job.notes = [...state.job.notes, `page text: ${text}`].slice(-50);
+    } catch {
+      // Diagnostics are optional; never let them fail the pause.
     }
   }
 
