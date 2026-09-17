@@ -16,9 +16,12 @@
 // visually and textually readable, and the report says WebMCP was unavailable.
 
 import type { PaperSession } from './browser.ts';
-import { storeScreenshot } from './artifacts.ts';
+import { storeScreenshot, storeText } from './artifacts.ts';
 import { pickReadTool } from './read-report.ts';
 import type { DesignReadReport } from './types.ts';
+
+// Inline text kept small; the full extraction is stored as an R2 artifact.
+const INLINE_TEXT_CHARS = 2000;
 
 export async function readDesign(
   session: PaperSession,
@@ -42,15 +45,20 @@ export async function readDesign(
     // A missing screenshot is not fatal to the report.
   }
 
-  // Text proof.
+  // Text proof: capture the full visible text, keep a small inline sample, and
+  // store the rest as an R2 text artifact so the whole design comes through.
   try {
     const title = await session.title();
-    const text = await session.inspect();
+    const text = await session.readText();
     report.dom = {
       title: title || undefined,
-      textSample: text.slice(0, 2000),
+      textSample: text.slice(0, INLINE_TEXT_CHARS),
       textLength: text.length,
     };
+    if (text.length > INLINE_TEXT_CHARS) {
+      const stored = await storeText(jobId, iteration, text);
+      report.dom.textUrl = stored.url;
+    }
   } catch {
     // Leave the empty DOM proof in place.
   }

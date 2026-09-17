@@ -54,7 +54,7 @@ same warm browser session by id.
 
 ## API
 
-- `POST /paper/jobs` — `{ mode?, objective?, paperUrl?, model? }` → `DesignJob`
+- `POST /paper/jobs` — `{ mode?, objective?, paperUrl?, model?, sessionId? }` → `DesignJob`
 - `GET /paper/jobs/:id` — inspect a job
 - `POST /paper/jobs/:id/resume` — re-queue a paused/failed job (e.g. after auth)
 - `GET /paper/jobs/:id/live-view` — session id + Live View URL for auth
@@ -91,11 +91,22 @@ design → implementation → visual comparison → iteration.
 
 ## Authentication
 
-Initial Paper authentication may require a human. When the agent opens Paper and
-the WebMCP surface is absent, the job moves to `needs_user`; an operator opens
-the Browser Run Live View (see `GET .../live-view`), signs in, and calls
-`resume`. The warm session (and its cookies) persists across turns, so this is a
-one-time step per session.
+Paper only exposes its WebMCP surface to an authenticated session. Because a
+freshly launched Browser Run session is logged out, structured WebMCP reads
+require attaching to a session a human has already signed into:
+
+1. Run any job to launch a session and note its `browserSessionId`.
+2. Open that session in the Cloudflare **Browser Run › Live Sessions › Live
+   View** (you get control of the remote browser) and sign into Paper.
+3. Run a read job with `sessionId` set to that id — the job attaches to the
+   authenticated session (reusing the Paper tab) instead of launching a new one,
+   so WebMCP becomes available. An attached session is never replaced or closed
+   by the job; if it can't be reached, the job fails loudly rather than silently
+   launching a logged-out one.
+
+Unauthenticated reads still succeed via the screenshot and DOM-text proofs — the
+full extracted text is stored as an R2 artifact (`readReport.dom.textUrl`) when
+it exceeds the inline sample.
 
 ## Configuration
 

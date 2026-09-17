@@ -8,7 +8,7 @@
 import { env } from 'cloudflare:workers';
 import { signArtifactKey } from '../integrations/security/crypto.ts';
 
-export interface StoredScreenshot {
+export interface StoredArtifact {
   key: string;
   url: string;
 }
@@ -18,9 +18,26 @@ export async function storeScreenshot(
   jobId: string,
   iteration: number,
   png: Uint8Array,
-): Promise<StoredScreenshot> {
+): Promise<StoredArtifact> {
   const key = `paper-jobs/${jobId}/${String(iteration).padStart(3, '0')}-${crypto.randomUUID()}.png`;
   await env.ARTIFACTS.put(key, png, { httpMetadata: { contentType: 'image/png' } });
+  const sig = await signArtifactKey(key);
+  const path = `/artifacts/${key}?sig=${sig}`;
+  const base = env.PUBLIC_BASE_URL.trim();
+  const url = base ? new URL(path, base).toString() : path;
+  return { key, url };
+}
+
+/** Store extracted design text for a job iteration and return its signed URL. */
+export async function storeText(
+  jobId: string,
+  iteration: number,
+  text: string,
+): Promise<StoredArtifact> {
+  const key = `paper-jobs/${jobId}/${String(iteration).padStart(3, '0')}-${crypto.randomUUID()}.txt`;
+  await env.ARTIFACTS.put(key, text, {
+    httpMetadata: { contentType: 'text/plain; charset=utf-8' },
+  });
   const sig = await signArtifactKey(key);
   const path = `/artifacts/${key}?sig=${sig}`;
   const base = env.PUBLIC_BASE_URL.trim();

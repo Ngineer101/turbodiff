@@ -32,6 +32,10 @@ interface Persisted {
   messages: Message[];
   screenshotCount: number;
   consecutiveErrors: number;
+  // True when the operator supplied the browser session id (attach to an
+  // already-authenticated session). We must never launch a fresh one to
+  // replace it, or we would silently lose their Paper login.
+  attached: boolean;
 }
 
 const STATE_KEY = 'state';
@@ -56,6 +60,9 @@ export class DesignJob extends DurableObject<Cloudflare.Env> {
       mode: input.mode ?? 'read',
       status: 'queued',
       iteration: 0,
+      // Pre-seed the session id when attaching, so the first turn reconnects to
+      // the operator's authenticated session instead of launching a new one.
+      browserSessionId: input.sessionId?.trim() || undefined,
       artifacts: { screenshots: [] },
       organizationId: input.organizationId,
       createdAt: now,
@@ -69,6 +76,7 @@ export class DesignJob extends DurableObject<Cloudflare.Env> {
       messages: seedMessages(input.objective),
       screenshotCount: 0,
       consecutiveErrors: 0,
+      attached: Boolean(input.sessionId?.trim()),
     };
     await this.save(state);
     await this.ctx.storage.setAlarm(Date.now());
@@ -190,14 +198,20 @@ export class DesignJob extends DurableObject<Cloudflare.Env> {
   private async openSession(state: Persisted): Promise<PaperSession> {
     const binding: BrowserWorker = this.env.BROWSER;
     const sessionId = state.job.browserSessionId;
-    if (!sessionId) return PaperSession.open(binding);
+    if (!sessionId) return PaperSession.open(binding, { preferUrl: state.paperUrl });
     try {
-      return await PaperSession.open(binding, { sessionId });
-    } catch {
-      // The warm session expired; start a fresh one. Paper will need
-      // re-authentication, which the WebMCP readiness check below detects.
+      return await PaperSession.open(binding, { sessionId, preferUrl: state.paperUrl });
+    } catch (error) {
+      // An operator-attached session must not be silently replaced — that would
+      // throw away their Paper login. Surface the failure instead.
+      if (state.attached) {
+        const detail = error instanceof Error ? error.message : 'unknown error';
+        throw new Error(`could not attach to Browser Run session ${sessionId}: ${detail}`);
+      }
+      // A warm session we launched ourselves expired; start a fresh one. Paper
+      // will need re-authentication, which the WebMCP check below detects.
       state.job.browserSessionId = undefined;
-      return PaperSession.open(binding);
+      return PaperSession.open(binding, { preferUrl: state.paperUrl });
     }
   }
 

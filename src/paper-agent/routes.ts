@@ -67,6 +67,7 @@ export function createPaperRoutes(authenticate: typeof requireUser = requireUser
     const objective = rawObjective || 'Read the existing Paper design and prove it is readable';
     const paperUrl = isString(body.paperUrl) ? body.paperUrl.trim() : undefined;
     const model = isString(body.model) ? body.model.trim() : undefined;
+    const sessionId = isString(body.sessionId) ? body.sessionId.trim() : undefined;
 
     const id = crypto.randomUUID();
     try {
@@ -77,6 +78,7 @@ export function createPaperRoutes(authenticate: typeof requireUser = requireUser
         paperUrl,
         model,
         mode,
+        sessionId,
       });
       return context.json(job, 201);
     } catch (error) {

@@ -45,6 +45,9 @@ export interface OpenSessionOptions {
   // Enable Browser Run's experimental "lab" environment, where the WebMCP
   // surface is currently exposed. Defaults to true for this agent.
   lab?: boolean;
+  // When reconnecting, prefer a tab already on this URL's host (e.g. the Paper
+  // document the operator signed into), rather than a blank tab.
+  preferUrl?: string;
 }
 
 export class PaperSession {
@@ -64,8 +67,7 @@ export class PaperSession {
   ): Promise<PaperSession> {
     if (options.sessionId) {
       const browser = await puppeteer.connect(binding, options.sessionId);
-      const pages = await browser.pages();
-      const page = pages[0] ?? (await browser.newPage());
+      const page = await pickPage(browser, options.preferUrl);
       return new PaperSession(browser, page);
     }
     const browser = await puppeteer.launch(binding, {
@@ -104,12 +106,21 @@ export class PaperSession {
 
   /** DOM fallback: return trimmed visible text for a selector (or the body). */
   async inspect(selector?: string): Promise<string> {
-    return this.page.evaluate((sel: string | undefined) => {
-      // SAFETY: this closure runs in the page, where `document` is the real DOM.
-      const doc = (globalThis as BrowserGlobals).document;
-      const node = sel ? doc?.querySelector(sel) : doc?.body;
-      return (node?.innerText ?? '').slice(0, 8000);
-    }, selector);
+    return this.readText(selector, 8000);
+  }
+
+  /** Extract visible text from the page (or a selector), up to `limit` chars. */
+  async readText(selector?: string, limit = 500_000): Promise<string> {
+    return this.page.evaluate(
+      (sel: string | undefined, max: number) => {
+        // SAFETY: this closure runs in the page, where `document` is the real DOM.
+        const doc = (globalThis as BrowserGlobals).document;
+        const node = sel ? doc?.querySelector(sel) : doc?.body;
+        return (node?.innerText ?? '').slice(0, max);
+      },
+      selector,
+      limit,
+    );
   }
 
   /** Whether Paper's WebMCP surface is present and usable on this page. */
@@ -160,5 +171,29 @@ export class PaperSession {
   /** End the session entirely, releasing the Browser Run instance. */
   async close(): Promise<void> {
     await this.browser.close();
+  }
+}
+
+/**
+ * Choose which existing tab to drive after reconnecting: prefer one already on
+ * the target URL's host (the document the operator signed into), else the first
+ * tab, else a new one.
+ */
+async function pickPage(browser: Browser, preferUrl?: string): Promise<Page> {
+  const pages = await browser.pages();
+  const host = hostOf(preferUrl);
+  if (host) {
+    const match = pages.find((page) => hostOf(page.url()) === host);
+    if (match) return match;
+  }
+  return pages[0] ?? (await browser.newPage());
+}
+
+function hostOf(url: string | undefined): string {
+  if (!url) return '';
+  try {
+    return new URL(url).host;
+  } catch {
+    return '';
   }
 }

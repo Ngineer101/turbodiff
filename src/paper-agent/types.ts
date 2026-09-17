@@ -54,7 +54,9 @@ export interface DesignReadReport {
   // Structural proof (when authenticated + lab enabled): WebMCP discovery/read.
   webMcp: WebMcpReadProbe;
   // Text proof: visible text extracted from the page (layer/page names, copy).
-  dom: { title?: string; textSample: string; textLength: number };
+  // `textUrl` is a signed URL of the full extracted text stored in R2 (the
+  // inline sample is capped); `textLength` is the full length.
+  dom: { title?: string; textSample: string; textLength: number; textUrl?: string };
 }
 
 /** Public view of a job, returned by the API and safe to show a client. */
@@ -115,6 +117,11 @@ export interface CreateDesignJobInput {
   // Supplied per request so operators can point a job at any document they can
   // reach; falls back to the PAPER_BASE_URL env var when omitted.
   paperUrl?: string;
+  // Attach to an existing Browser Run session (by id) instead of launching a
+  // fresh one. Lets an operator sign into Paper once in the Live View and then
+  // run a read job against that already-authenticated session, so WebMCP is
+  // available. When omitted, a new session is launched.
+  sessionId?: string;
   // Optional model override (Cloudflare AI Gateway unified id, e.g.
   // "anthropic/claude-...").
   model?: string;
