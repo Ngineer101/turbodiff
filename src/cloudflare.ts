@@ -7,6 +7,7 @@ import app from './app.ts';
 
 export { Sandbox } from '@cloudflare/sandbox';
 export { LiveUpdates } from './live-updates.ts';
+export { DesignJob } from './paper-agent/design-job.ts';
 export { ArtifactsEventsWorkflow } from './application/repositories/artifacts-events-workflow.ts';
 export { FactoryStageWorkflow };
 

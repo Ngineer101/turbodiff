@@ -27,5 +27,10 @@ declare namespace Cloudflare {
     // wrangler.jsonc so forks don't inherit this deployment's key.
     VAPID_PUBLIC_KEY: string;
     VAPID_SUBJECT: string; // e.g. "mailto:ops@turbodiff.dev"
+    // Autonomous Paper design agent. All optional: a job may pass its own
+    // paperUrl/model, and Live View is only needed for human-assisted auth.
+    PAPER_BASE_URL?: string;
+    PAPER_AGENT_MODEL?: string;
+    PAPER_LIVE_VIEW_BASE?: string;
   }
 }

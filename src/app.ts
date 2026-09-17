@@ -10,6 +10,7 @@ import { createMcpRoutes } from './http/mcp.ts';
 import { handleMcpProxy } from './http/mcp-proxy.ts';
 import { handleAiGatewayProxy } from './http/ai-gateway-proxy.ts';
 import { createUiRoutes } from './http/ui.ts';
+import { createPaperRoutes } from './paper-agent/routes.ts';
 import { createWebhookRoutes } from './http/webhooks.ts';
 import { oAuthDiscoveryMetadata, oAuthProtectedResourceMetadata } from 'better-auth/plugins';
 import { withAuth } from './integrations/auth/better-auth.ts';
@@ -143,6 +144,10 @@ app.all('/api/*', (c) => handleEffectApi(c.req.raw));
 
 // Hono only owns transports whose mechanics are not JSON domain endpoints.
 app.route('/protocol', createProtocolRoutes());
+
+// Autonomous Paper design agent: create/inspect long-running design jobs backed
+// by the DesignJob Durable Object and Cloudflare Browser Run.
+app.route('/paper', createPaperRoutes());
 
 // SPA shell + landing + OAuth sign-in (session cookie auth).
 app.route('/', createUiRoutes());

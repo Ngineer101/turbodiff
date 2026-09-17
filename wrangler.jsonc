@@ -19,6 +19,11 @@
   "observability": { "enabled": true, "traces": { "enabled": true } },
   // Workers AI binding for provider-backed application services.
   "ai": { "binding": "AI" },
+  // Browser Run (Browser Rendering) binding for the autonomous Paper design
+  // agent. The agent enables the experimental "lab" environment at launch,
+  // where Paper's WebMCP surface is currently exposed. Requires Browser
+  // Rendering / Browser Run access on the account.
+  "browser": { "binding": "BROWSER" },
   // Exposes the live Worker version (id/tag) to GET /version — see
   // https://developers.cloudflare.com/workers/configuration/version-metadata/
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
@@ -63,6 +68,7 @@
     "bindings": [
       { "class_name": "Sandbox", "name": "Sandbox" },
       { "class_name": "LiveUpdates", "name": "LIVE_UPDATES" },
+      { "class_name": "DesignJob", "name": "DESIGN_JOB" },
     ],
   },
   "workflows": [
@@ -121,5 +127,6 @@
     { "tag": "v4", "new_sqlite_classes": ["FlueExplainerAgent"] },
     { "tag": "v5", "deleted_classes": ["FluePrReviewerAgent"] },
     { "tag": "v6", "deleted_classes": ["FlueExplainerAgent"] },
+    { "tag": "v7", "new_sqlite_classes": ["DesignJob"] },
   ],
 }

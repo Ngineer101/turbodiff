@@ -11,6 +11,7 @@
     "db:generate": "drizzle-kit generate --config drizzle.config.ts"
   },
   "dependencies": {
+    "@cloudflare/puppeteer": "^1.4.0",
     "@cloudflare/sandbox": "0.12.5",
     "@codemirror/commands": "^6.11.0",
     "@codemirror/language": "^6.11.3",

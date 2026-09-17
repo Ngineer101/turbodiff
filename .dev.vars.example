@@ -18,6 +18,18 @@ REVIEW_DAILY_LIMIT="50"
 # Empty disables the cheap-model override for trivial reviews.
 TRIVIAL_MODEL=""
 
+# Autonomous Paper design agent (all optional).
+# Default authenticated Paper document/share URL for design jobs. A job may
+# override this per request with a `paperUrl` field.
+PAPER_BASE_URL=""
+# AI Gateway unified model id for planning + multimodal critique. Must be a
+# multimodal Anthropic model enabled on the gateway. Falls back to a built-in
+# default when empty; a job may override it with a `model` field.
+PAPER_AGENT_MODEL=""
+# Base URL for building a Browser Run Live View link used to complete Paper
+# authentication by hand, e.g. "https://<account>.browser-run.cloudflare.dev/live".
+PAPER_LIVE_VIEW_BASE=""
+
 # Required Worker secrets
 GITHUB_APP_ID=""
 GITHUB_APP_PRIVATE_KEY=""
