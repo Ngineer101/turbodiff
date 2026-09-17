@@ -46,13 +46,31 @@ export function resolveModel(env: PaperAgentEnv, requested?: string): string {
 }
 
 export function resolvePaperUrl(env: PaperAgentEnv, requested?: string): string {
-  const url = (requested ?? env.PAPER_BASE_URL ?? '').trim();
-  if (!url) {
+  return validatePaperUrl(requested ?? env.PAPER_BASE_URL ?? '');
+}
+
+/**
+ * Validate a Paper URL up front so a bad value fails at job creation (a clear
+ * 400) instead of deep in the agent loop, where Chromium rejects it as an
+ * "invalid URL" and burns retries. Requires an absolute http(s) URL.
+ */
+export function validatePaperUrl(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
     throw new Error(
       'no Paper URL: pass paperUrl in the request body or set PAPER_BASE_URL for this deployment',
     );
   }
-  return url;
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new Error(`invalid Paper URL "${trimmed}": provide an absolute URL, e.g. https://…`);
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(`invalid Paper URL "${trimmed}": must use http or https`);
+  }
+  return url.toString();
 }
 
 /** Build a Live View URL for a session when a base is configured. */

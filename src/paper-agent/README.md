@@ -39,18 +39,18 @@ same warm browser session by id.
 
 ## Files
 
-| File | Responsibility |
-| --- | --- |
-| `types.ts` | `DesignJob` job model and WebMCP tool shapes |
-| `config.ts` | Env-derived configuration (model, Paper URL, limits, Live View) |
-| `browser.ts` | Browser Run session: open/resume, screenshot, navigate, inspect, WebMCP |
-| `webmcp.ts` | WebMCP `listTools` payload normalisation (pure, unit-tested) |
-| `model.ts` | Claude Messages calls through Cloudflare AI Gateway |
-| `tools.ts` | Builds the model's tool catalog: `paper.*` / `browser.*` / `job.*` |
-| `agent-loop.ts` | One agent turn: model round-trip + tool execution |
-| `artifacts.ts` | Screenshot persistence to R2 as signed capability URLs |
-| `design-job.ts` | `DesignJob` Durable Object: alarm-driven loop, resumption |
-| `routes.ts` | `/paper/jobs` HTTP surface |
+| File            | Responsibility                                                          |
+| --------------- | ----------------------------------------------------------------------- |
+| `types.ts`      | `DesignJob` job model and WebMCP tool shapes                            |
+| `config.ts`     | Env-derived configuration (model, Paper URL, limits, Live View)         |
+| `browser.ts`    | Browser Run session: open/resume, screenshot, navigate, inspect, WebMCP |
+| `webmcp.ts`     | WebMCP `listTools` payload normalisation (pure, unit-tested)            |
+| `model.ts`      | Claude Messages calls through Cloudflare AI Gateway                     |
+| `tools.ts`      | Builds the model's tool catalog: `paper.*` / `browser.*` / `job.*`      |
+| `agent-loop.ts` | One agent turn: model round-trip + tool execution                       |
+| `artifacts.ts`  | Screenshot persistence to R2 as signed capability URLs                  |
+| `design-job.ts` | `DesignJob` Durable Object: alarm-driven loop, resumption               |
+| `routes.ts`     | `/paper/jobs` HTTP surface                                              |
 
 ## API
 
