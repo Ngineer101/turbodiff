@@ -1,8 +1,13 @@
 import process from 'node:process';
+import { readFile } from 'node:fs/promises';
 import { Client } from 'pg';
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error('DATABASE_URL is required');
+const modelCatalogSeed = await readFile(
+  new URL('../../db/migrations/0001_seed_cloudflare_code_models.sql', import.meta.url),
+  'utf8',
+);
 
 const hostname = new URL(connectionString).hostname;
 if (hostname !== 'localhost' && hostname !== '127.0.0.1' && hostname !== '::1') {
@@ -31,6 +36,7 @@ try {
       ('openai', 'gpt-5.6-sol', 'GPT-5.6 Sol', ARRAY['text', 'tools', 'reasoning'], true, true, false),
       ('anthropic', 'claude-opus-4.8', 'Claude Opus 4.8', ARRAY['text', 'tools', 'reasoning'], true, false, true)
   `);
+  await client.query(modelCatalogSeed);
   console.log('Local PostgreSQL test data reset');
 } finally {
   await client.end();

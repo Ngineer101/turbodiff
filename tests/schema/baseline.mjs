@@ -9,9 +9,9 @@ const directory = path.resolve('db/migrations');
 const files = (await readdir(directory)).filter((file) => file.endsWith('.sql')).sort();
 const journal = JSON.parse(await readFile(path.join(directory, 'meta', '_journal.json'), 'utf8'));
 
-if (files.length !== 1 || journal.entries.length !== 1) {
+if (files.length !== 2 || journal.entries.length !== 2) {
   throw new Error(
-    `Expected one baseline migration, found ${files.length} files and ${journal.entries.length} journal entries`,
+    `Expected the baseline and model catalog migrations, found ${files.length} files and ${journal.entries.length} journal entries`,
   );
 }
 
@@ -22,7 +22,7 @@ try {
     migrationsTable: 'schema_migrations',
   });
 } catch (error) {
-  throw new Error('Fresh baseline migration failed', { cause: error });
+  throw new Error('Fresh migration chain failed', { cause: error });
 }
 
 const requiredTables = await database.query(`
@@ -87,6 +87,67 @@ if (
   modelDefaults?.fast_model !== 'anthropic/claude-opus-4.8'
 ) {
   throw new Error(`Invalid model defaults: ${JSON.stringify(modelDefaults)}`);
+}
+
+const expectedModels = new Set([
+  '@cf/moonshotai/kimi-k2.7-code',
+  '@cf/qwen/qwen2.5-coder-32b-instruct',
+  '@cf/zai-org/glm-5.2',
+  '@cf/zai-org/glm-5.3',
+  '@cf/zai-org/glm-5.3-flash',
+  'alibaba/qwen3-max',
+  'alibaba/qwen3.5-397b-a17b',
+  'alibaba/qwen3.7-max',
+  'alibaba/qwen3.7-plus',
+  'alibaba/qwen3.8-max',
+  'anthropic/claude-fable-5',
+  'anthropic/claude-fable-5.1',
+  'anthropic/claude-haiku-4.5',
+  'anthropic/claude-opus-4.5',
+  'anthropic/claude-opus-4.6',
+  'anthropic/claude-opus-4.7',
+  'anthropic/claude-opus-4.8',
+  'anthropic/claude-opus-5',
+  'anthropic/claude-sonnet-4.5',
+  'anthropic/claude-sonnet-4.6',
+  'anthropic/claude-sonnet-5',
+  'google/gemini-3.6-flash',
+  'google/gemini-3.7-flash',
+  'google/gemini-3.8-flash',
+  'moonshotai/kimi-k3',
+  'openai/gpt-4.1',
+  'openai/gpt-5',
+  'openai/gpt-5.1',
+  'openai/gpt-5.4',
+  'openai/gpt-5.4-pro',
+  'openai/gpt-5.5',
+  'openai/gpt-5.5-pro',
+  'openai/gpt-5.6-luna',
+  'openai/gpt-5.6-sol',
+  'openai/gpt-5.6-terra',
+  'openai/gpt-6-astra',
+  'openai/o3',
+  'stealth/union-alpha',
+  'thinkingmachines/inkling',
+  'thinkingmachines/inkling-256k',
+  'unbiased/pareto',
+  'xai/grok-4.20-0309-non-reasoning',
+  'xai/grok-4.20-0309-reasoning',
+  'xai/grok-4.3',
+]);
+const catalogRows = await database.query(`
+  SELECT CASE
+    WHEN model_id LIKE '@cf/%' THEN model_id
+    ELSE provider || '/' || model_id
+  END AS id
+  FROM app.models
+  WHERE enabled
+`);
+const catalogModels = new Set(catalogRows.rows.map((row) => row.id));
+const missingModels = [...expectedModels].filter((id) => !catalogModels.has(id));
+const unexpectedModels = [...catalogModels].filter((id) => !expectedModels.has(id));
+if (missingModels.length > 0 || unexpectedModels.length > 0) {
+  throw new Error(`Invalid model catalog: ${JSON.stringify({ missingModels, unexpectedModels })}`);
 }
 
 const missingForeignKeyIndexes = await database.query(`
@@ -231,4 +292,4 @@ await mustReject(
 );
 
 await database.close();
-console.log('Fresh primitive-first PostgreSQL baseline passed (1 migration)');
+console.log(`Fresh primitive-first PostgreSQL baseline passed (${files.length} migrations)`);
