@@ -9,6 +9,7 @@ import {
 } from '../../../agents/planner.ts';
 import type { AgentExecutionRequest } from '../../../agents/types.ts';
 import { runCodingAgent } from '../../../integrations/agent-runtime/coding-agent.ts';
+import { classifyTaskComplexity } from '../../../integrations/typesafe/task-complexity.ts';
 import { PLANNING_CONFIG } from '../../../integrations/agent-runtime/planning-session.ts';
 import { redactSecrets } from '../../../integrations/agent-runtime/redaction.ts';
 import { resolveRunnerAuth } from '../runner-auth.ts';
@@ -230,6 +231,19 @@ export async function executePlanningStage(
     const mcp = await buildSandboxMcpConfig(mcpBindings);
     secrets.push(...(mcp?.secrets ?? []));
 
+    // A small Jev judgment decides how thorough planning should be; `standard`
+    // stays the default when the classifier is unconfigured or unavailable.
+    const tier =
+      (await classifyTaskComplexity(
+        {
+          title: workItem.title,
+          requirements: workItem.description,
+          repositoryCount: repositories.length,
+          attachmentCount: attachments.length,
+        },
+        { apiKey: env.TYPESAFE_API_KEY },
+      )) ?? 'standard';
+
     const plannerInput: PlannerDraftInput = {
       operation: 'draft',
       title: workItem.title,
@@ -237,7 +251,7 @@ export async function executePlanningStage(
       repositories,
       attachments,
       analysis: null,
-      tier: 'standard',
+      tier,
       answers: [],
       feedback: [],
       previousPlan: null,

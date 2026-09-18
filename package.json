@@ -29,6 +29,7 @@
     "@tanstack/react-query": "^5.102.3",
     "@tanstack/react-query-persist-client": "^5.102.3",
     "@tanstack/react-router": "^1.170.22",
+    "@typesafe-ai/sdk": "0.6.0",
     "agents": "^0.14.2",
     "better-auth": "^1.6.27",
     "class-variance-authority": "^0.7.1",
