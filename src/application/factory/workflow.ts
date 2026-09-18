@@ -2,6 +2,7 @@ import { env, WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from '
 import { withDatabaseScope } from '../../data/postgres.ts';
 import { executeFactoryStage, failFactoryStageInfrastructure } from './execute.ts';
 import { parseRunFactoryMessage, type RunFactoryMessage } from './message.ts';
+import { startFactoryStageWorkflowWithBinding } from './workflow-start.ts';
 
 export class FactoryStageWorkflow extends WorkflowEntrypoint<unknown, RunFactoryMessage> {
   async run(event: WorkflowEvent<RunFactoryMessage>, step: WorkflowStep): Promise<string> {
@@ -22,15 +23,5 @@ export class FactoryStageWorkflow extends WorkflowEntrypoint<unknown, RunFactory
 }
 
 export async function startFactoryStageWorkflow(message: RunFactoryMessage): Promise<void> {
-  const validated = parseRunFactoryMessage(message);
-  const id = `factory-stage-${validated.stageRunId}`;
-  const instance = await env.FACTORY_STAGE_WORKFLOW.get(id);
-  const status = await instance.status();
-  if (status.status === 'unknown') {
-    await env.FACTORY_STAGE_WORKFLOW.create({ id, params: validated });
-    return;
-  }
-  if (status.status === 'errored' || status.status === 'terminated') {
-    await instance.restart();
-  }
+  await startFactoryStageWorkflowWithBinding(env.FACTORY_STAGE_WORKFLOW, message);
 }
