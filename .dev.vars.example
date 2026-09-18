@@ -32,6 +32,8 @@ REVIEW_SECRET=""
 TOKEN_ENCRYPTION_KEY=""
 RESEND_API_KEY=""
 SKILLS_SH_API_TOKEN=""
+# Empty disables the Jev task-complexity classifier; planning uses the standard tier.
+TYPESAFE_API_KEY=""
 VAPID_PUBLIC_KEY=""
 VAPID_PRIVATE_KEY=""
 VAPID_SUBJECT=""

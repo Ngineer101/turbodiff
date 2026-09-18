@@ -270,6 +270,9 @@ importers:
       '@tanstack/react-router':
         specifier: ^1.170.22
         version: 1.170.24(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@typesafe-ai/sdk':
+        specifier: 0.6.0
+        version: 0.6.0
       agents:
         specifier: ^0.14.2
         version: 0.14.5(@babel/core@7.29.7(supports-color@10.2.2))(@babel/runtime@7.29.7)(@cloudflare/workers-types@5.20260813.1)(@voidzero-dev/vite-plus-core@0.2.8(@types/node@22.20.1)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(typescript@7.0.2)(yaml@2.9.0))(ai@6.0.246(zod@4.4.3))(react@19.2.8)(rolldown@1.2.3)(supports-color@10.2.2)(zod@4.4.3)
@@ -2875,6 +2878,10 @@ packages:
 
   '@types/unist@3.0.3':
     resolution: {integrity: sha512-ko/gIFJRv177XgZsZcBwnqJN5x/Gien8qNOn0D5bQU/zAzVf9Zt3BlcUiLqhV9y4ARk0GbT3tnUiPNgnTXzc/Q==}
+
+  '@typesafe-ai/sdk@0.6.0':
+    resolution: {integrity: sha512-IddX+Q0XM+VagOUZFeP7wZjaO4SHMdvnh2zEBdrZZnXedWI3BNK1lKhMx3ayrkFWvVLbVcUHJy6AVZlY+e6Jaw==}
+    engines: {node: '>=20'}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
@@ -7416,6 +7423,8 @@ snapshots:
   '@types/unist@2.0.11': {}
 
   '@types/unist@3.0.3': {}
+
+  '@typesafe-ai/sdk@0.6.0': {}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     optional: true

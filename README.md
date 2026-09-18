@@ -225,19 +225,20 @@ Use [.dev.vars.example](.dev.vars.example) as the local configuration template.
 
 Leave these out unless you use the related feature:
 
-| Name                    | Where         | Used for                                                             |
-| ----------------------- | ------------- | -------------------------------------------------------------------- |
-| `ARTIFACTS_REMOTE_BASE` | Worker var    | Clone base URL for Turbodiff-hosted repositories.                    |
-| `RESEND_FROM_ADDRESS`   | Worker var    | Sender address for organization invitation emails.                   |
-| `VAPID_PUBLIC_KEY`      | Worker var    | Enables browser push subscription.                                   |
-| `VAPID_SUBJECT`         | Worker var    | Contact URI included in Web Push authorization.                      |
-| `TOKEN_ENCRYPTION_KEY`  | Worker secret | Encrypts credentials for connected tools.                            |
-| `RESEND_API_KEY`        | Worker secret | Sends organization invitation emails.                                |
-| `SKILLS_SH_API_TOKEN`   | Worker secret | Enables skills.sh catalog browsing.                                  |
-| `VAPID_PRIVATE_KEY`     | Worker secret | Signs Web Push notifications.                                        |
-| `POSTGRES_DATABASE_URL` | CI secret     | Production migration URL used by the GitHub Actions deploy workflow. |
-| `CLOUDFLARE_API_TOKEN`  | CI secret     | Lets the GitHub Actions deploy workflow publish to Cloudflare.       |
-| `CLOUDFLARE_ACCOUNT_ID` | CI secret     | Selects the Cloudflare account used by the deploy workflow.          |
+| Name                    | Where         | Used for                                                                |
+| ----------------------- | ------------- | ----------------------------------------------------------------------- |
+| `ARTIFACTS_REMOTE_BASE` | Worker var    | Clone base URL for Turbodiff-hosted repositories.                       |
+| `RESEND_FROM_ADDRESS`   | Worker var    | Sender address for organization invitation emails.                      |
+| `VAPID_PUBLIC_KEY`      | Worker var    | Enables browser push subscription.                                      |
+| `VAPID_SUBJECT`         | Worker var    | Contact URI included in Web Push authorization.                         |
+| `TOKEN_ENCRYPTION_KEY`  | Worker secret | Encrypts credentials for connected tools.                               |
+| `RESEND_API_KEY`        | Worker secret | Sends organization invitation emails.                                   |
+| `SKILLS_SH_API_TOKEN`   | Worker secret | Enables skills.sh catalog browsing.                                     |
+| `TYPESAFE_API_KEY`      | Worker secret | Enables the Jev task-complexity classifier that sets the planning tier. |
+| `VAPID_PRIVATE_KEY`     | Worker secret | Signs Web Push notifications.                                           |
+| `POSTGRES_DATABASE_URL` | CI secret     | Production migration URL used by the GitHub Actions deploy workflow.    |
+| `CLOUDFLARE_API_TOKEN`  | CI secret     | Lets the GitHub Actions deploy workflow publish to Cloudflare.          |
+| `CLOUDFLARE_ACCOUNT_ID` | CI secret     | Selects the Cloudflare account used by the deploy workflow.             |
 
 Generate `TOKEN_ENCRYPTION_KEY` with `openssl rand -hex 32`. It is required before anyone can
 save credentials for connected tools.
