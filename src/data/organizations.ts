@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import { BUILTIN_AGENTS } from '../domain/agent-definitions.ts';
 import { execute, queryOne, queryRows, withTransaction } from './postgres.ts';
 
 export interface OrganizationRow {
@@ -37,6 +38,24 @@ function organizationSlug(name: string, id: string): string {
     .slice(0, 40);
   return `${base || 'workspace'}-${id.slice(0, 8)}`;
 }
+
+function personalOrganizationMetadata(userId: string): string {
+  return JSON.stringify({ kind: 'personal', ownerUserId: userId });
+}
+
+const pristineBuiltinAgent = sql.join(
+  BUILTIN_AGENTS.map(
+    (agent) => sql`(
+      candidate.definition_key = ${agent.definitionKey}
+      AND candidate.slug = ${agent.slug}
+      AND candidate.name = ${agent.name}
+      AND candidate.description IS NOT DISTINCT FROM ${agent.description}
+      AND candidate.instructions_override IS NOT DISTINCT FROM ${agent.instructionsOverride}
+      AND candidate.enabled
+    )`,
+  ),
+  sql` OR `,
+);
 
 export async function listOrganizationsForUser(userId: string): Promise<OrganizationRow[]> {
   return queryRows<OrganizationRow>(sql`
@@ -128,9 +147,10 @@ export async function ensurePersonalOrganization(
     const organizationId = crypto.randomUUID();
     const now = new Date().toISOString();
     await transaction.execute(sql`
-      INSERT INTO auth."organization" (id, name, slug, "createdAt")
+      INSERT INTO auth."organization" (id, name, slug, metadata, "createdAt")
       VALUES (
-        ${organizationId}, ${name}, ${organizationSlug(name, organizationId)}, ${now}
+        ${organizationId}, ${name}, ${organizationSlug(name, organizationId)},
+        ${personalOrganizationMetadata(userId)}, ${now}
       )
     `);
     await transaction.execute(sql`
@@ -141,6 +161,62 @@ export async function ensurePersonalOrganization(
     if (!created) throw new Error('organization insert returned no row');
     return created;
   });
+}
+
+export async function deletePristinePersonalOrganization(
+  userId: string,
+  retainedOrganizationId: string,
+): Promise<string | null> {
+  const deleted = await queryOne<{ id: string }>(sql`
+    DELETE FROM auth."organization" personal
+    WHERE personal.id <> ${retainedOrganizationId}
+      AND personal.metadata = ${personalOrganizationMetadata(userId)}
+      AND EXISTS (
+        SELECT 1 FROM auth."member" owner_membership
+        WHERE owner_membership."organizationId" = personal.id
+          AND owner_membership."userId" = ${userId}
+          AND owner_membership.role = 'owner'
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM auth."member" other_membership
+        WHERE other_membership."organizationId" = personal.id
+          AND other_membership."userId" <> ${userId}
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM auth."invitation" invitation
+        WHERE invitation."organizationId" = personal.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM app.integrations integration
+        WHERE integration.organization_id = personal.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM app.repositories repository
+        WHERE repository.organization_id = personal.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM app.agents candidate
+        WHERE candidate.organization_id = personal.id
+          AND NOT (${pristineBuiltinAgent})
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM app.skills skill WHERE skill.organization_id = personal.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM app.automations automation WHERE automation.organization_id = personal.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM app.work_items work_item WHERE work_item.organization_id = personal.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM app.artifacts artifact WHERE artifact.organization_id = personal.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM app.factory_runs factory_run WHERE factory_run.organization_id = personal.id
+      )
+    RETURNING personal.id
+  `);
+  return deleted?.id ?? null;
 }
 
 export async function addOrganizationOwner(organizationId: string, userId: string): Promise<void> {

@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { ensureGithubOrganization, findAuthUserByGithubId } from '../../data/organizations.ts';
+import {
+  deletePristinePersonalOrganization,
+  ensureGithubOrganization,
+  findAuthUserByGithubId,
+} from '../../data/organizations.ts';
 import {
   disableRepositoriesForIntegration,
   getRepositoryByExternalId,
@@ -106,6 +110,8 @@ async function handleInstallation(event: InstallationEvent): Promise<WebhookHand
   }
 
   let integration = await getIntegrationByExternalAccount('github', externalId);
+  let personalOrganizationOwnerId: string | null = null;
+  let retainedOrganizationId: string | null = null;
   if (!integration) {
     const ownerUserId = event.sender ? await findAuthUserByGithubId(event.sender.id) : null;
     const organization = await ensureGithubOrganization({
@@ -122,6 +128,10 @@ async function handleInstallation(event: InstallationEvent): Promise<WebhookHand
       config: installationConfig(event),
       enabled: event.action !== 'suspend',
     });
+    if (ownerUserId && event.installation.account.type === 'User') {
+      personalOrganizationOwnerId = ownerUserId;
+      retainedOrganizationId = organization.id;
+    }
   } else {
     await updateIntegration(integration.id, {
       name: integration.name,
@@ -134,6 +144,9 @@ async function handleInstallation(event: InstallationEvent): Promise<WebhookHand
     integration,
     (event.repositories ?? event.repositories_added ?? []).map(ownerAndName),
   );
+  if (personalOrganizationOwnerId && retainedOrganizationId) {
+    await deletePristinePersonalOrganization(personalOrganizationOwnerId, retainedOrganizationId);
+  }
   for (const repository of event.repositories_removed ?? []) {
     const row = await getRepositoryByExternalId(integration.id, String(repository.id));
     if (row) await removeRepositories([row.id]);
