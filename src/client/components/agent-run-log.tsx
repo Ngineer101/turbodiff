@@ -12,6 +12,7 @@ const KIND_LABEL = {
   plan_refine: 'Plan refine',
   generate: 'Generate',
   verify: 'Verify',
+  review: 'Review',
   fix: 'Fix',
   chat: 'Chat',
   automation: 'Automation',

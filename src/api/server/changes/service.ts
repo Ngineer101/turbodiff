@@ -1,3 +1,6 @@
+import { changeVerification } from '../../../application/factory/verification-view.ts';
+import { resumeDeliveryRun } from '../../../data/delivery-lifecycle.ts';
+import { repositoryPolicy } from '../../../domain/repository-policy.ts';
 import { listChangeChecks } from '../../../data/change-checks.ts';
 import { reviewArtifactSchema } from '../../../artifacts/review.ts';
 import { Context, Effect, Layer } from 'effect';
@@ -111,6 +114,9 @@ const serialize = async (
   origin: change.origin,
   status: change.status,
   currentRevision: serializeRevision(revision, await Promise.all(outcomes.map(reviewDetails))),
+  verification: revision
+    ? await changeVerification(change.id, revision.id, change.organization_id)
+    : null,
   checks: revision
     ? (await listChangeChecks(revision.id)).map((check) => ({
         name: check.name,
@@ -140,6 +146,10 @@ export interface ChangeOperations {
   ) => Effect.Effect<typeof ChangeCollection.Type, DomainError>;
   readonly get: (user: CurrentUserIdentity, id: number) => Effect.Effect<Change, DomainError>;
   readonly createReviewRun: (
+    user: CurrentUserIdentity,
+    id: number,
+  ) => Effect.Effect<{ factoryRunId: number; stageRunId: number; status: 'queued' }, DomainError>;
+  readonly resumeDelivery: (
     user: CurrentUserIdentity,
     id: number,
   ) => Effect.Effect<{ factoryRunId: number; stageRunId: number; status: 'queued' }, DomainError>;
@@ -245,6 +255,35 @@ export const ChangeServiceLive = Layer.effect(
           return {
             factoryRunId: started.factoryRun.id,
             stageRunId: started.stageRun.id,
+            status: 'queued' as const,
+          };
+        }),
+      resumeDelivery: (user, id) =>
+        Effect.gen(function* () {
+          const change = yield* owned(user, id);
+          yield* requireOrganizationWrite(user, change.organization_id);
+          const repository = yield* dataEffect(() => getRepository(change.repository_id));
+          if (
+            !change.delivery_id ||
+            !['factory', 'automation'].includes(change.origin) ||
+            change.status !== 'open' ||
+            !repository?.enabled ||
+            !repositoryPolicy(repository.settings).verify
+          )
+            return yield* Effect.fail(
+              conflict('Automatic delivery is unavailable for this change'),
+            );
+          const stage = yield* dataEffect(() => resumeDeliveryRun(change));
+          yield* dataEffect(() =>
+            dependencies.enqueueFactory({
+              kind: 'run_factory',
+              factoryRunId: stage.factory_run_id,
+              stageRunId: stage.id,
+            }),
+          );
+          return {
+            factoryRunId: stage.factory_run_id,
+            stageRunId: stage.id,
             status: 'queued' as const,
           };
         }),

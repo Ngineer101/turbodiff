@@ -52,6 +52,21 @@ export const Change = Schema.Struct({
   origin: Schema.Literal('human', 'factory', 'automation', 'imported'),
   status: ChangeStatus,
   currentRevision: Schema.NullOr(ChangeRevision),
+  verification: Schema.NullOr(
+    Schema.Struct({
+      artifactId: PositiveInt,
+      headSha: Schema.String,
+      verdict: Schema.Literal('passed', 'failed', 'inconclusive'),
+      summary: Schema.String,
+      criteria: Schema.Array(
+        Schema.Struct({
+          text: Schema.String,
+          verdict: Schema.Literal('passed', 'failed', 'not_verified'),
+          evidence: Schema.String,
+        }),
+      ),
+    }),
+  ),
   checks: Schema.Array(
     Schema.Struct({
       name: Schema.String,
@@ -156,6 +171,11 @@ export const ChangesApi = HttpApiGroup.make('changes')
   )
   .add(
     HttpApiEndpoint.post('createReviewRun')`/changes/${idParam('changeId')}/review-runs`
+      .addSuccess(ReviewRunAccepted, { status: 202 })
+      .addError(DomainError),
+  )
+  .add(
+    HttpApiEndpoint.post('resumeDelivery')`/changes/${idParam('changeId')}/delivery-resumptions`
       .addSuccess(ReviewRunAccepted, { status: 202 })
       .addError(DomainError),
   )

@@ -18,7 +18,12 @@ import {
   type AgentRow,
 } from '../../../data/agents.ts';
 import { getArtifact } from '../../../data/artifacts.ts';
-import { getChange, latestChangeRevision, recordReviewOutcome } from '../../../data/changes.ts';
+import {
+  getChange,
+  getChangeRevision,
+  latestChangeRevision,
+  recordReviewOutcome,
+} from '../../../data/changes.ts';
 import { type FactoryRunRow, type StageRunRow } from '../../../data/execution.ts';
 import { listRepositoryIntegrations } from '../../../data/integrations.ts';
 import { getRepository } from '../../../data/repositories.ts';
@@ -104,6 +109,7 @@ async function invokeReviewer(input: {
 export async function executeReviewStage(
   factoryRun: FactoryRunRow,
   stageRun: StageRunRow,
+  expectedRevisionId?: number,
 ): Promise<{ revisionId: number; agentRunIds: number[] }> {
   if (!factoryRun.change_id) throw new Error('review run has no change');
   const change = await getChange(factoryRun.change_id);
@@ -114,7 +120,11 @@ export async function executeReviewStage(
   if (!repository?.enabled || repository.organization_id !== factoryRun.organization_id) {
     throw new Error('review repository is missing or disabled');
   }
-  let revision = await latestChangeRevision(change.id);
+  let revision = expectedRevisionId
+    ? await getChangeRevision(expectedRevisionId)
+    : await latestChangeRevision(change.id);
+  if (revision && revision.change_id !== change.id)
+    throw new Error('Review revision scope mismatch');
   if (!revision && repository.source_provider === 'github') {
     revision = await syncGithubChangeRevision(repository, change);
   }
@@ -152,6 +162,9 @@ export async function executeReviewStage(
       base: change.source_ref,
     });
   }
+  const actualHead = await sandbox.exec(`git -C ${workDir} rev-parse HEAD`);
+  if (!actualHead.success || actualHead.stdout.trim() !== revision.head_sha)
+    throw new Error('Review checkout does not match its immutable revision');
   const patchFile = `/workspace/review-stage-${stageRun.id}.patch`;
   await sandbox.writeFile(patchFile, revisionArtifact.patch);
 
