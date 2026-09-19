@@ -1,3 +1,4 @@
+import { repositoryPolicy } from '../../../domain/repository-policy.ts';
 import { Context, Effect, Layer } from 'effect';
 import {
   getAgent,
@@ -16,7 +17,6 @@ import {
   listRepositories,
   updateRepository,
   type RepositoryRow,
-  type RepositorySettings as StoredRepositorySettings,
 } from '../../../data/repositories.ts';
 import {
   getSkill,
@@ -44,7 +44,7 @@ import {
   readTreeArtifacts,
   saveFileArtifacts,
 } from '../../../integrations/source-code/artifacts.ts';
-import { isJsonObject, isBoolean, isString, type JsonObject } from '../../../shared/json.ts';
+import { isJsonObject, type JsonObject } from '../../../shared/json.ts';
 import { PROJECT_SEGMENT } from '../../../shared/projects.ts';
 import type { CurrentUserIdentity } from '../../contract/auth.ts';
 import type {
@@ -69,10 +69,6 @@ import {
   type DomainError,
 } from '../../contract/errors.ts';
 import { requireOrganizationWrite } from '../authorization.ts';
-
-const DEFAULT_SETTINGS: Required<Pick<StoredRepositorySettings, 'reviewOnPush'>> = {
-  reviewOnPush: false,
-};
 
 const dataEffect = <A>(run: () => Promise<A>): Effect.Effect<A, DomainError> =>
   Effect.tryPromise({
@@ -103,23 +99,15 @@ const githubInstallationId = (repository: RepositoryRow): Effect.Effect<number, 
     : Effect.fail(internalServerError());
 };
 
-const settingsOf = (repository: RepositoryRow): StoredRepositorySettings => {
-  const value = isJsonObject(repository.settings) ? repository.settings : {};
-  return {
-    reviewOnPush: isBoolean(value.reviewOnPush)
-      ? value.reviewOnPush
-      : DEFAULT_SETTINGS.reviewOnPush,
-    checkCommand: isString(value.checkCommand) ? value.checkCommand : undefined,
-  };
-};
-
 const serializeSettings = (repository: RepositoryRow): RepositorySettings => {
-  const settings = settingsOf(repository);
+  const settings = repositoryPolicy(repository.settings);
   return {
     id: repository.id,
     enabled: repository.enabled,
-    reviewOnPush: settings.reviewOnPush ?? false,
-    checkCommand: settings.checkCommand ?? null,
+    reviewOnPush: settings.reviewOnPush,
+    processProfile: settings.processProfile,
+    blockingReviews: settings.blockingReviews,
+    checkCommand: settings.checkCommand,
   };
 };
 
@@ -288,6 +276,8 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
       if (!PROJECT_SEGMENT.test(owner) || !PROJECT_SEGMENT.test(name)) {
         return yield* Effect.fail(badRequest('Repository owner or name is invalid'));
       }
+      if (input.processProfile === 'full_delivery')
+        return yield* Effect.fail(badRequest('Automatic merge requires a GitHub repository'));
       const project = yield* providerEffect(() =>
         createArtifactsProject({
           organizationId: input.organizationId,
@@ -295,6 +285,7 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
           owner,
           name,
           description: input.description,
+          processProfile: input.processProfile,
         }),
       );
       return {
@@ -430,12 +421,23 @@ export const RepositoryServiceLive = Layer.succeed(RepositoryService, {
     Effect.gen(function* () {
       const repository = yield* owned(user, id);
       yield* requireOrganizationWrite(user, repository.organization_id);
-      const current = settingsOf(repository);
-      const settings: JsonObject = {
-        reviewOnPush: input.reviewOnPush ?? current.reviewOnPush ?? false,
-      };
-      const checkCommand = input.checkCommand ?? current.checkCommand;
+      const current = repositoryPolicy(repository.settings);
+      const stored = repository.settings;
+      const settings: JsonObject = {};
+      if (isJsonObject(stored)) Object.assign(settings, stored);
+      Object.assign(settings, {
+        reviewOnPush: input.reviewOnPush ?? current.reviewOnPush,
+        processProfile: input.processProfile ?? current.processProfile,
+        blockingReviews: input.blockingReviews ?? current.blockingReviews,
+      });
+      const checkCommand =
+        input.checkCommand === undefined ? current.checkCommand : input.checkCommand;
       if (checkCommand !== undefined) settings.checkCommand = checkCommand;
+      if (settings.processProfile === 'full_delivery' && repository.source_provider !== 'github') {
+        return yield* Effect.fail(
+          badRequest('Automatic merge is currently supported for GitHub repositories'),
+        );
+      }
       yield* dataEffect(() =>
         updateRepository(id, {
           enabled: input.enabled,

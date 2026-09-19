@@ -41,14 +41,19 @@ export function ProjectNewPage() {
   const [owner, setOwner] = useState(me.login?.toLowerCase() ?? '');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [processProfile, setProcessProfile] = useState<ApiProcessProfile>('review_and_repair');
+  const [processProfile, setProcessProfile] = useState<ApiProcessProfile>('assisted_delivery');
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<ApiCreatedProject | null>(null);
   const selectedProfile = PROCESS_PROFILES.find((p) => p.value === processProfile);
 
   const create = useMutation({
     mutationFn: () =>
-      createProject(owner.trim().toLowerCase(), name.trim(), description.trim() || undefined),
+      createProject(
+        owner.trim().toLowerCase(),
+        name.trim(),
+        description.trim() || undefined,
+        processProfile,
+      ),
     onSuccess: (project) => {
       toast.success('Project created');
       setCreated(project);
@@ -126,7 +131,7 @@ export function ProjectNewPage() {
                   if (next) setProcessProfile(next.value);
                 }}
               >
-                {PROCESS_PROFILES.map((p) => (
+                {PROCESS_PROFILES.filter((p) => p.value !== 'full_delivery').map((p) => (
                   <option key={p.value} value={p.value}>
                     {p.label}
                   </option>

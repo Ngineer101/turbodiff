@@ -1,15 +1,7 @@
 // Presentation models consumed by the existing SPA. The server contract lives
 // in src/api/contract and is adapted to these shapes by client/lib/backend.ts.
 
-export type ApiProcessProfile =
-  | 'review_on_demand'
-  | 'automatic_review'
-  | 'review_and_repair'
-  | 'idea_to_pr'
-  | 'assisted_delivery'
-  | 'full_delivery'
-  | 'native_turnkey'
-  | 'legacy_factory';
+export type ApiProcessProfile = import('../domain/repository-policy.ts').ProcessProfile;
 
 // One session (generation, review, fix, or verify run) inside a shipped
 // feature's usage accordion.
