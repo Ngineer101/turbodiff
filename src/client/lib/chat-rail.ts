@@ -28,6 +28,20 @@ export function clampRailWidth(width: number): number {
 // lands.
 export const CHAT_TURN_PENDING = new Set(['queued', 'running']);
 
+export interface ChatFollowUp {
+  id: number;
+  text: string;
+}
+
+export function chatFollowUps(
+  state: ChatFollowUp[],
+  action: { type: 'enqueue'; message: ChatFollowUp } | { type: 'remove'; id: number },
+): ChatFollowUp[] {
+  return action.type === 'enqueue'
+    ? [...state, action.message]
+    : state.filter((message) => message.id !== action.id);
+}
+
 export function pendingTurn(messages: ApiChatMessage[]): ApiChatMessage | null {
   return messages.find((m) => m.role === 'user' && CHAT_TURN_PENDING.has(m.status)) ?? null;
 }

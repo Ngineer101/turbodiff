@@ -236,6 +236,66 @@ export function pushHeadCommand(remote: WorkspaceRemote, dir: string): string {
   return `git ${remote.configFlags} -C ${dir} push "${remote.authUrl}" HEAD:"$PUSH_BRANCH"`;
 }
 
+// A follow-up must extend exactly the head it read. The ancestry check keeps
+// this a fast-forward update; the explicit lease also catches branch rewinds,
+// deletion, and replacement while the agent was working.
+export function pushFollowUpCommand(remote: WorkspaceRemote, dir: string): string {
+  assertWorkspacePath(dir, 'dir');
+  return (
+    `git -C ${dir} merge-base --is-ancestor "$EXPECTED_HEAD" HEAD && ` +
+    `git ${remote.configFlags} -C ${dir} push ` +
+    `--force-with-lease="refs/heads/$PUSH_BRANCH:$EXPECTED_HEAD" ` +
+    `"${remote.authUrl}" HEAD:"$PUSH_BRANCH"`
+  );
+}
+
+export async function captureChangeRevision(
+  sandbox: Pick<Sandbox, 'exec'>,
+  dir: string,
+  remote: WorkspaceRemote,
+  sourceRef: string,
+  targetRef: string,
+): Promise<{ baseSha: string; headSha: string; patch: string }> {
+  assertWorkspacePath(dir, 'dir');
+  assertGitRef(sourceRef, 'source branch');
+  assertGitRef(targetRef, 'target branch');
+  const scrub = (value: string) => redactSecrets(value, [remote.token]).slice(-500);
+  const fetched = await sandbox.exec(
+    `git ${remote.configFlags} -C ${dir} fetch --depth 50 "${remote.authUrl}" "$TARGET_REF"`,
+    { env: { ...remote.env, TARGET_REF: targetRef }, timeout: 5 * 60_000 },
+  );
+  if (!fetched.success)
+    throw new Error(`Could not read the target branch: ${scrub(fetched.stderr)}`);
+  const base = await sandbox.exec(`git -C ${dir} rev-parse FETCH_HEAD`);
+  const head = await sandbox.exec(`git -C ${dir} rev-parse HEAD`);
+  if (!base.success || !head.success) throw new Error('Could not read change revision refs');
+  const baseSha = base.stdout.trim();
+  const mergeBase = await sandbox.exec(`git -C ${dir} merge-base "$TARGET_SHA" HEAD`, {
+    env: { TARGET_SHA: baseSha },
+  });
+  if (!mergeBase.success) {
+    const shallow = await sandbox.exec(`git -C ${dir} rev-parse --is-shallow-repository`);
+    if (shallow.success && shallow.stdout.trim() === 'true') {
+      const history = await sandbox.exec(
+        `git ${remote.configFlags} -C ${dir} fetch --unshallow "${remote.authUrl}" "$SOURCE_REF" "$TARGET_REF"`,
+        {
+          env: { ...remote.env, SOURCE_REF: sourceRef, TARGET_REF: targetRef },
+          timeout: 5 * 60_000,
+        },
+      );
+      if (!history.success)
+        throw new Error(`Could not fetch change history: ${scrub(history.stderr)}`);
+    }
+  }
+  // FETCH_HEAD changes during deepening, so diff against the pinned target SHA.
+  const diff = await sandbox.exec(`git -C ${dir} diff --no-ext-diff "$TARGET_SHA"...HEAD`, {
+    env: { TARGET_SHA: baseSha },
+  });
+  if (!diff.success)
+    throw new Error(`Could not capture the updated change revision: ${scrub(diff.stderr)}`);
+  return { baseSha, headSha: head.stdout.trim(), patch: diff.stdout };
+}
+
 export async function worktreeChanged(sandbox: Sandbox, workDir: string): Promise<boolean> {
   const status = await sandbox.exec(`git -C ${workDir} status --porcelain`);
   return Boolean(status.stdout.trim());

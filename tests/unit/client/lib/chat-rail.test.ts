@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vite-plus/test';
 import type { ApiChatMessage } from '../../../../src/client/types.ts';
 import {
+  chatFollowUps,
   agoShort,
   chatLedger,
   clampRailWidth,
@@ -19,6 +20,17 @@ import {
   unreadReplies,
   withFileContext,
 } from '../../../../src/client/lib/chat-rail.ts';
+
+it('keeps multiple follow-ups in order and removes only the sent or edited message', () => {
+  let queue = chatFollowUps([], { type: 'enqueue', message: { id: 1, text: 'First' } });
+  queue = chatFollowUps(queue, { type: 'enqueue', message: { id: 2, text: 'Second' } });
+  queue = chatFollowUps(queue, { type: 'enqueue', message: { id: 3, text: 'Third' } });
+  expect(queue.map((message) => message.text)).toEqual(['First', 'Second', 'Third']);
+  const first = queue[0];
+  queue = chatFollowUps(queue, { type: 'remove', id: first.id });
+  queue = chatFollowUps(queue, { type: 'remove', id: 3 });
+  expect(queue).toEqual([{ id: 2, text: 'Second' }]);
+});
 
 const NOW = Date.parse('2026-09-03T12:00:00Z');
 

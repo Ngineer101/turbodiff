@@ -9,7 +9,11 @@ import {
 } from '../../../data/work.ts';
 import { getArtifact } from '../../../data/artifacts.ts';
 import { listChangesForDelivery } from '../../../data/changes.ts';
-import { listDeliveryMessages, type DeliveryMessageWithRun } from '../../../data/deliveries.ts';
+import {
+  createDeliveryMessage,
+  listDeliveryMessages,
+  type DeliveryMessageWithRun,
+} from '../../../data/deliveries.ts';
 import { sendDeliveryChatMessage } from '../../../application/delivery-chat.ts';
 import { createFactoryRunWithStage, listFactoryRuns } from '../../../data/execution.ts';
 import { DELIVERY_FLOW } from '../../../application/factory/flows.ts';
@@ -58,6 +62,11 @@ export interface DeliveryOperations {
     id: number,
   ) => Effect.Effect<{ items: DeliveryMessage[] }, DomainError>;
   readonly createMessage: (
+    user: CurrentUserIdentity,
+    id: number,
+    body: string,
+  ) => Effect.Effect<DeliveryMessage, DomainError>;
+  readonly createChatTurn: (
     user: CurrentUserIdentity,
     id: number,
     body: string,
@@ -154,6 +163,21 @@ export const DeliveryServiceLive = Layer.effect(
           return { items: items.map(serializeMessage) };
         }),
       createMessage: (user, id, rawBody) =>
+        Effect.gen(function* () {
+          const delivery = yield* owned(user, id);
+          const body = rawBody.trim();
+          if (!body) return yield* Effect.fail(badRequest('Message body is required'));
+          const message = yield* dataEffect(() =>
+            createDeliveryMessage({
+              delivery,
+              authorUserId: user.session.authUserId,
+              role: 'user',
+              body,
+            }),
+          );
+          return serializeMessage({ ...message, status: null, error: null });
+        }),
+      createChatTurn: (user, id, rawBody) =>
         Effect.gen(function* () {
           const delivery = yield* owned(user, id);
           yield* requireOrganizationWrite(user, delivery.organization_id);

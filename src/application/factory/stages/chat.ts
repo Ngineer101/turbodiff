@@ -20,7 +20,8 @@ import { redactSecrets } from '../../../integrations/agent-runtime/redaction.ts'
 import {
   assertGitRef,
   prepareFreshClone,
-  pushHeadCommand,
+  pushFollowUpCommand,
+  captureChangeRevision,
 } from '../../../integrations/agent-runtime/repository-workspace.ts';
 import { generationSandbox } from '../../../integrations/agent-runtime/sandbox.ts';
 import { mountSkills } from '../../../integrations/agent-runtime/skills.ts';
@@ -102,6 +103,9 @@ export async function executeChatStage(
   assertGitRef(change.target_ref, 'target branch');
   try {
     await prepareFreshClone({ sandbox, cloneDir: workDir, remote, branch: change.source_ref });
+    const originalHead = await sandbox.exec(`git -C ${workDir} rev-parse HEAD`);
+    if (!originalHead.success) throw new Error('Could not read the source branch head');
+    const expectedHead = originalHead.stdout.trim();
     const [skills, integrations, history] = await Promise.all([
       Promise.all([listSkillsForRepository(repository.id), listSkillsForAgent(agent.id)]),
       listRepositoryIntegrations(repository.id),
@@ -156,13 +160,6 @@ export async function executeChatStage(
     const artifact = tracked.artifact;
     let commitSha: string | null = null;
     if (artifact.kind === 'repository-change') {
-      if (check) {
-        const checked = await runCheckCommand(sandbox, workDir, check, scrub, 12 * 60_000);
-        if (!checked.ok)
-          throw new Error(
-            `Repository check failed; no changes were pushed: ${checked.output.slice(-1_000)}`,
-          );
-      }
       const committed = await sandbox.exec(
         `git -C ${workDir} add -A && git -C ${workDir} commit -m "$COMMIT_MESSAGE"`,
         {
@@ -172,22 +169,22 @@ export async function executeChatStage(
       );
       if (!committed.success)
         throw new Error(`Git commit failed: ${scrub(committed.stderr).slice(-500)}`);
-      const fetched = await sandbox.exec(
-        `git ${remote.configFlags} -C ${workDir} fetch --depth 50 "${remote.authUrl}" "$TARGET_REF"`,
-        {
-          env: { ...remote.env, TARGET_REF: change.target_ref },
-          timeout: 5 * 60_000,
-        },
+      if (check) {
+        const checked = await runCheckCommand(sandbox, workDir, check, scrub, 12 * 60_000);
+        if (!checked.ok)
+          throw new Error(
+            `Repository check failed; no changes were pushed: ${checked.output.slice(-1_000)}`,
+          );
+      }
+      const captured = await captureChangeRevision(
+        sandbox,
+        workDir,
+        remote,
+        change.source_ref,
+        change.target_ref,
       );
-      if (!fetched.success)
-        throw new Error(`Could not read the target branch: ${scrub(fetched.stderr).slice(-500)}`);
-      const base = await sandbox.exec(`git -C ${workDir} rev-parse FETCH_HEAD`);
-      const head = await sandbox.exec(`git -C ${workDir} rev-parse HEAD`);
-      const diff = await sandbox.exec(`git -C ${workDir} diff --no-ext-diff FETCH_HEAD...HEAD`);
-      if (!base.success || !head.success || !diff.success)
-        throw new Error('Could not capture the updated change revision');
-      commitSha = head.stdout.trim();
-      const snapshot = buildReviewDiffSnapshot(diff.stdout);
+      commitSha = captured.headSha;
+      const snapshot = buildReviewDiffSnapshot(captured.patch);
       const revision = await persistJsonArtifact({
         organizationId: delivery.organization_id,
         kind: 'change_revision',
@@ -200,7 +197,7 @@ export async function executeChatStage(
           description: artifact.summary,
           base: change.target_ref,
           head: change.source_ref,
-          baseSha: base.stdout.trim(),
+          baseSha: captured.baseSha,
           headSha: commitSha,
           files: snapshot.files,
           patch: snapshot.diff,
@@ -208,8 +205,8 @@ export async function executeChatStage(
       });
       await writableDelivery(factoryRun);
       await runtime.assertWritable(repository, change);
-      const pushed = await sandbox.exec(pushHeadCommand(remote, workDir), {
-        env: { ...remote.env, PUSH_BRANCH: change.source_ref },
+      const pushed = await sandbox.exec(pushFollowUpCommand(remote, workDir), {
+        env: { ...remote.env, PUSH_BRANCH: change.source_ref, EXPECTED_HEAD: expectedHead },
         timeout: 5 * 60_000,
       });
       if (!pushed.success)
@@ -218,7 +215,7 @@ export async function executeChatStage(
         );
       await createChangeRevision({
         change,
-        baseSha: base.stdout.trim(),
+        baseSha: captured.baseSha,
         headSha: commitSha,
         artifactId: revision.id,
       });

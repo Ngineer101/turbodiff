@@ -21,6 +21,11 @@ export const DeliveriesHandlers = HttpApiBuilder.group(
           service.createMessage(user, path.deliveryId, payload.body),
         ),
       )
+      .handle('createDeliveryChatTurn', ({ path, payload }) =>
+        Effect.flatMap(CurrentUser, (user) =>
+          service.createChatTurn(user, path.deliveryId, payload.body),
+        ),
+      )
       .handle('startDeliveryRun', ({ path }) =>
         Effect.flatMap(CurrentUser, (user) => service.startRun(user, path.deliveryId)),
       )

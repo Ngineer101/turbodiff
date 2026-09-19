@@ -529,6 +529,11 @@ export const sendDeliveryMessage = (id: number, body: string) =>
     client.deliveries.createDeliveryMessage({ path: { deliveryId: id }, payload: { body } }),
   );
 
+export const sendDeliveryChatTurn = (id: number, body: string) =>
+  call((client) =>
+    client.deliveries.createDeliveryChatTurn({ path: { deliveryId: id }, payload: { body } }),
+  );
+
 export async function getAgents(): Promise<ApiAgentsList> {
   const [me, agents] = await Promise.all([
     getCurrentUser(),

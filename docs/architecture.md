@@ -165,17 +165,22 @@ A GitHub installation webhook creates or updates a deterministic organization an
 
 ## Factory execution and durability
 
-Delivery chat uses the versioned `chat@1` flow and its `respond` stage. Accepting a
-message atomically stores the user message and a queued factory run under a delivery
-row lock. Messages reference that run through an organization-aware foreign key;
+Delivery chat uses the versioned `chat@1` flow and its `respond` stage. Only
+`POST /deliveries/:id/chat-turns` accepts executable chat submissions, atomically
+storing the user message and a queued factory run under a delivery row lock.
+`POST /deliveries/:id/messages` remains save-only for diff comments and acceptance
+feedback, including submissions by organization members. Messages reference that run through an organization-aware foreign key;
 status and errors come from the factory/stage lifecycle rather than a separate chat
 state machine. Queue failure leaves the durable stage available to normal recovery.
 
 The stage reuses the implementer and immutable input/output/log artifacts, checks
 out the existing change's current source branch, and saves either a reply without
 an edit or a checked commit and immutable change revision. It rechecks write access
-and open-change state before publishing and uses a normal fast-forward push. Chat
-failures do not change the original delivery's completed status. An interrupted
+and open-change state before publishing. The push must extend the original source
+head and carries an explicit lease, protecting both concurrent commits and rewinds.
+Agent edits are committed before repository checks so check-generated files stay
+out of the push. Revision capture fetches full history when a shallow checkout
+contains no merge base. Chat failures do not change the original delivery's completed status. An interrupted
 running chat is failed visibly instead of replaying a potentially published write;
 a new user turn starts from the remote branch. Unlinked historical messages remain
 saved context and are never executed automatically.

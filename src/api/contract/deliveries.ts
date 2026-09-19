@@ -101,6 +101,12 @@ export const DeliveriesApi = HttpApiGroup.make('deliveries')
       .addError(DomainError),
   )
   .add(
+    HttpApiEndpoint.post('createDeliveryChatTurn')`/deliveries/${deliveryId}/chat-turns`
+      .setPayload(CreateDeliveryMessage)
+      .addSuccess(DeliveryMessage, { status: 202 })
+      .addError(DomainError),
+  )
+  .add(
     HttpApiEndpoint.post('startDeliveryRun')`/deliveries/${deliveryId}/factory-runs`
       .setPayload(StartDeliveryRun)
       .addSuccess(DeliveryRunAccepted, { status: 202 })
