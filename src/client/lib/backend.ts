@@ -146,7 +146,7 @@ async function workItemPlan(
     acceptance: artifactPlan.acceptance,
     plan: artifactPlan.plan,
     summary: artifactPlan.summary,
-    archived: workItem.status === 'completed' || workItem.status === 'cancelled',
+    archived: workItem.archived,
     model: selectedModel || defaultModel,
     attachments: workItem.attachments.map((attachment) => ({ name: attachment.name })),
     repos: workItem.targets.map((target) => {
@@ -177,8 +177,8 @@ async function workItemPlan(
 }
 
 export interface BoardPage {
-  activeBefore?: number;
-  historyBefore?: number;
+  activeBefore?: string;
+  historyBefore?: string;
 }
 
 export async function getBoard(page: BoardPage = {}): Promise<ApiBoard> {
@@ -193,7 +193,7 @@ export async function getBoard(page: BoardPage = {}): Promise<ApiBoard> {
     activeNextBefore: board.activeNextBefore,
     historyNextBefore: board.historyNextBefore,
     todos: board.items
-      .filter((item) => item.status === 'open')
+      .filter((item) => item.status === 'open' && item.column === 'in_progress')
       .map((item) => ({
         id: item.id,
         organization_id: item.organizationId,
@@ -207,19 +207,21 @@ export async function getBoard(page: BoardPage = {}): Promise<ApiBoard> {
         })),
       })),
     tasks: board.items
-      .filter((item) => item.status !== 'open')
+      .filter((item) => item.status !== 'open' || item.column === 'done')
       .map((item) => ({
         id: item.id,
         title: item.title,
         created_at: item.createdAt,
         error: null,
-        archived: item.status === 'completed',
+        archived: false,
         status:
-          item.status === 'planning'
-            ? 'analyzing'
-            : item.status === 'awaiting_approval'
-              ? 'plan_ready'
-              : 'approved',
+          item.column === 'done'
+            ? 'completed'
+            : item.status === 'planning'
+              ? 'analyzing'
+              : item.status === 'awaiting_approval'
+                ? 'plan_ready'
+                : 'approved',
         repos: item.targets.map((target) => ({
           repository_id: target.repositoryId,
           owner: target.owner,
@@ -989,7 +991,7 @@ export const archiveWorkItem = (id: number, archived: boolean) =>
   call((client) =>
     client.workItems.updateWorkItem({
       path: { workItemId: id },
-      payload: { status: archived ? 'completed' : 'open' },
+      payload: { archived },
     }),
   );
 

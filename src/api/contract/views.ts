@@ -27,9 +27,22 @@ export const DeliveryView = Schema.Struct({
 });
 export type DeliveryView = typeof DeliveryView.Type;
 const PositiveInt = Schema.Int.pipe(Schema.positive());
+const BoardCursor = Schema.String.pipe(
+  Schema.pattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z\|[1-9]\d*$/),
+  Schema.filter((value) => {
+    const [date, id] = value.split('|');
+    const timestamp = Date.parse(date!);
+    return (
+      Number.isFinite(timestamp) &&
+      Number(date!.slice(0, 4)) > 0 &&
+      new Date(timestamp).toISOString().slice(0, 19) === date!.slice(0, 19) &&
+      Number.isSafeInteger(Number(id))
+    );
+  }),
+);
 export const BoardCursors = Schema.Struct({
-  activeBefore: Schema.optional(Schema.NumberFromString.pipe(Schema.int(), Schema.positive())),
-  historyBefore: Schema.optional(Schema.NumberFromString.pipe(Schema.int(), Schema.positive())),
+  activeBefore: Schema.optional(BoardCursor),
+  historyBefore: Schema.optional(BoardCursor),
 });
 export const BoardView = Schema.Struct({
   items: Schema.Array(
@@ -47,6 +60,7 @@ export const BoardView = Schema.Struct({
         'completed',
         'cancelled',
       ),
+      column: Schema.Literal('in_progress', 'done'),
       createdAt: Schema.String,
       targets: Schema.Array(
         Schema.Struct({
@@ -62,8 +76,8 @@ export const BoardView = Schema.Struct({
       ),
     }),
   ),
-  activeNextBefore: Schema.NullOr(PositiveInt),
-  historyNextBefore: Schema.NullOr(PositiveInt),
+  activeNextBefore: Schema.NullOr(BoardCursor),
+  historyNextBefore: Schema.NullOr(BoardCursor),
 });
 export type BoardView = typeof BoardView.Type;
 export const ViewsApi = HttpApiGroup.make('views')

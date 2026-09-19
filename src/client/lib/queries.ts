@@ -93,7 +93,7 @@ export const meQuery = queryOptions({
   },
 });
 
-export const boardPageQuery = (page: { activeBefore?: number; historyBefore?: number } = {}) =>
+export const boardPageQuery = (page: { activeBefore?: string; historyBefore?: string } = {}) =>
   queryOptions({
     queryKey: page.activeBefore || page.historyBefore ? ['board', page] : ['board'],
     queryFn: () => getBoard(page),

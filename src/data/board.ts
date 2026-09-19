@@ -12,6 +12,8 @@ interface BoardItemRow {
   notes: string | null;
   status: WorkItemStatus;
   created_at: string;
+  cursor: string;
+  board_column: 'in_progress' | 'done';
 }
 interface BoardTargetRow {
   work_item_id: number;
@@ -26,8 +28,8 @@ interface BoardTargetRow {
 }
 
 export interface BoardCursors {
-  activeBefore?: number;
-  historyBefore?: number;
+  activeBefore?: string;
+  historyBefore?: string;
 }
 
 /** Two bounded, tenant-scoped reads. The board never hydrates runs or artifact bodies. */
@@ -39,22 +41,45 @@ export async function readBoardPage(
   if (!organizationIds.length)
     return { items: [], activeNextBefore: null, historyNextBefore: null };
   const organizations = sqlValueList([...organizationIds]);
+  const [activeDate, activeId] = cursors.activeBefore?.split('|') ?? [];
+  const [historyDate, historyId] = cursors.historyBefore?.split('|') ?? [];
   const rows = await read<BoardItemRow>(sql`
-    (SELECT id, organization_id, title, CASE WHEN status = 'open' THEN NULLIF(description, title) ELSE NULL END AS notes,
-       status, created_at
-     FROM app.work_items
-     WHERE organization_id IN (${organizations}) AND status NOT IN ('completed', 'cancelled')
-       AND (${cursors.activeBefore ?? null}::bigint IS NULL OR id < ${cursors.activeBefore ?? null})
-     ORDER BY id DESC LIMIT ${ACTIVE_PAGE_SIZE + 1})
+    WITH visible AS NOT MATERIALIZED (
+      SELECT wi.id, wi.organization_id, wi.title,
+        CASE WHEN wi.status = 'open' THEN NULLIF(wi.description, wi.title) ELSE NULL END AS notes,
+        wi.status, wi.created_at,
+        to_char(wi.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') || '|' || wi.id AS cursor,
+        CASE WHEN wi.status = 'completed' OR (
+          EXISTS (SELECT 1 FROM app.work_item_targets t
+            WHERE t.work_item_id = wi.id AND t.organization_id = wi.organization_id)
+          AND NOT EXISTS (
+            SELECT 1 FROM app.work_item_targets t
+            LEFT JOIN app.deliveries d ON d.work_item_id = t.work_item_id
+              AND d.repository_id = t.repository_id AND d.organization_id = t.organization_id
+            LEFT JOIN LATERAL (
+              SELECT status FROM app.changes
+              WHERE delivery_id = d.id AND organization_id = wi.organization_id
+              ORDER BY updated_at DESC, id DESC LIMIT 1
+            ) c ON true
+            WHERE t.work_item_id = wi.id AND t.organization_id = wi.organization_id
+              AND NOT (COALESCE(d.status = 'completed', false) OR COALESCE(c.status = 'merged', false))
+          )
+        ) THEN 'done' ELSE 'in_progress' END AS board_column
+      FROM app.work_items wi
+      WHERE wi.organization_id IN (${organizations}) AND wi.status <> 'cancelled' AND NOT wi.archived
+    )
+    (SELECT * FROM visible WHERE board_column = 'in_progress'
+      AND (${activeDate ?? null}::timestamptz IS NULL OR (created_at, id) < (${activeDate ?? null}::timestamptz, ${activeId ?? null}::bigint))
+      ORDER BY created_at DESC, id DESC LIMIT ${ACTIVE_PAGE_SIZE + 1})
     UNION ALL
-    (SELECT id, organization_id, title, NULL AS notes, status, created_at
-     FROM app.work_items
-     WHERE organization_id IN (${organizations}) AND status = 'completed'
-       AND (${cursors.historyBefore ?? null}::bigint IS NULL OR id < ${cursors.historyBefore ?? null})
-     ORDER BY id DESC LIMIT ${HISTORY_PAGE_SIZE + 1})
+    (SELECT * FROM visible WHERE board_column = 'done'
+      AND (${historyDate ?? null}::timestamptz IS NULL OR (created_at, id) < (${historyDate ?? null}::timestamptz, ${historyId ?? null}::bigint))
+      ORDER BY created_at DESC, id DESC LIMIT ${HISTORY_PAGE_SIZE + 1})
   `);
-  const active = rows.filter((row) => row.status !== 'completed').sort((a, b) => b.id - a.id);
-  const history = rows.filter((row) => row.status === 'completed').sort((a, b) => b.id - a.id);
+  const newestFirst = (a: BoardItemRow, b: BoardItemRow) =>
+    b.cursor.split('|')[0]!.localeCompare(a.cursor.split('|')[0]!) || b.id - a.id;
+  const active = rows.filter((row) => row.board_column === 'in_progress').sort(newestFirst);
+  const history = rows.filter((row) => row.board_column === 'done').sort(newestFirst);
   const items = [...active.slice(0, ACTIVE_PAGE_SIZE), ...history.slice(0, HISTORY_PAGE_SIZE)];
   const targets = items.length
     ? await read<BoardTargetRow>(sql`
@@ -88,7 +113,8 @@ export async function readBoardPage(
       title: item.title,
       notes: item.notes,
       status: item.status,
-      createdAt: item.created_at,
+      column: item.board_column,
+      createdAt: item.cursor.split('|')[0]!,
       targets: (byItem.get(item.id) ?? []).map((target) => ({
         repositoryId: target.repository_id,
         owner: target.owner,
@@ -100,8 +126,9 @@ export async function readBoardPage(
         changeStatus: target.change_status,
       })),
     })),
-    activeNextBefore: active.length > ACTIVE_PAGE_SIZE ? active[ACTIVE_PAGE_SIZE - 1]!.id : null,
+    activeNextBefore:
+      active.length > ACTIVE_PAGE_SIZE ? active[ACTIVE_PAGE_SIZE - 1]!.cursor : null,
     historyNextBefore:
-      history.length > HISTORY_PAGE_SIZE ? history[HISTORY_PAGE_SIZE - 1]!.id : null,
+      history.length > HISTORY_PAGE_SIZE ? history[HISTORY_PAGE_SIZE - 1]!.cursor : null,
   };
 }

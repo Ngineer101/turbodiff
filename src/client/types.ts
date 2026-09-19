@@ -591,8 +591,8 @@ export interface ApiBoard {
   stats: { month_pipeline_cost_usd: number; running: number };
   todos: ApiTodo[];
   tasks: ApiTaskSummary[];
-  activeNextBefore: number | null;
-  historyNextBefore: number | null;
+  activeNextBefore: string | null;
+  historyNextBefore: string | null;
   organizations: { id: string; name: string }[];
   repos: { id: number; owner: string; name: string; organization_id: string }[];
 }

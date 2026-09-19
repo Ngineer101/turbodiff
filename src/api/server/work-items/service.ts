@@ -73,6 +73,7 @@ const serialize = (
   title: row.title,
   description: row.description,
   status: row.status,
+  archived: row.archived,
   approvedPlanArtifactId: row.approved_plan_artifact_id,
   attachments: attachments
     .filter((attachment) => attachment.work_item_id === row.id)
@@ -241,7 +242,14 @@ export const WorkItemServiceLive = Layer.effect(
             );
             yield* dataEffect(() => replaceWorkItemTargets(row, repositoryIds));
           }
-          yield* dataEffect(() => updateWorkItem(id, { title, description, status: input.status }));
+          yield* dataEffect(() =>
+            updateWorkItem(id, {
+              title,
+              description,
+              status: input.status,
+              archived: input.archived,
+            }),
+          );
           return yield* load(user, id);
         }),
       remove: (user, id) =>
