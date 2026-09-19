@@ -202,6 +202,7 @@ describe('delivery evidence and settings', () => {
         workflow_run: {
           id: 12,
           workflow_id: 34,
+          event: 'pull_request',
           name: 'CI',
           head_sha: revision.head_sha,
           status: 'completed',

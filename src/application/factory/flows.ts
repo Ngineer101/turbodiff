@@ -5,6 +5,10 @@ export type FactoryStageOperation =
   | 'dispatch'
   | 'implement'
   | 'review'
+  | 'verify'
+  | 'repair'
+  | 'merge'
+  | 'reconcile'
   | 'explain'
   | 'invoke_automation';
 
@@ -43,7 +47,7 @@ export const WORK_ITEM_FLOW = {
   },
 } as const satisfies FactoryFlowDefinition;
 
-export const DELIVERY_FLOW = {
+const DELIVERY_FLOW_V1 = {
   key: 'delivery',
   version: 1,
   scope: 'delivery',
@@ -54,6 +58,22 @@ export const DELIVERY_FLOW = {
       operation: 'implement',
       success: { kind: 'complete' },
     },
+  },
+} as const satisfies FactoryFlowDefinition;
+
+export const DELIVERY_FLOW = { ...DELIVERY_FLOW_V1, version: 2 } as const;
+
+export const CHANGE_DELIVERY_FLOW = {
+  key: 'change_delivery',
+  version: 1,
+  scope: 'change',
+  initialStage: 'review',
+  stages: {
+    review: { key: 'review', operation: 'review', success: { kind: 'complete' } },
+    verify: { key: 'verify', operation: 'verify', success: { kind: 'complete' } },
+    repair: { key: 'repair', operation: 'repair', success: { kind: 'complete' } },
+    reconcile: { key: 'reconcile', operation: 'reconcile', success: { kind: 'complete' } },
+    merge: { key: 'merge', operation: 'merge', success: { kind: 'complete' } },
   },
 } as const satisfies FactoryFlowDefinition;
 
@@ -101,7 +121,9 @@ export const EXPLANATION_FLOW = {
 
 export const FACTORY_FLOWS = [
   WORK_ITEM_FLOW,
+  DELIVERY_FLOW_V1,
   DELIVERY_FLOW,
+  CHANGE_DELIVERY_FLOW,
   REVIEW_FLOW,
   AUTOMATION_FLOW,
   EXPLANATION_FLOW,
