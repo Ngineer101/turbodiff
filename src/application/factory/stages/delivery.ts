@@ -1,7 +1,6 @@
 import { invokeImplementer, runtimeSkills, repositorySettings } from '../invoke-implementer.ts';
 import { repositoryPolicy } from '../../../domain/repository-policy.ts';
 import { syncGithubChangeRevision } from '../../changes/github-revision.ts';
-import type { ZodType } from 'zod';
 import { implementerAgent, type ImplementerInput } from '../../../agents/implementer.ts';
 import { changeRevisionArtifactSchema } from '../../../artifacts/change.ts';
 import { storedPlanArtifactSchema } from '../../../artifacts/plan.ts';
