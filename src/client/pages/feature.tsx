@@ -27,6 +27,7 @@ import {
   generateFeatureExplanation,
   mergeDeliveryChange,
   reviewDelivery,
+  resumeDelivery,
   retryDelivery,
   sendDeliveryMessage,
 } from '../lib/backend.ts';
@@ -155,6 +156,8 @@ function verifyStation(v: ApiVerificationSummary | null, merged: boolean): Stati
       return { label: 'Verify', verdict: 'GO', tone: 'go' };
     case 'running':
       return { label: 'Verify', verdict: 'POLLING', tone: 'hold', pulse: true };
+    case 'inconclusive':
+      return { label: 'Verify', verdict: 'UNVERIFIED', tone: 'hold' };
     case 'stalled':
       // Presumed dead, not live — no pulse.
       return { label: 'Verify', verdict: 'STALLED', tone: 'abort' };
@@ -169,6 +172,7 @@ function stationsFor(data: ApiFeatureDetail): Station[] {
   const v = data.verification;
   const lastReview = data.reviews.at(-1);
   const blocking =
+    lastReview?.state === 'request_changes' ||
     lastReview?.state === 'CHANGES_REQUESTED' ||
     Boolean(lastReview?.body.startsWith('**Verdict: REQUEST_CHANGES**'));
   const merged = data.pr?.state === 'merged';
@@ -180,7 +184,15 @@ function stationsFor(data: ApiFeatureDetail): Station[] {
     .at(-1)
     ?.stages.filter((stage) => stage.stage === 'review')
     .at(-1);
-  const build: Station = { label: 'Build', verdict: 'GO', tone: 'go' };
+  const build: Station = data.checks.some((check) => check.status === 'failed')
+    ? { label: 'Build', verdict: 'FAILED', tone: 'abort' }
+    : data.checks.some((check) => check.status !== 'passed')
+      ? { label: 'Build', verdict: 'PENDING', tone: 'hold' }
+      : {
+          label: 'Build',
+          verdict: data.checks.length ? 'GO' : 'NO CHECKS',
+          tone: data.checks.length ? 'go' : 'off',
+        };
   // A failed review stage outranks earlier rounds' verdicts: after a repair
   // the re-review is the one that gates the run, and its failure parks the
   // lifecycle — the lamp read GO off round one while the run sat awaiting a
@@ -866,7 +878,7 @@ export default function FeaturePage() {
     onError: onApiError,
   });
   const resumeStage = useMutation({
-    mutationFn: (_runId: number) => retryDelivery(id),
+    mutationFn: (_runId: number) => resumeDelivery(id),
     onSuccess: () => {
       toast.success('Stage retried — it runs again on the same delivery');
       refresh();

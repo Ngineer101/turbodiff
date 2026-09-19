@@ -38,6 +38,7 @@ import { executePlanningStage } from './stages/planning.ts';
 import { executeReviewStage } from './stages/review.ts';
 import { executeExplanationStage } from './stages/explanation.ts';
 import { DELIVERY_FLOW, factoryFlow, factoryStage } from './flows.ts';
+import { executeChangeDeliveryStage, reconcileChangeDelivery } from './delivery-lifecycle.ts';
 import { enqueueFactoryMessages } from './queue.ts';
 
 async function finishSucceeded(
@@ -198,6 +199,10 @@ export async function executeFactoryStage(message: RunFactoryMessage): Promise<v
       );
     }
 
+    if (run.flow_key === 'change_delivery') {
+      await executeChangeDeliveryStage(run, stage);
+      return;
+    }
     if (definition.operation === 'dispatch' || definition.operation === 'invoke_automation') {
       if (!run.work_item_id) throw new Error('factory run has no work item');
       const workItem = await getWorkItem(run.work_item_id);
@@ -250,6 +255,13 @@ export async function executeFactoryStage(message: RunFactoryMessage): Promise<v
     if (definition.operation === 'implement') {
       const result = await executeDeliveryStage(run, stage);
       await finishSucceeded(run, stage, result.outcome, result);
+      if (result.changeId && run.flow_version >= 2) {
+        try {
+          await reconcileChangeDelivery(result.changeId);
+        } catch (error) {
+          console.warn('turbodiff: delivery reconciliation deferred to recovery', error);
+        }
+      }
       return;
     }
     if (definition.operation === 'review') {

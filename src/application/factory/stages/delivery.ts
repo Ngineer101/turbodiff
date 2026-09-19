@@ -1,3 +1,5 @@
+import { repositoryPolicy } from '../../../domain/repository-policy.ts';
+import { syncGithubChangeRevision } from '../../changes/github-revision.ts';
 import type { ZodType } from 'zod';
 import { implementerAgent, type ImplementerInput } from '../../../agents/implementer.ts';
 import type { AgentExecutionRequest } from '../../../agents/types.ts';
@@ -47,7 +49,7 @@ import {
 } from '../../../data/skills.ts';
 import { buildReviewDiffSnapshot } from '../../../domain/review-context.ts';
 import { remoteSourceOf, resolveWorkspaceRemote } from '../../../integrations/git/provider.ts';
-import { installationToken } from '../../../integrations/github/app.ts';
+import { authorizesWorkflowFiles, installationToken } from '../../../integrations/github/app.ts';
 import { githubJson } from '../../../integrations/github/client.ts';
 import { buildSandboxMcpConfig } from '../../integrations/mcp-proxy.ts';
 import { isJsonObject, isString } from '../../../shared/json.ts';
@@ -181,8 +183,15 @@ export async function executeDeliveryStage(
   }
   const existing = (await listChangesForDelivery(delivery.id))[0];
   if (existing) {
-    await updateDeliveryStatus(delivery.id, 'completed');
-    await completeWorkItemWhenDelivered(delivery.work_item_id);
+    const repository = await getRepository(delivery.repository_id);
+    if (
+      factoryRun.flow_version < 2 ||
+      !repository ||
+      !repositoryPolicy(repository.settings).verify
+    ) {
+      await updateDeliveryStatus(delivery.id, 'completed');
+      await completeWorkItemWhenDelivered(delivery.work_item_id);
+    }
     return { changeId: existing.id, outcome: 'change_created' };
   }
   const [repository, workItem] = await Promise.all([
@@ -223,7 +232,7 @@ export async function executeDeliveryStage(
   const branch = branchName(delivery.id, workItem.title);
   const base = repository.default_branch ?? 'main';
   const remote = await resolveWorkspaceRemote(remoteSourceOf(repository), 'write', {
-    workflows: true,
+    workflows: authorizesWorkflowFiles(plan.plan),
   });
   const { prepareCachedWorktree, pushHeadCommand } =
     await import('../../../integrations/agent-runtime/repository-workspace.ts');
@@ -304,7 +313,10 @@ export async function executeDeliveryStage(
       },
     );
     if (!commit.success) throw new Error(`git commit failed: ${commit.stderr.slice(-500)}`);
-    if (settings.checkCommand) {
+    if (
+      settings.checkCommand &&
+      (factoryRun.flow_version < 2 || !repositoryPolicy(repository.settings).verify)
+    ) {
       const checked = await runCheckCommand(
         sandbox,
         workDir,
@@ -362,31 +374,37 @@ export async function executeDeliveryStage(
       origin: factoryRun.automation_id ? 'automation' : 'factory',
       status: 'open',
     });
-    const revisionArtifact = await persistJsonArtifact({
-      organizationId: factoryRun.organization_id,
-      kind: 'change_revision',
-      storageKey: `organizations/${factoryRun.organization_id}/changes/${change.id}/revisions/${headSha}.json`,
-      schema: changeRevisionArtifactSchema,
-      value: {
-        kind: 'change-revision',
-        title: workItem.title,
-        description: tracked.artifact.summary,
-        base,
-        head: branch,
+    if (repository.source_provider === 'github')
+      await syncGithubChangeRevision(repository, change, headSha);
+    else {
+      const revisionArtifact = await persistJsonArtifact({
+        organizationId: factoryRun.organization_id,
+        kind: 'change_revision',
+        storageKey: `organizations/${factoryRun.organization_id}/changes/${change.id}/revisions/${headSha}.json`,
+        schema: changeRevisionArtifactSchema,
+        value: {
+          kind: 'change-revision',
+          title: workItem.title,
+          description: tracked.artifact.summary,
+          base,
+          head: branch,
+          baseSha,
+          headSha,
+          files: snapshot.files,
+          patch: snapshot.diff,
+        },
+      });
+      await createChangeRevision({
+        change,
         baseSha,
         headSha,
-        files: snapshot.files,
-        patch: snapshot.diff,
-      },
-    });
-    await createChangeRevision({
-      change,
-      baseSha,
-      headSha,
-      artifactId: revisionArtifact.id,
-    });
-    await updateDeliveryStatus(delivery.id, 'completed');
-    await completeWorkItemWhenDelivered(delivery.work_item_id);
+        artifactId: revisionArtifact.id,
+      });
+    }
+    if (factoryRun.flow_version < 2 || !repositoryPolicy(repository.settings).verify) {
+      await updateDeliveryStatus(delivery.id, 'completed');
+      await completeWorkItemWhenDelivered(delivery.work_item_id);
+    }
     completed = true;
     return { changeId: change.id, outcome: 'change_created' };
   } finally {
