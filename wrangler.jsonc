@@ -121,6 +121,7 @@
     { "tag": "v4", "new_sqlite_classes": ["FlueExplainerAgent"] },
     { "tag": "v5", "deleted_classes": ["FluePrReviewerAgent"] },
     { "tag": "v6", "deleted_classes": ["FlueExplainerAgent"] },
-    { "tag": "v7" },
+    { "tag": "v7", "new_sqlite_classes": ["DesignJob"] },
+    { "tag": "v8", "deleted_classes": ["DesignJob"] },
   ],
 }
