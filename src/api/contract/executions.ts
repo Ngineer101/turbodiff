@@ -50,6 +50,15 @@ export const FactoryRun = Schema.Struct({
   parentRunId: Schema.NullOr(PositiveInt),
   trigger: Schema.String,
   status: RunStatus,
+  events: Schema.Array(
+    Schema.Struct({
+      id: PositiveInt,
+      stageRunId: Schema.NullOr(PositiveInt),
+      kind: Schema.String,
+      payload: Schema.Unknown,
+      createdAt: Schema.String,
+    }),
+  ),
   stages: Schema.Array(
     Schema.Struct({
       id: PositiveInt,

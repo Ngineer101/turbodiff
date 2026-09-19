@@ -16,6 +16,16 @@ const ChangeRevision = Schema.Struct({
   reviewOutcomes: Schema.Array(
     Schema.Struct({
       agentRunId: PositiveInt,
+      author: Schema.String,
+      summary: Schema.String,
+      findings: Schema.Array(
+        Schema.Struct({
+          path: Schema.String,
+          line: PositiveInt,
+          severity: Schema.Literal('P1', 'P2'),
+          body: Schema.String,
+        }),
+      ),
       verdict: Schema.Literal('approve', 'comment', 'request_changes'),
       conclusion: Schema.Literal('ready', 'ready_with_warnings', 'not_ready', 'inconclusive'),
       coverageStatus: Schema.Literal('complete', 'incomplete', 'stale'),
@@ -42,6 +52,14 @@ export const Change = Schema.Struct({
   origin: Schema.Literal('human', 'factory', 'automation', 'imported'),
   status: ChangeStatus,
   currentRevision: Schema.NullOr(ChangeRevision),
+  checks: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      status: Schema.Literal('queued', 'running', 'completed'),
+      conclusion: Schema.NullOr(Schema.String),
+      detailsUrl: Schema.NullOr(Schema.String),
+    }),
+  ),
   createdAt: Schema.String,
   updatedAt: Schema.String,
 });
