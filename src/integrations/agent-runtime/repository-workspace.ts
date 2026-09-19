@@ -17,7 +17,7 @@ function botIdentity(dir: string): string {
 }
 
 interface PrepareCachedWorktreeOptions {
-  sandbox: Sandbox;
+  sandbox: Pick<Sandbox, 'exec'>;
   cacheDir: string;
   workDir: string;
   remote: WorkspaceRemote;
@@ -137,7 +137,7 @@ export async function prepareCachedWorktree({
 }
 
 interface PrepareFreshCloneOptions {
-  sandbox: Sandbox;
+  sandbox: Pick<Sandbox, 'exec'>;
   cloneDir: string;
   remote: WorkspaceRemote;
   branch: string;
@@ -157,6 +157,8 @@ export async function prepareFreshClone({
   branch,
   secrets = [],
 }: PrepareFreshCloneOptions): Promise<void> {
+  assertWorkspacePath(cloneDir, 'cloneDir');
+  assertGitRef(branch, 'branch');
   const clone = await sandbox.exec(
     `rm -rf ${cloneDir} && git ${remote.configFlags} clone --depth 50 --single-branch ` +
       `--branch "$WORK_BRANCH" "${remote.authUrl}" ${cloneDir}`,
@@ -167,9 +169,10 @@ export async function prepareFreshClone({
       `git clone failed: ${redactSecrets(clone.stderr, [remote.token, ...secrets]).slice(0, 500)}`,
     );
   }
-  await sandbox.exec(
+  const configured = await sandbox.exec(
     `git -C ${cloneDir} remote set-url origin "${remote.cleanUrl}" && ` + botIdentity(cloneDir),
   );
+  if (!configured.success) throw new Error('Could not configure the change checkout');
 }
 
 // Incremental refresh of an existing PR checkout to the branch's current

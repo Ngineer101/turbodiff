@@ -16,6 +16,7 @@ import { persistJsonArtifact } from '../../../src/application/artifacts.ts';
 import type { RunFactoryMessage } from '../../../src/application/factory/message.ts';
 import { changeRevisionArtifactSchema } from '../../../src/artifacts/change.ts';
 import { acceptanceContractArtifactSchema } from '../../../src/artifacts/plan.ts';
+import { createDeliveryMessage } from '../../../src/data/deliveries.ts';
 import { createChangeRevision, upsertChange } from '../../../src/data/changes.ts';
 import { queryOne } from '../../../src/data/postgres.ts';
 import { isJsonArray, isJsonObject } from '../../../src/shared/json.ts';
@@ -71,10 +72,13 @@ describe('primitive services with PostgreSQL', () => {
             acceptance.id,
             'active',
           );
-          const message = yield* service.createMessage(
-            tenant.user,
-            delivery.id,
-            '  Preserve this context.  ',
+          const message = yield* Effect.promise(() =>
+            createDeliveryMessage({
+              delivery,
+              authorUserId: tenant.userId,
+              role: 'user',
+              body: 'Preserve this context.',
+            }),
           );
           const run = yield* service.startRun(tenant.user, delivery.id);
           const loaded = yield* service.get(tenant.user, delivery.id);

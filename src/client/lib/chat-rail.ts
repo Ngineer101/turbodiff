@@ -75,14 +75,10 @@ export interface TurnStep {
 }
 
 // What the turn's status lets us say honestly: queued means no sandbox has
-// picked it up yet; running means the branch is checked out and the agent
-// is working (the runner sets 'running' right before it starts).
+// picked it up yet; running includes checkout, agent execution, and publication.
 export function turnSteps(status: string): TurnStep[] {
   if (status === 'running') {
-    return [
-      { label: 'Sandbox ready, branch checked out', state: 'done' },
-      { label: 'Working on your change', state: 'live' },
-    ];
+    return [{ label: 'Preparing and working on your change', state: 'live' }];
   }
   return [{ label: 'Queued for a sandbox', state: 'live' }];
 }

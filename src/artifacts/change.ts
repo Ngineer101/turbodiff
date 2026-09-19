@@ -10,7 +10,9 @@ const changedRepositorySchema = z
   })
   .strict();
 
-const unchangedRepositorySchema = z.object({ kind: z.literal('no-change') }).strict();
+const unchangedRepositorySchema = z
+  .object({ kind: z.literal('no-change'), summary: artifactText(20_000).optional() })
+  .strict();
 
 // The semantic result of a repository-writing agent. Git state determines
 // which variant exists; usage, sessions, commits, and pull requests belong to

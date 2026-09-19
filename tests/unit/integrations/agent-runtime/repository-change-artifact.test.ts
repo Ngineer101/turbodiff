@@ -22,6 +22,16 @@ function runtime(changed: boolean, files: ReadonlyMap<string, string>) {
 }
 
 describe('repository change artifact runtime adapter', () => {
+  it('preserves an answer when the agent leaves the checkout unchanged', async () => {
+    await expect(
+      readRepositoryChangeArtifact(
+        runtime(false, new Map([[outputFiles.summary, '  Here is how the feature works.  ']])),
+        '/workspace/repo',
+        repositoryChangeArtifactSchema,
+        outputFiles,
+      ),
+    ).resolves.toEqual({ kind: 'no-change', summary: 'Here is how the feature works.' });
+  });
   it('uses git state for the no-change outcome without requiring output files', async () => {
     await expect(
       readRepositoryChangeArtifact(

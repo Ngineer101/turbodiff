@@ -106,6 +106,7 @@ The current flow definitions in `src/application/factory/flows.ts` are:
 | --------------- | --------- | --------------------------------- | --------------------------------------------------------------------- |
 | `work_item@1`   | work item | `plan → plan_approval → dispatch` | Creates one delivery per target                                       |
 | `delivery@1`    | delivery  | `implement`                       | Produces or updates a reviewable change                               |
+| `chat@1`        | delivery  | `respond`                         | Replies to a message and optionally updates the existing change       |
 | `review@1`      | change    | `review`                          | Reviews one immutable change revision                                 |
 | `automation@1`  | work item | `invoke`                          | Runs the configured agent and, when applicable, dispatches deliveries |
 | `explanation@1` | change    | `explain`                         | Explains one immutable change revision                                |
@@ -163,6 +164,21 @@ Email/password users can use Turbodiff without GitHub. If a user has no organiza
 A GitHub installation webhook creates or updates a deterministic organization and a GitHub integration. If the installer already has a matching Turbodiff identity, ownership is granted immediately. Otherwise the organization is claimed when that GitHub identity signs in. The installation remains an integration; it never becomes the tenant identifier.
 
 ## Factory execution and durability
+
+Delivery chat uses the versioned `chat@1` flow and its `respond` stage. Accepting a
+message atomically stores the user message and a queued factory run under a delivery
+row lock. Messages reference that run through an organization-aware foreign key;
+status and errors come from the factory/stage lifecycle rather than a separate chat
+state machine. Queue failure leaves the durable stage available to normal recovery.
+
+The stage reuses the implementer and immutable input/output/log artifacts, checks
+out the existing change's current source branch, and saves either a reply without
+an edit or a checked commit and immutable change revision. It rechecks write access
+and open-change state before publishing and uses a normal fast-forward push. Chat
+failures do not change the original delivery's completed status. An interrupted
+running chat is failed visibly instead of replaying a potentially published write;
+a new user turn starts from the remote branch. Unlinked historical messages remain
+saved context and are never executed automatically.
 
 ### Persist before publishing
 

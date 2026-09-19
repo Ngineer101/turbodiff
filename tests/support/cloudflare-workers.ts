@@ -8,6 +8,7 @@ if (!connectionString) {
 
 export const env = {
   HYPERDRIVE: { connectionString },
+  LIVE_UPDATES: { getByName: () => ({ broadcast: async () => undefined }) },
   ARTIFACTS: {
     async put(key: string, value: string | Uint8Array) {
       artifactBodies.set(key, isString(value) ? new TextEncoder().encode(value) : value);

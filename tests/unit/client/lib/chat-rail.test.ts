@@ -68,7 +68,7 @@ describe('turn bookkeeping', () => {
 
   it('describes the turn by what its status proves', () => {
     expect(turnSteps('queued').map((s) => s.state)).toEqual(['live']);
-    expect(turnSteps('running').map((s) => s.state)).toEqual(['done', 'live']);
+    expect(turnSteps('running').map((s) => s.state)).toEqual(['live']);
   });
 
   it('recalls the sender’s last message for ↑', () => {
