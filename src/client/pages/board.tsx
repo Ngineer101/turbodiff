@@ -13,10 +13,18 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import {
+  startTransition,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { toast } from 'sonner';
-import type { ApiBoard, ApiPlan, ApiTodo } from '../types.ts';
+import type { ApiBoard, ApiTaskSummary, ApiTodo } from '../types.ts';
 import { ApiError } from '../lib/api.ts';
 import {
   archiveWorkItem,
@@ -29,7 +37,7 @@ import {
 import { useDictation } from '../lib/dictation.ts';
 import { ago, fmtUsd } from '../lib/format.ts';
 import { applyOptimistic, optimisticId, optimisticNow } from '../lib/optimistic.ts';
-import { boardQuery, modelsQuery } from '../lib/queries.ts';
+import { boardPageQuery, modelsQuery } from '../lib/queries.ts';
 import { nextIndex, noOverlayOpen, onListboxKeyDown } from '../lib/shortcuts.ts';
 import { taskColumn, taskStages, taskState } from '../lib/task-state.ts';
 import { useIsDesktop } from '../lib/use-is-desktop.ts';
@@ -59,11 +67,9 @@ import { Kbd } from '../components/ui/kbd.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover.tsx';
 
-// The home board: To Do (unstarted todos, deletable) → In Progress (started
-// tasks — planning through open PR) → Done (merged). Started tasks are only
-// ever archived, never deleted.
-
-type ColumnKey = 'todo' | 'in_progress' | 'done';
+// Unstarted and started work share In progress; completed work is Done.
+// Cancelled and archived items are excluded by the server before pagination.
+type ColumnKey = 'in_progress' | 'done';
 
 function onApiError<T>(err: T) {
   toast.error(err instanceof ApiError ? err.message : 'Request failed');
@@ -812,7 +818,7 @@ function TodoCard({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
       // Tab-reachable so the card keys (Enter/s/d) work without j/k.
       tabIndex={0}
       data-board-card
-      data-column="todo"
+      data-column="in_progress"
       aria-label={todo.title}
       onKeyDown={(e) => {
         // Only when the card itself is focused — keys on inner buttons/links
@@ -861,7 +867,7 @@ function TodoCard({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
   );
 }
 
-function TaskCard({ task }: { task: ApiPlan }) {
+function TaskCard({ task }: { task: ApiTaskSummary }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const state = taskState(task);
@@ -912,7 +918,13 @@ function TaskCard({ task }: { task: ApiPlan }) {
       <div className="flex items-baseline justify-between gap-2">
         <Serial n={task.id} />
         <span className="flex items-center gap-2">
-          {done ? <Stamp tone="ok">MERGED</Stamp> : null}
+          {done ? (
+            <Stamp tone="ok">
+              {task.repos.length > 0 && task.repos.every((r) => r.feature_status === 'merged')
+                ? 'MERGED'
+                : 'COMPLETED'}
+            </Stamp>
+          ) : null}
           <ConfirmButton
             variant="ghost"
             size="icon"
@@ -1219,7 +1231,11 @@ function moveBoardFocus(key: string) {
 }
 
 export function BoardPage() {
-  const { data } = useSuspenseQuery(boardQuery);
+  const [activePages, setActivePages] = useState<string[]>([]);
+  const [historyPages, setHistoryPages] = useState<string[]>([]);
+  const { data } = useSuspenseQuery(
+    boardPageQuery({ activeBefore: activePages.at(-1), historyBefore: historyPages.at(-1) }),
+  );
   const isDesktop = useIsDesktop();
   useHotkeys(
     'j,k,down,up,h,l,left,right',
@@ -1275,35 +1291,30 @@ export function BoardPage() {
 
   const columns: { key: ColumnKey; el: ReactNode }[] = [
     {
-      key: 'todo',
-      el: (
-        <Column
-          key="todo"
-          title="To do"
-          lamp="off"
-          count={todos.length}
-          empty={repoFilter !== null ? filteredEmpty : 'The backlog is empty — add todos above.'}
-        >
-          {todos.map((t) => (
-            <TodoCard key={t.id} todo={t} board={data} />
-          ))}
-        </Column>
-      ),
-    },
-    {
       key: 'in_progress',
       el: (
         <Column
           key="in_progress"
           title="In progress"
-          lamp={inProgress.length > 0 ? 'hold' : 'off'}
+          lamp={inProgress.length + todos.length > 0 ? 'hold' : 'off'}
           pulse={data.stats.running > 0}
-          count={inProgress.length}
-          empty={repoFilter !== null ? filteredEmpty : 'Start a todo to put the agents to work.'}
+          count={inProgress.length + todos.length}
+          empty={repoFilter !== null ? filteredEmpty : 'Add a task above to get started.'}
         >
-          {inProgress.map((t) => (
-            <TaskCard key={t.id} task={t} />
-          ))}
+          {[
+            ...todos.map((todo) => ({
+              id: todo.id,
+              created_at: todo.created_at,
+              card: <TodoCard key={todo.id} todo={todo} board={data} />,
+            })),
+            ...inProgress.map((task) => ({
+              id: task.id,
+              created_at: task.created_at,
+              card: <TaskCard key={task.id} task={task} />,
+            })),
+          ]
+            .sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id - a.id)
+            .map((item) => item.card)}
         </Column>
       ),
     },
@@ -1315,7 +1326,7 @@ export function BoardPage() {
           title="Done"
           lamp={done.length > 0 ? 'go' : 'off'}
           count={done.length}
-          empty={repoFilter !== null ? filteredEmpty : 'Merged tasks land here.'}
+          empty={repoFilter !== null ? filteredEmpty : 'Completed and merged tasks land here.'}
         >
           {done.map((t) => (
             <TaskCard key={t.id} task={t} />
@@ -1351,7 +1362,51 @@ export function BoardPage() {
         ) : null}
       </div>
 
-      {/* Mobile: filter chips instead of three side-by-side columns. */}
+      <nav aria-label="Board pages" className="mt-4 flex flex-wrap gap-4 text-xs text-mute">
+        {[
+          {
+            label: 'In progress',
+            pages: activePages,
+            setPages: setActivePages,
+            next: data.activeNextBefore,
+          },
+          {
+            label: 'Done',
+            pages: historyPages,
+            setPages: setHistoryPages,
+            next: data.historyNextBefore,
+          },
+        ].map(({ label, pages, setPages, next }) =>
+          pages.length > 0 || next !== null ? (
+            <div key={label} className="flex items-center gap-2">
+              <span>
+                {label} · page {pages.length + 1}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={!pages.length}
+                onClick={() => startTransition(() => setPages((previous) => previous.slice(0, -1)))}
+              >
+                Newer
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={next === null}
+                onClick={() => {
+                  if (next !== null)
+                    startTransition(() => setPages((previous) => [...previous, next]));
+                }}
+              >
+                Older
+              </Button>
+            </div>
+          ) : null,
+        )}
+      </nav>
+
+      {/* Mobile: filter chips instead of two side-by-side columns. */}
       <div
         className="mt-5 flex gap-2 overflow-x-auto pb-1 lg:hidden"
         role="tablist"
@@ -1360,7 +1415,6 @@ export function BoardPage() {
         {(
           [
             ['all', 'All'],
-            ['todo', 'To do'],
             ['in_progress', 'In progress'],
             ['done', 'Done'],
           ] as const
@@ -1382,7 +1436,7 @@ export function BoardPage() {
         ))}
       </div>
 
-      <div className="mt-6 hidden gap-6 lg:grid lg:grid-cols-3">{columns.map((col) => col.el)}</div>
+      <div className="mt-6 hidden gap-6 lg:grid lg:grid-cols-2">{columns.map((col) => col.el)}</div>
       <div className="mt-4 flex flex-col gap-7 lg:hidden">
         {columns.filter((col) => show(col.key)).map((col) => col.el)}
       </div>

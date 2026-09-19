@@ -1,3 +1,4 @@
+import type { WorkItemView } from '../../api/contract/views.ts';
 import type {
   ApiAgentDetail,
   ApiAgentsList,
@@ -104,33 +105,26 @@ const getWorkItemResource = (id: number) =>
 function workItemPlan(
   workItem: Awaited<ReturnType<typeof getWorkItemResource>>,
   detailed: false,
+  view?: WorkItemView,
 ): Promise<ApiPlan>;
 function workItemPlan(
   workItem: Awaited<ReturnType<typeof getWorkItemResource>>,
   detailed: true,
+  view?: WorkItemView,
 ): Promise<ApiTaskDetail>;
 async function workItemPlan(
   workItem: Awaited<ReturnType<typeof getWorkItemResource>>,
   detailed: boolean,
+  view?: WorkItemView,
 ): Promise<ApiPlan | ApiTaskDetail> {
-  const [deliveryList, artifact, runList] = await Promise.all([
-    call((client) =>
-      client.workItems.listWorkItemDeliveries({ path: { workItemId: workItem.id } }),
-    ),
-    planArtifactForWorkItem(workItem),
-    detailed
-      ? call((client) =>
-          client.workItems.listWorkItemFactoryRuns({ path: { workItemId: workItem.id } }),
-        )
-      : Promise.resolve({ items: [] }),
-  ]);
-  const defaultModel = (await getModels()).runner.default_model;
+  const loaded =
+    view ??
+    (await call((client) => client.views.getWorkItemView({ path: { workItemId: workItem.id } })));
+  const artifact = loaded.plan;
+  const deliveries = loaded.deliveries;
+  const runList = { items: loaded.factoryRuns };
+  const defaultModel = loaded.defaultModel;
   const selectedModel = window.localStorage.getItem(`turbodiff.workItemModel.${workItem.id}`);
-  const deliveries = await Promise.all(
-    deliveryList.items.map((item) =>
-      call((client) => client.deliveries.getDelivery({ path: { deliveryId: item.id } })),
-    ),
-  );
   const artifactPlan = asPlan(artifact?.value);
   const status =
     workItem.status === 'planning'
@@ -152,7 +146,7 @@ async function workItemPlan(
     acceptance: artifactPlan.acceptance,
     plan: artifactPlan.plan,
     summary: artifactPlan.summary,
-    archived: workItem.status === 'completed' || workItem.status === 'cancelled',
+    archived: workItem.archived,
     model: selectedModel || defaultModel,
     attachments: workItem.attachments.map((attachment) => ({ name: attachment.name })),
     repos: workItem.targets.map((target) => {
@@ -182,30 +176,64 @@ async function workItemPlan(
   };
 }
 
-export async function getBoard(): Promise<ApiBoard> {
-  const [workItems, repositories, organizations, usage] = await Promise.all([
-    call((client) => client.workItems.listWorkItems({})),
+export interface BoardPage {
+  activeBefore?: string;
+  historyBefore?: string;
+}
+
+export async function getBoard(page: BoardPage = {}): Promise<ApiBoard> {
+  const [board, repositories, organizations, usage] = await Promise.all([
+    call((client) => client.views.getBoardView({ urlParams: page })),
     call((client) => client.repositories.listRepositories({})),
     call((client) => client.organizations.listOrganizations({})),
     call((client) => client.reporting.getUsageSummary({})),
   ]);
-  const todos = workItems.items.filter((item) => item.status === 'open');
-  const tasks = workItems.items.filter((item) => item.status !== 'open');
   return {
     stats: { month_pipeline_cost_usd: usage.totals.costUsd, running: usage.totals.running },
-    todos: todos.map((item) => ({
-      id: item.id,
-      organization_id: item.organizationId,
-      title: item.title,
-      notes: item.description === item.title ? null : item.description,
-      created_at: item.createdAt,
-      repos: item.targets.map((target) => ({
-        id: target.repositoryId,
-        owner: target.owner,
-        name: target.name,
+    activeNextBefore: board.activeNextBefore,
+    historyNextBefore: board.historyNextBefore,
+    todos: board.items
+      .filter((item) => item.status === 'open' && item.column === 'in_progress')
+      .map((item) => ({
+        id: item.id,
+        organization_id: item.organizationId,
+        title: item.title,
+        notes: item.notes,
+        created_at: item.createdAt,
+        repos: item.targets.map((target) => ({
+          id: target.repositoryId,
+          owner: target.owner,
+          name: target.name,
+        })),
       })),
-    })),
-    tasks: await Promise.all(tasks.map((item) => workItemPlan(item, false))),
+    tasks: board.items
+      .filter((item) => item.status !== 'open' || item.column === 'done')
+      .map((item) => ({
+        id: item.id,
+        title: item.title,
+        created_at: item.createdAt,
+        error: null,
+        archived: false,
+        status:
+          item.column === 'done'
+            ? 'completed'
+            : item.status === 'planning'
+              ? 'analyzing'
+              : item.status === 'awaiting_approval'
+                ? 'plan_ready'
+                : 'approved',
+        repos: item.targets.map((target) => ({
+          repository_id: target.repositoryId,
+          owner: target.owner,
+          name: target.name,
+          provider: target.provider,
+          feature_id: target.deliveryId,
+          pr_number: target.changeNumber,
+          feature_status: target.changeStatus ?? target.deliveryStatus,
+          feature_error: null,
+          verification: null,
+        })),
+      })),
     organizations: organizations.items.map((organization) => ({
       id: organization.id,
       name: organization.name,
@@ -220,7 +248,8 @@ export async function getBoard(): Promise<ApiBoard> {
 }
 
 export async function getTask(id: number): Promise<ApiTaskDetail> {
-  return workItemPlan(await getWorkItemResource(id), true);
+  const view = await call((client) => client.views.getWorkItemView({ path: { workItemId: id } }));
+  return workItemPlan(view.workItem, true, view);
 }
 
 export async function getUsage(): Promise<ApiUsage> {
@@ -286,31 +315,17 @@ function diffFiles(patch: string): ApiFeatureDetail['files'] {
 }
 
 export async function getFeature(id: number): Promise<ApiFeatureDetail> {
-  const delivery = await call((client) =>
-    client.deliveries.getDelivery({ path: { deliveryId: id } }),
-  );
-  const [workItem, change] = await Promise.all([
-    getWorkItemResource(delivery.workItemId),
-    delivery.change
-      ? call((client) => client.changes.getChange({ path: { changeId: delivery.change!.id } }))
-      : Promise.resolve(null),
-  ]);
-  const revisionArtifact = change?.currentRevision
-    ? await call((client) =>
-        client.artifacts.getArtifact({
-          path: { artifactId: change.currentRevision!.artifactId },
-        }),
-      )
-    : null;
+  const {
+    delivery,
+    workItem,
+    change,
+    revision: revisionArtifact,
+    plan: planArtifact,
+    factoryRuns: runs,
+  } = await call((client) => client.views.getDeliveryView({ path: { deliveryId: id } }));
   const revision = isJsonObject(revisionArtifact?.value) ? revisionArtifact.value : null;
   const files = revision && isString(revision.patch) ? diffFiles(revision.patch) : [];
-  const planArtifact = await planArtifactForWorkItem(workItem);
   const plan = asPlan(planArtifact?.value);
-  const runs = await Promise.all(
-    delivery.factoryRuns.map((run) =>
-      call((client) => client.executions.getFactoryRun({ path: { factoryRunId: run.id } })),
-    ),
-  );
   const reviewOutcomes = change?.currentRevision?.reviewOutcomes ?? [];
   return {
     feature: {
@@ -976,7 +991,7 @@ export const archiveWorkItem = (id: number, archived: boolean) =>
   call((client) =>
     client.workItems.updateWorkItem({
       path: { workItemId: id },
-      payload: { status: archived ? 'completed' : 'open' },
+      payload: { archived },
     }),
   );
 

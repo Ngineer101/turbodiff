@@ -147,6 +147,8 @@ These projections do not create new orchestration models. For example, a review 
 
 Better Auth organizations are the only tenant boundary. Every tenant-owned aggregate carries `organization_id`. Cross-tenant-capable relationships use organization-aware foreign keys so an application bug cannot connect rows from different tenants.
 
+Normal signed-in requests resolve fresh organization membership and integration availability with one database query. Built-in agents are seeded during organization provisioning and before agent execution, not on every authenticated read.
+
 A signed-in request resolves one identity containing the Better Auth user ID, all authorized organization IDs, and an active organization ID. The active organization is only a default for actions that do not otherwise identify their tenant; it does not replace resource ownership checks.
 
 Authorization follows these rules:
@@ -261,6 +263,19 @@ vp run db:verify
 ## Effect API
 
 ### Ownership
+
+Typed read views compose existing work items, deliveries, changes, runs, and artifacts on the server. The browser loads a task or delivery view in one authenticated request; these projections add no new execution primitive.
+
+The board uses `GET /api/board-view`, a summary projection independent of task-detail hydration. Cancelled and archived tasks are hidden. The remaining tasks appear in two columns:
+
+- **In progress:** every task that is not completed or fully delivered, including unstarted tasks with their Start controls.
+- **Done:** tasks whose work-item status is completed, or whose repository targets all have a completed delivery or merged latest change. A task with unfinished targets remains In progress.
+
+Both columns order by `created_at DESC, id DESC`; ID only breaks equal creation timestamps. Classification and exclusions happen before pagination. Each request returns at most 50 In progress and 25 Done cards. Each column has independent creation-time/ID cursors and Newer/Older controls. One extra row per column determines whether an older page exists; refreshes never walk additional pages automatically.
+
+Archiving is an independent work-item flag. Archive and restore never change execution status or completion timestamps.
+
+The server uses one query for the two pages and one batched repository/delivery/latest-change query. Tenant membership scopes both queries. Board cards contain no plan bodies, factory runs, stage runs, agent runs or lifecycle events. Full unstarted-task requirements remain available to the start dialog; task and feature detail endpoints retain their existing artifact and history reads.
 
 One Effect `HttpApi` mounted at `/api` owns the complete signed-in JSON data plane. There is no legacy fallback router or second authorization stack. Unknown `/api` resources are contract `404` responses.
 

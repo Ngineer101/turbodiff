@@ -1,4 +1,4 @@
-import type { ApiPlan } from '../types.ts';
+import type { ApiTaskSummary } from '../types.ts';
 import type { StageState } from '../components/identity.tsx';
 import { sentence } from './format.ts';
 import { GENERATION_STOPPED } from './queries.ts';
@@ -19,7 +19,7 @@ export interface TaskState {
 // task's repos. A summary visual, deliberately coarser than taskState's
 // label — precise wording stays on the pill, position on the line lives
 // here.
-export function taskStages(p: ApiPlan): { label: string; state: StageState }[] {
+export function taskStages(p: ApiTaskSummary): { label: string; state: StageState }[] {
   const plan: StageState =
     p.status === 'failed'
       ? 'failed'
@@ -58,13 +58,15 @@ export function taskStages(p: ApiPlan): { label: string; state: StageState }[] {
   ];
 }
 
-export function taskColumn(p: ApiPlan): 'in_progress' | 'done' {
-  return p.repos.length > 0 && p.repos.every((r) => r.feature_status === 'merged')
+export function taskColumn(p: ApiTaskSummary): 'in_progress' | 'done' {
+  return p.status === 'completed' ||
+    (p.repos.length > 0 &&
+      p.repos.every((r) => r.feature_status === 'merged' || r.feature_status === 'completed'))
     ? 'done'
     : 'in_progress';
 }
 
-export function taskState(p: ApiPlan): TaskState {
+export function taskState(p: ApiTaskSummary): TaskState {
   switch (p.status) {
     case 'analyzing':
       return {

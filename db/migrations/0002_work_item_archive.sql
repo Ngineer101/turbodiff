@@ -1,0 +1,1 @@
+ALTER TABLE "app"."work_items" ADD COLUMN "archived" boolean DEFAULT false NOT NULL;
