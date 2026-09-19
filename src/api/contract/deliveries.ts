@@ -1,5 +1,6 @@
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from '@effect/platform';
 import { Schema } from 'effect';
+import { PROCESS_PROFILES } from '../../domain/repository-policy.ts';
 import { DomainError } from './errors.ts';
 
 const PositiveInt = Schema.Int.pipe(Schema.positive());
@@ -37,6 +38,7 @@ export const Delivery = Schema.Struct({
   id: PositiveInt,
   organizationId: Schema.String,
   workItemId: PositiveInt,
+  processProfile: Schema.Literal(...PROCESS_PROFILES),
   repository: Schema.Struct({
     id: PositiveInt,
     owner: Schema.String,

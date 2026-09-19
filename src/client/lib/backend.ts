@@ -1,3 +1,4 @@
+import type { WorkItemView } from '../../api/contract/views.ts';
 import type {
   ApiAgentDetail,
   ApiAgentsList,
@@ -104,33 +105,26 @@ const getWorkItemResource = (id: number) =>
 function workItemPlan(
   workItem: Awaited<ReturnType<typeof getWorkItemResource>>,
   detailed: false,
+  view?: WorkItemView,
 ): Promise<ApiPlan>;
 function workItemPlan(
   workItem: Awaited<ReturnType<typeof getWorkItemResource>>,
   detailed: true,
+  view?: WorkItemView,
 ): Promise<ApiTaskDetail>;
 async function workItemPlan(
   workItem: Awaited<ReturnType<typeof getWorkItemResource>>,
   detailed: boolean,
+  view?: WorkItemView,
 ): Promise<ApiPlan | ApiTaskDetail> {
-  const [deliveryList, artifact, runList] = await Promise.all([
-    call((client) =>
-      client.workItems.listWorkItemDeliveries({ path: { workItemId: workItem.id } }),
-    ),
-    planArtifactForWorkItem(workItem),
-    detailed
-      ? call((client) =>
-          client.workItems.listWorkItemFactoryRuns({ path: { workItemId: workItem.id } }),
-        )
-      : Promise.resolve({ items: [] }),
-  ]);
-  const defaultModel = (await getModels()).runner.default_model;
+  const loaded =
+    view ??
+    (await call((client) => client.views.getWorkItemView({ path: { workItemId: workItem.id } })));
+  const artifact = loaded.plan;
+  const deliveries = loaded.deliveries;
+  const runList = { items: loaded.factoryRuns };
+  const defaultModel = loaded.defaultModel;
   const selectedModel = window.localStorage.getItem(`turbodiff.workItemModel.${workItem.id}`);
-  const deliveries = await Promise.all(
-    deliveryList.items.map((item) =>
-      call((client) => client.deliveries.getDelivery({ path: { deliveryId: item.id } })),
-    ),
-  );
   const artifactPlan = asPlan(artifact?.value);
   const status =
     workItem.status === 'planning'
@@ -152,7 +146,7 @@ async function workItemPlan(
     acceptance: artifactPlan.acceptance,
     plan: artifactPlan.plan,
     summary: artifactPlan.summary,
-    archived: workItem.status === 'completed' || workItem.status === 'cancelled',
+    archived: workItem.archivedAt !== null,
     model: selectedModel || defaultModel,
     attachments: workItem.attachments.map((attachment) => ({ name: attachment.name })),
     repos: workItem.targets.map((target) => {
@@ -182,30 +176,64 @@ async function workItemPlan(
   };
 }
 
-export async function getBoard(): Promise<ApiBoard> {
-  const [workItems, repositories, organizations, usage] = await Promise.all([
-    call((client) => client.workItems.listWorkItems({})),
+export interface BoardPage {
+  activeBefore?: string;
+  historyBefore?: string;
+}
+
+export async function getBoard(page: BoardPage = {}): Promise<ApiBoard> {
+  const [board, repositories, organizations, usage] = await Promise.all([
+    call((client) => client.views.getBoardView({ urlParams: page })),
     call((client) => client.repositories.listRepositories({})),
     call((client) => client.organizations.listOrganizations({})),
     call((client) => client.reporting.getUsageSummary({})),
   ]);
-  const todos = workItems.items.filter((item) => item.status === 'open');
-  const tasks = workItems.items.filter((item) => item.status !== 'open');
   return {
     stats: { month_pipeline_cost_usd: usage.totals.costUsd, running: usage.totals.running },
-    todos: todos.map((item) => ({
-      id: item.id,
-      organization_id: item.organizationId,
-      title: item.title,
-      notes: item.description === item.title ? null : item.description,
-      created_at: item.createdAt,
-      repos: item.targets.map((target) => ({
-        id: target.repositoryId,
-        owner: target.owner,
-        name: target.name,
+    activeNextBefore: board.activeNextBefore,
+    historyNextBefore: board.historyNextBefore,
+    todos: board.items
+      .filter((item) => item.status === 'open' && item.column === 'in_progress')
+      .map((item) => ({
+        id: item.id,
+        organization_id: item.organizationId,
+        title: item.title,
+        notes: item.notes,
+        created_at: item.createdAt,
+        repos: item.targets.map((target) => ({
+          id: target.repositoryId,
+          owner: target.owner,
+          name: target.name,
+        })),
       })),
-    })),
-    tasks: await Promise.all(tasks.map((item) => workItemPlan(item, false))),
+    tasks: board.items
+      .filter((item) => item.status !== 'open' || item.column === 'done')
+      .map((item) => ({
+        id: item.id,
+        title: item.title,
+        created_at: item.createdAt,
+        error: null,
+        archived: false,
+        status:
+          item.column === 'done'
+            ? 'completed'
+            : item.status === 'planning'
+              ? 'analyzing'
+              : item.status === 'awaiting_approval'
+                ? 'plan_ready'
+                : 'approved',
+        repos: item.targets.map((target) => ({
+          repository_id: target.repositoryId,
+          owner: target.owner,
+          name: target.name,
+          provider: target.provider,
+          feature_id: target.deliveryId,
+          pr_number: target.changeNumber,
+          feature_status: target.changeStatus ?? target.deliveryStatus,
+          feature_error: null,
+          verification: null,
+        })),
+      })),
     organizations: organizations.items.map((organization) => ({
       id: organization.id,
       name: organization.name,
@@ -220,7 +248,8 @@ export async function getBoard(): Promise<ApiBoard> {
 }
 
 export async function getTask(id: number): Promise<ApiTaskDetail> {
-  return workItemPlan(await getWorkItemResource(id), true);
+  const view = await call((client) => client.views.getWorkItemView({ path: { workItemId: id } }));
+  return workItemPlan(view.workItem, true, view);
 }
 
 export async function getUsage(): Promise<ApiUsage> {
@@ -286,31 +315,17 @@ function diffFiles(patch: string): ApiFeatureDetail['files'] {
 }
 
 export async function getFeature(id: number): Promise<ApiFeatureDetail> {
-  const delivery = await call((client) =>
-    client.deliveries.getDelivery({ path: { deliveryId: id } }),
-  );
-  const [workItem, change] = await Promise.all([
-    getWorkItemResource(delivery.workItemId),
-    delivery.change
-      ? call((client) => client.changes.getChange({ path: { changeId: delivery.change!.id } }))
-      : Promise.resolve(null),
-  ]);
-  const revisionArtifact = change?.currentRevision
-    ? await call((client) =>
-        client.artifacts.getArtifact({
-          path: { artifactId: change.currentRevision!.artifactId },
-        }),
-      )
-    : null;
+  const {
+    delivery,
+    workItem,
+    change,
+    revision: revisionArtifact,
+    plan: planArtifact,
+    factoryRuns: runs,
+  } = await call((client) => client.views.getDeliveryView({ path: { deliveryId: id } }));
   const revision = isJsonObject(revisionArtifact?.value) ? revisionArtifact.value : null;
   const files = revision && isString(revision.patch) ? diffFiles(revision.patch) : [];
-  const planArtifact = await planArtifactForWorkItem(workItem);
   const plan = asPlan(planArtifact?.value);
-  const runs = await Promise.all(
-    delivery.factoryRuns.map((run) =>
-      call((client) => client.executions.getFactoryRun({ path: { factoryRunId: run.id } })),
-    ),
-  );
   const reviewOutcomes = change?.currentRevision?.reviewOutcomes ?? [];
   return {
     feature: {
@@ -327,7 +342,16 @@ export async function getFeature(id: number): Promise<ApiFeatureDetail> {
     provider: delivery.repository.provider,
     diff_version: change?.currentRevision?.headSha ?? null,
     cr_number: delivery.repository.provider === 'github' ? null : (delivery.change?.number ?? null),
-    checks: [],
+    checks: (change?.checks ?? []).map((check) => ({
+      name: check.name,
+      status:
+        check.status === 'completed'
+          ? ['success', 'neutral', 'skipped'].includes(check.conclusion ?? '')
+            ? 'passed'
+            : 'failed'
+          : check.status,
+      summary: check.conclusion,
+    })),
     plan: plan.plan,
     pr: delivery.change
       ? {
@@ -343,31 +367,56 @@ export async function getFeature(id: number): Promise<ApiFeatureDetail> {
     more_files: 0,
     reviews: reviewOutcomes.map((outcome) => ({
       state: outcome.verdict,
-      body: outcome.conclusion,
-      author: null,
+      body: [
+        outcome.summary,
+        ...outcome.findings.map(
+          (finding) =>
+            `**${finding.severity} · ${finding.path}:${finding.line}**\n\n${finding.body}`,
+        ),
+      ].join('\n\n'),
+      author: outcome.author,
     })),
     comments: [],
     demo: null,
-    criteria: plan.acceptance.map((text) => ({
-      text,
-      verdict: null,
-      note: null,
-      screenshot_url: null,
-    })),
-    verification: null,
+    criteria: plan.acceptance.map((text) => {
+      const evidence = change?.verification?.criteria.find((criterion) => criterion.text === text);
+      return {
+        text,
+        verdict: evidence?.verdict ?? null,
+        note: evidence?.evidence ?? null,
+        screenshot_url: null,
+      };
+    }),
+    verification: change?.verification
+      ? {
+          status: change.verification.verdict,
+          total: change.verification.criteria.length,
+          failed: change.verification.criteria.filter((criterion) => criterion.verdict === 'failed')
+            .length,
+        }
+      : null,
     runs: runs.flatMap((run) =>
       run.stages.flatMap((stage) =>
         stage.agentRuns.map((agentRun) => ({
           id: agentRun.id,
-          kind: run.flowKey === 'review' ? 'verify' : 'generate',
+          kind:
+            stage.stageKey === 'verify'
+              ? 'verify'
+              : stage.stageKey === 'repair'
+                ? 'fix'
+                : stage.stageKey === 'review'
+                  ? 'review'
+                  : 'generate',
           success: agentRun.status === 'succeeded',
           created_at: agentRun.createdAt,
         })),
       ),
     ),
-    lifecycle_runs: runs.map((run) => ({
+    lifecycle_runs: [...runs].reverse().map((run) => ({
       id: run.id,
-      profile: run.flowKey === 'review' ? 'automatic_review' : 'full_delivery',
+      retry_kind:
+        run.flowKey === 'change_delivery' ? 'delivery' : run.flowKey === 'review' ? 'review' : null,
+      profile: run.flowKey === 'review' ? 'automatic_review' : delivery.processProfile,
       status:
         run.status === 'waiting'
           ? 'awaiting_human'
@@ -380,7 +429,12 @@ export async function getFeature(id: number): Promise<ApiFeatureDetail> {
                 : 'active',
       start_stage: run.stages[0]?.stageKey ?? '',
       stop_after_stage: run.stages.at(-1)?.stageKey ?? '',
-      handoff_reason: null,
+      handoff_reason: (() => {
+        const event = [...run.events].reverse().find((event) => event.kind === 'delivery_waiting');
+        return event && isJsonObject(event.payload) && isString(event.payload.reason)
+          ? event.payload.reason
+          : null;
+      })(),
       created_at: run.createdAt,
       completed_at: run.completedAt,
       stages: run.stages.map((stage) => ({
@@ -402,7 +456,16 @@ export async function getFeature(id: number): Promise<ApiFeatureDetail> {
         started_at: stage.startedAt,
         completed_at: stage.completedAt,
       })),
-      events: [],
+      events: run.events.map((event) => ({
+        key: String(event.id),
+        kind: event.kind,
+        decision: null,
+        reason:
+          isJsonObject(event.payload) && isString(event.payload.reason)
+            ? event.payload.reason
+            : null,
+        created_at: event.createdAt,
+      })),
     })),
   };
 }
@@ -639,10 +702,12 @@ export async function getSettings(): Promise<ApiSettings> {
           enabled: repository.settings.enabled,
           review_on_push: repository.settings.reviewOnPush,
           review_push_debounce_minutes: 0,
-          process_profile: 'full_delivery',
-          blocking_reviews: true,
-          auto_fix: false,
-          auto_merge: false,
+          process_profile: repository.settings.processProfile,
+          blocking_reviews: repository.settings.blockingReviews,
+          auto_fix: ['assisted_delivery', 'full_delivery'].includes(
+            repository.settings.processProfile,
+          ),
+          auto_merge: repository.settings.processProfile === 'full_delivery',
           auto_resolve_conflicts: false,
           demo_videos: false,
           check_command: repository.settings.checkCommand,
@@ -981,12 +1046,22 @@ export const archiveWorkItem = (id: number, archived: boolean) =>
   call((client) =>
     client.workItems.updateWorkItem({
       path: { workItemId: id },
-      payload: { status: archived ? 'completed' : 'open' },
+      payload: { archived },
     }),
   );
 
 export const retryDelivery = (id: number) =>
   call((client) => client.deliveries.startDeliveryRun({ path: { deliveryId: id }, payload: {} }));
+
+export async function resumeDelivery(id: number) {
+  const delivery = await call((client) =>
+    client.deliveries.getDelivery({ path: { deliveryId: id } }),
+  );
+  if (!delivery.change) throw new ApiError('There is no change to resume', 409);
+  return call((client) =>
+    client.changes.resumeDelivery({ path: { changeId: delivery.change!.id } }),
+  );
+}
 
 export async function reviewDelivery(id: number) {
   const delivery = await call((client) =>
@@ -1246,7 +1321,13 @@ export const setRepositoryIntegration = (
 
 export const updateRepositorySettings = (
   repositoryId: number,
-  values: { enabled?: boolean; review_on_push?: boolean; check_command?: string | null },
+  values: {
+    enabled?: boolean;
+    review_on_push?: boolean;
+    check_command?: string | null;
+    process_profile?: import('../../domain/repository-policy.ts').ProcessProfile;
+    blocking_reviews?: boolean;
+  },
 ) =>
   call((client) =>
     client.repositories.updateRepositorySettings({
@@ -1254,7 +1335,9 @@ export const updateRepositorySettings = (
       payload: {
         enabled: values.enabled,
         reviewOnPush: values.review_on_push,
-        checkCommand: values.check_command ?? undefined,
+        checkCommand: values.check_command,
+        processProfile: values.process_profile,
+        blockingReviews: values.blocking_reviews,
       },
     }),
   );
@@ -1283,7 +1366,12 @@ export const createCloneCredential = (repositoryId: number, scope: 'read' | 'wri
     }),
   );
 
-export async function createProject(owner: string, name: string, description?: string) {
+export async function createProject(
+  owner: string,
+  name: string,
+  description?: string,
+  processProfile?: import('../../domain/repository-policy.ts').ProcessProfile,
+) {
   const [me, integrations] = await Promise.all([
     getCurrentUser(),
     call((client) => client.integrations.listIntegrations({})),
@@ -1311,6 +1399,7 @@ export async function createProject(owner: string, name: string, description?: s
         owner,
         name,
         description,
+        processProfile,
       },
     }),
   );

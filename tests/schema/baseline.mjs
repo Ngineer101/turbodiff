@@ -9,9 +9,9 @@ const directory = path.resolve('db/migrations');
 const files = (await readdir(directory)).filter((file) => file.endsWith('.sql')).sort();
 const journal = JSON.parse(await readFile(path.join(directory, 'meta', '_journal.json'), 'utf8'));
 
-if (files.length !== 3 || journal.entries.length !== 3) {
+if (files.length !== 4 || journal.entries.length !== 4) {
   throw new Error(
-    `Expected the baseline, model catalog, and delivery chat migrations, found ${files.length} files and ${journal.entries.length} journal entries`,
+    `Expected the baseline, model catalog, work-item archive, and delivery recovery migrations, found ${files.length} files and ${journal.entries.length} journal entries`,
   );
 }
 

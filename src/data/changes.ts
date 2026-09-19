@@ -19,6 +19,7 @@ export interface ChangeRow {
   status: ChangeStatus;
   created_at: string;
   updated_at: string;
+  delivery_recovery_at: string | null;
 }
 
 export interface ChangeRevisionRow {
@@ -184,10 +185,25 @@ export async function recordReviewOutcome(input: {
   `);
 }
 
-export async function listReviewOutcomes(changeRevisionId: number): Promise<ReviewOutcomeRow[]> {
-  return queryRows<ReviewOutcomeRow>(sql`
-    SELECT * FROM app.review_outcomes
-    WHERE change_revision_id = ${changeRevisionId}
-    ORDER BY agent_run_id
+export async function listReviewOutcomes(
+  changeRevisionId: number,
+): Promise<Array<ReviewOutcomeRow & { agent_name: string; output_artifact_id: number }>> {
+  return queryRows<ReviewOutcomeRow & { agent_name: string; output_artifact_id: number }>(sql`
+    SELECT outcome.*, agent.name AS agent_name, run.output_artifact_id
+    FROM app.review_outcomes outcome
+    JOIN app.agent_runs run ON run.id = outcome.agent_run_id AND run.organization_id = outcome.organization_id
+    JOIN app.agents agent ON agent.id = run.agent_id AND agent.organization_id = run.organization_id
+    WHERE outcome.change_revision_id = ${changeRevisionId}
+    ORDER BY outcome.agent_run_id
   `);
+}
+
+/** Match immutable heads, including historical revisions, without moving the current head. */
+export function findChangesAtHead(
+  repositoryId: number,
+  headSha: string,
+): Promise<ChangeRevisionRow[]> {
+  return queryRows(sql`SELECT revision.* FROM app.change_revisions revision
+    JOIN app.changes change ON change.id = revision.change_id AND change.organization_id = revision.organization_id
+    WHERE change.repository_id = ${repositoryId} AND revision.head_sha = ${headSha}`);
 }

@@ -1,3 +1,8 @@
+import { changeVerification } from '../../../application/factory/verification-view.ts';
+import { resumeDeliveryRun } from '../../../data/delivery-lifecycle.ts';
+import { repositoryPolicy } from '../../../domain/repository-policy.ts';
+import { listChangeChecks } from '../../../data/change-checks.ts';
+import { reviewArtifactSchema } from '../../../artifacts/review.ts';
 import { Context, Effect, Layer } from 'effect';
 import {
   getChange,
@@ -7,7 +12,6 @@ import {
   updateChangeStatus,
   type ChangeRevisionRow,
   type ChangeRow,
-  type ReviewOutcomeRow,
 } from '../../../data/changes.ts';
 import {
   createFactoryRunWithStage,
@@ -56,7 +60,18 @@ const providerEffect = <A>(run: () => Promise<A>): Effect.Effect<A, DomainError>
     },
   });
 
-const serializeRevision = (revision: ChangeRevisionRow | null, outcomes: ReviewOutcomeRow[]) =>
+type ReviewOutcome = Awaited<ReturnType<typeof listReviewOutcomes>>[number];
+const reviewDetails = async (outcome: ReviewOutcome) => {
+  const row = await getArtifact(outcome.output_artifact_id);
+  if (!row || row.organization_id !== outcome.organization_id)
+    throw new Error('review artifact is missing');
+  const artifact = await loadJsonArtifact(row, reviewArtifactSchema);
+  return { ...outcome, summary: artifact.summary, findings: artifact.findings };
+};
+const serializeRevision = (
+  revision: ChangeRevisionRow | null,
+  outcomes: Array<Awaited<ReturnType<typeof reviewDetails>>>,
+) =>
   revision
     ? {
         id: revision.id,
@@ -66,6 +81,9 @@ const serializeRevision = (revision: ChangeRevisionRow | null, outcomes: ReviewO
         artifactId: revision.artifact_id,
         reviewOutcomes: outcomes.map((outcome) => ({
           agentRunId: outcome.agent_run_id,
+          author: outcome.agent_name,
+          summary: outcome.summary,
+          findings: outcome.findings,
           verdict: outcome.verdict,
           conclusion: outcome.conclusion,
           coverageStatus: outcome.coverage_status,
@@ -77,11 +95,11 @@ const serializeRevision = (revision: ChangeRevisionRow | null, outcomes: ReviewO
       }
     : null;
 
-const serialize = (
+const serialize = async (
   change: ChangeRow,
   revision: ChangeRevisionRow | null,
-  outcomes: ReviewOutcomeRow[],
-): Change => ({
+  outcomes: ReviewOutcome[],
+): Promise<Change> => ({
   id: change.id,
   organizationId: change.organization_id,
   repositoryId: change.repository_id,
@@ -95,7 +113,18 @@ const serialize = (
   url: change.url,
   origin: change.origin,
   status: change.status,
-  currentRevision: serializeRevision(revision, outcomes),
+  currentRevision: serializeRevision(revision, await Promise.all(outcomes.map(reviewDetails))),
+  verification: revision
+    ? await changeVerification(change.id, revision.id, change.organization_id)
+    : null,
+  checks: revision
+    ? (await listChangeChecks(revision.id)).map((check) => ({
+        name: check.name,
+        status: check.status,
+        conclusion: check.conclusion,
+        detailsUrl: check.details_url,
+      }))
+    : [],
   createdAt: change.created_at,
   updatedAt: change.updated_at,
 });
@@ -117,6 +146,10 @@ export interface ChangeOperations {
   ) => Effect.Effect<typeof ChangeCollection.Type, DomainError>;
   readonly get: (user: CurrentUserIdentity, id: number) => Effect.Effect<Change, DomainError>;
   readonly createReviewRun: (
+    user: CurrentUserIdentity,
+    id: number,
+  ) => Effect.Effect<{ factoryRunId: number; stageRunId: number; status: 'queued' }, DomainError>;
+  readonly resumeDelivery: (
     user: CurrentUserIdentity,
     id: number,
   ) => Effect.Effect<{ factoryRunId: number; stageRunId: number; status: 'queued' }, DomainError>;
@@ -169,8 +202,12 @@ export const ChangeServiceLive = Layer.effect(
             ),
           );
           return {
-            items: rows.map((change, index) =>
-              serialize(change, revisions[index] ?? null, outcomes[index] ?? []),
+            items: yield* dataEffect(() =>
+              Promise.all(
+                rows.map((change, index) =>
+                  serialize(change, revisions[index] ?? null, outcomes[index] ?? []),
+                ),
+              ),
             ),
           };
         }),
@@ -179,7 +216,7 @@ export const ChangeServiceLive = Layer.effect(
           const change = yield* owned(user, id);
           const revision = yield* dataEffect(() => latestChangeRevision(id));
           const outcomes = revision ? yield* dataEffect(() => listReviewOutcomes(revision.id)) : [];
-          return serialize(change, revision, outcomes);
+          return yield* dataEffect(() => serialize(change, revision, outcomes));
         }),
       createReviewRun: (user, id) =>
         Effect.gen(function* () {
@@ -218,6 +255,35 @@ export const ChangeServiceLive = Layer.effect(
           return {
             factoryRunId: started.factoryRun.id,
             stageRunId: started.stageRun.id,
+            status: 'queued' as const,
+          };
+        }),
+      resumeDelivery: (user, id) =>
+        Effect.gen(function* () {
+          const change = yield* owned(user, id);
+          yield* requireOrganizationWrite(user, change.organization_id);
+          const repository = yield* dataEffect(() => getRepository(change.repository_id));
+          if (
+            !change.delivery_id ||
+            !['factory', 'automation'].includes(change.origin) ||
+            change.status !== 'open' ||
+            !repository?.enabled ||
+            !repositoryPolicy(repository.settings).verify
+          )
+            return yield* Effect.fail(
+              conflict('Automatic delivery is unavailable for this change'),
+            );
+          const stage = yield* dataEffect(() => resumeDeliveryRun(change));
+          yield* dataEffect(() =>
+            dependencies.enqueueFactory({
+              kind: 'run_factory',
+              factoryRunId: stage.factory_run_id,
+              stageRunId: stage.id,
+            }),
+          );
+          return {
+            factoryRunId: stage.factory_run_id,
+            stageRunId: stage.id,
             status: 'queued' as const,
           };
         }),

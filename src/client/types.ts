@@ -1,15 +1,7 @@
 // Presentation models consumed by the existing SPA. The server contract lives
 // in src/api/contract and is adapted to these shapes by client/lib/backend.ts.
 
-export type ApiProcessProfile =
-  | 'review_on_demand'
-  | 'automatic_review'
-  | 'review_and_repair'
-  | 'idea_to_pr'
-  | 'assisted_delivery'
-  | 'full_delivery'
-  | 'native_turnkey'
-  | 'legacy_factory';
+export type ApiProcessProfile = import('../domain/repository-policy.ts').ProcessProfile;
 
 // One session (generation, review, fix, or verify run) inside a shipped
 // feature's usage accordion.
@@ -147,6 +139,7 @@ export interface ApiAgentRun {
     | 'plan_refine'
     | 'generate'
     | 'verify'
+    | 'review'
     | 'fix'
     | 'chat'
     | 'automation'
@@ -160,6 +153,11 @@ export interface ApiAgentRun {
 // runs there) since ApiPlan is also every board card's shape (ApiBoard.tasks),
 // and the board never renders runs — folding it in would cost an extra query
 // per card.
+export type ApiTaskSummary = Pick<
+  ApiPlan,
+  'id' | 'title' | 'status' | 'error' | 'created_at' | 'archived' | 'repos'
+>;
+
 export interface ApiTaskDetail extends ApiPlan {
   runs: ApiAgentRun[];
 }
@@ -201,6 +199,7 @@ export interface ApiChatList {
 
 export interface ApiLifecycleRun {
   id: number;
+  retry_kind: 'delivery' | 'review' | null;
   profile: ApiProcessProfile;
   status: 'active' | 'awaiting_human' | 'handed_off' | 'completed' | 'failed' | 'cancelled';
   start_stage: string;
@@ -585,7 +584,9 @@ export interface ApiBoard {
   // month_cost_usd, which was review-stage cost only and did not match /usage).
   stats: { month_pipeline_cost_usd: number; running: number };
   todos: ApiTodo[];
-  tasks: ApiPlan[]; // non-archived
+  tasks: ApiTaskSummary[];
+  activeNextBefore: string | null;
+  historyNextBefore: string | null;
   organizations: { id: string; name: string }[];
   repos: { id: number; owner: string; name: string; organization_id: string }[];
 }

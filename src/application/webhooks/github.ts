@@ -1,4 +1,9 @@
+import { repositoryPolicy } from '../../domain/repository-policy.ts';
+import { reconcileChangeDelivery } from '../factory/delivery-lifecycle.ts';
+import { recordChangeCheck } from '../../data/change-checks.ts';
+import { findChangesAtHead } from '../../data/changes.ts';
 import { z } from 'zod';
+import { ensureBuiltinAgents } from '../../data/agents.ts';
 import {
   deletePristinePersonalOrganization,
   ensureGithubOrganization,
@@ -62,6 +67,55 @@ const repositoryEvent = z.object({
   repository: webhookRepository,
 });
 
+const workflowRunEvent = z.object({
+  action: z.string(),
+  installation: z.object({ id: z.number().int().positive() }),
+  repository: webhookRepository,
+  workflow_run: z.object({
+    id: z.number().int().positive(),
+    workflow_id: z.number().int().positive(),
+    event: z.string(),
+    name: z.string().nullable(),
+    head_sha: z.string().regex(/^[a-f0-9]{40}$/),
+    status: z.string(),
+    conclusion: z.string().nullable(),
+    html_url: z.string().url(),
+    updated_at: z.string().datetime(),
+  }),
+});
+
+async function handleWorkflowRun(
+  event: z.infer<typeof workflowRunEvent>,
+  reconcile: typeof reconcileChangeDelivery,
+): Promise<WebhookHandlerResult> {
+  const repository = await getRepositoryByProviderExternalId('github', String(event.repository.id));
+  if (!repository || repository.source_external_account_id !== String(event.installation.id)) {
+    return { body: { ok: true, skipped: 'repository not tracked by installation' } };
+  }
+  const integration = await getIntegration(repository.source_integration_id);
+  if (!integration?.enabled || !repository.enabled)
+    return { body: { ok: true, skipped: 'repository disabled' } };
+  const run = event.workflow_run;
+  const changes = await findChangesAtHead(repository.id, run.head_sha);
+  for (const revision of changes) {
+    await recordChangeCheck(revision, {
+      name: `${run.name ?? 'GitHub Actions'} (workflow ${run.workflow_id}, ${run.event})`,
+      status:
+        run.status === 'completed'
+          ? 'completed'
+          : run.status === 'in_progress'
+            ? 'running'
+            : 'queued',
+      conclusion: run.conclusion,
+      details_url: run.html_url,
+      updated_at: run.updated_at,
+    });
+  }
+  for (const changeId of new Set(changes.map((revision) => revision.change_id)))
+    await reconcile(changeId);
+  return { body: { ok: true, checksUpdated: changes.length } };
+}
+
 type WebhookRepository = z.infer<typeof webhookRepository>;
 type InstallationEvent = z.infer<typeof installationEvent>;
 type PullRequestEvent = z.infer<typeof pullRequestEvent>;
@@ -74,6 +128,7 @@ export interface WebhookHandlerResult {
 }
 export interface GithubWebhookDependencies {
   enqueueFactory?: typeof enqueueFactoryMessage;
+  reconcileDelivery?: typeof reconcileChangeDelivery;
 }
 
 const ownerAndName = (repository: WebhookRepository) => {
@@ -119,6 +174,7 @@ async function handleInstallation(event: InstallationEvent): Promise<WebhookHand
       accountLogin: event.installation.account.login,
       ownerUserId,
     });
+    await ensureBuiltinAgents(organization.id);
     integration = await upsertExternalIntegration({
       organizationId: organization.id,
       kind: 'scm',
@@ -170,9 +226,14 @@ async function handleRepository(event: RepositoryEvent): Promise<WebhookHandlerR
 async function handlePullRequest(
   event: PullRequestEvent,
   enqueue: typeof enqueueFactoryMessage,
+  reconcile: typeof reconcileChangeDelivery,
 ): Promise<WebhookHandlerResult> {
   const repository = await getRepositoryByProviderExternalId('github', String(event.repository.id));
-  if (!repository) return { body: { ok: true, skipped: 'repository not tracked' } };
+  if (
+    !repository?.enabled ||
+    repository.source_external_account_id !== String(event.installation?.id)
+  )
+    return { body: { ok: true, skipped: 'repository not tracked by installation' } };
   const integration = await getIntegration(repository.source_integration_id);
   if (!integration || !integration.enabled)
     return { body: { ok: true, skipped: 'integration disabled' } };
@@ -195,7 +256,13 @@ async function handlePullRequest(
         : 'human',
     status,
   });
-  if (status !== 'open' || event.pull_request.draft)
+  const policy = repositoryPolicy(repository.settings);
+  if (policy.verify && change.origin === 'factory') {
+    // Publication attaches the delivery. If the webhook wins that race, recovery starts it later.
+    await reconcile(change.id);
+    return { body: { ok: true, change: change.id } };
+  }
+  if (status !== 'open' || event.pull_request.draft || !policy.review)
     return { body: { ok: true, change: change.id } };
   const settings = isJsonObject(repository.settings) ? repository.settings : {};
   if (event.action === 'synchronize' && settings.reviewOnPush !== true)
@@ -229,6 +296,7 @@ async function handlePullRequest(
 
 export function createGithubWebhookService(dependencies: GithubWebhookDependencies = {}) {
   const enqueue = dependencies.enqueueFactory ?? enqueueFactoryMessage;
+  const reconcile = dependencies.reconcileDelivery ?? reconcileChangeDelivery;
   return {
     async handle(name: string, payload: JsonValue): Promise<WebhookHandlerResult> {
       if (!isJsonObject(payload))
@@ -245,10 +313,16 @@ export function createGithubWebhookService(dependencies: GithubWebhookDependenci
           ? handleRepository(parsed.data)
           : { body: { ok: false, error: 'invalid repository payload' }, status: 400 };
       }
+      if (name === 'workflow_run') {
+        const parsed = workflowRunEvent.safeParse(payload);
+        return parsed.success
+          ? handleWorkflowRun(parsed.data, reconcile)
+          : { body: { ok: false, error: 'invalid workflow run payload' }, status: 400 };
+      }
       if (name === 'pull_request') {
         const parsed = pullRequestEvent.safeParse(payload);
         return parsed.success
-          ? handlePullRequest(parsed.data, enqueue)
+          ? handlePullRequest(parsed.data, enqueue, reconcile)
           : { body: { ok: false, error: 'invalid pull request payload' }, status: 400 };
       }
       return { body: { ok: true, ignored: name } };

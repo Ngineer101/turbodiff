@@ -1,3 +1,4 @@
+import { ViewsHandlers } from './views/handlers.ts';
 import { HttpApiBuilder, HttpApp, HttpServer } from '@effect/platform';
 import { env } from 'cloudflare:workers';
 import { Effect, Layer, Scope } from 'effect';
@@ -73,6 +74,7 @@ export function createEffectApiHandler(
     SkillsHandlers,
     WorkItemsHandlers,
     ArtifactsHandlers,
+    ViewsHandlers,
   ).pipe(Layer.provide(ServicesLive));
   const ApiLive = HttpApiBuilder.api(AppApi).pipe(
     Layer.provide(HandlersLive),

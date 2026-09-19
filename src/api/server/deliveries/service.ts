@@ -1,3 +1,4 @@
+import { repositoryPolicy } from '../../../domain/repository-policy.ts';
 import { Context, Effect, Layer } from 'effect';
 import {
   activeAcceptanceContract,
@@ -15,7 +16,7 @@ import {
   type DeliveryMessageWithRun,
 } from '../../../data/deliveries.ts';
 import { sendDeliveryChatMessage } from '../../../application/delivery-chat.ts';
-import { createFactoryRunWithStage, listFactoryRuns } from '../../../data/execution.ts';
+import { createFactoryRunWithStage, listDeliveryFactoryRuns } from '../../../data/execution.ts';
 import { DELIVERY_FLOW } from '../../../application/factory/flows.ts';
 import type { CurrentUserIdentity } from '../../contract/auth.ts';
 import type { Delivery, DeliveryMessage } from '../../contract/deliveries.ts';
@@ -101,7 +102,7 @@ export const DeliveryServiceLive = Layer.effect(
             getDeliveryRepository(id),
             activeAcceptanceContract(id),
             listChangesForDelivery(id),
-            listFactoryRuns({ deliveryId: id }),
+            listDeliveryFactoryRuns(id),
           ]),
         );
         if (!repository) return yield* Effect.fail(notFound('Unknown delivery repository'));
@@ -116,6 +117,7 @@ export const DeliveryServiceLive = Layer.effect(
             name: repository.name,
             provider: repository.source_provider,
           },
+          processProfile: repositoryPolicy(repository.settings).processProfile,
           status: delivery.status,
           acceptanceContract: acceptance ? serializeContract(acceptance) : null,
           change: change

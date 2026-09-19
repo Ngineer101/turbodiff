@@ -11,11 +11,6 @@ export const PROCESS_PROFILES: {
   artifactsOnly?: boolean;
 }[] = [
   {
-    value: 'legacy_factory',
-    label: 'Legacy factory',
-    description: 'Preserve the existing end-to-end factory behavior for factory-created changes.',
-  },
-  {
     value: 'review_on_demand',
     label: 'Review on demand',
     description: 'Review any open change only when a person explicitly requests it.',
@@ -24,12 +19,6 @@ export const PROCESS_PROFILES: {
     value: 'automatic_review',
     label: 'Automatic review',
     description: 'Automatically review qualifying human, automation, and factory changes.',
-  },
-  {
-    value: 'review_and_repair',
-    label: 'Review + repair',
-    description:
-      'Automatically review writable changes, repair blocking findings, and re-review until clean or handed off.',
   },
   {
     value: 'idea_to_pr',
@@ -46,11 +35,5 @@ export const PROCESS_PROFILES: {
     value: 'full_delivery',
     label: 'Full delivery',
     description: 'Run the full lifecycle through merge when every gate passes.',
-  },
-  {
-    value: 'native_turnkey',
-    label: 'Native turnkey',
-    description: 'Run full delivery using native Artifacts change requests.',
-    artifactsOnly: true,
   },
 ];

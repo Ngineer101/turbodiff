@@ -1,3 +1,4 @@
+import { ViewsApi } from './views.ts';
 import { HttpApi } from '@effect/platform';
 import { SessionAuth } from './auth.ts';
 import { AutomationsApi } from './automations.ts';
@@ -28,5 +29,6 @@ export const AppApi = HttpApi.make('appApi')
   .add(ExecutionsApi)
   .add(ReportingApi)
   .add(ArtifactsApi)
+  .add(ViewsApi)
   .prefix('/api')
   .middleware(SessionAuth);

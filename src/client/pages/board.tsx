@@ -13,10 +13,18 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import {
+  startTransition,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { toast } from 'sonner';
-import type { ApiBoard, ApiPlan, ApiTodo } from '../types.ts';
+import type { ApiBoard, ApiTaskSummary, ApiTodo } from '../types.ts';
 import { ApiError } from '../lib/api.ts';
 import {
   archiveWorkItem,
@@ -29,7 +37,7 @@ import {
 import { useDictation } from '../lib/dictation.ts';
 import { ago, fmtUsd } from '../lib/format.ts';
 import { applyOptimistic, optimisticId, optimisticNow } from '../lib/optimistic.ts';
-import { boardQuery, modelsQuery } from '../lib/queries.ts';
+import { boardPageQuery, modelsQuery } from '../lib/queries.ts';
 import { nextIndex, noOverlayOpen, onListboxKeyDown } from '../lib/shortcuts.ts';
 import { taskColumn, taskStages, taskState } from '../lib/task-state.ts';
 import { useIsDesktop } from '../lib/use-is-desktop.ts';
@@ -62,7 +70,6 @@ import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popove
 // The home board: To Do (unstarted todos, deletable) → In Progress (started
 // tasks — planning through open PR) → Done (merged). Started tasks are only
 // ever archived, never deleted.
-
 type ColumnKey = 'todo' | 'in_progress' | 'done';
 
 function onApiError<T>(err: T) {
@@ -861,7 +868,7 @@ function TodoCard({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
   );
 }
 
-function TaskCard({ task }: { task: ApiPlan }) {
+function TaskCard({ task }: { task: ApiTaskSummary }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const state = taskState(task);
@@ -912,7 +919,13 @@ function TaskCard({ task }: { task: ApiPlan }) {
       <div className="flex items-baseline justify-between gap-2">
         <Serial n={task.id} />
         <span className="flex items-center gap-2">
-          {done ? <Stamp tone="ok">MERGED</Stamp> : null}
+          {done ? (
+            <Stamp tone="ok">
+              {task.repos.length > 0 && task.repos.every((r) => r.feature_status === 'merged')
+                ? 'MERGED'
+                : 'COMPLETED'}
+            </Stamp>
+          ) : null}
           <ConfirmButton
             variant="ghost"
             size="icon"
@@ -1219,7 +1232,11 @@ function moveBoardFocus(key: string) {
 }
 
 export function BoardPage() {
-  const { data } = useSuspenseQuery(boardQuery);
+  const [activePages, setActivePages] = useState<string[]>([]);
+  const [historyPages, setHistoryPages] = useState<string[]>([]);
+  const { data } = useSuspenseQuery(
+    boardPageQuery({ activeBefore: activePages.at(-1), historyBefore: historyPages.at(-1) }),
+  );
   const isDesktop = useIsDesktop();
   useHotkeys(
     'j,k,down,up,h,l,left,right',
@@ -1284,8 +1301,8 @@ export function BoardPage() {
           count={todos.length}
           empty={repoFilter !== null ? filteredEmpty : 'The backlog is empty — add todos above.'}
         >
-          {todos.map((t) => (
-            <TodoCard key={t.id} todo={t} board={data} />
+          {todos.map((todo) => (
+            <TodoCard key={todo.id} todo={todo} board={data} />
           ))}
         </Column>
       ),
@@ -1301,8 +1318,8 @@ export function BoardPage() {
           count={inProgress.length}
           empty={repoFilter !== null ? filteredEmpty : 'Start a todo to put the agents to work.'}
         >
-          {inProgress.map((t) => (
-            <TaskCard key={t.id} task={t} />
+          {inProgress.map((task) => (
+            <TaskCard key={task.id} task={task} />
           ))}
         </Column>
       ),
@@ -1350,6 +1367,50 @@ export function BoardPage() {
           </div>
         ) : null}
       </div>
+
+      <nav aria-label="Board pages" className="mt-4 flex flex-wrap gap-4 text-xs text-mute">
+        {[
+          {
+            label: 'In progress',
+            pages: activePages,
+            setPages: setActivePages,
+            next: data.activeNextBefore,
+          },
+          {
+            label: 'Done',
+            pages: historyPages,
+            setPages: setHistoryPages,
+            next: data.historyNextBefore,
+          },
+        ].map(({ label, pages, setPages, next }) =>
+          pages.length > 0 || next !== null ? (
+            <div key={label} className="flex items-center gap-2">
+              <span>
+                {label} · page {pages.length + 1}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={!pages.length}
+                onClick={() => startTransition(() => setPages((previous) => previous.slice(0, -1)))}
+              >
+                Newer
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={next === null}
+                onClick={() => {
+                  if (next !== null)
+                    startTransition(() => setPages((previous) => [...previous, next]));
+                }}
+              >
+                Older
+              </Button>
+            </div>
+          ) : null,
+        )}
+      </nav>
 
       {/* Mobile: filter chips instead of three side-by-side columns. */}
       <div

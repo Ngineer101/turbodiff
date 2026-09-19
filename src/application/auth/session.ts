@@ -1,11 +1,7 @@
 import { ensureBuiltinAgents } from '../../data/agents.ts';
-import { hasEnabledGithubIntegration } from '../../data/integrations.ts';
+import { getSessionAccess } from '../../data/session-access.ts';
 import { getAuthUser } from '../../data/auth-users.ts';
-import {
-  claimGithubOrganizations,
-  ensurePersonalOrganization,
-  listOrganizationsForUser,
-} from '../../data/organizations.ts';
+import { claimGithubOrganizations, ensurePersonalOrganization } from '../../data/organizations.ts';
 import { withAuth, type AuthUser } from '../../integrations/auth/better-auth.ts';
 import { isNumber, isString } from '../../shared/json.ts';
 
@@ -34,25 +30,31 @@ async function resolveAuthedUser(
   identity: AuthUser,
   preferredOrganizationId?: string | null,
 ): Promise<AuthedUser> {
-  if (identity.githubId) await claimGithubOrganizations(identity.id, identity.githubId);
-  let organizations = await listOrganizationsForUser(identity.id);
-  if (organizations.length === 0) {
-    await ensurePersonalOrganization(identity.id, identity.name || identity.email);
-    organizations = await listOrganizationsForUser(identity.id);
+  let access = await getSessionAccess(identity.id, identity.githubId ?? null);
+  if (access.has_unclaimed && identity.githubId) {
+    await claimGithubOrganizations(identity.id, identity.githubId);
+    access = await getSessionAccess(identity.id, identity.githubId);
   }
-  const organizationIds = organizations.map((organization) => organization.id);
+  if (access.organization_ids.length === 0) {
+    const organization = await ensurePersonalOrganization(
+      identity.id,
+      identity.name || identity.email,
+    );
+    await ensureBuiltinAgents(organization.id);
+    access = await getSessionAccess(identity.id, identity.githubId ?? null);
+  }
+  const organizationIds = access.organization_ids;
   const preferred =
     preferredOrganizationId && organizationIds.includes(preferredOrganizationId)
       ? preferredOrganizationId
       : null;
   const activeOrganizationId = preferred ?? organizationIds[0];
   if (!activeOrganizationId) throw new Error('authenticated user has no organization');
-  await ensureBuiltinAgents(activeOrganizationId);
 
   const login = identity.login ?? null;
   const githubUserId = identity.githubId ?? null;
   const githubConnected = login !== null && githubUserId !== null;
-  const integrationConnected = await hasEnabledGithubIntegration(organizationIds);
+  const integrationConnected = access.github_connected;
   return {
     session: { authUserId: identity.id, githubUserId, login },
     organizationIds,

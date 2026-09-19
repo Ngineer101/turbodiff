@@ -509,6 +509,7 @@ export const workItems = appSchema.table(
     title: text().notNull(),
     description: text().notNull(),
     status: text().default('open').notNull(),
+    archivedAt: timestamp('archived_at', { withTimezone: true, mode: 'string' }),
     approvedPlanArtifactId: bigint('approved_plan_artifact_id', { mode: 'number' }),
     createdByUserId: text('created_by_user_id'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
@@ -675,6 +676,10 @@ export const changes = appSchema.table(
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
       .defaultNow()
       .notNull(),
+    deliveryRecoveryAt: timestamp('delivery_recovery_at', {
+      withTimezone: true,
+      mode: 'string',
+    }),
   },
   (table) => [
     index('changes_repository_status_idx').on(table.repositoryId, table.status, table.createdAt),

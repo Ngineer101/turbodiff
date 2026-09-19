@@ -34,7 +34,7 @@ const implementInputSchema = z
 const repairInputSchema = z
   .object({
     operation: z.literal('repair'),
-    checkCommand: requiredText,
+    checkCommand: requiredText.nullable(),
     checkOutput: z.string(),
     freshSession: z.boolean(),
     originalTaskFile: requiredText,
@@ -94,13 +94,13 @@ ${input.instructions}
 
 function repairPrompt(input: ImplementRepairInput): string {
   const checkOutput = input.checkOutput || '(command exited unsuccessfully without output)';
-  return `${input.freshSession ? `Read ${input.originalTaskFile} for the task previously implemented in this checkout.\n\n` : ''}The repository check command (\`${input.checkCommand}\`) failed after your changes:
+  return `${input.freshSession ? `Read ${input.originalTaskFile} for the task previously implemented in this checkout.\n\n` : ''}Delivery validation${input.checkCommand ? ` (\`${input.checkCommand}\`)` : ''} reported failures after your changes:
 
 \`\`\`
 ${checkOutput}
 \`\`\`
 
-Fix only the failures caused by your changes, then re-run the check to confirm. Do not commit, push, or expand the task's scope. If a failure clearly pre-dates the task and cannot be fixed safely, record that in ${input.outputFiles.notes} and stop.
+Fix the demonstrated failures in CI, review, or acceptance evidence, then run relevant checks to confirm. If dependencies are needed, install them using the repository's declared package manager and version. Write a concise summary to ${input.outputFiles.summary} and implementation notes to ${input.outputFiles.notes}. Do not commit, push, or expand the task's scope. If a failure clearly pre-dates the task and cannot be fixed safely, record that in ${input.outputFiles.notes} and stop.
 
 ${UNTRUSTED_CONTENT_RULES}
 `;
