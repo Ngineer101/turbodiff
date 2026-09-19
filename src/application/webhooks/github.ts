@@ -1,3 +1,5 @@
+import { recordChangeCheck } from '../../data/change-checks.ts';
+import { findChangesAtHead } from '../../data/changes.ts';
 import { z } from 'zod';
 import { ensureBuiltinAgents } from '../../data/agents.ts';
 import {
@@ -62,6 +64,51 @@ const repositoryEvent = z.object({
   installation: z.object({ id: z.number().int().positive() }).optional(),
   repository: webhookRepository,
 });
+
+const workflowRunEvent = z.object({
+  action: z.string(),
+  installation: z.object({ id: z.number().int().positive() }),
+  repository: webhookRepository,
+  workflow_run: z.object({
+    id: z.number().int().positive(),
+    workflow_id: z.number().int().positive(),
+    name: z.string().nullable(),
+    head_sha: z.string().regex(/^[a-f0-9]{40}$/),
+    status: z.string(),
+    conclusion: z.string().nullable(),
+    html_url: z.string().url(),
+    updated_at: z.string().datetime(),
+  }),
+});
+
+async function handleWorkflowRun(
+  event: z.infer<typeof workflowRunEvent>,
+): Promise<WebhookHandlerResult> {
+  const repository = await getRepositoryByProviderExternalId('github', String(event.repository.id));
+  if (!repository || repository.source_external_account_id !== String(event.installation.id)) {
+    return { body: { ok: true, skipped: 'repository not tracked by installation' } };
+  }
+  const integration = await getIntegration(repository.source_integration_id);
+  if (!integration?.enabled || !repository.enabled)
+    return { body: { ok: true, skipped: 'repository disabled' } };
+  const run = event.workflow_run;
+  const changes = await findChangesAtHead(repository.id, run.head_sha);
+  for (const revision of changes) {
+    await recordChangeCheck(revision, {
+      name: `${run.name ?? 'GitHub Actions'} (workflow ${run.workflow_id})`,
+      status:
+        run.status === 'completed'
+          ? 'completed'
+          : run.status === 'in_progress'
+            ? 'running'
+            : 'queued',
+      conclusion: run.conclusion,
+      details_url: run.html_url,
+      updated_at: run.updated_at,
+    });
+  }
+  return { body: { ok: true, checksUpdated: changes.length } };
+}
 
 type WebhookRepository = z.infer<typeof webhookRepository>;
 type InstallationEvent = z.infer<typeof installationEvent>;
@@ -246,6 +293,12 @@ export function createGithubWebhookService(dependencies: GithubWebhookDependenci
         return parsed.success
           ? handleRepository(parsed.data)
           : { body: { ok: false, error: 'invalid repository payload' }, status: 400 };
+      }
+      if (name === 'workflow_run') {
+        const parsed = workflowRunEvent.safeParse(payload);
+        return parsed.success
+          ? handleWorkflowRun(parsed.data)
+          : { body: { ok: false, error: 'invalid workflow run payload' }, status: 400 };
       }
       if (name === 'pull_request') {
         const parsed = pullRequestEvent.safeParse(payload);

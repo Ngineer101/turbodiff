@@ -1,5 +1,6 @@
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from '@effect/platform';
 import { Schema } from 'effect';
+import { PROCESS_PROFILES } from '../../domain/repository-policy.ts';
 import { DomainError } from './errors.ts';
 
 const PositiveInt = Schema.Int.pipe(Schema.positive());
@@ -51,6 +52,7 @@ export const CreateRepository = Schema.Struct({
   owner: Schema.String,
   name: Schema.String,
   description: Schema.optional(Schema.String),
+  processProfile: Schema.optional(Schema.Literal(...PROCESS_PROFILES)),
 });
 export type CreateRepository = typeof CreateRepository.Type;
 
@@ -140,6 +142,8 @@ export const RepositorySettings = Schema.Struct({
   id: PositiveInt,
   enabled: Schema.Boolean,
   reviewOnPush: Schema.Boolean,
+  processProfile: Schema.Literal(...PROCESS_PROFILES),
+  blockingReviews: Schema.Boolean,
   checkCommand: Schema.NullOr(Schema.String),
 });
 export type RepositorySettings = typeof RepositorySettings.Type;
@@ -147,7 +151,9 @@ export type RepositorySettings = typeof RepositorySettings.Type;
 export const UpdateRepositorySettings = Schema.Struct({
   enabled: Schema.optional(Schema.Boolean),
   reviewOnPush: Schema.optional(Schema.Boolean),
-  checkCommand: Schema.optional(Schema.String),
+  processProfile: Schema.optional(Schema.Literal(...PROCESS_PROFILES)),
+  blockingReviews: Schema.optional(Schema.Boolean),
+  checkCommand: Schema.optional(Schema.NullOr(Schema.String)),
 });
 export type UpdateRepositorySettings = typeof UpdateRepositorySettings.Type;
 

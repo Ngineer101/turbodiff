@@ -1,3 +1,4 @@
+import type { ProcessProfile } from '../../domain/repository-policy.ts';
 import { env } from 'cloudflare:workers';
 import { redactSecrets } from '../../integrations/agent-runtime/redaction.ts';
 import { runnerSandbox } from '../../integrations/agent-runtime/sandbox.ts';
@@ -8,6 +9,7 @@ import {
   recordRepositoryRef,
   removeRepositories,
   upsertRepositories,
+  updateRepository,
   type RepositoryRow,
 } from '../../data/repositories.ts';
 import { getIntegration } from '../../data/integrations.ts';
@@ -47,6 +49,7 @@ export async function createArtifactsProject(input: {
   owner: string;
   name: string;
   description?: string;
+  processProfile?: ProcessProfile;
 }): Promise<CreatedProject> {
   if (!PROJECT_SEGMENT.test(input.owner) || !PROJECT_SEGMENT.test(input.name)) {
     throw new Error(`owner and name must match ${PROJECT_SEGMENT}`);
@@ -87,6 +90,8 @@ export async function createArtifactsProject(input: {
     ]);
     const repo = await getRepositoryByExternalId(integration.id, created.name);
     if (!repo) throw new Error('repository insert returned no row');
+    if (input.processProfile)
+      await updateRepository(repo.id, { settings: { processProfile: input.processProfile } });
     return { repo, remote: created.remote };
   } catch (failure) {
     await env.GIT_ARTIFACTS.delete(created.name).catch((cleanupFailure) => {
