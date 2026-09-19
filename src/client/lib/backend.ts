@@ -530,15 +530,18 @@ export const sendDeliveryMessage = (id: number, body: string) =>
   );
 
 export async function getAgents(): Promise<ApiAgentsList> {
-  const [me, agents] = await Promise.all([
+  const [me, agents, organizations] = await Promise.all([
     getCurrentUser(),
     call((client) => client.agents.listAgents({})),
+    call((client) => client.organizations.listOrganizations({})),
   ]);
   const models = await getModels();
   return {
     github_app_slug: me.githubAppSlug,
+    organizations: organizations.items.map(({ id, name }) => ({ id, name })),
     agents: agents.items.map((agent) => ({
       id: agent.id,
+      organization_id: agent.organizationId,
       slug: agent.slug,
       name: agent.name,
       description: agent.description,
@@ -556,6 +559,7 @@ export async function getAgent(id: number): Promise<ApiAgentDetail> {
   return {
     agent: {
       id: agent.id,
+      organization_id: agent.organizationId,
       slug: agent.slug,
       name: agent.name,
       description: agent.description,
@@ -568,10 +572,15 @@ export async function getAgent(id: number): Promise<ApiAgentDetail> {
 }
 
 export async function getSkills(): Promise<ApiSkillsList> {
-  const skills = await call((client) => client.skills.listSkills({}));
+  const [skills, organizations] = await Promise.all([
+    call((client) => client.skills.listSkills({})),
+    call((client) => client.organizations.listOrganizations({})),
+  ]);
   return {
+    organizations: organizations.items.map(({ id, name }) => ({ id, name })),
     skills: skills.items.map((skill) => ({
       id: skill.id,
+      organization_id: skill.organizationId,
       slug: skill.slug,
       name: skill.name,
       description: null,
@@ -585,6 +594,7 @@ export async function getSkill(id: number): Promise<ApiSkillDetail> {
   return {
     skill: {
       id: skill.id,
+      organization_id: skill.organizationId,
       slug: skill.slug,
       name: skill.name,
       description: null,
@@ -741,16 +751,19 @@ function automationSchedule(schedule: string) {
 }
 
 export async function getAutomations(): Promise<ApiAutomationsList> {
-  const [automations, repositories] = await Promise.all([
+  const [automations, repositories, organizations] = await Promise.all([
     call((client) => client.automations.listAutomations({})),
     call((client) => client.repositories.listRepositories({})),
+    call((client) => client.organizations.listOrganizations({})),
   ]);
   return {
+    organizations: organizations.items.map(({ id, name }) => ({ id, name })),
     automations: automations.items.map((automation) => {
       const schedule = automationSchedule(automation.schedule);
       const repository = repositories.items.find((item) => item.id === automation.repositoryId);
       return {
         id: automation.id,
+        organization_id: automation.organizationId,
         name: automation.name,
         repository: repository
           ? { id: repository.id, owner: repository.owner, name: repository.name }

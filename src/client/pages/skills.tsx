@@ -6,9 +6,8 @@ import { EntityCard, EntityGrid, EntityListHeader } from '../components/entity-l
 import { EmptyState } from '../components/section.tsx';
 import { buttonVariants } from '../components/ui/button.tsx';
 import { Pill } from '../components/ui/pill.tsx';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs.tsx';
 
-// One flat list — skills are generic: any skill can be enabled on any repo
-// (settings), regardless of which organization the repo lives in.
 export function SkillsPage() {
   const { data } = useSuspenseQuery(skillsQuery);
 
@@ -44,36 +43,58 @@ export function SkillsPage() {
         }
       />
 
-      {data.skills.length === 0 ? (
+      {data.organizations.length === 0 ? (
         <div className="mt-6">
           <EmptyState>No skills yet — create one, or import one from skills.sh.</EmptyState>
         </div>
       ) : (
-        <EntityGrid>
-          {data.skills.map((s) => (
-            <Link
-              key={s.id}
-              to="/skills/$skillId/edit"
-              params={{ skillId: String(s.id) }}
-              className="block active:scale-[0.99]"
-            >
-              <EntityCard
-                kind="skill"
-                slug={s.slug}
-                name={s.name}
-                interactive
-                chips={
-                  <>
-                    <Pill>{s.slug}</Pill>
-                    {s.source === 'skills.sh' ? <Pill tone="on">skills.sh</Pill> : null}
-                    {s.source === 'github' ? <Pill>imported</Pill> : null}
-                  </>
-                }
-                description={s.description ?? undefined}
-              />
-            </Link>
-          ))}
-        </EntityGrid>
+        <Tabs defaultValue={data.organizations[0]!.id} className="mt-6">
+          <TabsList>
+            {data.organizations.map((organization) => (
+              <TabsTrigger key={organization.id} value={organization.id}>
+                {organization.name}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          {data.organizations.map((organization) => {
+            const skills = data.skills.filter(
+              (skill) => skill.organization_id === organization.id,
+            );
+            return (
+              <TabsContent key={organization.id} value={organization.id}>
+                {skills.length === 0 ? (
+                  <EmptyState>No skills yet for {organization.name}.</EmptyState>
+                ) : (
+                  <EntityGrid>
+                    {skills.map((s) => (
+                      <Link
+                        key={s.id}
+                        to="/skills/$skillId/edit"
+                        params={{ skillId: String(s.id) }}
+                        className="block active:scale-[0.99]"
+                      >
+                        <EntityCard
+                          kind="skill"
+                          slug={s.slug}
+                          name={s.name}
+                          interactive
+                          chips={
+                            <>
+                              <Pill>{s.slug}</Pill>
+                              {s.source === 'skills.sh' ? <Pill tone="on">skills.sh</Pill> : null}
+                              {s.source === 'github' ? <Pill>imported</Pill> : null}
+                            </>
+                          }
+                          description={s.description ?? undefined}
+                        />
+                      </Link>
+                    ))}
+                  </EntityGrid>
+                )}
+              </TabsContent>
+            );
+          })}
+        </Tabs>
       )}
     </div>
   );
