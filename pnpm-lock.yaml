@@ -1,4 +1,3 @@
----
 lockfileVersion: '9.0'
 
 settings:
@@ -2246,6 +2245,7 @@ packages:
         optional: true
 
   '@radix-ui/react-roving-focus@1.1.13':
+    resolution: {integrity: sha512-9gkwneI0guf8JDmrFxPjJF6Ozzgioyw+/lonYNCwefS9ZHA05er0BVHiXr+LbWGHxUfczvMY6G1oiZZi1VzjRw==}
     peerDependencies:
       '@types/react': '*'
       '@types/react-dom': '*'
@@ -2280,7 +2280,7 @@ packages:
         optional: true
 
   '@radix-ui/react-tabs@1.1.13':
-    resolution: {integrity: sha512-7xdcatg7/U+7+Udyoj2zodtI9H/IIop0fAxsYuPzjsaWM40pYN04RLWTI1ZSrQjoq1kM4VodZgxttAEM1ctC3w==}
+    resolution: {integrity: sha512-7xdcatg7/U+7+Udyoj2zodtI9H/IIopqo+YOIcZOq1nJwXWBZ9p8xiu5llXlekDbZkca79a/fozEYQXIA4sW6A==}
     peerDependencies:
       '@types/react': '*'
       '@types/react-dom': '*'
