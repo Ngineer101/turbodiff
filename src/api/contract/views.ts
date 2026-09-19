@@ -26,10 +26,51 @@ export const DeliveryView = Schema.Struct({
   factoryRuns: Schema.Array(FactoryRun),
 });
 export type DeliveryView = typeof DeliveryView.Type;
+const PositiveInt = Schema.Int.pipe(Schema.positive());
+export const BoardCursors = Schema.Struct({
+  activeBefore: Schema.optional(Schema.NumberFromString.pipe(Schema.int(), Schema.positive())),
+  historyBefore: Schema.optional(Schema.NumberFromString.pipe(Schema.int(), Schema.positive())),
+});
+export const BoardView = Schema.Struct({
+  items: Schema.Array(
+    Schema.Struct({
+      id: PositiveInt,
+      organizationId: Schema.String,
+      title: Schema.String,
+      notes: Schema.NullOr(Schema.String),
+      status: Schema.Literal(
+        'open',
+        'planning',
+        'awaiting_approval',
+        'approved',
+        'in_progress',
+        'completed',
+        'cancelled',
+      ),
+      createdAt: Schema.String,
+      targets: Schema.Array(
+        Schema.Struct({
+          repositoryId: PositiveInt,
+          owner: Schema.String,
+          name: Schema.String,
+          provider: Schema.String,
+          deliveryId: Schema.NullOr(PositiveInt),
+          deliveryStatus: Schema.NullOr(Schema.String),
+          changeNumber: Schema.NullOr(PositiveInt),
+          changeStatus: Schema.NullOr(Schema.String),
+        }),
+      ),
+    }),
+  ),
+  activeNextBefore: Schema.NullOr(PositiveInt),
+  historyNextBefore: Schema.NullOr(PositiveInt),
+});
+export type BoardView = typeof BoardView.Type;
 export const ViewsApi = HttpApiGroup.make('views')
   .add(
-    HttpApiEndpoint.get('listWorkItemViews', '/work-item-views')
-      .addSuccess(Schema.Struct({ items: Schema.Array(WorkItemView) }))
+    HttpApiEndpoint.get('getBoardView', '/board-view')
+      .setUrlParams(BoardCursors)
+      .addSuccess(BoardView)
       .addError(DomainError),
   )
   .add(

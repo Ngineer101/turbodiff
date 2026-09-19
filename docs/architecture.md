@@ -266,6 +266,8 @@ vp run db:verify
 
 Typed read views compose existing work items, deliveries, changes, runs, and artifacts on the server. The browser loads a task or delivery view in one authenticated request; these projections add no new execution primitive.
 
+The board uses `GET /api/board-view`, a summary projection independent of task-detail hydration. It reads at most 50 active work items and 25 completed work items per page, plus one sentinel per group for cursors, followed by one batched repository/delivery/latest-change query. Cancelled tasks are excluded. Tenant membership scopes both queries. Active work and completed history have independent `id` keyset cursors exposed by Newer/Older controls; refreshes never walk additional pages automatically. Board cards contain no plan bodies, factory runs, stage runs, agent runs or lifecycle events. Full todo requirements remain available to the start dialog; task and feature detail endpoints retain their existing artifact and history reads.
+
 One Effect `HttpApi` mounted at `/api` owns the complete signed-in JSON data plane. There is no legacy fallback router or second authorization stack. Unknown `/api` resources are contract `404` responses.
 
 The API layout is:

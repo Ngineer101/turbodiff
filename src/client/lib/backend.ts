@@ -176,32 +176,62 @@ async function workItemPlan(
   };
 }
 
-export async function getBoard(): Promise<ApiBoard> {
-  const [workItems, repositories, organizations, usage] = await Promise.all([
-    call((client) => client.views.listWorkItemViews({})),
+export interface BoardPage {
+  activeBefore?: number;
+  historyBefore?: number;
+}
+
+export async function getBoard(page: BoardPage = {}): Promise<ApiBoard> {
+  const [board, repositories, organizations, usage] = await Promise.all([
+    call((client) => client.views.getBoardView({ urlParams: page })),
     call((client) => client.repositories.listRepositories({})),
     call((client) => client.organizations.listOrganizations({})),
     call((client) => client.reporting.getUsageSummary({})),
   ]);
-  const todos = workItems.items
-    .map((view) => view.workItem)
-    .filter((item) => item.status === 'open');
-  const tasks = workItems.items.filter((view) => view.workItem.status !== 'open');
   return {
     stats: { month_pipeline_cost_usd: usage.totals.costUsd, running: usage.totals.running },
-    todos: todos.map((item) => ({
-      id: item.id,
-      organization_id: item.organizationId,
-      title: item.title,
-      notes: item.description === item.title ? null : item.description,
-      created_at: item.createdAt,
-      repos: item.targets.map((target) => ({
-        id: target.repositoryId,
-        owner: target.owner,
-        name: target.name,
+    activeNextBefore: board.activeNextBefore,
+    historyNextBefore: board.historyNextBefore,
+    todos: board.items
+      .filter((item) => item.status === 'open')
+      .map((item) => ({
+        id: item.id,
+        organization_id: item.organizationId,
+        title: item.title,
+        notes: item.notes,
+        created_at: item.createdAt,
+        repos: item.targets.map((target) => ({
+          id: target.repositoryId,
+          owner: target.owner,
+          name: target.name,
+        })),
       })),
-    })),
-    tasks: await Promise.all(tasks.map((view) => workItemPlan(view.workItem, false, view))),
+    tasks: board.items
+      .filter((item) => item.status !== 'open')
+      .map((item) => ({
+        id: item.id,
+        title: item.title,
+        created_at: item.createdAt,
+        error: null,
+        archived: item.status === 'completed',
+        status:
+          item.status === 'planning'
+            ? 'analyzing'
+            : item.status === 'awaiting_approval'
+              ? 'plan_ready'
+              : 'approved',
+        repos: item.targets.map((target) => ({
+          repository_id: target.repositoryId,
+          owner: target.owner,
+          name: target.name,
+          provider: target.provider,
+          feature_id: target.deliveryId,
+          pr_number: target.changeNumber,
+          feature_status: target.changeStatus ?? target.deliveryStatus,
+          feature_error: null,
+          verification: null,
+        })),
+      })),
     organizations: organizations.items.map((organization) => ({
       id: organization.id,
       name: organization.name,

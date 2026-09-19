@@ -373,7 +373,7 @@ const PERSISTED_KEYS = new Set([
   'usage',
 ]);
 // Bump to drop persisted caches whose shape no longer matches the client.
-const PERSIST_BUSTER = 'v4';
+const PERSIST_BUSTER = 'v5';
 const persistOptions: PersistQueryClientOptions = {
   queryClient,
   persister: createSyncStoragePersister({

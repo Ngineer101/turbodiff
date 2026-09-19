@@ -1,3 +1,4 @@
+import { readBoardPage } from '../../../data/board.ts';
 import { HttpApiBuilder } from '@effect/platform';
 import { Effect } from 'effect';
 import { AppApi } from '../../contract/api.ts';
@@ -54,16 +55,10 @@ export const ViewsHandlers = HttpApiBuilder.group(
         };
       });
     return handlers
-      .handle('listWorkItemViews', () =>
+      .handle('getBoardView', ({ urlParams }) =>
         Effect.gen(function* () {
           const user = yield* CurrentUser;
-          const items = yield* workItems.list(user);
-          const model = yield* dataEffect(() => resolveModel());
-          return {
-            items: yield* Effect.forEach(items.items, (item) =>
-              workItemView(user, item, canonicalModelId(model)),
-            ),
-          };
+          return yield* dataEffect(() => readBoardPage(user.organizationIds, urlParams));
         }),
       )
       .handle('getWorkItemView', ({ path }) =>

@@ -27,7 +27,7 @@ import {
   getUsage,
 } from './backend.ts';
 import { CHAT_TURN_PENDING } from './chat-rail.ts';
-import type { ApiPlan } from '../types.ts';
+import type { ApiTaskSummary } from '../types.ts';
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -63,7 +63,7 @@ export function retryQueued(error: string | null | undefined): boolean {
   return error === 'retry queued' || error?.startsWith('retry scheduled in ') === true;
 }
 
-export function taskIsLive(p: ApiPlan): boolean {
+export function taskIsLive(p: ApiTaskSummary): boolean {
   if (RUNNING_PLAN_STATUSES.has(p.status)) return true;
   if (p.repos.some((r) => r.verification?.status === 'running')) return true;
   // Approved and some repo has no PR yet: that repo's generation is in
@@ -93,11 +93,13 @@ export const meQuery = queryOptions({
   },
 });
 
-export const boardQuery = queryOptions({
-  queryKey: ['board'],
-  queryFn: getBoard,
-  refetchInterval: (query) => (query.state.data?.tasks.some(taskIsLive) ? LIVE_POLL_MS : false),
-});
+export const boardPageQuery = (page: { activeBefore?: number; historyBefore?: number } = {}) =>
+  queryOptions({
+    queryKey: page.activeBefore || page.historyBefore ? ['board', page] : ['board'],
+    queryFn: () => getBoard(page),
+    refetchInterval: (query) => (query.state.data?.tasks.some(taskIsLive) ? LIVE_POLL_MS : false),
+  });
+export const boardQuery = boardPageQuery();
 
 export const taskQuery = (id: number) =>
   queryOptions({

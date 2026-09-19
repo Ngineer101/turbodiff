@@ -46,8 +46,12 @@ describe('factory read views', () => {
       expect(
         (await handle(new Request(`https://app.test/api/work-items/${item.id}/view`))).status,
       ).toBe(404);
-      const list = await handle(new Request('https://app.test/api/work-item-views'));
-      expect(await list.json()).toEqual({ items: [] });
+      const list = await handle(new Request('https://app.test/api/board-view'));
+      expect(await list.json()).toEqual({
+        items: [],
+        activeNextBefore: null,
+        historyNextBefore: null,
+      });
     }));
 
   it('reflects membership revocation immediately without a cached authorization decision', () =>
