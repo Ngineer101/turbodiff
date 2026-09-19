@@ -67,9 +67,10 @@ import { Kbd } from '../components/ui/kbd.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover.tsx';
 
-// Unstarted and started work share In progress; completed work is Done.
-// Cancelled and archived items are excluded by the server before pagination.
-type ColumnKey = 'in_progress' | 'done';
+// The home board: To Do (unstarted todos, deletable) → In Progress (started
+// tasks — planning through open PR) → Done (merged). Started tasks are only
+// ever archived, never deleted.
+type ColumnKey = 'todo' | 'in_progress' | 'done';
 
 function onApiError<T>(err: T) {
   toast.error(err instanceof ApiError ? err.message : 'Request failed');
@@ -818,7 +819,7 @@ function TodoCard({ todo, board }: { todo: ApiTodo; board: ApiBoard }) {
       // Tab-reachable so the card keys (Enter/s/d) work without j/k.
       tabIndex={0}
       data-board-card
-      data-column="in_progress"
+      data-column="todo"
       aria-label={todo.title}
       onKeyDown={(e) => {
         // Only when the card itself is focused — keys on inner buttons/links
@@ -1291,30 +1292,35 @@ export function BoardPage() {
 
   const columns: { key: ColumnKey; el: ReactNode }[] = [
     {
+      key: 'todo',
+      el: (
+        <Column
+          key="todo"
+          title="To do"
+          lamp="off"
+          count={todos.length}
+          empty={repoFilter !== null ? filteredEmpty : 'The backlog is empty — add todos above.'}
+        >
+          {todos.map((todo) => (
+            <TodoCard key={todo.id} todo={todo} board={data} />
+          ))}
+        </Column>
+      ),
+    },
+    {
       key: 'in_progress',
       el: (
         <Column
           key="in_progress"
           title="In progress"
-          lamp={inProgress.length + todos.length > 0 ? 'hold' : 'off'}
+          lamp={inProgress.length > 0 ? 'hold' : 'off'}
           pulse={data.stats.running > 0}
-          count={inProgress.length + todos.length}
-          empty={repoFilter !== null ? filteredEmpty : 'Add a task above to get started.'}
+          count={inProgress.length}
+          empty={repoFilter !== null ? filteredEmpty : 'Start a todo to put the agents to work.'}
         >
-          {[
-            ...todos.map((todo) => ({
-              id: todo.id,
-              created_at: todo.created_at,
-              card: <TodoCard key={todo.id} todo={todo} board={data} />,
-            })),
-            ...inProgress.map((task) => ({
-              id: task.id,
-              created_at: task.created_at,
-              card: <TaskCard key={task.id} task={task} />,
-            })),
-          ]
-            .sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id - a.id)
-            .map((item) => item.card)}
+          {inProgress.map((task) => (
+            <TaskCard key={task.id} task={task} />
+          ))}
         </Column>
       ),
     },
@@ -1326,7 +1332,7 @@ export function BoardPage() {
           title="Done"
           lamp={done.length > 0 ? 'go' : 'off'}
           count={done.length}
-          empty={repoFilter !== null ? filteredEmpty : 'Completed and merged tasks land here.'}
+          empty={repoFilter !== null ? filteredEmpty : 'Merged tasks land here.'}
         >
           {done.map((t) => (
             <TaskCard key={t.id} task={t} />
@@ -1406,7 +1412,7 @@ export function BoardPage() {
         )}
       </nav>
 
-      {/* Mobile: filter chips instead of two side-by-side columns. */}
+      {/* Mobile: filter chips instead of three side-by-side columns. */}
       <div
         className="mt-5 flex gap-2 overflow-x-auto pb-1 lg:hidden"
         role="tablist"
@@ -1415,6 +1421,7 @@ export function BoardPage() {
         {(
           [
             ['all', 'All'],
+            ['todo', 'To do'],
             ['in_progress', 'In progress'],
             ['done', 'Done'],
           ] as const
@@ -1436,7 +1443,7 @@ export function BoardPage() {
         ))}
       </div>
 
-      <div className="mt-6 hidden gap-6 lg:grid lg:grid-cols-2">{columns.map((col) => col.el)}</div>
+      <div className="mt-6 hidden gap-6 lg:grid lg:grid-cols-3">{columns.map((col) => col.el)}</div>
       <div className="mt-4 flex flex-col gap-7 lg:hidden">
         {columns.filter((col) => show(col.key)).map((col) => col.el)}
       </div>

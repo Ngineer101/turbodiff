@@ -49,7 +49,7 @@ export async function readBoardPage(
         CASE WHEN wi.status = 'open' THEN NULLIF(wi.description, wi.title) ELSE NULL END AS notes,
         wi.status, wi.created_at,
         to_char(wi.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') || '|' || wi.id AS cursor,
-        CASE WHEN wi.status = 'completed' OR (
+        CASE WHEN (
           EXISTS (SELECT 1 FROM app.work_item_targets t
             WHERE t.work_item_id = wi.id AND t.organization_id = wi.organization_id)
           AND NOT EXISTS (
@@ -62,7 +62,7 @@ export async function readBoardPage(
               ORDER BY updated_at DESC, id DESC LIMIT 1
             ) c ON true
             WHERE t.work_item_id = wi.id AND t.organization_id = wi.organization_id
-              AND NOT (COALESCE(d.status = 'completed', false) OR COALESCE(c.status = 'merged', false))
+              AND NOT COALESCE(c.status = 'merged', false)
           )
         ) THEN 'done' ELSE 'in_progress' END AS board_column
       FROM app.work_items wi

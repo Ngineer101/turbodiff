@@ -59,9 +59,7 @@ export function taskStages(p: ApiTaskSummary): { label: string; state: StageStat
 }
 
 export function taskColumn(p: ApiTaskSummary): 'in_progress' | 'done' {
-  return p.status === 'completed' ||
-    (p.repos.length > 0 &&
-      p.repos.every((r) => r.feature_status === 'merged' || r.feature_status === 'completed'))
+  return p.repos.length > 0 && p.repos.every((r) => r.feature_status === 'merged')
     ? 'done'
     : 'in_progress';
 }

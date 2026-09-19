@@ -30,6 +30,24 @@ describe('bounded factory board projection', () => {
       const stranger = await createTenant();
       const active = await insertItems(owner.organizationId, 51, 'open');
       const completed = await insertItems(owner.organizationId, 26, 'completed');
+      for (const item of completed) {
+        await execute(sql`INSERT INTO app.work_item_targets (work_item_id, repository_id, organization_id, position)
+          VALUES (${item.id}, ${owner.repositoryId}, ${owner.organizationId}, 0)`);
+        const [delivery] = await createDeliveries((await getWorkItem(item.id))!);
+        await upsertChange({
+          organizationId: owner.organizationId,
+          repositoryId: owner.repositoryId,
+          deliveryId: delivery!.id,
+          providerIntegrationId: owner.integrationId,
+          providerKey: `board-history:${item.id}`,
+          number: item.id,
+          title: `Item ${item.id}`,
+          sourceRef: `turbodiff/${item.id}`,
+          targetRef: 'main',
+          origin: 'factory',
+          status: 'merged',
+        });
+      }
       await insertItems(owner.organizationId, 2, 'cancelled');
       const archived = await insertItems(owner.organizationId, 2, 'completed');
       for (const item of archived) await updateWorkItem(item.id, { archived: true });
@@ -83,7 +101,7 @@ describe('bounded factory board projection', () => {
       ).toHaveLength(50);
     }));
 
-  it('classifies completed deliveries and merged changes before applying column page limits', () =>
+  it('classifies only fully merged work as done before applying column page limits', () =>
     rollbackAfter(async () => {
       const tenant = await createTenant();
       // These IDs are older than every merged item, so late client-side classification would hide them.
@@ -105,8 +123,9 @@ describe('bounded factory board projection', () => {
           sourceRef: `turbodiff/${index}`,
           targetRef: 'main',
           origin: 'factory',
+          status: 'merged',
         });
-        await execute(sql`UPDATE app.changes SET status = 'merged' WHERE id = ${change.id}`);
+        expect(change.status).toBe('merged');
       }
       const page = await readBoardPage([tenant.organizationId]);
       expect(
@@ -142,18 +161,24 @@ describe('bounded factory board projection', () => {
       await execute(sql`DELETE FROM app.work_item_targets WHERE work_item_id = ${merged.at(-1)!.id}
         AND repository_id = ${otherRepository!.id}`);
 
-      // A completed delivery is enough even while its latest change has not merged.
+      // Delivery completion means the PR exists; it remains in progress until that PR merges.
+      const openItem = merged.at(-1)!;
       await execute(
-        sql`UPDATE app.changes SET status = 'open' WHERE organization_id = ${tenant.organizationId}`,
+        sql`UPDATE app.changes SET status = 'open' WHERE delivery_id = (
+          SELECT id FROM app.deliveries WHERE work_item_id = ${openItem.id}
+        )`,
       );
       await execute(
-        sql`UPDATE app.deliveries SET status = 'completed' WHERE organization_id = ${tenant.organizationId}`,
+        sql`UPDATE app.deliveries SET status = 'completed' WHERE work_item_id = ${openItem.id}`,
       );
-      expect(await readBoardPage([tenant.organizationId])).toMatchObject({
-        items: page.items.map(({ targets: _targets, ...item }) => item),
+      const withOpenPullRequest = await readBoardPage([tenant.organizationId]);
+      expect(withOpenPullRequest.items.find((item) => item.id === openItem.id)).toMatchObject({
+        column: 'in_progress',
+        targets: [{ changeStatus: 'open', deliveryStatus: 'completed' }],
       });
-      // Cancellation wins over successful delivery; archiving does too.
-      await updateWorkItem(merged.at(-1)!.id, { status: 'cancelled' });
+      expect(withOpenPullRequest.items.filter((item) => item.column === 'done')).toHaveLength(25);
+      // Cancellation hides the open task; archiving hides merged history too.
+      await updateWorkItem(openItem.id, { status: 'cancelled' });
       await updateWorkItem(merged.at(-2)!.id, { archived: true });
       const visible = await readBoardPage([tenant.organizationId]);
       expect(visible.items.filter((item) => item.column === 'done')).toHaveLength(24);
@@ -214,7 +239,7 @@ describe('bounded factory board projection', () => {
         expect((await handle(patch(false))).status).toBe(200);
         expect(
           (await readBoardPage([tenant.organizationId])).items.find((card) => card.id === item!.id),
-        ).toMatchObject({ column: status === 'completed' ? 'done' : 'in_progress' });
+        ).toMatchObject({ column: 'in_progress' });
         expect(await getWorkItem(item!.id)).toMatchObject({
           status,
           completed_at: before.completed_at,
