@@ -28,6 +28,20 @@ export function clampRailWidth(width: number): number {
 // lands.
 export const CHAT_TURN_PENDING = new Set(['queued', 'running']);
 
+export interface ChatFollowUp {
+  id: number;
+  text: string;
+}
+
+export function chatFollowUps(
+  state: ChatFollowUp[],
+  action: { type: 'enqueue'; message: ChatFollowUp } | { type: 'remove'; id: number },
+): ChatFollowUp[] {
+  return action.type === 'enqueue'
+    ? [...state, action.message]
+    : state.filter((message) => message.id !== action.id);
+}
+
 export function pendingTurn(messages: ApiChatMessage[]): ApiChatMessage | null {
   return messages.find((m) => m.role === 'user' && CHAT_TURN_PENDING.has(m.status)) ?? null;
 }
@@ -75,14 +89,10 @@ export interface TurnStep {
 }
 
 // What the turn's status lets us say honestly: queued means no sandbox has
-// picked it up yet; running means the branch is checked out and the agent
-// is working (the runner sets 'running' right before it starts).
+// picked it up yet; running includes checkout, agent execution, and publication.
 export function turnSteps(status: string): TurnStep[] {
   if (status === 'running') {
-    return [
-      { label: 'Sandbox ready, branch checked out', state: 'done' },
-      { label: 'Working on your change', state: 'live' },
-    ];
+    return [{ label: 'Preparing and working on your change', state: 'live' }];
   }
   return [{ label: 'Queued for a sandbox', state: 'live' }];
 }

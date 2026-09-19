@@ -15,6 +15,7 @@ import {
   useEffect,
   useLayoutEffect,
   useRef,
+  useReducer,
   useState,
   type Dispatch,
   type KeyboardEvent,
@@ -27,10 +28,12 @@ import { useHotkeys } from 'react-hotkeys-hook';
 import { toast } from 'sonner';
 import type { ApiChatList, ApiChatMessage, ApiMe } from '../types.ts';
 import { ApiError } from '../lib/api.ts';
-import { sendDeliveryMessage } from '../lib/backend.ts';
+import { sendDeliveryChatTurn } from '../lib/backend.ts';
 import {
   agoShort,
   chatLedger,
+  chatFollowUps,
+  type ChatFollowUp,
   clampRailWidth,
   commitUrl,
   draftKey,
@@ -111,9 +114,9 @@ interface ChatState {
   markSeen: () => void;
   body: string;
   setBody: Dispatch<SetStateAction<string>>;
-  // A follow-up typed while a turn was running: sent the moment it ends.
-  queued: string | null;
-  unqueue: () => void;
+  // Follow-ups are sent in order as each preceding turn ends.
+  queued: ChatFollowUp[];
+  unqueue: (id: number) => void;
   submit: (text: string) => void;
   sending: boolean;
   me: string | null;
@@ -171,7 +174,7 @@ function useChat(featureId: number, visible: boolean): ChatState {
   }, [body, featureId]);
 
   const send = useMutation({
-    mutationFn: (text: string) => sendDeliveryMessage(featureId, text),
+    mutationFn: (text: string) => sendDeliveryChatTurn(featureId, text),
     // The message appears in the transcript on Send; 'queued' status also
     // flips the in-flight state, so the working pill reacts instantly too.
     onMutate: async (text) => {
@@ -204,28 +207,30 @@ function useChat(featureId: number, visible: boolean): ChatState {
   });
   const { mutate, isPending: sending } = send;
 
-  const [queued, setQueued] = useState<string | null>(null);
+  const [queued, dispatchQueue] = useReducer(chatFollowUps, []);
   useEffect(() => {
-    if (inFlight || queued === null || sending) return;
-    setQueued(null);
-    mutate(queued);
+    const next = queued[0];
+    if (inFlight || !next || sending) return;
+    dispatchQueue({ type: 'remove', id: next.id });
+    mutate(next.text);
   }, [inFlight, queued, sending, mutate]);
   const queuedRef = useRef(queued);
   queuedRef.current = queued;
-  // Edit a queued follow-up: it goes back into the box, ahead of any draft.
-  const unqueue = useCallback(() => {
-    const text = queuedRef.current;
-    if (text === null) return;
-    setQueued(null);
-    setBody((prev) => (prev.trim() ? `${text}\n\n${prev}` : text));
+  // Editing removes only the selected follow-up; the others keep their order.
+  const unqueue = useCallback((id: number) => {
+    const message = queuedRef.current.find((entry) => entry.id === id);
+    if (!message) return;
+    dispatchQueue({ type: 'remove', id });
+    setBody((prev) => (prev.trim() ? `${message.text}\n\n${prev}` : message.text));
   }, []);
   const submit = useCallback(
     (text: string) => {
       setDividerAfter(null);
-      if (inFlight) setQueued(text);
-      else mutate(text);
+      if (inFlight || sending || queuedRef.current.length > 0) {
+        dispatchQueue({ type: 'enqueue', message: { id: optimisticId(), text } });
+      } else mutate(text);
     },
-    [inFlight, mutate],
+    [inFlight, sending, mutate],
   );
 
   return {
@@ -593,7 +598,13 @@ function Transcript({
               <PendingTurn message={pending} now={now} />
             </>
           ) : null}
-          {queued !== null ? <QueuedFollowUp text={queued} onEdit={chat.unqueue} /> : null}
+          {queued.map((message) => (
+            <QueuedFollowUp
+              key={message.id}
+              text={message.text}
+              onEdit={() => chat.unqueue(message.id)}
+            />
+          ))}
         </div>
       </div>
       {/* The way back down: yellow when replies landed while scrolled up,

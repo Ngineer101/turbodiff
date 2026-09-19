@@ -1128,6 +1128,9 @@ export const deliveryMessages = appSchema.table(
     authorUserId: text('author_user_id'),
     role: text().notNull(),
     body: text().notNull(),
+    factoryRunId: bigint('factory_run_id', { mode: 'number' }),
+    outcome: text(),
+    commitSha: text('commit_sha'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .defaultNow()
       .notNull(),
@@ -1135,6 +1138,15 @@ export const deliveryMessages = appSchema.table(
   (table) => [
     index('delivery_messages_delivery_idx').on(table.deliveryId, table.id),
     index('delivery_messages_author_idx').on(table.authorUserId),
+    unique('delivery_messages_run_role_unique').on(table.factoryRunId, table.role),
+    foreignKey({
+      columns: [table.factoryRunId, table.organizationId],
+      foreignColumns: [factoryRuns.id, factoryRuns.organizationId],
+    }).onDelete('restrict'),
+    check(
+      'delivery_messages_outcome_check',
+      sql`outcome IS NULL OR outcome IN ('changed', 'no_changes')`,
+    ),
     foreignKey({
       columns: [table.deliveryId, table.organizationId],
       foreignColumns: [deliveries.id, deliveries.organizationId],

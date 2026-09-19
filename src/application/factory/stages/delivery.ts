@@ -1,18 +1,10 @@
-import type { ZodType } from 'zod';
+import { invokeImplementer, runtimeSkills, repositorySettings } from '../invoke-implementer.ts';
 import { implementerAgent, type ImplementerInput } from '../../../agents/implementer.ts';
-import type { AgentExecutionRequest } from '../../../agents/types.ts';
-import {
-  changeRevisionArtifactSchema,
-  type RepositoryChangeArtifact,
-} from '../../../artifacts/change.ts';
+import { changeRevisionArtifactSchema } from '../../../artifacts/change.ts';
 import { storedPlanArtifactSchema } from '../../../artifacts/plan.ts';
-import { runCodingAgent } from '../../../integrations/agent-runtime/coding-agent.ts';
 import { runCheckCommand } from '../../../integrations/agent-runtime/check-command.ts';
-import { readRepositoryChangeArtifact } from '../../../integrations/agent-runtime/repository-change-artifact.ts';
 import { redactSecrets } from '../../../integrations/agent-runtime/redaction.ts';
-import { resolveRunnerAuth } from '../runner-auth.ts';
 import { generationSandbox } from '../../../integrations/agent-runtime/sandbox.ts';
-import { NPM_CACHE_ENV } from '../../../integrations/agent-runtime/sandbox-deps.ts';
 import { mountSkills } from '../../../integrations/agent-runtime/skills.ts';
 import {
   completeWorkItemWhenDelivered,
@@ -20,12 +12,7 @@ import {
   getWorkItem,
   updateDeliveryStatus,
 } from '../../../data/work.ts';
-import {
-  ensureBuiltinAgents,
-  getAgent,
-  getAgentBySlug,
-  type AgentRow,
-} from '../../../data/agents.ts';
+import { ensureBuiltinAgents, getAgent, getAgentBySlug } from '../../../data/agents.ts';
 import { getArtifact } from '../../../data/artifacts.ts';
 import { getAutomation } from '../../../data/automations.ts';
 import {
@@ -43,28 +30,16 @@ import {
   listSkillsForAgent,
   listSkillsForAutomation,
   listSkillsForRepository,
-  type SkillRow,
 } from '../../../data/skills.ts';
 import { buildReviewDiffSnapshot } from '../../../domain/review-context.ts';
 import { remoteSourceOf, resolveWorkspaceRemote } from '../../../integrations/git/provider.ts';
 import { installationToken } from '../../../integrations/github/app.ts';
 import { githubJson } from '../../../integrations/github/client.ts';
 import { buildSandboxMcpConfig } from '../../integrations/mcp-proxy.ts';
-import { isJsonObject, isString } from '../../../shared/json.ts';
 import { loadJsonArtifact, persistJsonArtifact } from '../../artifacts.ts';
-import { runTrackedAgent, type AgentInvocation } from '../agent-run.ts';
+import { runTrackedAgent } from '../agent-run.ts';
 
-const AGENT_TIMEOUT_MS = 25 * 60_000;
 const CHECK_TIMEOUT_MS = 12 * 60_000;
-
-function runtimeSkills(rows: SkillRow[]) {
-  return [...new Map(rows.map((row) => [row.id, row])).values()].map((row) => ({
-    slug: row.slug,
-    name: row.name,
-    description: null,
-    instructions: row.content,
-  }));
-}
 
 function branchName(deliveryId: number, title: string): string {
   const slug = title
@@ -73,68 +48,6 @@ function branchName(deliveryId: number, title: string): string {
     .replaceAll(/^-+|-+$/g, '')
     .slice(0, 40);
   return `turbodiff/delivery-${deliveryId}-${slug || 'change'}`;
-}
-
-interface DeliveryRepositorySettings {
-  checkCommand: string | null;
-}
-
-function repositorySettings(repository: RepositoryRow): DeliveryRepositorySettings {
-  if (!isJsonObject(repository.settings)) return { checkCommand: null };
-  return {
-    checkCommand:
-      isString(repository.settings.checkCommand) && repository.settings.checkCommand.trim()
-        ? repository.settings.checkCommand.trim()
-        : null,
-  };
-}
-
-async function invokeImplementer(
-  agent: AgentRow,
-  repository: RepositoryRow,
-  workDir: string,
-  promptFile: string,
-  summaryFile: string,
-  notesFile: string,
-  request: AgentExecutionRequest,
-  output: ZodType<RepositoryChangeArtifact>,
-  mcp: Awaited<ReturnType<typeof buildSandboxMcpConfig>>,
-): Promise<AgentInvocation<RepositoryChangeArtifact>> {
-  if (request.repositoryAccess !== 'write') throw new Error('implementer must have write access');
-  const auth = await resolveRunnerAuth(request.model);
-  const sanitize = (value: string) =>
-    redactSecrets(value, [...Object.values(auth.vars), ...(mcp?.secrets ?? [])]);
-  const override = agent.instructions_override?.trim();
-  await generationSandbox(repository).writeFile(
-    promptFile,
-    `${request.prompt}${override ? `\n\n## Organization instructions\n${override}` : ''}`,
-  );
-  const run = await runCodingAgent(generationSandbox(repository), auth, {
-    promptFile,
-    cwd: workDir,
-    timeout: AGENT_TIMEOUT_MS,
-    env: NPM_CACHE_ENV,
-    configExtensionJson: mcp?.configJson,
-  });
-  if (!run.success) {
-    throw new Error(
-      `implementation agent exited ${run.exitCode}: ${sanitize(`${run.resultText}\n${run.stderr}`).slice(-1_000)}`,
-    );
-  }
-  return {
-    artifact: await readRepositoryChangeArtifact(
-      generationSandbox(repository),
-      workDir,
-      output,
-      {
-        summary: summaryFile,
-        notes: notesFile,
-      },
-      `${repository.owner}/${repository.name} implementation`,
-    ),
-    run,
-    sanitize,
-  };
 }
 
 async function openGithubPullRequest(input: {

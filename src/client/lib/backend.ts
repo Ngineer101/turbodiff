@@ -515,10 +515,10 @@ export async function getDeliveryChat(id: number): Promise<ApiChatList> {
         role: message.role === 'assistant' ? 'assistant' : 'user',
         body: message.body,
         author: message.authorUserId,
-        status: 'done',
-        outcome: null,
-        commit_sha: null,
-        error: null,
+        status: message.status === 'succeeded' ? 'done' : (message.status ?? 'saved'),
+        outcome: message.outcome,
+        commit_sha: message.commitSha,
+        error: message.error,
         created_at: message.createdAt,
       })),
   };
@@ -527,6 +527,11 @@ export async function getDeliveryChat(id: number): Promise<ApiChatList> {
 export const sendDeliveryMessage = (id: number, body: string) =>
   call((client) =>
     client.deliveries.createDeliveryMessage({ path: { deliveryId: id }, payload: { body } }),
+  );
+
+export const sendDeliveryChatTurn = (id: number, body: string) =>
+  call((client) =>
+    client.deliveries.createDeliveryChatTurn({ path: { deliveryId: id }, payload: { body } }),
   );
 
 export async function getAgents(): Promise<ApiAgentsList> {

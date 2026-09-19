@@ -16,6 +16,8 @@ import {
   claimStageRun,
   createFactoryRunWithStage,
   finishStageRun,
+  failAgentRun,
+  listAgentRunsForStage,
   getFactoryRun,
   getStageRun,
   recordLifecycleEvent,
@@ -33,6 +35,7 @@ import {
 import { isSandboxTransportError } from '../../integrations/agent-runtime/sandbox.ts';
 import { notifyOrganizationsLive } from '../notifications/live-updates.ts';
 import { loadJsonArtifact, persistJsonArtifact } from '../artifacts.ts';
+import { executeChatStage, type ChatStageRuntime } from './stages/chat.ts';
 import { executeDeliveryStage } from './stages/delivery.ts';
 import { executePlanningStage } from './stages/planning.ts';
 import { executeReviewStage } from './stages/review.ts';
@@ -172,7 +175,10 @@ async function prepareAutomationPlan(run: FactoryRunRow, workItem: WorkItemRow):
   await approveWorkItemPlan(workItem.id, artifact);
 }
 
-export async function executeFactoryStage(message: RunFactoryMessage): Promise<void> {
+export async function executeFactoryStage(
+  message: RunFactoryMessage,
+  chatRuntime?: ChatStageRuntime,
+): Promise<void> {
   const [run, stage] = await Promise.all([
     getFactoryRun(message.factoryRunId),
     getStageRun(message.stageRunId),
@@ -190,6 +196,11 @@ export async function executeFactoryStage(message: RunFactoryMessage): Promise<v
   });
 
   try {
+    // An interrupted chat may already have pushed a commit. Never replay its
+    // mutable checkout; expose the failure so a new turn starts from remote HEAD.
+    if (run.flow_key === 'chat' && stage.status === 'running') {
+      throw new Error('Chat execution was interrupted. Check the branch and retry your message.');
+    }
     const flow = factoryFlow(run.flow_key, run.flow_version);
     const definition = flow ? factoryStage(flow, stage.stage_key) : undefined;
     if (!flow || !definition) {
@@ -252,6 +263,11 @@ export async function executeFactoryStage(message: RunFactoryMessage): Promise<v
       await finishSucceeded(run, stage, result.outcome, result);
       return;
     }
+    if (definition.operation === 'chat') {
+      const result = await executeChatStage(run, stage, chatRuntime);
+      await finishSucceeded(run, stage, 'chat_completed', result);
+      return;
+    }
     if (definition.operation === 'review') {
       const result = await executeReviewStage(run, stage);
       await finishSucceeded(run, stage, 'review_completed', result);
@@ -264,11 +280,15 @@ export async function executeFactoryStage(message: RunFactoryMessage): Promise<v
     }
     throw new Error('Unsupported factory operation');
   } catch (failure) {
-    if (isSandboxTransportError(failure)) throw failure;
+    if (run.flow_key !== 'chat' && isSandboxTransportError(failure)) throw failure;
     const detail = failure instanceof Error ? failure.message : 'Factory stage failed';
     await finishStageRun(stage.id, 'failed', { code: 'stage_failed', message: detail });
     await updateFactoryRunStatus(run.id, 'failed');
-    if (run.delivery_id) await updateDeliveryStatus(run.delivery_id, 'failed');
+    if (run.flow_key === 'chat') {
+      for (const agent of await listAgentRunsForStage(stage.id)) {
+        await failAgentRun(agent.id, { code: 'stage_failed', message: detail });
+      }
+    } else if (run.delivery_id) await updateDeliveryStatus(run.delivery_id, 'failed');
     await recordLifecycleEvent({
       organizationId: run.organization_id,
       factoryRunId: run.id,
@@ -296,7 +316,8 @@ export async function failFactoryStageInfrastructure(
     message: detail,
   });
   await updateFactoryRunStatus(run.id, 'failed');
-  if (run.delivery_id) await updateDeliveryStatus(run.delivery_id, 'failed');
+  if (run.flow_key !== 'chat' && run.delivery_id)
+    await updateDeliveryStatus(run.delivery_id, 'failed');
   await recordLifecycleEvent({
     organizationId: run.organization_id,
     factoryRunId: run.id,

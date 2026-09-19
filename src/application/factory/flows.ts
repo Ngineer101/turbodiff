@@ -4,6 +4,7 @@ export type FactoryStageOperation =
   | 'plan'
   | 'dispatch'
   | 'implement'
+  | 'chat'
   | 'review'
   | 'explain'
   | 'invoke_automation';
@@ -71,6 +72,16 @@ export const REVIEW_FLOW = {
   },
 } as const satisfies FactoryFlowDefinition;
 
+export const CHAT_FLOW = {
+  key: 'chat',
+  version: 1,
+  scope: 'delivery',
+  initialStage: 'respond',
+  stages: {
+    respond: { key: 'respond', operation: 'chat', success: { kind: 'complete' } },
+  },
+} as const satisfies FactoryFlowDefinition;
+
 export const AUTOMATION_FLOW = {
   key: 'automation',
   version: 1,
@@ -102,6 +113,7 @@ export const EXPLANATION_FLOW = {
 export const FACTORY_FLOWS = [
   WORK_ITEM_FLOW,
   DELIVERY_FLOW,
+  CHAT_FLOW,
   REVIEW_FLOW,
   AUTOMATION_FLOW,
   EXPLANATION_FLOW,

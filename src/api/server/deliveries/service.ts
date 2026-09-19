@@ -9,11 +9,16 @@ import {
 } from '../../../data/work.ts';
 import { getArtifact } from '../../../data/artifacts.ts';
 import { listChangesForDelivery } from '../../../data/changes.ts';
-import { createDeliveryMessage, listDeliveryMessages } from '../../../data/deliveries.ts';
+import {
+  createDeliveryMessage,
+  listDeliveryMessages,
+  type DeliveryMessageWithRun,
+} from '../../../data/deliveries.ts';
+import { sendDeliveryChatMessage } from '../../../application/delivery-chat.ts';
 import { createFactoryRunWithStage, listFactoryRuns } from '../../../data/execution.ts';
 import { DELIVERY_FLOW } from '../../../application/factory/flows.ts';
 import type { CurrentUserIdentity } from '../../contract/auth.ts';
-import type { Delivery } from '../../contract/deliveries.ts';
+import type { Delivery, DeliveryMessage } from '../../contract/deliveries.ts';
 import {
   badRequest,
   conflict,
@@ -55,32 +60,17 @@ export interface DeliveryOperations {
   readonly listMessages: (
     user: CurrentUserIdentity,
     id: number,
-  ) => Effect.Effect<
-    {
-      items: Array<{
-        id: number;
-        role: 'user' | 'assistant' | 'system';
-        body: string;
-        authorUserId: string | null;
-        createdAt: string;
-      }>;
-    },
-    DomainError
-  >;
+  ) => Effect.Effect<{ items: DeliveryMessage[] }, DomainError>;
   readonly createMessage: (
     user: CurrentUserIdentity,
     id: number,
     body: string,
-  ) => Effect.Effect<
-    {
-      id: number;
-      role: 'user' | 'assistant' | 'system';
-      body: string;
-      authorUserId: string | null;
-      createdAt: string;
-    },
-    DomainError
-  >;
+  ) => Effect.Effect<DeliveryMessage, DomainError>;
+  readonly createChatTurn: (
+    user: CurrentUserIdentity,
+    id: number,
+    body: string,
+  ) => Effect.Effect<DeliveryMessage, DomainError>;
   readonly startRun: (
     user: CurrentUserIdentity,
     id: number,
@@ -151,12 +141,17 @@ export const DeliveryServiceLive = Layer.effect(
         } satisfies Delivery;
       });
 
-    const serializeMessage = (message: Awaited<ReturnType<typeof createDeliveryMessage>>) => ({
+    const serializeMessage = (message: DeliveryMessageWithRun) => ({
       id: message.id,
       role: message.role,
       body: message.body,
       authorUserId: message.author_user_id,
       createdAt: message.created_at,
+      factoryRunId: message.factory_run_id,
+      status: message.status,
+      outcome: message.outcome,
+      commitSha: message.commit_sha,
+      error: message.error,
     });
 
     return {
@@ -172,16 +167,45 @@ export const DeliveryServiceLive = Layer.effect(
           const delivery = yield* owned(user, id);
           const body = rawBody.trim();
           if (!body) return yield* Effect.fail(badRequest('Message body is required'));
-          return serializeMessage(
-            yield* dataEffect(() =>
-              createDeliveryMessage({
-                delivery,
+          const message = yield* dataEffect(() =>
+            createDeliveryMessage({
+              delivery,
+              authorUserId: user.session.authUserId,
+              role: 'user',
+              body,
+            }),
+          );
+          return serializeMessage({ ...message, status: null, error: null });
+        }),
+      createChatTurn: (user, id, rawBody) =>
+        Effect.gen(function* () {
+          const delivery = yield* owned(user, id);
+          yield* requireOrganizationWrite(user, delivery.organization_id);
+          const body = rawBody.trim();
+          if (!body || body.length > 64_000)
+            return yield* Effect.fail(badRequest('Message must contain 1–64,000 characters'));
+          const result = yield* dataEffect(() =>
+            sendDeliveryChatMessage(
+              {
+                deliveryId: delivery.id,
+                organizationId: delivery.organization_id,
                 authorUserId: user.session.authUserId,
-                role: 'user',
                 body,
-              }),
+              },
+              dependencies.enqueueFactory,
             ),
           );
+          if (result.kind === 'busy')
+            return yield* Effect.fail(conflict('An agent is already working on this delivery'));
+          if (result.kind === 'unavailable')
+            return yield* Effect.fail(
+              conflict('Chat requires an open change in an enabled repository'),
+            );
+          return serializeMessage({
+            ...result.message,
+            status: result.factoryRun.status,
+            error: null,
+          });
         }),
       startRun: (user, id) =>
         Effect.gen(function* () {

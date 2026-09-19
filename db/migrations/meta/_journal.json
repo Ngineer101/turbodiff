@@ -15,6 +15,13 @@
       "when": 1789764583278,
       "tag": "0001_seed_cloudflare_code_models",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789840546817,
+      "tag": "0002_delivery_chat_runs",
+      "breakpoints": true
     }
   ]
 }

@@ -59,7 +59,15 @@ export const DeliveryMessage = Schema.Struct({
   body: Schema.String,
   authorUserId: Schema.NullOr(Schema.String),
   createdAt: Schema.String,
+  factoryRunId: Schema.NullOr(PositiveInt),
+  status: Schema.NullOr(
+    Schema.Literal('queued', 'running', 'waiting', 'succeeded', 'failed', 'cancelled'),
+  ),
+  outcome: Schema.NullOr(Schema.Literal('changed', 'no_changes')),
+  commitSha: Schema.NullOr(Schema.String),
+  error: Schema.NullOr(Schema.String),
 });
+export type DeliveryMessage = typeof DeliveryMessage.Type;
 export const DeliveryMessages = Schema.Struct({ items: Schema.Array(DeliveryMessage) });
 export const CreateDeliveryMessage = Schema.Struct({ body: Schema.String });
 
@@ -90,6 +98,12 @@ export const DeliveriesApi = HttpApiGroup.make('deliveries')
     HttpApiEndpoint.post('createDeliveryMessage')`/deliveries/${deliveryId}/messages`
       .setPayload(CreateDeliveryMessage)
       .addSuccess(DeliveryMessage, { status: 201 })
+      .addError(DomainError),
+  )
+  .add(
+    HttpApiEndpoint.post('createDeliveryChatTurn')`/deliveries/${deliveryId}/chat-turns`
+      .setPayload(CreateDeliveryMessage)
+      .addSuccess(DeliveryMessage, { status: 202 })
       .addError(DomainError),
   )
   .add(
