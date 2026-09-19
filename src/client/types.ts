@@ -139,6 +139,7 @@ export interface ApiAgentRun {
     | 'plan_refine'
     | 'generate'
     | 'verify'
+    | 'review'
     | 'fix'
     | 'chat'
     | 'automation'

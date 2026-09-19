@@ -27,17 +27,19 @@ export async function syncGithubChangeRevision(
   }
   const token = await installationToken(installationId);
   const path = `/repos/${repository.owner}/${repository.name}/pulls/${change.number}`;
-  const [pullRequest, patch] = await Promise.all([
-    githubJson<GithubPullRequest>(token, path),
-    githubRequest(token, path, { accept: 'application/vnd.github.v3.diff' }).then((response) =>
-      response.text(),
-    ),
-  ]);
+  const pullRequest = await githubJson<GithubPullRequest>(token, path);
   if (expectedHeadSha && pullRequest.head.sha !== expectedHeadSha) {
     throw new Error('pull request changed while its revision was being captured');
   }
   const existing = await latestChangeRevision(change.id);
   if (existing?.head_sha === pullRequest.head.sha) return existing;
+  const patch = await githubRequest(token, path, { accept: 'application/vnd.github.v3.diff' }).then(
+    (response) => response.text(),
+  );
+  const after = await githubJson<GithubPullRequest>(token, path);
+  if (after.head.sha !== pullRequest.head.sha || after.base.sha !== pullRequest.base.sha) {
+    throw new Error('pull request changed while its diff was being captured');
+  }
   const snapshot = buildReviewDiffSnapshot(patch);
   const artifact = await persistJsonArtifact({
     organizationId: change.organization_id,

@@ -1,9 +1,11 @@
+import { verifierAgent } from '../agents/verifier.ts';
 import { implementerAgent } from '../agents/implementer.ts';
 import { plannerAgent } from '../agents/planner.ts';
 import { reviewerAgent } from '../agents/reviewer.ts';
 import { explainerAgent } from '../agents/explainer.ts';
 
 export const AGENT_DEFINITIONS = {
+  verifier: verifierAgent,
   planner: plannerAgent,
   implementer: implementerAgent,
   reviewer: reviewerAgent,
@@ -11,6 +13,13 @@ export const AGENT_DEFINITIONS = {
 } as const;
 
 export const BUILTIN_AGENTS = [
+  {
+    definitionKey: verifierAgent.id,
+    slug: 'verifier',
+    name: 'Verifier',
+    description: 'Verifies an immutable revision against its acceptance contract.',
+    instructionsOverride: null,
+  },
   {
     definitionKey: plannerAgent.id,
     slug: 'planner',
