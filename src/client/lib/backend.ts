@@ -378,25 +378,44 @@ export async function getFeature(id: number): Promise<ApiFeatureDetail> {
     })),
     comments: [],
     demo: null,
-    criteria: plan.acceptance.map((text) => ({
-      text,
-      verdict: null,
-      note: null,
-      screenshot_url: null,
-    })),
-    verification: null,
+    criteria: plan.acceptance.map((text) => {
+      const evidence = change?.verification?.criteria.find((criterion) => criterion.text === text);
+      return {
+        text,
+        verdict: evidence?.verdict ?? null,
+        note: evidence?.evidence ?? null,
+        screenshot_url: null,
+      };
+    }),
+    verification: change?.verification
+      ? {
+          status: change.verification.verdict,
+          total: change.verification.criteria.length,
+          failed: change.verification.criteria.filter((criterion) => criterion.verdict === 'failed')
+            .length,
+        }
+      : null,
     runs: runs.flatMap((run) =>
       run.stages.flatMap((stage) =>
         stage.agentRuns.map((agentRun) => ({
           id: agentRun.id,
-          kind: run.flowKey === 'review' ? 'verify' : 'generate',
+          kind:
+            stage.stageKey === 'verify'
+              ? 'verify'
+              : stage.stageKey === 'repair'
+                ? 'fix'
+                : stage.stageKey === 'review'
+                  ? 'review'
+                  : 'generate',
           success: agentRun.status === 'succeeded',
           created_at: agentRun.createdAt,
         })),
       ),
     ),
-    lifecycle_runs: runs.map((run) => ({
+    lifecycle_runs: [...runs].reverse().map((run) => ({
       id: run.id,
+      retry_kind:
+        run.flowKey === 'change_delivery' ? 'delivery' : run.flowKey === 'review' ? 'review' : null,
       profile: run.flowKey === 'review' ? 'automatic_review' : delivery.processProfile,
       status:
         run.status === 'waiting'
@@ -410,7 +429,12 @@ export async function getFeature(id: number): Promise<ApiFeatureDetail> {
                 : 'active',
       start_stage: run.stages[0]?.stageKey ?? '',
       stop_after_stage: run.stages.at(-1)?.stageKey ?? '',
-      handoff_reason: null,
+      handoff_reason: (() => {
+        const event = [...run.events].reverse().find((event) => event.kind === 'delivery_waiting');
+        return event && isJsonObject(event.payload) && isString(event.payload.reason)
+          ? event.payload.reason
+          : null;
+      })(),
       created_at: run.createdAt,
       completed_at: run.completedAt,
       stages: run.stages.map((stage) => ({
@@ -1023,6 +1047,16 @@ export const archiveWorkItem = (id: number, archived: boolean) =>
 
 export const retryDelivery = (id: number) =>
   call((client) => client.deliveries.startDeliveryRun({ path: { deliveryId: id }, payload: {} }));
+
+export async function resumeDelivery(id: number) {
+  const delivery = await call((client) =>
+    client.deliveries.getDelivery({ path: { deliveryId: id } }),
+  );
+  if (!delivery.change) throw new ApiError('There is no change to resume', 409);
+  return call((client) =>
+    client.changes.resumeDelivery({ path: { changeId: delivery.change!.id } }),
+  );
+}
 
 export async function reviewDelivery(id: number) {
   const delivery = await call((client) =>

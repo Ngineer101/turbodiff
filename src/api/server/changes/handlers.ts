@@ -21,6 +21,9 @@ export const ChangesHandlers = HttpApiBuilder.group(
       .handle('createReviewRun', ({ path }) =>
         Effect.flatMap(CurrentUser, (user) => service.createReviewRun(user, path.changeId)),
       )
+      .handle('resumeDelivery', ({ path }) =>
+        Effect.flatMap(CurrentUser, (user) => service.resumeDelivery(user, path.changeId)),
+      )
       .handle('mergeChange', ({ path }) =>
         Effect.flatMap(CurrentUser, (user) => service.merge(user, path.changeId)),
       )

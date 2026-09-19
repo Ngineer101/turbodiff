@@ -19,6 +19,7 @@ export interface ChangeRow {
   status: ChangeStatus;
   created_at: string;
   updated_at: string;
+  delivery_recovery_at: string | null;
 }
 
 export interface ChangeRevisionRow {

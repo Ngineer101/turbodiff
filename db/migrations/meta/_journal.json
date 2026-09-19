@@ -22,6 +22,13 @@
       "when": 1789847382372,
       "tag": "0002_work_item_archive",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789851387867,
+      "tag": "0003_delivery_recovery_rotation",
+      "breakpoints": true
     }
   ]
 }

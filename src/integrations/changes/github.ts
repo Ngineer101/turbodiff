@@ -17,12 +17,13 @@ function pullRequestNumber(change: ChangeRow): number {
 export async function mergeGithubChange(
   repository: RepositoryRow,
   change: ChangeRow,
+  expectedHeadSha?: string,
 ): Promise<void> {
   const token = await installationToken(installationId(repository));
   const response = await githubRequest(
     token,
     `/repos/${repository.owner}/${repository.name}/pulls/${pullRequestNumber(change)}/merge`,
-    { method: 'PUT', body: JSON.stringify({ merge_method: 'merge' }) },
+    { method: 'PUT', body: JSON.stringify({ merge_method: 'merge', sha: expectedHeadSha }) },
   );
   const result = await response.json<{ merged?: boolean }>();
   if (!result.merged) throw new Error('GitHub did not merge the pull request');
