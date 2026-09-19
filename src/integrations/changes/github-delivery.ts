@@ -46,6 +46,9 @@ const workflowSchema = z.object({
   updated_at: z.string(),
 });
 
+const successfulConclusion = (conclusion: string | null) =>
+  conclusion !== null && ['success', 'neutral', 'skipped'].includes(conclusion);
+
 export interface GithubDeliveryState {
   headSha: string;
   status: 'open' | 'merged' | 'closed';
@@ -145,15 +148,25 @@ export async function readGithubDeliveryState(
     })),
   );
   const evidence = checks
-    .filter((check) => check.conclusion === 'failure')
+    .filter((check) => check.status === 'completed' && !successfulConclusion(check.conclusion))
     .map(
       (check) =>
-        `${check.name}: ${check.output.title ?? ''}\n${check.output.summary ?? ''}\n${check.output.text ?? ''}`,
+        `${check.name} (${check.conclusion ?? 'no conclusion'}): ${check.output.title ?? ''}\n${check.output.summary ?? ''}\n${check.output.text ?? ''}`,
     );
   evidence.push(
     ...[...latestStatuses.values()]
       .filter((status) => ['failure', 'error'].includes(status.state))
       .map((status) => `${status.context}: ${status.description ?? status.state}`),
+  );
+  evidence.push(
+    ...[...latestWorkflows.values()]
+      .filter(
+        (workflow) => workflow.status === 'completed' && !successfulConclusion(workflow.conclusion),
+      )
+      .map(
+        (workflow) =>
+          `${workflow.name ?? 'GitHub Actions'}: ${workflow.conclusion ?? 'no conclusion'}; inspect ${workflow.html_url}`,
+      ),
   );
   // Job logs explain failures such as dependency installation, which have no check annotations.
   for (const workflow of (includeLogs ? [...latestWorkflows.values()] : [])

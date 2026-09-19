@@ -257,7 +257,7 @@ async function handlePullRequest(
     status,
   });
   const policy = repositoryPolicy(repository.settings);
-  if (policy.verify && change.origin !== 'human') {
+  if (policy.verify && change.origin === 'factory') {
     // Publication attaches the delivery. If the webhook wins that race, recovery starts it later.
     await reconcile(change.id);
     return { body: { ok: true, change: change.id } };

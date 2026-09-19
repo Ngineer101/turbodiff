@@ -69,22 +69,10 @@ export function ciVerdict(
   revision: ChangeRevisionRow,
 ): DeliveryVerdict | 'pending' {
   if (!state) return 'passed';
-  if (
-    state.checks.some(
-      (check) =>
-        check.status === 'completed' &&
-        ['failure', 'timed_out', 'action_required', 'error'].includes(check.conclusion ?? ''),
-    )
-  )
-    return 'failed';
-  if (
-    state.checks.some(
-      (check) =>
-        check.status !== 'completed' ||
-        !['success', 'neutral', 'skipped'].includes(check.conclusion ?? ''),
-    )
-  )
-    return 'pending';
+  for (const check of state.checks) {
+    if (check.status !== 'completed' || check.conclusion === null) return 'pending';
+    if (!['success', 'neutral', 'skipped'].includes(check.conclusion)) return 'failed';
+  }
   // Give GitHub time to discover workflow runs before considering a check-free repository ready.
   return Date.now() - new Date(revision.created_at).getTime() < 60_000 ? 'pending' : 'passed';
 }

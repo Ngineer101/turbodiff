@@ -16,11 +16,13 @@ import {
   completeAgentRun,
   createAgentRun,
   createFactoryRunWithStage,
+  listFactoryRuns,
 } from '../../../src/data/execution.ts';
 import { resolveModel } from '../../../src/data/models.ts';
 import { execute } from '../../../src/data/postgres.ts';
 import { createWorkItem, createDeliveries } from '../../../src/data/work.ts';
 import { apiDependencies, createTenant, rollbackAfter } from './support.ts';
+import type { RunFactoryMessage } from '../../../src/application/factory/message.ts';
 
 async function fixture() {
   const tenant = await createTenant();
@@ -72,6 +74,43 @@ async function fixture() {
 }
 
 describe('delivery evidence and settings', () => {
+  it('keeps automatic review enabled for bot pull requests outside factory delivery', () =>
+    rollbackAfter(async () => {
+      const tenant = await createTenant();
+      await execute(sql`UPDATE app.repositories
+        SET external_id = '12345', settings = '{"processProfile":"full_delivery"}'::jsonb
+        WHERE id = ${tenant.repositoryId}`);
+      await execute(sql`UPDATE app.integrations SET external_account_id = '45678'
+        WHERE id = ${tenant.integrationId}`);
+      const messages: RunFactoryMessage[] = [];
+      const reconciled: number[] = [];
+      const webhook = createGithubWebhookService({
+        enqueueFactory: async (message) => {
+          messages.push(message);
+        },
+        reconcileDelivery: async (changeId) => {
+          reconciled.push(changeId);
+        },
+      });
+      const result = await webhook.handle('pull_request', {
+        action: 'opened',
+        number: 77,
+        installation: { id: 45678 },
+        repository: { id: 12345, name: 'repo', full_name: 'bot/repo' },
+        pull_request: {
+          draft: false,
+          html_url: 'https://github.com/bot/repo/pull/77',
+          user: { type: 'Bot' },
+        },
+      });
+      expect(reconciled).toEqual([]);
+      expect(messages).toHaveLength(1);
+      expect(result.body.factoryRun).toEqual(expect.any(Number));
+      expect(await listFactoryRuns({ changeId: Number(result.body.change) })).toMatchObject([
+        { flow_key: 'review' },
+      ]);
+    }));
+
   it('returns the named reviewer, full artifact summary/findings, and the separate review run', () =>
     rollbackAfter(async () => {
       const { tenant, delivery, change, revision } = await fixture();

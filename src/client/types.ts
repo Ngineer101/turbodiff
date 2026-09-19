@@ -199,6 +199,7 @@ export interface ApiChatList {
 
 export interface ApiLifecycleRun {
   id: number;
+  retry_kind: 'delivery' | 'review' | null;
   profile: ApiProcessProfile;
   status: 'active' | 'awaiting_human' | 'handed_off' | 'completed' | 'failed' | 'cancelled';
   start_stage: string;

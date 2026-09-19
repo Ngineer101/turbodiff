@@ -23,11 +23,24 @@ import {
 import type { DeliveryDecision } from '../domain/delivery-lifecycle.ts';
 
 export function deliveryCandidates(): Promise<Array<{ id: number }>> {
-  return queryRows(sql`SELECT c.id FROM app.changes c
-    JOIN app.repositories r ON r.id = c.repository_id AND r.organization_id = c.organization_id
-    WHERE c.delivery_id IS NOT NULL AND c.status = 'open' AND r.enabled
-      AND r.settings->>'processProfile' IN ('assisted_delivery', 'full_delivery')
-    ORDER BY c.updated_at, c.id LIMIT 100`);
+  return queryRows(sql`
+    WITH candidates AS (
+      SELECT c.id
+      FROM app.changes c
+      JOIN app.repositories r
+        ON r.id = c.repository_id AND r.organization_id = c.organization_id
+      WHERE c.delivery_id IS NOT NULL AND c.status = 'open' AND r.enabled
+        AND r.settings->>'processProfile' IN ('assisted_delivery', 'full_delivery')
+      ORDER BY c.delivery_recovery_at NULLS FIRST, c.id
+      FOR UPDATE OF c SKIP LOCKED
+      LIMIT 100
+    )
+    UPDATE app.changes change
+    SET delivery_recovery_at = CURRENT_TIMESTAMP
+    FROM candidates
+    WHERE change.id = candidates.id
+    RETURNING change.id
+  `);
 }
 
 export async function withDeliveryLock<T>(

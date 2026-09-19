@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vite-plus/test';
 import { createGithubWebhookService } from '../../../src/application/webhooks/github.ts';
-import { ensureBuiltinAgents } from '../../../src/data/agents.ts';
+import { ensureBuiltinAgents, getAgentByDefinition, listAgents } from '../../../src/data/agents.ts';
 import {
   deletePristinePersonalOrganization,
   ensurePersonalOrganization,
@@ -36,6 +36,32 @@ async function createUser(githubId?: number): Promise<string> {
 }
 
 describe('personal organizations with PostgreSQL', () => {
+  it('preserves a pre-existing custom verifier slug and seeds the builtin under a safe slug', () =>
+    rollbackAfter(async () => {
+      const userId = await createUser();
+      const organization = await ensurePersonalOrganization(userId, 'Verifier Collision');
+      await execute(sql`DELETE FROM app.agents WHERE organization_id = ${organization.id}
+        AND definition_key = 'verifier'`);
+      await execute(sql`INSERT INTO app.agents (organization_id, definition_key, slug, name)
+        VALUES (${organization.id}, 'reviewer', 'verifier', 'Custom Verifier')`);
+
+      await Promise.all([
+        ensureBuiltinAgents(organization.id),
+        ensureBuiltinAgents(organization.id),
+      ]);
+
+      const agents = await listAgents([organization.id]);
+      expect(agents.find((agent) => agent.slug === 'verifier')).toMatchObject({
+        definition_key: 'reviewer',
+        name: 'Custom Verifier',
+      });
+      expect(agents.filter((agent) => agent.definition_key === 'verifier')).toHaveLength(1);
+      expect(await getAgentByDefinition(organization.id, 'verifier')).toMatchObject({
+        slug: 'verifier-builtin',
+        enabled: true,
+      });
+    }));
+
   it('creates one organization when session bootstrap runs concurrently', async () => {
     const userId = await createUser();
 

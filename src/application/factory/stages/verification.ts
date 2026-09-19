@@ -4,7 +4,7 @@ import {
   acceptanceContractArtifactSchema,
   storedPlanArtifactSchema,
 } from '../../../artifacts/plan.ts';
-import { ensureBuiltinAgents, getAgentBySlug } from '../../../data/agents.ts';
+import { ensureBuiltinAgents, getAgentByDefinition } from '../../../data/agents.ts';
 import { getArtifact, getArtifactByStorageKey } from '../../../data/artifacts.ts';
 import type { ChangeRow, ChangeRevisionRow } from '../../../data/changes.ts';
 import type { FactoryRunRow, StageRunRow } from '../../../data/execution.ts';
@@ -53,7 +53,7 @@ export async function executeVerification(
   const task = await deliveryTask(change);
   const command = repositoryPolicy(repository.settings).checkCommand;
   await ensureBuiltinAgents(run.organization_id);
-  const agent = await getAgentBySlug(run.organization_id, 'verifier');
+  const agent = await getAgentByDefinition(run.organization_id, verifierAgent.id);
   if (!agent?.enabled) throw new Error('Verifier agent is unavailable');
   const { sandbox, workDir, scrub } = await deliveryWorkspace(
     repository,

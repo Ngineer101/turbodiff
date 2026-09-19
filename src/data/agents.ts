@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { BUILTIN_AGENTS } from '../domain/agent-definitions.ts';
-import { execute, queryOne, queryRows, sqlValueList } from './postgres.ts';
+import { execute, queryOne, queryRows, sqlValueList, withTransaction } from './postgres.ts';
 
 export interface AgentRow {
   id: number;
@@ -16,19 +16,38 @@ export interface AgentRow {
 }
 
 export async function ensureBuiltinAgents(organizationId: string): Promise<void> {
-  await execute(sql`
-    INSERT INTO app.agents (organization_id, definition_key, slug, name, description, instructions_override)
-    VALUES ${sql.join(
-      BUILTIN_AGENTS.map(
-        (agent) => sql`(
-      ${organizationId}, ${agent.definitionKey}, ${agent.slug}, ${agent.name},
-      ${agent.description}, ${agent.instructionsOverride}
-    )`,
-      ),
-      sql`, `,
-    )}
-    ON CONFLICT(organization_id, slug) DO NOTHING
-  `);
+  await withTransaction(async () => {
+    await execute(
+      sql`SELECT pg_advisory_xact_lock(hashtextextended(${organizationId} || ':builtin-agents', 0))`,
+    );
+    await execute(sql`
+      INSERT INTO app.agents (organization_id, definition_key, slug, name, description, instructions_override)
+      VALUES ${sql.join(
+        BUILTIN_AGENTS.map(
+          (agent) => sql`(
+        ${organizationId}, ${agent.definitionKey}, ${agent.slug}, ${agent.name},
+        ${agent.description}, ${agent.instructionsOverride}
+      )`,
+        ),
+        sql`, `,
+      )}
+      ON CONFLICT(organization_id, slug) DO NOTHING
+    `);
+    if (await getAgentByDefinition(organizationId, 'verifier')) return;
+    const occupied = new Set((await listAgents([organizationId])).map((agent) => agent.slug));
+    let suffix = 1;
+    let slug = 'verifier-builtin';
+    while (occupied.has(slug)) slug = `verifier-builtin-${++suffix}`;
+    const verifier = BUILTIN_AGENTS.find((agent) => agent.definitionKey === 'verifier')!;
+    await createAgent({
+      organizationId,
+      definitionKey: verifier.definitionKey,
+      slug,
+      name: verifier.name,
+      description: verifier.description,
+      instructionsOverride: verifier.instructionsOverride,
+    });
+  });
 }
 
 export async function listAgents(organizationIds: string[]): Promise<AgentRow[]> {
@@ -51,6 +70,18 @@ export async function getAgentBySlug(
   return queryOne<AgentRow>(sql`
     SELECT * FROM app.agents
     WHERE organization_id = ${organizationId} AND slug = ${slug}
+  `);
+}
+
+export async function getAgentByDefinition(
+  organizationId: string,
+  definitionKey: string,
+): Promise<AgentRow | null> {
+  return queryOne<AgentRow>(sql`
+    SELECT * FROM app.agents
+    WHERE organization_id = ${organizationId} AND definition_key = ${definitionKey}
+    ORDER BY CASE WHEN slug = ${definitionKey} THEN 0 ELSE 1 END, id
+    LIMIT 1
   `);
 }
 

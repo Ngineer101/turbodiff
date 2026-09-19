@@ -30,7 +30,11 @@ import {
 } from '../../contract/errors.ts';
 import { requireOrganizationWrite } from '../authorization.ts';
 
-const builtinSlugs = new Set<string>(BUILTIN_AGENTS.map((agent) => agent.slug));
+const builtinDefinitions = new Map<string, string>(
+  BUILTIN_AGENTS.map((agent) => [agent.slug, agent.definitionKey]),
+);
+const isBuiltIn = (row: AgentRow) =>
+  builtinDefinitions.get(row.slug) === row.definition_key || row.definition_key === 'verifier';
 
 const operation = <A>(run: () => Promise<A>): Effect.Effect<A, DomainError> =>
   Effect.tryPromise({
@@ -51,7 +55,7 @@ const summary = (row: AgentRow, skillIds: number[]) => ({
   slug: row.slug,
   name: row.name,
   description: row.description,
-  builtIn: builtinSlugs.has(row.slug),
+  builtIn: isBuiltIn(row),
   enabled: row.enabled,
   skillIds,
 });
@@ -206,7 +210,7 @@ export const AgentServiceLive = Layer.succeed(AgentService, {
     Effect.gen(function* () {
       const row = yield* owned(user, id);
       yield* requireOrganizationWrite(user, row.organization_id);
-      if (builtinSlugs.has(row.slug)) {
+      if (isBuiltIn(row)) {
         return yield* Effect.fail(forbidden('Built-in agents cannot be deleted'));
       }
       yield* operation(() => deleteAgent(id));

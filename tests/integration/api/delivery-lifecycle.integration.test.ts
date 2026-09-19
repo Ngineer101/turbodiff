@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vite-plus/test';
 import {
+  ciVerdict,
   reconcileChangeDelivery,
   executeChangeDeliveryStage,
   type DeliveryDependencies,
@@ -12,7 +13,11 @@ import {
   upsertChange,
   type ChangeRevisionRow,
 } from '../../../src/data/changes.ts';
-import { completeDeliveryStage, resumeDeliveryRun } from '../../../src/data/delivery-lifecycle.ts';
+import {
+  completeDeliveryStage,
+  deliveryCandidates,
+  resumeDeliveryRun,
+} from '../../../src/data/delivery-lifecycle.ts';
 import {
   claimStageRun,
   getFactoryRun,
@@ -124,6 +129,78 @@ async function fixture() {
 }
 
 describe('durable delivery coordination', () => {
+  it('rotates bounded recovery claims so persistent old changes cannot starve newer deliveries', () =>
+    rollbackAfter(async () => {
+      const tenant = await createTenant();
+      await execute(
+        sql`UPDATE app.repositories SET settings = '{"processProfile":"full_delivery"}'::jsonb
+          WHERE id = ${tenant.repositoryId}`,
+      );
+      await execute(sql`
+        WITH items AS (
+          INSERT INTO app.work_items (organization_id, origin, title, description, status)
+          SELECT ${tenant.organizationId}, 'idea', 'Recovery ' || n, 'Recovery', 'in_progress'
+          FROM generate_series(1, 101) n
+          RETURNING id, organization_id
+        ), targets AS (
+          INSERT INTO app.work_item_targets (work_item_id, repository_id, organization_id, position)
+          SELECT id, ${tenant.repositoryId}, organization_id, 0 FROM items
+          RETURNING work_item_id, organization_id
+        ), deliveries AS (
+          INSERT INTO app.deliveries (organization_id, work_item_id, repository_id, status)
+          SELECT organization_id, work_item_id, ${tenant.repositoryId}, 'active' FROM targets
+          RETURNING id, organization_id
+        )
+        INSERT INTO app.changes (
+          organization_id, repository_id, delivery_id, provider_integration_id, provider_key,
+          number, title, source_ref, target_ref, origin, status
+        )
+        SELECT organization_id, ${tenant.repositoryId}, id, ${tenant.integrationId},
+          'recovery:' || id, id::int, 'Recovery', 'turbodiff/recovery-' || id, 'main',
+          'factory', 'open'
+        FROM deliveries
+      `);
+      const first = await deliveryCandidates();
+      const second = await deliveryCandidates();
+      expect(first).toHaveLength(100);
+      expect(new Set([...first, ...second].map((candidate) => candidate.id))).toHaveLength(101);
+    }));
+
+  it.each(['cancelled', 'stale', 'startup_failure'])(
+    'treats the completed GitHub conclusion %s as failed CI',
+    (conclusion) => {
+      const state: GithubDeliveryState = {
+        headSha: 'b'.repeat(40),
+        status: 'open',
+        writable: true,
+        humanReviewBlocked: false,
+        draft: false,
+        mergeable: true,
+        checks: [
+          {
+            name: 'CI',
+            status: 'completed',
+            conclusion,
+            details_url: null,
+            updated_at: new Date().toISOString(),
+          },
+        ],
+        failureEvidence: '',
+      };
+      const revision: ChangeRevisionRow = {
+        id: 1,
+        organization_id: 'test',
+        change_id: 1,
+        version: 1,
+        base_sha: 'a'.repeat(40),
+        head_sha: 'b'.repeat(40),
+        artifact_id: 1,
+        created_at: new Date(0).toISOString(),
+      };
+      expect(ciVerdict(state, revision)).toBe('failed');
+    },
+  );
+
   it('deduplicates overlapping wakeups and advances review → verify → merge without completing early', () =>
     rollbackAfter(async () => {
       const f = await fixture();

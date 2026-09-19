@@ -414,6 +414,8 @@ export async function getFeature(id: number): Promise<ApiFeatureDetail> {
     ),
     lifecycle_runs: [...runs].reverse().map((run) => ({
       id: run.id,
+      retry_kind:
+        run.flowKey === 'change_delivery' ? 'delivery' : run.flowKey === 'review' ? 'review' : null,
       profile: run.flowKey === 'review' ? 'automatic_review' : delivery.processProfile,
       status:
         run.status === 'waiting'

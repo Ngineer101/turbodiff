@@ -133,9 +133,9 @@ function onApiError<T>(err: T) {
 // Criterion verdicts in the proof ledger: mono glyphs, not emoji — the
 // ledger is a document, and its marks should typeset like one.
 function VerdictMark({ verdict }: { verdict: string | null }) {
-  if (verdict === 'pass') return <span className="font-mono text-go-bright">✓</span>;
-  if (verdict === 'fail') return <span className="font-mono text-danger">✗</span>;
-  if (verdict === 'skip') return <span className="font-mono text-mute">—</span>;
+  if (verdict === 'passed') return <span className="font-mono text-go-bright">✓</span>;
+  if (verdict === 'failed') return <span className="font-mono text-danger">✗</span>;
+  if (verdict === 'not_verified') return <span className="font-mono text-mute">—</span>;
   return <span className="font-mono text-mute">○</span>;
 }
 
@@ -330,13 +330,12 @@ function GoNoGoBoard({ data }: { data: ApiFeatureDetail }) {
 
 function LifecycleHistory({
   runs,
-  onResume,
-  resuming,
+  onRetry,
+  retrying,
 }: {
   runs: ApiFeatureDetail['lifecycle_runs'];
-  // Retry a failure or rerun checks after manual fixes.
-  onResume: (runId: number) => void;
-  resuming: boolean;
+  onRetry: (run: ApiFeatureDetail['lifecycle_runs'][number]) => void;
+  retrying: boolean;
 }) {
   if (runs.length === 0) return null;
   return (
@@ -396,13 +395,15 @@ function LifecycleHistory({
                   </li>
                 ))}
               </ol>
-              {run.status === 'failed' && run.stages.at(-1)?.status === 'failed' ? (
+              {run.retry_kind &&
+              run.status === 'failed' &&
+              run.stages.at(-1)?.status === 'failed' ? (
                 <div className="mt-3">
                   <Button
                     size="sm"
                     variant="secondary"
-                    onClick={() => onResume(run.id)}
-                    loading={resuming}
+                    onClick={() => onRetry(run)}
+                    loading={retrying}
                   >
                     Retry {sentence(run.stages.at(-1)?.stage ?? 'stage')}
                   </Button>
@@ -877,10 +878,15 @@ export default function FeaturePage() {
     },
     onError: onApiError,
   });
-  const resumeStage = useMutation({
-    mutationFn: (_runId: number) => resumeDelivery(id),
-    onSuccess: () => {
-      toast.success('Stage retried — it runs again on the same delivery');
+  const retryLifecycle = useMutation({
+    mutationFn: (run: ApiFeatureDetail['lifecycle_runs'][number]) =>
+      run.retry_kind === 'review' ? reviewDelivery(id) : resumeDelivery(id),
+    onSuccess: (_result, run) => {
+      toast.success(
+        run.retry_kind === 'review'
+          ? 'Review dispatched — the verdict lands here when it completes'
+          : 'Stage retried — it runs again on the same delivery',
+      );
       refresh();
     },
     onError: onApiError,
@@ -1184,7 +1190,7 @@ export default function FeaturePage() {
               <AccordionTrigger
                 aside={
                   <span className="font-mono text-xs tracking-[0.1em] text-mute uppercase tabular-nums">
-                    {data.criteria.filter((c) => c.verdict === 'pass').length}/
+                    {data.criteria.filter((c) => c.verdict === 'passed').length}/
                     {data.criteria.length} proven
                   </span>
                 }
@@ -1256,8 +1262,8 @@ export default function FeaturePage() {
 
       <LifecycleHistory
         runs={data.lifecycle_runs}
-        onResume={(runId) => resumeStage.mutate(runId)}
-        resuming={resumeStage.isPending}
+        onRetry={(run) => retryLifecycle.mutate(run)}
+        retrying={retryLifecycle.isPending}
       />
       <AgentRunLog runs={data.runs} />
 
