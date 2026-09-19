@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ensureBuiltinAgents } from '../../data/agents.ts';
 import {
   deletePristinePersonalOrganization,
   ensureGithubOrganization,
@@ -119,6 +120,7 @@ async function handleInstallation(event: InstallationEvent): Promise<WebhookHand
       accountLogin: event.installation.account.login,
       ownerUserId,
     });
+    await ensureBuiltinAgents(organization.id);
     integration = await upsertExternalIntegration({
       organizationId: organization.id,
       kind: 'scm',

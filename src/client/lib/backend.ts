@@ -1,3 +1,4 @@
+import type { WorkItemView } from '../../api/contract/views.ts';
 import type {
   ApiAgentDetail,
   ApiAgentsList,
@@ -104,33 +105,26 @@ const getWorkItemResource = (id: number) =>
 function workItemPlan(
   workItem: Awaited<ReturnType<typeof getWorkItemResource>>,
   detailed: false,
+  view?: WorkItemView,
 ): Promise<ApiPlan>;
 function workItemPlan(
   workItem: Awaited<ReturnType<typeof getWorkItemResource>>,
   detailed: true,
+  view?: WorkItemView,
 ): Promise<ApiTaskDetail>;
 async function workItemPlan(
   workItem: Awaited<ReturnType<typeof getWorkItemResource>>,
   detailed: boolean,
+  view?: WorkItemView,
 ): Promise<ApiPlan | ApiTaskDetail> {
-  const [deliveryList, artifact, runList] = await Promise.all([
-    call((client) =>
-      client.workItems.listWorkItemDeliveries({ path: { workItemId: workItem.id } }),
-    ),
-    planArtifactForWorkItem(workItem),
-    detailed
-      ? call((client) =>
-          client.workItems.listWorkItemFactoryRuns({ path: { workItemId: workItem.id } }),
-        )
-      : Promise.resolve({ items: [] }),
-  ]);
-  const defaultModel = (await getModels()).runner.default_model;
+  const loaded =
+    view ??
+    (await call((client) => client.views.getWorkItemView({ path: { workItemId: workItem.id } })));
+  const artifact = loaded.plan;
+  const deliveries = loaded.deliveries;
+  const runList = { items: loaded.factoryRuns };
+  const defaultModel = loaded.defaultModel;
   const selectedModel = window.localStorage.getItem(`turbodiff.workItemModel.${workItem.id}`);
-  const deliveries = await Promise.all(
-    deliveryList.items.map((item) =>
-      call((client) => client.deliveries.getDelivery({ path: { deliveryId: item.id } })),
-    ),
-  );
   const artifactPlan = asPlan(artifact?.value);
   const status =
     workItem.status === 'planning'
@@ -184,13 +178,15 @@ async function workItemPlan(
 
 export async function getBoard(): Promise<ApiBoard> {
   const [workItems, repositories, organizations, usage] = await Promise.all([
-    call((client) => client.workItems.listWorkItems({})),
+    call((client) => client.views.listWorkItemViews({})),
     call((client) => client.repositories.listRepositories({})),
     call((client) => client.organizations.listOrganizations({})),
     call((client) => client.reporting.getUsageSummary({})),
   ]);
-  const todos = workItems.items.filter((item) => item.status === 'open');
-  const tasks = workItems.items.filter((item) => item.status !== 'open');
+  const todos = workItems.items
+    .map((view) => view.workItem)
+    .filter((item) => item.status === 'open');
+  const tasks = workItems.items.filter((view) => view.workItem.status !== 'open');
   return {
     stats: { month_pipeline_cost_usd: usage.totals.costUsd, running: usage.totals.running },
     todos: todos.map((item) => ({
@@ -205,7 +201,7 @@ export async function getBoard(): Promise<ApiBoard> {
         name: target.name,
       })),
     })),
-    tasks: await Promise.all(tasks.map((item) => workItemPlan(item, false))),
+    tasks: await Promise.all(tasks.map((view) => workItemPlan(view.workItem, false, view))),
     organizations: organizations.items.map((organization) => ({
       id: organization.id,
       name: organization.name,
@@ -220,7 +216,8 @@ export async function getBoard(): Promise<ApiBoard> {
 }
 
 export async function getTask(id: number): Promise<ApiTaskDetail> {
-  return workItemPlan(await getWorkItemResource(id), true);
+  const view = await call((client) => client.views.getWorkItemView({ path: { workItemId: id } }));
+  return workItemPlan(view.workItem, true, view);
 }
 
 export async function getUsage(): Promise<ApiUsage> {
@@ -286,31 +283,17 @@ function diffFiles(patch: string): ApiFeatureDetail['files'] {
 }
 
 export async function getFeature(id: number): Promise<ApiFeatureDetail> {
-  const delivery = await call((client) =>
-    client.deliveries.getDelivery({ path: { deliveryId: id } }),
-  );
-  const [workItem, change] = await Promise.all([
-    getWorkItemResource(delivery.workItemId),
-    delivery.change
-      ? call((client) => client.changes.getChange({ path: { changeId: delivery.change!.id } }))
-      : Promise.resolve(null),
-  ]);
-  const revisionArtifact = change?.currentRevision
-    ? await call((client) =>
-        client.artifacts.getArtifact({
-          path: { artifactId: change.currentRevision!.artifactId },
-        }),
-      )
-    : null;
+  const {
+    delivery,
+    workItem,
+    change,
+    revision: revisionArtifact,
+    plan: planArtifact,
+    factoryRuns: runs,
+  } = await call((client) => client.views.getDeliveryView({ path: { deliveryId: id } }));
   const revision = isJsonObject(revisionArtifact?.value) ? revisionArtifact.value : null;
   const files = revision && isString(revision.patch) ? diffFiles(revision.patch) : [];
-  const planArtifact = await planArtifactForWorkItem(workItem);
   const plan = asPlan(planArtifact?.value);
-  const runs = await Promise.all(
-    delivery.factoryRuns.map((run) =>
-      call((client) => client.executions.getFactoryRun({ path: { factoryRunId: run.id } })),
-    ),
-  );
   const reviewOutcomes = change?.currentRevision?.reviewOutcomes ?? [];
   return {
     feature: {
