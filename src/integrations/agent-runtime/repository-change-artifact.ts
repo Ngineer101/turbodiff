@@ -35,7 +35,10 @@ export async function readRepositoryChangeArtifact<Output>(
   if (!status.success) {
     throw new Error(`git status failed: ${status.stderr.trim().slice(-500) || 'unknown error'}`);
   }
-  if (!status.stdout.trim()) return output.parse({ kind: 'no-change' });
+  if (!status.stdout.trim()) {
+    const summary = await readOptionalText(runtime, outputFiles.summary);
+    return output.parse(summary ? { kind: 'no-change', summary } : { kind: 'no-change' });
+  }
 
   const summary = (await readOptionalText(runtime, outputFiles.summary)) ?? fallbackSummary;
   if (!summary) throw new Error(`implementer did not produce ${outputFiles.summary}`);

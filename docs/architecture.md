@@ -106,6 +106,7 @@ The current flow definitions in `src/application/factory/flows.ts` are:
 | --------------- | --------- | --------------------------------- | --------------------------------------------------------------------- |
 | `work_item@1`   | work item | `plan → plan_approval → dispatch` | Creates one delivery per target                                       |
 | `delivery@1`    | delivery  | `implement`                       | Produces or updates a reviewable change                               |
+| `chat@1`        | delivery  | `respond`                         | Replies to a message and optionally updates the existing change       |
 | `review@1`      | change    | `review`                          | Reviews one immutable change revision                                 |
 | `automation@1`  | work item | `invoke`                          | Runs the configured agent and, when applicable, dispatches deliveries |
 | `explanation@1` | change    | `explain`                         | Explains one immutable change revision                                |

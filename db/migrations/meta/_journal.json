@@ -29,6 +29,13 @@
       "when": 1789851387867,
       "tag": "0003_delivery_recovery_rotation",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789852846345,
+      "tag": "0004_delivery_chat_runs",
+      "breakpoints": true
     }
   ]
 }
