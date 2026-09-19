@@ -1,3 +1,5 @@
+import { listChangeChecks } from '../../../data/change-checks.ts';
+import { reviewArtifactSchema } from '../../../artifacts/review.ts';
 import { Context, Effect, Layer } from 'effect';
 import {
   getChange,
@@ -7,7 +9,6 @@ import {
   updateChangeStatus,
   type ChangeRevisionRow,
   type ChangeRow,
-  type ReviewOutcomeRow,
 } from '../../../data/changes.ts';
 import {
   createFactoryRunWithStage,
@@ -56,7 +57,18 @@ const providerEffect = <A>(run: () => Promise<A>): Effect.Effect<A, DomainError>
     },
   });
 
-const serializeRevision = (revision: ChangeRevisionRow | null, outcomes: ReviewOutcomeRow[]) =>
+type ReviewOutcome = Awaited<ReturnType<typeof listReviewOutcomes>>[number];
+const reviewDetails = async (outcome: ReviewOutcome) => {
+  const row = await getArtifact(outcome.output_artifact_id);
+  if (!row || row.organization_id !== outcome.organization_id)
+    throw new Error('review artifact is missing');
+  const artifact = await loadJsonArtifact(row, reviewArtifactSchema);
+  return { ...outcome, summary: artifact.summary, findings: artifact.findings };
+};
+const serializeRevision = (
+  revision: ChangeRevisionRow | null,
+  outcomes: Array<Awaited<ReturnType<typeof reviewDetails>>>,
+) =>
   revision
     ? {
         id: revision.id,
@@ -66,6 +78,9 @@ const serializeRevision = (revision: ChangeRevisionRow | null, outcomes: ReviewO
         artifactId: revision.artifact_id,
         reviewOutcomes: outcomes.map((outcome) => ({
           agentRunId: outcome.agent_run_id,
+          author: outcome.agent_name,
+          summary: outcome.summary,
+          findings: outcome.findings,
           verdict: outcome.verdict,
           conclusion: outcome.conclusion,
           coverageStatus: outcome.coverage_status,
@@ -77,11 +92,11 @@ const serializeRevision = (revision: ChangeRevisionRow | null, outcomes: ReviewO
       }
     : null;
 
-const serialize = (
+const serialize = async (
   change: ChangeRow,
   revision: ChangeRevisionRow | null,
-  outcomes: ReviewOutcomeRow[],
-): Change => ({
+  outcomes: ReviewOutcome[],
+): Promise<Change> => ({
   id: change.id,
   organizationId: change.organization_id,
   repositoryId: change.repository_id,
@@ -95,7 +110,15 @@ const serialize = (
   url: change.url,
   origin: change.origin,
   status: change.status,
-  currentRevision: serializeRevision(revision, outcomes),
+  currentRevision: serializeRevision(revision, await Promise.all(outcomes.map(reviewDetails))),
+  checks: revision
+    ? (await listChangeChecks(revision.id)).map((check) => ({
+        name: check.name,
+        status: check.status,
+        conclusion: check.conclusion,
+        detailsUrl: check.details_url,
+      }))
+    : [],
   createdAt: change.created_at,
   updatedAt: change.updated_at,
 });
@@ -169,8 +192,12 @@ export const ChangeServiceLive = Layer.effect(
             ),
           );
           return {
-            items: rows.map((change, index) =>
-              serialize(change, revisions[index] ?? null, outcomes[index] ?? []),
+            items: yield* dataEffect(() =>
+              Promise.all(
+                rows.map((change, index) =>
+                  serialize(change, revisions[index] ?? null, outcomes[index] ?? []),
+                ),
+              ),
             ),
           };
         }),
@@ -179,7 +206,7 @@ export const ChangeServiceLive = Layer.effect(
           const change = yield* owned(user, id);
           const revision = yield* dataEffect(() => latestChangeRevision(id));
           const outcomes = revision ? yield* dataEffect(() => listReviewOutcomes(revision.id)) : [];
-          return serialize(change, revision, outcomes);
+          return yield* dataEffect(() => serialize(change, revision, outcomes));
         }),
       createReviewRun: (user, id) =>
         Effect.gen(function* () {

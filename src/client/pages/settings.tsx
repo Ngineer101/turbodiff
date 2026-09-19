@@ -4,19 +4,15 @@ import {
   BarChart2,
   Bell,
   ChevronRight,
-  Clapperboard,
   Code,
   ExternalLink,
   FolderGit2,
-  GitCompare,
-  GitMerge,
   OctagonMinus,
   Plus,
   RefreshCw,
   Search,
   SlidersHorizontal,
   Users,
-  Wrench,
 } from 'lucide-react';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { toast } from 'sonner';
@@ -170,47 +166,6 @@ function CheckCommandForm({ repo }: { repo: ApiRepoSettings }) {
 
 // The trailing window a push waits before its re-review runs (a newer push
 // in the window supersedes it). Saved on submit, like the check command.
-function PushDebounceForm({ repo }: { repo: ApiRepoSettings }) {
-  const patchRepo = usePatchRepo(repo.id);
-  const [minutes, setMinutes] = useState(String(repo.review_push_debounce_minutes));
-  const parsed = Number(minutes);
-  const valid = minutes.trim() !== '' && Number.isInteger(parsed) && parsed >= 0 && parsed <= 720;
-  const dirty = valid && parsed !== repo.review_push_debounce_minutes;
-  const save = (e: FormEvent) => {
-    e.preventDefault();
-    if (!dirty) return;
-    patchRepo.mutate(
-      { review_push_debounce_minutes: parsed },
-      { onSuccess: () => toast.success('Push debounce saved') },
-    );
-  };
-  return (
-    <form onSubmit={save} className="inline-flex items-center gap-1.5">
-      <label className="inline-flex items-center gap-1.5 text-xs text-mute">
-        <span className="whitespace-nowrap">wait</span>
-        <Input
-          type="number"
-          inputMode="numeric"
-          min={0}
-          max={720}
-          step={1}
-          value={minutes}
-          onChange={(e) => setMinutes(e.target.value)}
-          aria-label={`Minutes to wait after a push before re-reviewing ${repo.owner}/${repo.name}`}
-          aria-invalid={!valid}
-          title="Minutes a push waits before its re-review runs; a newer push in the window replaces it. 0 reviews immediately."
-          className="w-16 py-1 text-center font-mono text-xs sm:text-xs"
-        />
-        <span className="whitespace-nowrap">min</span>
-      </label>
-      {dirty ? (
-        <Button size="sm" variant="secondary" type="submit" loading={patchRepo.isPending}>
-          Save
-        </Button>
-      ) : null}
-    </form>
-  );
-}
 
 function RepoRow({ repo }: { repo: ApiRepoSettings }) {
   const queryClient = useQueryClient();
@@ -282,7 +237,7 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
   const [open, setOpen] = useState(false);
   const selectedProfile = PROCESS_PROFILES.find((p) => p.value === repo.process_profile);
   const profileOptions = PROCESS_PROFILES.filter(
-    (p) => !p.artifactsOnly || repo.provider === 'artifacts',
+    (p) => p.value !== 'full_delivery' || repo.provider === 'github',
   );
   // The icon tile + name + one-line summary — shared between the collapsed
   // toggle button (enabled) and the static row (factory off).
@@ -397,48 +352,17 @@ function RepoRow({ repo }: { repo: ApiRepoSettings }) {
           <ConfigRow label="Behavior">
             <Chip
               on={repo.review_on_push}
-              title={`${repo.review_on_push ? 'Stop' : 'Start'} re-reviewing open PRs when new commits are pushed — after a quiet window, only the agents the pushed changes concern`}
+              title={`${repo.review_on_push ? 'Stop' : 'Start'} re-reviewing open PRs when new commits are pushed`}
               onClick={() => patchRepo.mutate({ review_on_push: !repo.review_on_push })}
             >
               <RefreshCw className="size-3" aria-hidden /> On push
             </Chip>
-            {repo.review_on_push ? <PushDebounceForm repo={repo} /> : null}
             <Chip
               on={repo.blocking_reviews}
               title={`${repo.blocking_reviews ? 'Reviews post as plain comments' : 'P1 findings request changes; clean reviews approve'} — click to ${repo.blocking_reviews ? 'disable' : 'enable'}`}
               onClick={() => patchRepo.mutate({ blocking_reviews: !repo.blocking_reviews })}
             >
               <OctagonMinus className="size-3" aria-hidden /> Blocking
-            </Chip>
-            <Chip
-              on={repo.auto_fix}
-              title={`${repo.auto_fix ? 'Blocking reviews are left for a human to address' : 'A blocking review dispatches the fix agent to address the findings (max 3 runs per PR)'} — click to ${repo.auto_fix ? 'disable' : 'enable'}`}
-              onClick={() => patchRepo.mutate({ auto_fix: !repo.auto_fix })}
-            >
-              <Wrench className="size-3" aria-hidden /> Auto-fix
-            </Chip>
-            <Chip
-              on={repo.auto_merge}
-              title={`${repo.auto_merge ? 'Factory PRs stay open for a human to merge' : 'Factory PRs merge automatically once verification passes and the review is clean (requires blocking reviews)'} — click to ${repo.auto_merge ? 'disable' : 'enable'}`}
-              onClick={() => patchRepo.mutate({ auto_merge: !repo.auto_merge })}
-            >
-              <GitMerge className="size-3" aria-hidden /> Auto-merge
-            </Chip>
-            <Chip
-              on={repo.auto_resolve_conflicts}
-              title={`${repo.auto_resolve_conflicts ? 'Conflicts are left for a human to resolve' : 'A detected merge conflict dispatches the fix agent to merge the base branch in and push a resolution'} — click to ${repo.auto_resolve_conflicts ? 'disable' : 'enable'}`}
-              onClick={() =>
-                patchRepo.mutate({ auto_resolve_conflicts: !repo.auto_resolve_conflicts })
-              }
-            >
-              <GitCompare className="size-3" aria-hidden /> Auto-resolve conflicts
-            </Chip>
-            <Chip
-              on={repo.demo_videos}
-              title={`${repo.demo_videos ? 'Verification records a short demo video of each feature (the verify agent auto-detects how to launch the app)' : 'Verification skips demo recordings for this repo'} — click to ${repo.demo_videos ? 'disable' : 'enable'}`}
-              onClick={() => patchRepo.mutate({ demo_videos: !repo.demo_videos })}
-            >
-              <Clapperboard className="size-3" aria-hidden /> Demos
             </Chip>
           </ConfigRow>
           <ConfigRow label="Process">

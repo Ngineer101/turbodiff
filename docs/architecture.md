@@ -433,3 +433,9 @@ The primitives lead; storage tables, endpoints, and Cloudflare components follow
 - a read model over existing primitives — make it a projection, not another execution aggregate.
 
 New long-running behavior must persist its intent before enqueueing durable IDs. New tenant relationships must be enforced both in service authorization and by organization-aware database constraints. New signed-in JSON behavior must extend the Effect contract and generated client. A framework or Cloudflare product is justified only when it implements one of these requirements more clearly than the existing boundaries.
+
+### Repository policy and delivery evidence
+
+Repository settings persist `processProfile`, `reviewOnPush`, `blockingReviews`, and nullable `checkCommand`. Unconfigured repositories default to automatic review, never implicit automatic repair or merge. Unsupported legacy toggles are not exposed. Delivery read views include both delivery-scoped runs and runs on their changes. Review identities join the configured agent, while summaries and findings come from the immutable review artifact.
+
+GitHub `workflow_run` events record checks against an immutable head in `change_checks`. Duplicate events upsert one workflow check; older timestamps cannot overwrite newer results. Events for other heads cannot change the current revision's readiness. Lifecycle policy execution is extended by the next PR in the stack.

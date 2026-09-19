@@ -1,3 +1,4 @@
+import { repositoryPolicy } from '../../../domain/repository-policy.ts';
 import type { Sandbox } from '@cloudflare/sandbox';
 import type { ZodType } from 'zod';
 import { reviewerAgent, type ReviewerInput } from '../../../agents/reviewer.ts';
@@ -198,7 +199,11 @@ export async function executeReviewStage(
             scrub,
           }),
       });
-      const publicationPlan = planReviewPublication(reviewerInput, tracked.artifact, true);
+      const publicationPlan = planReviewPublication(
+        reviewerInput,
+        tracked.artifact,
+        repositoryPolicy(repository.settings).blockingReviews,
+      );
       const publication =
         repository.source_provider === 'github' && change.number
           ? await publishGithubReview(
