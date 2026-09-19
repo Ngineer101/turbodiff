@@ -342,7 +342,16 @@ export async function getFeature(id: number): Promise<ApiFeatureDetail> {
     provider: delivery.repository.provider,
     diff_version: change?.currentRevision?.headSha ?? null,
     cr_number: delivery.repository.provider === 'github' ? null : (delivery.change?.number ?? null),
-    checks: [],
+    checks: (change?.checks ?? []).map((check) => ({
+      name: check.name,
+      status:
+        check.status === 'completed'
+          ? ['success', 'neutral', 'skipped'].includes(check.conclusion ?? '')
+            ? 'passed'
+            : 'failed'
+          : check.status,
+      summary: check.conclusion,
+    })),
     plan: plan.plan,
     pr: delivery.change
       ? {
@@ -358,8 +367,14 @@ export async function getFeature(id: number): Promise<ApiFeatureDetail> {
     more_files: 0,
     reviews: reviewOutcomes.map((outcome) => ({
       state: outcome.verdict,
-      body: outcome.conclusion,
-      author: null,
+      body: [
+        outcome.summary,
+        ...outcome.findings.map(
+          (finding) =>
+            `**${finding.severity} · ${finding.path}:${finding.line}**\n\n${finding.body}`,
+        ),
+      ].join('\n\n'),
+      author: outcome.author,
     })),
     comments: [],
     demo: null,
@@ -382,7 +397,7 @@ export async function getFeature(id: number): Promise<ApiFeatureDetail> {
     ),
     lifecycle_runs: runs.map((run) => ({
       id: run.id,
-      profile: run.flowKey === 'review' ? 'automatic_review' : 'full_delivery',
+      profile: run.flowKey === 'review' ? 'automatic_review' : delivery.processProfile,
       status:
         run.status === 'waiting'
           ? 'awaiting_human'
@@ -417,7 +432,16 @@ export async function getFeature(id: number): Promise<ApiFeatureDetail> {
         started_at: stage.startedAt,
         completed_at: stage.completedAt,
       })),
-      events: [],
+      events: run.events.map((event) => ({
+        key: String(event.id),
+        kind: event.kind,
+        decision: null,
+        reason:
+          isJsonObject(event.payload) && isString(event.payload.reason)
+            ? event.payload.reason
+            : null,
+        created_at: event.createdAt,
+      })),
     })),
   };
 }
@@ -649,10 +673,12 @@ export async function getSettings(): Promise<ApiSettings> {
           enabled: repository.settings.enabled,
           review_on_push: repository.settings.reviewOnPush,
           review_push_debounce_minutes: 0,
-          process_profile: 'full_delivery',
-          blocking_reviews: true,
-          auto_fix: false,
-          auto_merge: false,
+          process_profile: repository.settings.processProfile,
+          blocking_reviews: repository.settings.blockingReviews,
+          auto_fix: ['assisted_delivery', 'full_delivery'].includes(
+            repository.settings.processProfile,
+          ),
+          auto_merge: repository.settings.processProfile === 'full_delivery',
           auto_resolve_conflicts: false,
           demo_videos: false,
           check_command: repository.settings.checkCommand,
@@ -1256,7 +1282,13 @@ export const setRepositoryIntegration = (
 
 export const updateRepositorySettings = (
   repositoryId: number,
-  values: { enabled?: boolean; review_on_push?: boolean; check_command?: string | null },
+  values: {
+    enabled?: boolean;
+    review_on_push?: boolean;
+    check_command?: string | null;
+    process_profile?: import('../../domain/repository-policy.ts').ProcessProfile;
+    blocking_reviews?: boolean;
+  },
 ) =>
   call((client) =>
     client.repositories.updateRepositorySettings({
@@ -1264,7 +1296,9 @@ export const updateRepositorySettings = (
       payload: {
         enabled: values.enabled,
         reviewOnPush: values.review_on_push,
-        checkCommand: values.check_command ?? undefined,
+        checkCommand: values.check_command,
+        processProfile: values.process_profile,
+        blockingReviews: values.blocking_reviews,
       },
     }),
   );
@@ -1293,7 +1327,12 @@ export const createCloneCredential = (repositoryId: number, scope: 'read' | 'wri
     }),
   );
 
-export async function createProject(owner: string, name: string, description?: string) {
+export async function createProject(
+  owner: string,
+  name: string,
+  description?: string,
+  processProfile?: import('../../domain/repository-policy.ts').ProcessProfile,
+) {
   const [me, integrations] = await Promise.all([
     getCurrentUser(),
     call((client) => client.integrations.listIntegrations({})),
@@ -1321,6 +1360,7 @@ export async function createProject(owner: string, name: string, description?: s
         owner,
         name,
         description,
+        processProfile,
       },
     }),
   );

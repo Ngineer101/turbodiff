@@ -1,5 +1,10 @@
 import { Effect } from 'effect';
-import { getFactoryRun, listAgentRunsForStage, listStageRuns } from '../../../data/execution.ts';
+import {
+  getFactoryRun,
+  listAgentRunsForStage,
+  listStageRuns,
+  listLifecycleEvents,
+} from '../../../data/execution.ts';
 import type { FactoryRun } from '../../contract/executions.ts';
 import { notFound, type DomainError } from '../../contract/errors.ts';
 import { dataEffect } from '../authorization.ts';
@@ -34,6 +39,13 @@ export const loadFactoryRun = (
       parentRunId: row.parent_run_id,
       trigger: row.trigger,
       status: row.status,
+      events: (yield* dataEffect(() => listLifecycleEvents(row.id))).map((event) => ({
+        id: event.id,
+        stageRunId: event.stage_run_id,
+        kind: event.kind,
+        payload: event.payload,
+        createdAt: event.created_at,
+      })),
       stages: stages.map((stage, index) => ({
         id: stage.id,
         stageKey: stage.stage_key,

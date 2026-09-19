@@ -434,3 +434,11 @@ export async function createFactoryRunWithStage(
     return { factoryRun, stageRun };
   });
 }
+
+export function listDeliveryFactoryRuns(deliveryId: number): Promise<FactoryRunRow[]> {
+  return queryRows(sql`SELECT run.* FROM app.factory_runs run
+    WHERE run.delivery_id = ${deliveryId} OR EXISTS (
+      SELECT 1 FROM app.changes change WHERE change.id = run.change_id
+        AND change.organization_id = run.organization_id AND change.delivery_id = ${deliveryId}
+    ) ORDER BY run.id DESC`);
+}
