@@ -6,7 +6,10 @@ import {
   createAiGatewayGrant,
 } from '../../integrations/security/ai-gateway-grant.ts';
 
-export async function resolveRunnerAuth(model?: string | null): Promise<RunnerAuth> {
+export async function resolveRunnerAuth(
+  model: string | null | undefined,
+  usage: { organizationId: string; agentRunId: number },
+): Promise<RunnerAuth> {
   const accountId = (env.AI_GATEWAY_ACCOUNT_ID ?? '').trim();
   const gatewayId = (env.AI_GATEWAY_ID ?? '').trim();
   if (!accountId || !(env.AI_GATEWAY_API_TOKEN ?? '').trim() || !gatewayId) {
@@ -22,6 +25,8 @@ export async function resolveRunnerAuth(model?: string | null): Promise<RunnerAu
       TURBODIFF_AI_GATEWAY_GRANT: await createAiGatewayGrant(
         env.AI_GATEWAY_API_TOKEN,
         normalizedModel,
+        usage.organizationId,
+        usage.agentRunId,
         Date.now() + AI_GATEWAY_GRANT_TTL_MS,
       ),
     },

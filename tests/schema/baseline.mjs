@@ -9,9 +9,9 @@ const directory = path.resolve('db/migrations');
 const files = (await readdir(directory)).filter((file) => file.endsWith('.sql')).sort();
 const journal = JSON.parse(await readFile(path.join(directory, 'meta', '_journal.json'), 'utf8'));
 
-if (files.length !== 5 || journal.entries.length !== 5) {
+if (files.length !== 6 || journal.entries.length !== 6) {
   throw new Error(
-    `Expected the baseline, model catalog, work-item archive, delivery recovery, and delivery chat migrations, found ${files.length} files and ${journal.entries.length} journal entries`,
+    `Expected the complete six-migration schema history, found ${files.length} files and ${journal.entries.length} journal entries`,
   );
 }
 
@@ -51,6 +51,7 @@ for (const name of [
   'app.factory_runs',
   'app.stage_runs',
   'app.agent_runs',
+  'app.ai_gateway_usage',
   'app.lifecycle_events',
   'app.review_outcomes',
 ]) {
@@ -272,6 +273,18 @@ await mustReject(
   INSERT INTO app.agent_runs
     (organization_id, stage_run_id, agent_id, model_id, input_artifact_id, idempotency_key)
   VALUES ('org-b', 1, 2, 1, 2, 'cross-tenant-agent-run')
+`,
+);
+await database.exec(`
+  INSERT INTO app.agent_runs
+    (id, organization_id, stage_run_id, agent_id, model_id, input_artifact_id, idempotency_key)
+  VALUES (1, 'org-a', 1, 1, 1, 1, 'agent-run-a')
+`);
+await mustReject(
+  'cross-tenant AI Gateway usage',
+  `
+  INSERT INTO app.ai_gateway_usage (log_id, organization_id, agent_run_id)
+  VALUES ('log-cross-tenant', 'org-b', 1)
 `,
 );
 

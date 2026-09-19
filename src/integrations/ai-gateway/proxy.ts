@@ -10,6 +10,7 @@ export interface AiGatewayProxyConfig {
   accountId: string;
   gatewayId: string;
   apiToken: string;
+  recordLog?: (reference: { logId: string; organizationId: string; agentRunId: number }) => void;
 }
 
 function error(message: string, status: number): Response {
@@ -89,7 +90,14 @@ export async function proxyAiGatewayRequest(
     'cf-aig-max-attempts': '3',
     'cf-aig-backoff': 'exponential',
     'cf-aig-retry-delay': '500',
-    'cf-aig-metadata': JSON.stringify({ app: 'turbodiff', harness: 'opencode' }),
+    'cf-aig-collect-log': 'true',
+    'cf-aig-collect-log-payload': 'false',
+    'cf-aig-metadata': JSON.stringify({
+      app: 'turbodiff',
+      harness: 'opencode',
+      organization_id: grant.organizationId,
+      agent_run_id: grant.agentRunId,
+    }),
     'content-type': 'application/json',
   });
   for (const name of FORWARDED_SDK_HEADERS) {
@@ -105,6 +113,23 @@ export async function proxyAiGatewayRequest(
     },
   );
   const headers = new Headers();
+  const logId = upstream.headers.get('cf-aig-log-id');
+  if (logId) {
+    config.recordLog?.({
+      logId,
+      organizationId: grant.organizationId,
+      agentRunId: grant.agentRunId,
+    });
+  } else {
+    console.warn(
+      JSON.stringify({
+        message: 'turbodiff: AI Gateway response is missing its log id',
+        model: grant.model,
+        agentRunId: grant.agentRunId,
+        status: upstream.status,
+      }),
+    );
+  }
   if (!upstream.ok) {
     // Gateway analytics can omit rejected wholesale requests. Record failures
     // at our actual HTTP boundary without logging prompts or credentials.
@@ -119,6 +144,7 @@ export async function proxyAiGatewayRequest(
   for (const name of [
     'content-type',
     'cf-ray',
+    'cf-aig-log-id',
     'request-id',
     'x-request-id',
     'retry-after',

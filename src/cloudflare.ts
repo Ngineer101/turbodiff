@@ -1,4 +1,5 @@
 import { pollAutomations } from './application/automations/poll.ts';
+import { reconcilePendingAiGatewayUsage } from './application/ai-gateway-usage.ts';
 import type { RunFactoryMessage } from './application/factory/message.ts';
 import { recoverFactoryStages } from './application/factory/recover.ts';
 import { FactoryStageWorkflow, startFactoryStageWorkflow } from './application/factory/workflow.ts';
@@ -26,6 +27,7 @@ export default {
     await withDatabaseScope(async () => {
       await pollAutomations();
       await recoverFactoryStages();
+      await reconcilePendingAiGatewayUsage();
     });
   },
 };

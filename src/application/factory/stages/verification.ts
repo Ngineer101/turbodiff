@@ -77,7 +77,7 @@ export async function executeVerification(
       inputKind: 'verifier_input',
       outputKind: 'verification',
       invoke: async (request, output) => {
-        const auth = await resolveRunnerAuth(request.model);
+        const auth = await resolveRunnerAuth(request.model, request.usage);
         const sanitize = (value: string) => redactSecrets(scrub(value), Object.values(auth.vars));
         const result = await runStructuredAgent({
           sandbox,

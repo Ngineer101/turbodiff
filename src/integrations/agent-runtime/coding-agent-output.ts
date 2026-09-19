@@ -43,7 +43,6 @@ export function parseCodingAgentUsage(
     outputTokens: 0,
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
-    costUsd: 0,
     model,
   };
   for (const event of jsonLines(stdout)) {
@@ -57,7 +56,6 @@ export function parseCodingAgentUsage(
       total.cacheReadTokens += isNumber(part.tokens.cache.read) ? part.tokens.cache.read : 0;
       total.cacheWriteTokens += isNumber(part.tokens.cache.write) ? part.tokens.cache.write : 0;
     }
-    total.costUsd += isNumber(part.cost) ? part.cost : 0;
   }
   return seen ? total : null;
 }
@@ -70,7 +68,6 @@ export function addCliUsage(total: CliUsage | null, next: CliUsage | null): CliU
     outputTokens: total.outputTokens + next.outputTokens,
     cacheReadTokens: total.cacheReadTokens + next.cacheReadTokens,
     cacheWriteTokens: total.cacheWriteTokens + next.cacheWriteTokens,
-    costUsd: total.costUsd + next.costUsd,
     model: total.model ?? next.model,
   };
 }

@@ -1,8 +1,10 @@
 import { isJsonObject, isNumber, isString, parseJson } from '../../shared/json.ts';
 
-interface AiGatewayGrant {
-  v: 1;
+export interface AiGatewayGrant {
+  v: 2;
   model: string;
+  organizationId: string;
+  agentRunId: number;
   exp: number;
 }
 
@@ -43,11 +45,19 @@ async function hmacKey(secret: string, usage: 'sign' | 'verify'): Promise<Crypto
 export async function createAiGatewayGrant(
   secret: string,
   model: string,
+  organizationId: string,
+  agentRunId: number,
   expiresAt: number,
 ): Promise<string> {
   const encodedPayload = base64Url(
     new TextEncoder().encode(
-      JSON.stringify({ v: 1, model, exp: expiresAt } satisfies AiGatewayGrant),
+      JSON.stringify({
+        v: 2,
+        model,
+        organizationId,
+        agentRunId,
+        exp: expiresAt,
+      } satisfies AiGatewayGrant),
     ),
   );
   const signature = await crypto.subtle.sign(
@@ -76,15 +86,26 @@ export async function verifyAiGatewayGrantWithSecret(
     const payload = parseJson(new TextDecoder().decode(base64UrlDecode(encodedPayload)));
     if (
       !isJsonObject(payload) ||
-      payload.v !== 1 ||
+      payload.v !== 2 ||
       !isString(payload.model) ||
       !payload.model ||
+      !isString(payload.organizationId) ||
+      !payload.organizationId ||
+      !isNumber(payload.agentRunId) ||
+      !Number.isSafeInteger(payload.agentRunId) ||
+      payload.agentRunId <= 0 ||
       !isNumber(payload.exp) ||
       payload.exp <= now
     ) {
       return null;
     }
-    return { v: 1, model: payload.model, exp: payload.exp };
+    return {
+      v: 2,
+      model: payload.model,
+      organizationId: payload.organizationId,
+      agentRunId: payload.agentRunId,
+      exp: payload.exp,
+    };
   } catch {
     return null;
   }

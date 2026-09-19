@@ -12,7 +12,13 @@ const config: AiGatewayProxyConfig = {
 };
 
 async function request(model: string, grantModel = model): Promise<Request> {
-  const grant = await createAiGatewayGrant(config.apiToken, grantModel, Date.now() + 60_000);
+  const grant = await createAiGatewayGrant(
+    config.apiToken,
+    grantModel,
+    'org-1',
+    42,
+    Date.now() + 60_000,
+  );
   return new Request('https://turbodiff.test/ai-proxy/v1/chat/completions', {
     method: 'POST',
     headers: { authorization: `Bearer ${grant}`, accept: 'text/event-stream' },
@@ -24,6 +30,8 @@ async function messagesRequest(body: string): Promise<Request> {
   const grant = await createAiGatewayGrant(
     config.apiToken,
     'anthropic/claude-opus-4.8',
+    'org-1',
+    42,
     Date.now() + 60_000,
   );
   return new Request('https://turbodiff.test/ai-proxy/v1/messages', {
@@ -163,7 +171,13 @@ describe('AI Gateway sandbox proxy', () => {
     'leaves request bodies unchanged outside the Messages endpoint: %s',
     async (endpoint) => {
       const model = 'openai/gpt-5.2-codex';
-      const grant = await createAiGatewayGrant(config.apiToken, model, Date.now() + 60_000);
+      const grant = await createAiGatewayGrant(
+        config.apiToken,
+        model,
+        'org-1',
+        42,
+        Date.now() + 60_000,
+      );
       const body = JSON.stringify({ model, system: [{ type: 'text', text: 'Instructions' }] });
       const upstream = vi.fn<typeof fetch>().mockResolvedValue(new Response('ok'));
       await proxyAiGatewayRequest(
@@ -180,21 +194,32 @@ describe('AI Gateway sandbox proxy', () => {
   );
 
   it('exchanges a model grant for Worker-only credentials and preserves streaming', async () => {
+    const recordLog = vi.fn();
     const upstream = vi.fn<typeof fetch>().mockResolvedValue(
       new Response('data: done\n\n', {
         status: 200,
-        headers: { 'content-type': 'text/event-stream', 'cf-ray': 'ray-123' },
+        headers: {
+          'content-type': 'text/event-stream',
+          'cf-ray': 'ray-123',
+          'cf-aig-log-id': 'log-123',
+        },
       }),
     );
     const response = await proxyAiGatewayRequest(
       await request('openai/gpt-5.2-codex'),
-      config,
+      { ...config, recordLog },
       upstream,
     );
 
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('text/event-stream');
+    expect(response.headers.get('cf-aig-log-id')).toBe('log-123');
     expect(await response.text()).toBe('data: done\n\n');
+    expect(recordLog).toHaveBeenCalledWith({
+      logId: 'log-123',
+      organizationId: 'org-1',
+      agentRunId: 42,
+    });
     expect(upstream).toHaveBeenCalledOnce();
     const [url, init] = upstream.mock.calls[0]!;
     expect(url).toBe(
@@ -204,6 +229,14 @@ describe('AI Gateway sandbox proxy', () => {
     expect(headers.get('authorization')).toBe('Bearer permanent-worker-token');
     expect(headers.get('cf-aig-gateway-id')).toBe('production');
     expect(headers.get('cf-aig-max-attempts')).toBe('3');
+    expect(headers.get('cf-aig-collect-log')).toBe('true');
+    expect(headers.get('cf-aig-collect-log-payload')).toBe('false');
+    expect(JSON.parse(headers.get('cf-aig-metadata') ?? '')).toEqual({
+      app: 'turbodiff',
+      harness: 'opencode',
+      organization_id: 'org-1',
+      agent_run_id: 42,
+    });
   });
 
   it('rejects attempts to use the grant for another model before fetching', async () => {
@@ -219,7 +252,13 @@ describe('AI Gateway sandbox proxy', () => {
 
   it('accepts the Anthropic SDK x-api-key transport without forwarding it', async () => {
     const model = 'anthropic/claude-fable-5.1';
-    const grant = await createAiGatewayGrant(config.apiToken, model, Date.now() + 60_000);
+    const grant = await createAiGatewayGrant(
+      config.apiToken,
+      model,
+      'org-1',
+      42,
+      Date.now() + 60_000,
+    );
     const upstream = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ type: 'message' }));
     const response = await proxyAiGatewayRequest(
       new Request('https://turbodiff.test/ai-proxy/v1/messages', {

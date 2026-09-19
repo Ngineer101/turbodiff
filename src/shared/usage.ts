@@ -4,6 +4,5 @@ export interface CliUsage {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
-  costUsd: number;
   model: string | null;
 }
