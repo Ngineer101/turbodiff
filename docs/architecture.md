@@ -273,7 +273,7 @@ The board uses `GET /api/board-view`, a summary projection independent of task-d
 
 Both columns order by `created_at DESC, id DESC`; ID only breaks equal creation timestamps. Classification and exclusions happen before pagination. Each request returns at most 50 In progress and 25 Done cards. Each column has independent creation-time/ID cursors and Newer/Older controls. One extra row per column determines whether an older page exists; refreshes never walk additional pages automatically.
 
-Archiving is an independent work-item flag. Archive and restore never change execution status or completion timestamps.
+Archiving uses the nullable `work_items.archived_at` timestamp, exposed as `archivedAt` in the API. An archive request records server time once; repeated requests preserve it. Restore clears it. Archive and restore never change execution status or completion timestamps.
 
 The server uses one query for the two pages and one batched repository/delivery/latest-change query. Tenant membership scopes both queries. Board cards contain no plan bodies, factory runs, stage runs, agent runs or lifecycle events. Full unstarted-task requirements remain available to the start dialog; task and feature detail endpoints retain their existing artifact and history reads.
 

@@ -1,5 +1,5 @@
 {
-  "id": "6913fa67-5ea5-4355-ba24-209c18434408",
+  "id": "9389ab68-1be7-4daa-8820-256ec267d57f",
   "prevId": "e35cdc64-52ef-479b-9d62-5f97e6ac3c02",
   "version": "7",
   "dialect": "postgresql",
@@ -5194,12 +5194,11 @@
           "notNull": true,
           "default": "'open'"
         },
-        "archived": {
-          "name": "archived",
-          "type": "boolean",
+        "archived_at": {
+          "name": "archived_at",
+          "type": "timestamp with time zone",
           "primaryKey": false,
-          "notNull": true,
-          "default": false
+          "notNull": false
         },
         "approved_plan_artifact_id": {
           "name": "approved_plan_artifact_id",

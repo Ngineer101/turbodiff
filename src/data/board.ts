@@ -66,7 +66,7 @@ export async function readBoardPage(
           )
         ) THEN 'done' ELSE 'in_progress' END AS board_column
       FROM app.work_items wi
-      WHERE wi.organization_id IN (${organizations}) AND wi.status <> 'cancelled' AND NOT wi.archived
+      WHERE wi.organization_id IN (${organizations}) AND wi.status <> 'cancelled' AND wi.archived_at IS NULL
     )
     (SELECT * FROM visible WHERE board_column = 'in_progress'
       AND (${activeDate ?? null}::timestamptz IS NULL OR (created_at, id) < (${activeDate ?? null}::timestamptz, ${activeId ?? null}::bigint))

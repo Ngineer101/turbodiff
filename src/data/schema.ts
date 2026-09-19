@@ -509,7 +509,7 @@ export const workItems = appSchema.table(
     title: text().notNull(),
     description: text().notNull(),
     status: text().default('open').notNull(),
-    archived: boolean().default(false).notNull(),
+    archivedAt: timestamp('archived_at', { withTimezone: true, mode: 'string' }),
     approvedPlanArtifactId: bigint('approved_plan_artifact_id', { mode: 'number' }),
     createdByUserId: text('created_by_user_id'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })

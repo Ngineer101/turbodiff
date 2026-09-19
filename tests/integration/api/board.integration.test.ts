@@ -179,18 +179,38 @@ describe('bounded factory board projection', () => {
             body: JSON.stringify({ archived }),
           });
         expect((await foreign(patch(true))).status).toBe(404);
-        expect((await getWorkItem(item!.id))!.archived).toBe(false);
+        expect((await getWorkItem(item!.id))!.archived_at).toBeNull();
         const response = await handle(patch(true));
         expect(response.status).toBe(200);
-        expect(await response.json()).toMatchObject({ id: item!.id, archived: true, status });
+        const archived = (await getWorkItem(item!.id))!;
+        expect(archived.archived_at).not.toBeNull();
+        expect(Number.isFinite(new Date(archived.archived_at!).getTime())).toBe(true);
+        expect(await response.json()).toMatchObject({
+          id: item!.id,
+          archivedAt: archived.archived_at,
+          status,
+        });
         expect(
           (await readBoardPage([tenant.organizationId])).items.some((card) => card.id === item!.id),
         ).toBe(false);
         expect(await getWorkItem(item!.id)).toMatchObject({
           status,
           completed_at: before.completed_at,
-          archived: true,
+          archived_at: archived.archived_at,
         });
+        // A retried archive and unrelated edits must preserve the original archive time.
+        const originalArchiveTime = '2026-01-02T03:04:05.000Z';
+        await execute(
+          sql`UPDATE app.work_items SET archived_at = ${originalArchiveTime} WHERE id = ${item!.id}`,
+        );
+        const persistedArchiveTime = (await getWorkItem(item!.id))!.archived_at;
+        const retried = await handle(patch(true));
+        expect(retried.status).toBe(200);
+        expect(await retried.json()).toMatchObject({ archivedAt: persistedArchiveTime });
+        await updateWorkItem(item!.id, { title: 'Edited while archived' });
+        expect(new Date((await getWorkItem(item!.id))!.archived_at!).toISOString()).toBe(
+          originalArchiveTime,
+        );
         expect((await handle(patch(false))).status).toBe(200);
         expect(
           (await readBoardPage([tenant.organizationId])).items.find((card) => card.id === item!.id),
@@ -198,7 +218,7 @@ describe('bounded factory board projection', () => {
         expect(await getWorkItem(item!.id)).toMatchObject({
           status,
           completed_at: before.completed_at,
-          archived: false,
+          archived_at: null,
         });
       }
     }));

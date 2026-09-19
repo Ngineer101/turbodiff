@@ -146,7 +146,7 @@ async function workItemPlan(
     acceptance: artifactPlan.acceptance,
     plan: artifactPlan.plan,
     summary: artifactPlan.summary,
-    archived: workItem.archived,
+    archived: workItem.archivedAt !== null,
     model: selectedModel || defaultModel,
     attachments: workItem.attachments.map((attachment) => ({ name: attachment.name })),
     repos: workItem.targets.map((target) => {

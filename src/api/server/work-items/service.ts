@@ -73,7 +73,7 @@ const serialize = (
   title: row.title,
   description: row.description,
   status: row.status,
-  archived: row.archived,
+  archivedAt: row.archived_at,
   approvedPlanArtifactId: row.approved_plan_artifact_id,
   attachments: attachments
     .filter((attachment) => attachment.work_item_id === row.id)

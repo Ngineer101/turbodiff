@@ -29,7 +29,7 @@ export const WorkItem = Schema.Struct({
   title: Schema.String,
   description: Schema.String,
   status: WorkItemStatus,
-  archived: Schema.Boolean,
+  archivedAt: Schema.NullOr(Schema.String),
   approvedPlanArtifactId: Schema.NullOr(PositiveInt),
   attachments: Schema.Array(Schema.Struct({ artifactId: PositiveInt, name: Schema.String })),
   targets: Schema.Array(WorkItemTarget),
