@@ -43,6 +43,7 @@ export interface WorkItemRow {
   title: string;
   description: string;
   status: WorkItemStatus;
+  archived_at: string | null;
   approved_plan_artifact_id: number | null;
   created_by_user_id: string | null;
   created_at: string;
@@ -141,13 +142,18 @@ export async function createWorkItem(input: {
 
 export async function updateWorkItem(
   id: number,
-  input: { title?: string; description?: string; status?: WorkItemStatus },
+  input: { title?: string; description?: string; status?: WorkItemStatus; archived?: boolean },
 ): Promise<void> {
   await execute(sql`
     UPDATE app.work_items SET
       title = COALESCE(${input.title ?? null}, title),
       description = COALESCE(${input.description ?? null}, description),
       status = COALESCE(${input.status ?? null}, status),
+      archived_at = CASE
+        WHEN ${input.archived ?? null}::boolean = true THEN COALESCE(archived_at, CURRENT_TIMESTAMP)
+        WHEN ${input.archived ?? null}::boolean = false THEN NULL
+        ELSE archived_at
+      END,
       completed_at = CASE
         WHEN ${input.status ?? null} IN ('completed', 'cancelled') THEN CURRENT_TIMESTAMP
         WHEN ${input.status ?? null}::text IS NOT NULL THEN NULL

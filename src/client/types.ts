@@ -160,6 +160,11 @@ export interface ApiAgentRun {
 // runs there) since ApiPlan is also every board card's shape (ApiBoard.tasks),
 // and the board never renders runs — folding it in would cost an extra query
 // per card.
+export type ApiTaskSummary = Pick<
+  ApiPlan,
+  'id' | 'title' | 'status' | 'error' | 'created_at' | 'archived' | 'repos'
+>;
+
 export interface ApiTaskDetail extends ApiPlan {
   runs: ApiAgentRun[];
 }
@@ -585,7 +590,9 @@ export interface ApiBoard {
   // month_cost_usd, which was review-stage cost only and did not match /usage).
   stats: { month_pipeline_cost_usd: number; running: number };
   todos: ApiTodo[];
-  tasks: ApiPlan[]; // non-archived
+  tasks: ApiTaskSummary[];
+  activeNextBefore: string | null;
+  historyNextBefore: string | null;
   organizations: { id: string; name: string }[];
   repos: { id: number; owner: string; name: string; organization_id: string }[];
 }

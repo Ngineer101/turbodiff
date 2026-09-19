@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { BUILTIN_AGENTS } from '../domain/agent-definitions.ts';
-import { execute, queryOne, queryRows, sqlValueList, withTransaction } from './postgres.ts';
+import { execute, queryOne, queryRows, sqlValueList } from './postgres.ts';
 
 export interface AgentRow {
   id: number;
@@ -16,19 +16,19 @@ export interface AgentRow {
 }
 
 export async function ensureBuiltinAgents(organizationId: string): Promise<void> {
-  await withTransaction(async (transaction) => {
-    for (const agent of BUILTIN_AGENTS) {
-      await transaction.execute(sql`
-        INSERT INTO app.agents (
-          organization_id, definition_key, slug, name, description, instructions_override
-        ) VALUES (
-          ${organizationId}, ${agent.definitionKey}, ${agent.slug}, ${agent.name},
-          ${agent.description}, ${agent.instructionsOverride}
-        )
-        ON CONFLICT(organization_id, slug) DO NOTHING
-      `);
-    }
-  });
+  await execute(sql`
+    INSERT INTO app.agents (organization_id, definition_key, slug, name, description, instructions_override)
+    VALUES ${sql.join(
+      BUILTIN_AGENTS.map(
+        (agent) => sql`(
+      ${organizationId}, ${agent.definitionKey}, ${agent.slug}, ${agent.name},
+      ${agent.description}, ${agent.instructionsOverride}
+    )`,
+      ),
+      sql`, `,
+    )}
+    ON CONFLICT(organization_id, slug) DO NOTHING
+  `);
 }
 
 export async function listAgents(organizationIds: string[]): Promise<AgentRow[]> {

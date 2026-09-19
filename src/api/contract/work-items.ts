@@ -29,6 +29,7 @@ export const WorkItem = Schema.Struct({
   title: Schema.String,
   description: Schema.String,
   status: WorkItemStatus,
+  archivedAt: Schema.NullOr(Schema.String),
   approvedPlanArtifactId: Schema.NullOr(PositiveInt),
   attachments: Schema.Array(Schema.Struct({ artifactId: PositiveInt, name: Schema.String })),
   targets: Schema.Array(WorkItemTarget),
@@ -53,6 +54,7 @@ export const UpdateWorkItem = Schema.Struct({
   title: Schema.optional(Schema.String),
   description: Schema.optional(Schema.String),
   status: Schema.optional(WorkItemStatus),
+  archived: Schema.optional(Schema.Boolean),
   repositoryIds: Schema.optional(Schema.Array(PositiveInt)),
 });
 export type UpdateWorkItem = typeof UpdateWorkItem.Type;

@@ -147,6 +147,8 @@ These projections do not create new orchestration models. For example, a review 
 
 Better Auth organizations are the only tenant boundary. Every tenant-owned aggregate carries `organization_id`. Cross-tenant-capable relationships use organization-aware foreign keys so an application bug cannot connect rows from different tenants.
 
+Normal signed-in requests resolve fresh organization membership and integration availability with one database query. Built-in agents are seeded during organization provisioning and before agent execution.
+
 A signed-in request resolves one identity containing the Better Auth user ID, all authorized organization IDs, and an active organization ID. The active organization is only a default for actions that do not otherwise identify their tenant; it does not replace resource ownership checks.
 
 Authorization follows these rules:
