@@ -6,9 +6,8 @@ import { EntityCard, EntityGrid, EntityListHeader } from '../components/entity-l
 import { EmptyState } from '../components/section.tsx';
 import { buttonVariants } from '../components/ui/button.tsx';
 import { Pill } from '../components/ui/pill.tsx';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs.tsx';
 
-// One flat list — agents are generic: any agent can be enabled on any repo
-// (settings), regardless of which organization the repo lives in.
 export function AgentsPage() {
   const { data } = useSuspenseQuery(agentsQuery);
 
@@ -36,40 +35,64 @@ export function AgentsPage() {
         }
       />
 
-      {data.agents.length === 0 ? (
+      {data.organizations.length === 0 ? (
         <div className="mt-6">
           <EmptyState>No agents yet — install the app on GitHub first.</EmptyState>
         </div>
       ) : (
-        <EntityGrid>
-          {data.agents.map((a) => (
-            <Link
-              key={a.id}
-              to="/agents/$agentId/edit"
-              params={{ agentId: String(a.id) }}
-              className="block active:scale-[0.99]"
-            >
-              <EntityCard
-                kind="agent"
-                slug={a.slug}
-                name={a.name}
-                interactive
-                chips={
-                  <>
-                    <Pill>{a.slug}</Pill>
-                    {a.is_builtin ? <Pill className="text-mute/70">Built-in</Pill> : null}
-                  </>
-                }
-                description={a.description ?? undefined}
-                meta={
-                  <span className="font-mono text-mute/70">
-                    {a.model.replace('cloudflare/', '')}
-                  </span>
-                }
-              />
-            </Link>
-          ))}
-        </EntityGrid>
+        <Tabs defaultValue={data.organizations[0]!.id} className="mt-6">
+          <TabsList>
+            {data.organizations.map((organization) => (
+              <TabsTrigger key={organization.id} value={organization.id}>
+                {organization.name}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          {data.organizations.map((organization) => {
+            const agents = data.agents.filter(
+              (agent) => agent.organization_id === organization.id,
+            );
+            return (
+              <TabsContent key={organization.id} value={organization.id}>
+                {agents.length === 0 ? (
+                  <EmptyState>No agents yet for {organization.name}.</EmptyState>
+                ) : (
+                  <EntityGrid>
+                    {agents.map((a) => (
+                      <Link
+                        key={a.id}
+                        to="/agents/$agentId/edit"
+                        params={{ agentId: String(a.id) }}
+                        className="block active:scale-[0.99]"
+                      >
+                        <EntityCard
+                          kind="agent"
+                          slug={a.slug}
+                          name={a.name}
+                          interactive
+                          chips={
+                            <>
+                              <Pill>{a.slug}</Pill>
+                              {a.is_builtin ? (
+                                <Pill className="text-mute/70">Built-in</Pill>
+                              ) : null}
+                            </>
+                          }
+                          description={a.description ?? undefined}
+                          meta={
+                            <span className="font-mono text-mute/70">
+                              {a.model.replace('cloudflare/', '')}
+                            </span>
+                          }
+                        />
+                      </Link>
+                    ))}
+                  </EntityGrid>
+                )}
+              </TabsContent>
+            );
+          })}
+        </Tabs>
       )}
     </div>
   );
