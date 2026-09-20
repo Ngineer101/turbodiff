@@ -32,6 +32,7 @@ import { EntityIcon } from '../components/ui/entity-icon.tsx';
 import { Pill } from '../components/ui/pill.tsx';
 import { Switch } from '../components/ui/switch.tsx';
 import { Table, Td, Th } from '../components/ui/table.tsx';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs.tsx';
 import { Tooltip } from '../components/ui/tooltip.tsx';
 
 // Central integrations registry: MCP servers (mountable as run tools) and
@@ -401,17 +402,6 @@ export function IntegrationsPage() {
   const { data } = useSuspenseQuery(integrationsQuery);
   useOAuthCallbackToast();
 
-  const groups = data.organizations
-    .map((organization) => ({
-      organization,
-      connections: data.connections.filter(
-        (connection) => connection.organization_id === organization.id,
-      ),
-      repos: data.repos.filter((repository) => repository.organization_id === organization.id),
-    }))
-    .filter((g) => g.connections.length > 0);
-  const multiOrganization = data.organizations.length > 1;
-
   return (
     <>
       <PageTitle
@@ -443,19 +433,41 @@ export function IntegrationsPage() {
       >
         Connected
       </SectionHeading>
-      {data.connections.length === 0 ? (
-        <EmptyState>No integrations yet — add your first with “New integration”.</EmptyState>
+      {data.organizations.length === 0 ? (
+        <EmptyState>No organizations available.</EmptyState>
       ) : (
-        <div className="flex flex-col gap-4">
-          {groups.map(({ organization, connections, repos }) => (
-            <section key={organization.id} className="flex flex-col gap-2">
-              {multiOrganization ? <Placard className="px-0.5">{organization.name}</Placard> : null}
-              {connections.map((conn) => (
-                <IntegrationCard key={conn.id} conn={conn} repos={repos} />
-              ))}
-            </section>
-          ))}
-        </div>
+        <Tabs defaultValue={data.organizations[0]!.id}>
+          <TabsList>
+            {data.organizations.map((organization) => (
+              <TabsTrigger key={organization.id} value={organization.id}>
+                {organization.name}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          {data.organizations.map((organization) => {
+            const connections = data.connections.filter(
+              (connection) => connection.organization_id === organization.id,
+            );
+            const repos = data.repos.filter(
+              (repository) => repository.organization_id === organization.id,
+            );
+            return (
+              <TabsContent key={organization.id} value={organization.id}>
+                {connections.length === 0 ? (
+                  <EmptyState>
+                    No integrations yet for {organization.name} — add one with “New integration”.
+                  </EmptyState>
+                ) : (
+                  <div className="flex flex-col gap-4">
+                    {connections.map((conn) => (
+                      <IntegrationCard key={conn.id} conn={conn} repos={repos} />
+                    ))}
+                  </div>
+                )}
+              </TabsContent>
+            );
+          })}
+        </Tabs>
       )}
     </>
   );

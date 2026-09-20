@@ -365,6 +365,7 @@ export interface ApiFeatureExplanation {
 
 export interface ApiAgentSummary {
   id: number;
+  organization_id: string;
   slug: string;
   name: string;
   description: string | null;
@@ -376,6 +377,7 @@ export interface ApiAgentSummary {
 // writes fan out server-side so every installation stays in step.
 export interface ApiAgentsList {
   github_app_slug: string;
+  organizations: { id: string; name: string }[];
   agents: ApiAgentSummary[];
 }
 
@@ -399,6 +401,7 @@ export interface ApiAgentDetail {
 
 export interface ApiSkillSummary {
   id: number;
+  organization_id: string;
   slug: string;
   name: string;
   description: string | null;
@@ -407,6 +410,7 @@ export interface ApiSkillSummary {
 }
 
 export interface ApiSkillsList {
+  organizations: { id: string; name: string }[];
   skills: ApiSkillSummary[];
 }
 
@@ -629,6 +633,7 @@ export interface ApiIntegrations {
 
 export interface ApiAutomationSummary {
   id: number;
+  organization_id: string;
   name: string;
   repository: { id: number; owner: string; name: string };
   schedule_kind: 'hourly' | 'daily' | 'weekly';
@@ -641,6 +646,7 @@ export interface ApiAutomationSummary {
 }
 
 export interface ApiAutomationsList {
+  organizations: { id: string; name: string }[];
   automations: ApiAutomationSummary[];
   // Factory-enabled repos, for the new-automation repo picker — mirrors ApiBoard.repos.
   repos: { id: number; owner: string; name: string; organization_id: string }[];
