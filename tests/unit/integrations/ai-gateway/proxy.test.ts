@@ -11,6 +11,32 @@ const config: AiGatewayProxyConfig = {
   apiToken: 'permanent-worker-token',
 };
 
+function base64Url(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+async function legacyRequest(model: string): Promise<Request> {
+  const payload = base64Url(
+    new TextEncoder().encode(JSON.stringify({ v: 1, model, exp: Date.now() + 60_000 })),
+  );
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(config.apiToken),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload));
+  const grant = `${payload}.${base64Url(new Uint8Array(signature))}`;
+  return new Request('https://turbodiff.test/ai-proxy/v1/chat/completions', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${grant}` },
+    body: JSON.stringify({ model, messages: [] }),
+  });
+}
+
 async function request(model: string, grantModel = model): Promise<Request> {
   const grant = await createAiGatewayGrant(
     config.apiToken,
@@ -236,6 +262,29 @@ describe('AI Gateway sandbox proxy', () => {
       harness: 'opencode',
       organization_id: 'org-1',
       agent_run_id: 42,
+    });
+  });
+
+  it('lets an in-flight v1 grant finish without claiming per-run attribution', async () => {
+    const recordLog = vi.fn();
+    const upstream = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response('ok', { headers: { 'cf-aig-log-id': 'legacy-log-123' } }));
+
+    const response = await proxyAiGatewayRequest(
+      await legacyRequest('openai/gpt-5.2-codex'),
+      { ...config, recordLog },
+      upstream,
+    );
+
+    expect(response.status).toBe(200);
+    expect(recordLog).not.toHaveBeenCalled();
+    const headers = new Headers(upstream.mock.calls[0]![1]?.headers);
+    expect(headers.get('cf-aig-collect-log')).toBe('true');
+    expect(JSON.parse(headers.get('cf-aig-metadata') ?? '')).toEqual({
+      app: 'turbodiff',
+      harness: 'opencode',
+      grant_version: 1,
     });
   });
 

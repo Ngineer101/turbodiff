@@ -92,12 +92,16 @@ export async function proxyAiGatewayRequest(
     'cf-aig-retry-delay': '500',
     'cf-aig-collect-log': 'true',
     'cf-aig-collect-log-payload': 'false',
-    'cf-aig-metadata': JSON.stringify({
-      app: 'turbodiff',
-      harness: 'opencode',
-      organization_id: grant.organizationId,
-      agent_run_id: grant.agentRunId,
-    }),
+    'cf-aig-metadata': JSON.stringify(
+      grant.v === 2
+        ? {
+            app: 'turbodiff',
+            harness: 'opencode',
+            organization_id: grant.organizationId,
+            agent_run_id: grant.agentRunId,
+          }
+        : { app: 'turbodiff', harness: 'opencode', grant_version: 1 },
+    ),
     'content-type': 'application/json',
   });
   for (const name of FORWARDED_SDK_HEADERS) {
@@ -114,18 +118,26 @@ export async function proxyAiGatewayRequest(
   );
   const headers = new Headers();
   const logId = upstream.headers.get('cf-aig-log-id');
-  if (logId) {
+  if (logId && grant.v === 2) {
     config.recordLog?.({
       logId,
       organizationId: grant.organizationId,
       agentRunId: grant.agentRunId,
     });
+  } else if (logId) {
+    console.warn(
+      JSON.stringify({
+        message: 'turbodiff: legacy AI Gateway grant cannot attribute its log to an agent run',
+        logId,
+        model: grant.model,
+      }),
+    );
   } else {
     console.warn(
       JSON.stringify({
         message: 'turbodiff: AI Gateway response is missing its log id',
         model: grant.model,
-        agentRunId: grant.agentRunId,
+        agentRunId: grant.v === 2 ? grant.agentRunId : undefined,
         status: upstream.status,
       }),
     );

@@ -39,6 +39,15 @@ export async function recordAiGatewayUsage(input: {
   costUsd: number;
 }): Promise<void> {
   await withTransaction(async () => {
+    // Serialize every cost rollup for one run before changing a usage row.
+    // Under READ COMMITTED this ensures the later aggregate sees any usage
+    // committed by the previous lock holder rather than overwriting it with a
+    // partial statement snapshot.
+    await execute(sql`
+      SELECT id FROM app.agent_runs
+      WHERE id = ${input.agentRunId} AND organization_id = ${input.organizationId}
+      FOR UPDATE
+    `);
     await execute(sql`
       UPDATE app.ai_gateway_usage SET tokens_in = ${input.tokensIn},
         tokens_out = ${input.tokensOut}, cost_usd = ${input.costUsd},

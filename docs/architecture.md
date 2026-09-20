@@ -206,7 +206,7 @@ Repository-reading and repository-writing agents execute through `runAgent()` in
 
 Permanent provider credentials stay in the Worker. A sandbox receives short-lived capabilities scoped to the exact model or integration required by the run. The Worker verifies those capabilities before relaying AI Gateway or MCP traffic. Provider output and agent output are untrusted until parsed by their boundary schema.
 
-AI Gateway pricing is never duplicated in the coding harness or application. Each proxied model response contributes its Cloudflare `cf-aig-log-id` to `ai_gateway_usage`, attributed to the organization and agent run by the signed capability. A scheduled reconciler imports Cloudflare's token counts and calculated cost and rolls the request costs up to the agent run. Missing or delayed Gateway logs remain pending with bounded backoff; harness-reported dollar estimates are not persisted.
+AI Gateway pricing is never duplicated in the coding harness or application. Each proxied model response durably enqueues its Cloudflare `cf-aig-log-id`, attributed to the organization and agent run by the signed capability. The queue consumer registers it in `ai_gateway_usage`; delivery retries survive a temporary PostgreSQL or Hyperdrive outage. A scheduled reconciler imports Cloudflare's token counts and calculated cost and rolls the request costs up to the agent run. Missing or delayed Gateway logs remain pending with bounded backoff; harness-reported dollar estimates are not persisted.
 
 ## Data and storage
 
