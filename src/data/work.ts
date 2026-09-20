@@ -72,6 +72,17 @@ export interface DeliveryRow {
   completed_at: string | null;
 }
 
+export interface WorkItemDeliveryViewRow {
+  id: number;
+  repository_id: number;
+  owner: string;
+  name: string;
+  provider: string;
+  status: DeliveryRow['status'];
+  change_number: number | null;
+  change_status: 'open' | 'merged' | 'closed' | null;
+}
+
 export interface AcceptanceContractRow {
   id: number;
   organization_id: string;
@@ -224,6 +235,28 @@ export async function createDeliveries(workItem: WorkItemRow): Promise<DeliveryR
 export async function listDeliveriesForWorkItem(workItemId: number): Promise<DeliveryRow[]> {
   return queryRows<DeliveryRow>(sql`
     SELECT * FROM app.deliveries WHERE work_item_id = ${workItemId} ORDER BY id
+  `);
+}
+
+export async function listWorkItemDeliveryViews(
+  workItemId: number,
+): Promise<WorkItemDeliveryViewRow[]> {
+  return queryRows<WorkItemDeliveryViewRow>(sql`
+    SELECT delivery.id, repository.id AS repository_id, repository.owner, repository.name,
+      integration.provider, delivery.status, change.number AS change_number,
+      change.status AS change_status
+    FROM app.deliveries delivery
+    JOIN app.repositories repository ON repository.id = delivery.repository_id
+      AND repository.organization_id = delivery.organization_id
+    JOIN app.integrations integration ON integration.id = repository.source_integration_id
+      AND integration.organization_id = delivery.organization_id
+    LEFT JOIN LATERAL (
+      SELECT number, status FROM app.changes
+      WHERE delivery_id = delivery.id AND organization_id = delivery.organization_id
+      ORDER BY updated_at DESC, id DESC LIMIT 1
+    ) change ON true
+    WHERE delivery.work_item_id = ${workItemId}
+    ORDER BY delivery.id
   `);
 }
 
