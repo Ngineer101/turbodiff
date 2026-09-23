@@ -176,9 +176,9 @@ async function shellForPath(c: Context, path: string): Promise<string> {
   else if (path === '/skills/browse') preload.push('/api/skills/catalog?q=&sort=trending');
   else if (path === '/automations') preload.push('/api/automations');
   else if (/^\/tasks\/\d+$/.test(path)) {
-    preload.push(`/api/work-items/${path.slice('/tasks/'.length)}`);
+    preload.push(`/api/work-items/${path.slice('/tasks/'.length)}/view`);
   } else if (/^\/factory\/features\/\d+$/.test(path)) {
-    preload.push(`/api/deliveries/${path.slice('/factory/features/'.length)}`);
+    preload.push(`/api/deliveries/${path.slice('/factory/features/'.length)}/view`);
   } else {
     const code = path.match(/^\/repos\/(\d+)\/code(?:\/.*)?$/);
     if (code) preload.push(`/api/repositories/${code[1]}/code`);

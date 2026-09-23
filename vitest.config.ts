@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite-plus/test/config';
 
 // Vitest prefers this file over vite.config.ts, which is exactly the point:
@@ -7,6 +8,16 @@ import { defineConfig } from 'vite-plus/test/config';
 // pure functions needing no Workers runtime, so they run through this
 // plugin-free config instead, covering both the Worker and client sources.
 export default defineConfig({
+  resolve: {
+    alias: [
+      {
+        find: 'cloudflare:workers',
+        replacement: fileURLToPath(
+          new URL('./tests/support/cloudflare-workers-unit.ts', import.meta.url),
+        ),
+      },
+    ],
+  },
   test: {
     include: ['tests/unit/**/*.test.ts', 'tests/unit/**/*.test.tsx'],
   },

@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { execute, queryOne, queryRows, withTransaction } from './postgres.ts';
+import { execute, queryOne, queryRows, sqlValueList, withTransaction } from './postgres.ts';
 
 export type FactoryRunStatus =
   | 'queued'
@@ -121,6 +121,13 @@ export async function getFactoryRun(id: number): Promise<FactoryRunRow | null> {
   return queryOne<FactoryRunRow>(sql`SELECT * FROM app.factory_runs WHERE id = ${id}`);
 }
 
+export async function listFactoryRunsById(ids: readonly number[]): Promise<FactoryRunRow[]> {
+  if (ids.length === 0) return [];
+  return queryRows<FactoryRunRow>(sql`
+    SELECT * FROM app.factory_runs WHERE id IN (${sqlValueList(ids)}) ORDER BY id DESC
+  `);
+}
+
 export async function listFactoryRuns(input: {
   workItemId?: number;
   deliveryId?: number;
@@ -179,6 +186,17 @@ export async function listStageRuns(factoryRunId: number): Promise<StageRunRow[]
   `);
 }
 
+export async function listStageRunsForFactoryRuns(
+  factoryRunIds: readonly number[],
+): Promise<StageRunRow[]> {
+  if (factoryRunIds.length === 0) return [];
+  return queryRows<StageRunRow>(sql`
+    SELECT * FROM app.stage_runs
+    WHERE factory_run_id IN (${sqlValueList(factoryRunIds)})
+    ORDER BY factory_run_id, id
+  `);
+}
+
 export async function listRecoverableFactoryStages(limit = 100): Promise<QueuedFactoryStageRow[]> {
   return queryRows<QueuedFactoryStageRow>(sql`
     SELECT factory.id AS factory_run_id, stage.id AS stage_run_id
@@ -199,6 +217,17 @@ export async function listRecoverableFactoryStages(limit = 100): Promise<QueuedF
 export async function listLifecycleEvents(factoryRunId: number): Promise<LifecycleEventRow[]> {
   return queryRows<LifecycleEventRow>(sql`
     SELECT * FROM app.lifecycle_events WHERE factory_run_id = ${factoryRunId} ORDER BY id
+  `);
+}
+
+export async function listLifecycleEventsForFactoryRuns(
+  factoryRunIds: readonly number[],
+): Promise<LifecycleEventRow[]> {
+  if (factoryRunIds.length === 0) return [];
+  return queryRows<LifecycleEventRow>(sql`
+    SELECT * FROM app.lifecycle_events
+    WHERE factory_run_id IN (${sqlValueList(factoryRunIds)})
+    ORDER BY factory_run_id, id
   `);
 }
 
@@ -271,6 +300,41 @@ export async function listAgentRunsForFactoryRun(factoryRunId: number): Promise<
     WHERE stage_run.factory_run_id = ${factoryRunId}
     ORDER BY agent_run.id
   `);
+}
+
+export async function listAgentRunsForFactoryRuns(
+  factoryRunIds: readonly number[],
+): Promise<AgentRunRow[]> {
+  if (factoryRunIds.length === 0) return [];
+  return queryRows<AgentRunRow>(sql`
+    SELECT agent_run.*
+    FROM app.agent_runs agent_run
+    JOIN app.stage_runs stage_run ON stage_run.id = agent_run.stage_run_id
+      AND stage_run.organization_id = agent_run.organization_id
+    WHERE stage_run.factory_run_id IN (${sqlValueList(factoryRunIds)})
+    ORDER BY stage_run.factory_run_id, agent_run.id
+  `);
+}
+
+export async function latestPlanArtifactIdForWorkItem(workItemId: number): Promise<number | null> {
+  const row = await queryOne<{ output_artifact_id: number }>(sql`
+    SELECT agent_run.output_artifact_id
+    FROM app.factory_runs factory_run
+    JOIN app.stage_runs stage_run ON stage_run.factory_run_id = factory_run.id
+      AND stage_run.organization_id = factory_run.organization_id
+    JOIN app.agent_runs agent_run ON agent_run.stage_run_id = stage_run.id
+      AND agent_run.organization_id = factory_run.organization_id
+    JOIN app.artifacts artifact ON artifact.id = agent_run.output_artifact_id
+      AND artifact.organization_id = factory_run.organization_id
+    WHERE factory_run.work_item_id = ${workItemId}
+      AND factory_run.flow_key = 'work_item'
+      AND stage_run.stage_key = 'plan'
+      AND agent_run.status = 'succeeded'
+      AND artifact.kind = 'plan'
+    ORDER BY factory_run.id DESC, stage_run.id DESC, agent_run.id DESC
+    LIMIT 1
+  `);
+  return row?.output_artifact_id ?? null;
 }
 
 export async function artifactWasProducedForWorkItem(

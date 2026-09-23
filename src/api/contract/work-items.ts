@@ -59,7 +59,7 @@ export const UpdateWorkItem = Schema.Struct({
 });
 export type UpdateWorkItem = typeof UpdateWorkItem.Type;
 
-const FactoryRunSummary = Schema.Struct({
+export const FactoryRunSummary = Schema.Struct({
   id: PositiveInt,
   flowKey: Schema.String,
   flowVersion: PositiveInt,
@@ -68,6 +68,7 @@ const FactoryRunSummary = Schema.Struct({
   startedAt: Schema.NullOr(Schema.String),
   completedAt: Schema.NullOr(Schema.String),
 });
+export type FactoryRunSummary = typeof FactoryRunSummary.Type;
 export const WorkItemFactoryRuns = Schema.Struct({ items: Schema.Array(FactoryRunSummary) });
 
 export const WorkItemDelivery = Schema.Struct({

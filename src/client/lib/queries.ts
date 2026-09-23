@@ -27,7 +27,7 @@ import {
   getUsage,
 } from './backend.ts';
 import { CHAT_TURN_PENDING } from './chat-rail.ts';
-import type { ApiTaskSummary } from '../types.ts';
+import type { ApiFeatureDiff, ApiTaskSummary } from '../types.ts';
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -121,7 +121,18 @@ export const FIX_TERMINAL = new Set(['fixed', 'no_changes', 'tests_failed', 'fai
 export const featureQuery = (id: number) =>
   queryOptions({
     queryKey: ['feature', id],
-    queryFn: () => getFeature(id),
+    queryFn: async () => {
+      const feature = await getFeature(id);
+      // The delivery view already carries the revision patch. Seed the
+      // immutable diff query from that response so mounting the cockpit does
+      // not immediately request and parse the entire delivery view again.
+      queryClient.setQueryData<ApiFeatureDiff>(['feature-diff', id, feature.diff_version], {
+        version: feature.diff_version,
+        files: feature.files,
+        more_files: feature.more_files,
+      });
+      return { ...feature, files: [], more_files: 0 };
+    },
     refetchInterval: (query) => {
       const d = query.state.data;
       if (!d) return false;

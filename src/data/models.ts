@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { queryOne, queryRows } from './postgres.ts';
+import { queryOne, queryRows, sqlValueList } from './postgres.ts';
 
 export interface ModelRow {
   id: number;
@@ -83,4 +83,16 @@ export async function resolveModel(
 
 export async function getModel(id: number): Promise<ModelRow | null> {
   return queryOne<ModelRow>(sql`SELECT * FROM app.models WHERE id = ${id}`);
+}
+
+export async function listModelsForFactoryRuns(
+  factoryRunIds: readonly number[],
+): Promise<ModelRow[]> {
+  if (factoryRunIds.length === 0) return [];
+  return queryRows<ModelRow>(sql`
+    SELECT DISTINCT model.*
+    FROM app.models model
+    JOIN app.factory_runs factory_run ON factory_run.model_id = model.id
+    WHERE factory_run.id IN (${sqlValueList(factoryRunIds)})
+  `);
 }

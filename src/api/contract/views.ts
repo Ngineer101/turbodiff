@@ -4,16 +4,32 @@ import { Artifact } from './artifacts.ts';
 import { Change } from './changes.ts';
 import { Delivery } from './deliveries.ts';
 import { FactoryRun } from './executions.ts';
-import { WorkItem } from './work-items.ts';
+import { FactoryRunSummary, WorkItem } from './work-items.ts';
 import { DomainError } from './errors.ts';
 
 const id = (name: string) =>
   HttpApiSchema.param(name, Schema.NumberFromString.pipe(Schema.int(), Schema.positive()));
+const WorkItemDeliveryView = Schema.Struct({
+  id: Schema.Int.pipe(Schema.positive()),
+  repository: Schema.Struct({
+    id: Schema.Int.pipe(Schema.positive()),
+    owner: Schema.String,
+    name: Schema.String,
+    provider: Schema.String,
+  }),
+  status: Schema.Literal('pending', 'active', 'completed', 'failed', 'cancelled'),
+  change: Schema.NullOr(
+    Schema.Struct({
+      number: Schema.NullOr(Schema.Int.pipe(Schema.positive())),
+      status: Schema.Literal('open', 'merged', 'closed'),
+    }),
+  ),
+});
 export const WorkItemView = Schema.Struct({
   workItem: WorkItem,
-  deliveries: Schema.Array(Delivery),
+  deliveries: Schema.Array(WorkItemDeliveryView),
   plan: Schema.NullOr(Artifact),
-  factoryRuns: Schema.Array(FactoryRun),
+  factoryRuns: Schema.Array(FactoryRunSummary),
   defaultModel: Schema.String,
 });
 export type WorkItemView = typeof WorkItemView.Type;

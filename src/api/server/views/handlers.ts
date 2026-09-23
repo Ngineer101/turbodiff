@@ -4,14 +4,15 @@ import { Effect } from 'effect';
 import { AppApi } from '../../contract/api.ts';
 import { CurrentUser, type CurrentUserIdentity } from '../../contract/auth.ts';
 import type { WorkItem } from '../../contract/work-items.ts';
-import type { FactoryRun } from '../../contract/executions.ts';
 import { ArtifactService } from '../artifacts/service.ts';
 import { ChangeService } from '../changes/service.ts';
 import { DeliveryService } from '../deliveries/service.ts';
 import { WorkItemService } from '../work-items/service.ts';
-import { loadFactoryRun } from '../executions/view.ts';
+import { loadFactoryRuns } from '../executions/view.ts';
 import { dataEffect } from '../authorization.ts';
 import { canonicalModelId, resolveModel } from '../../../data/models.ts';
+import { latestPlanArtifactIdForWorkItem, listFactoryRuns } from '../../../data/execution.ts';
+import { listWorkItemDeliveryViews } from '../../../data/work.ts';
 
 // Read projections compose the existing authorized resources in one request.
 export const ViewsHandlers = HttpApiBuilder.group(
@@ -22,35 +23,49 @@ export const ViewsHandlers = HttpApiBuilder.group(
     const changes = yield* ChangeService;
     const deliveries = yield* DeliveryService;
     const workItems = yield* WorkItemService;
-    const runsForWorkItem = (user: CurrentUserIdentity, id: number) =>
-      workItems
-        .listRuns(user, id)
-        .pipe(
-          Effect.flatMap(({ items }) =>
-            Effect.forEach(items, (run) => loadFactoryRun(user.organizationIds, run.id)),
-          ),
-        );
-    const planFor = (user: CurrentUserIdentity, item: WorkItem, runs: readonly FactoryRun[]) => {
-      const artifactId =
-        item.approvedPlanArtifactId ??
-        runs
-          .filter((run) => run.flowKey === 'work_item')
-          .flatMap((run) => run.stages.filter((stage) => stage.stageKey === 'plan'))
-          .flatMap((stage) => stage.agentRuns)
-          .find((run) => run.status === 'succeeded' && run.outputArtifactId)?.outputArtifactId;
-      return artifactId ? artifacts.get(user, artifactId) : Effect.succeed(null);
-    };
+    const planFor = (user: CurrentUserIdentity, item: WorkItem) =>
+      Effect.gen(function* () {
+        const artifactId =
+          item.approvedPlanArtifactId ??
+          (yield* dataEffect(() => latestPlanArtifactIdForWorkItem(item.id)));
+        return artifactId ? yield* artifacts.get(user, artifactId) : null;
+      });
     const workItemView = (user: CurrentUserIdentity, item: WorkItem, defaultModel: string) =>
       Effect.gen(function* () {
-        const runs = yield* runsForWorkItem(user, item.id);
-        const deliveryList = yield* workItems.listDeliveries(user, item.id);
+        // These are task-page projections, not full delivery/execution
+        // resources. Loading the latter made one task fan out into dozens of
+        // redundant ownership and history queries.
+        const [runs, deliveryRows] = yield* dataEffect(() =>
+          Promise.all([
+            listFactoryRuns({ workItemId: item.id }),
+            listWorkItemDeliveryViews(item.id),
+          ]),
+        );
         return {
           workItem: item,
-          deliveries: yield* Effect.forEach(deliveryList.items, (delivery) =>
-            deliveries.get(user, delivery.id),
-          ),
-          plan: yield* planFor(user, item, runs),
-          factoryRuns: runs,
+          deliveries: deliveryRows.map((delivery) => ({
+            id: delivery.id,
+            repository: {
+              id: delivery.repository_id,
+              owner: delivery.owner,
+              name: delivery.name,
+              provider: delivery.provider,
+            },
+            status: delivery.status,
+            change: delivery.change_status
+              ? { number: delivery.change_number, status: delivery.change_status }
+              : null,
+          })),
+          plan: yield* planFor(user, item),
+          factoryRuns: runs.map((run) => ({
+            id: run.id,
+            flowKey: run.flow_key,
+            flowVersion: run.flow_version,
+            status: run.status,
+            createdAt: run.created_at,
+            startedAt: run.started_at,
+            completedAt: run.completed_at,
+          })),
           defaultModel,
         };
       });
@@ -75,12 +90,10 @@ export const ViewsHandlers = HttpApiBuilder.group(
           const delivery = yield* deliveries.get(user, path.deliveryId);
           const workItem = yield* workItems.get(user, delivery.workItemId);
           const change = delivery.change ? yield* changes.get(user, delivery.change.id) : null;
-          const runs = yield* Effect.forEach(delivery.factoryRuns, (run) =>
-            loadFactoryRun(user.organizationIds, run.id),
+          const runs = yield* loadFactoryRuns(
+            user.organizationIds,
+            delivery.factoryRuns.map((run) => run.id),
           );
-          const planningRuns = workItem.approvedPlanArtifactId
-            ? []
-            : yield* runsForWorkItem(user, workItem.id);
           return {
             delivery,
             workItem,
@@ -88,7 +101,7 @@ export const ViewsHandlers = HttpApiBuilder.group(
             revision: change?.currentRevision
               ? yield* artifacts.get(user, change.currentRevision.artifactId)
               : null,
-            plan: yield* planFor(user, workItem, planningRuns),
+            plan: yield* planFor(user, workItem),
             factoryRuns: runs,
           };
         }),
