@@ -171,7 +171,7 @@ export async function executeRepair(
     inputKind: 'implementer_input',
     outputKind: 'repository_change',
     invoke: async (request, output) => {
-      const auth = await resolveRunnerAuth(request.model);
+      const auth = await resolveRunnerAuth(request.model, request.usage);
       const sanitize = (value: string) => redactSecrets(scrub(value), Object.values(auth.vars));
       await sandbox.writeFile(promptFile, request.prompt);
       const result = await runCodingAgent(sandbox, auth, {

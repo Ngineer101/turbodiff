@@ -263,7 +263,11 @@ export async function getUsage(): Promise<ApiUsage> {
       month_reviews: usage.byFlow.find((item) => item.key === 'review')?.runs ?? 0,
       month_review_cost_usd: usage.byFlow.find((item) => item.key === 'review')?.costUsd ?? 0,
       month_pipeline_cost_usd: usage.totals.costUsd,
-      month_tokens: usage.totals.inputTokens + usage.totals.outputTokens,
+      month_tokens:
+        usage.totals.inputTokens +
+        usage.totals.outputTokens +
+        usage.totals.cacheReadTokens +
+        usage.totals.cacheWriteTokens,
       avg_duration_s: null,
       avg_findings: null,
       running: usage.totals.running,

@@ -85,7 +85,10 @@
       {
         "queue": "turbodiff-factory",
         "max_batch_size": 1,
-        "max_retries": 1,
+        // Usage references share this durable transport and apply their own
+        // exponential retry delay when PostgreSQL is temporarily unavailable.
+        "max_retries": 100,
+        "dead_letter_queue": "turbodiff-factory-dead-letter",
       },
     ],
   },

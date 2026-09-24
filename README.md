@@ -71,7 +71,9 @@ vp install
 ### 2. Set up Cloudflare
 
 Create an AI Gateway and enable billing for any third-party models you want to
-use. The committed [wrangler.jsonc](wrangler.jsonc) defines shared Worker
+use. The Worker token must be able to run those models and read AI Gateway logs;
+log reads are how Turbodiff imports Cloudflare's authoritative request cost. The
+committed [wrangler.jsonc](wrangler.jsonc) defines shared Worker
 infrastructure but intentionally contains no deployment-specific environment
 values. Configure those for your Worker in Cloudflare under **Settings →
 Variables and Secrets**. Wrangler's `keep_vars` setting preserves them across
@@ -211,7 +213,7 @@ These values are required for the full GitHub software factory:
 | `GITHUB_OAUTH_CLIENT_ID`     | Worker secret | Client ID used for GitHub sign-in.                           |
 | `GITHUB_OAUTH_CLIENT_SECRET` | Worker secret | Client secret used for GitHub sign-in.                       |
 | `SESSION_SECRET`             | Worker secret | Signs login state and short-lived access links.              |
-| `AI_GATEWAY_API_TOKEN`       | Worker secret | Cloudflare token used by code-writing agents to call models. |
+| `AI_GATEWAY_API_TOKEN`       | Worker secret | Cloudflare token used to call models and read Gateway costs. |
 | `DATABASE_URL`               | Shell or CI   | Direct PostgreSQL URL used for migrations and schema checks. |
 | `HYPERDRIVE_DATABASE_URL`    | Shell         | PostgreSQL URL used when creating or updating Hyperdrive.    |
 

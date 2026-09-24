@@ -12,19 +12,23 @@ import { getArtifact } from '../../../data/artifacts.ts';
 import { getChange, latestChangeRevision } from '../../../data/changes.ts';
 import type { FactoryRunRow, StageRunRow } from '../../../data/execution.ts';
 import { loadJsonArtifact } from '../../artifacts.ts';
-import { runTrackedAgent, type AgentInvocation } from '../agent-run.ts';
+import {
+  runTrackedAgent,
+  type AgentInvocation,
+  type TrackedAgentExecutionRequest,
+} from '../agent-run.ts';
 
 const AGENT_TIMEOUT_MS = 15 * 60_000;
 
 async function invokeExplainer(
   sandbox: Sandbox,
   stageRun: StageRunRow,
-  request: Parameters<typeof runStructuredAgent>[0]['request'],
+  request: TrackedAgentExecutionRequest,
   output: ZodType<ExplanationArtifact>,
 ): Promise<AgentInvocation<ExplanationArtifact>> {
   if (request.repositoryAccess !== 'none')
     throw new Error('explainer must not access a repository');
-  const auth = await resolveRunnerAuth(request.model);
+  const auth = await resolveRunnerAuth(request.model, request.usage);
   const sanitize = (value: string) => redactSecrets(value, Object.values(auth.vars));
   const result = await runStructuredAgent({
     sandbox,

@@ -232,6 +232,8 @@ await test(
           TURBODIFF_AI_GATEWAY_GRANT: await createAiGatewayGrant(
             config.apiToken,
             model,
+            'org-runtime-test',
+            1,
             Date.now() + 90_000,
           ),
         },

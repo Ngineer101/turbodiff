@@ -38,7 +38,11 @@ import { buildSandboxMcpConfig } from '../../integrations/mcp-proxy.ts';
 import { publishGithubReview } from '../../../integrations/reviews/github.ts';
 import { loadJsonArtifact } from '../../artifacts.ts';
 import { syncGithubChangeRevision } from '../../changes/github-revision.ts';
-import { runTrackedAgent, type AgentInvocation } from '../agent-run.ts';
+import {
+  runTrackedAgent,
+  type AgentInvocation,
+  type TrackedAgentExecutionRequest,
+} from '../agent-run.ts';
 
 const AGENT_TIMEOUT_MS = 27 * 60_000;
 const DEFAULT_FOCUS = `Review for demonstrated defects introduced by this change. Prioritize correctness, security, breaking behavior, and serious operational failures. Ignore style and speculative concerns.`;
@@ -69,12 +73,12 @@ async function invokeReviewer(input: {
   patchFile: string;
   agent: AgentRow;
   repositoryId: number;
-  request: Parameters<typeof runStructuredAgent>[0]['request'];
+  request: TrackedAgentExecutionRequest;
   output: ZodType<ReviewArtifact>;
   scrub: (value: string) => string;
 }): Promise<AgentInvocation<ReviewArtifact>> {
   if (input.request.repositoryAccess !== 'read') throw new Error('reviewer must be read-only');
-  const auth = await resolveRunnerAuth(input.request.model);
+  const auth = await resolveRunnerAuth(input.request.model, input.request.usage);
   const integrations = await listRepositoryIntegrations(input.repositoryId);
   const mcp = await buildSandboxMcpConfig(
     integrations.map((integration) => ({

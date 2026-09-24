@@ -206,6 +206,8 @@ Repository-reading and repository-writing agents execute through `runAgent()` in
 
 Permanent provider credentials stay in the Worker. A sandbox receives short-lived capabilities scoped to the exact model or integration required by the run. The Worker verifies those capabilities before relaying AI Gateway or MCP traffic. Provider output and agent output are untrusted until parsed by their boundary schema.
 
+AI Gateway pricing is never duplicated in the coding harness or application. Each proxied model response durably enqueues its Cloudflare `cf-aig-log-id`, attributed to the organization and agent run by the signed capability. The queue consumer registers it in `ai_gateway_usage`; delivery retries survive a temporary PostgreSQL or Hyperdrive outage. A scheduled reconciler imports Cloudflare's token counts and calculated cost and rolls the request costs up to the agent run. Missing or delayed Gateway logs remain pending with bounded backoff; harness-reported dollar estimates are not persisted.
+
 ## Data and storage
 
 ### PostgreSQL
@@ -223,7 +225,7 @@ The `app` tables are grouped by responsibility:
 - Configuration: `models`, `agents`, `skills`, `integrations`, `automations`.
 - Repositories and bindings: `repositories`, `repository_refs`, `repository_agents`, `repository_skills`, `repository_integrations`, `agent_skills`, `automation_skills`, `automation_integrations`.
 - Work and changes: `work_items`, `work_item_targets`, `deliveries`, `acceptance_contracts`, `changes`, `change_revisions`, `delivery_messages`, `change_comments`, `change_checks`.
-- Execution and evidence: `artifacts`, `factory_runs`, `stage_runs`, `agent_runs`, `lifecycle_events`, `review_outcomes`.
+- Execution and evidence: `artifacts`, `factory_runs`, `stage_runs`, `agent_runs`, `ai_gateway_usage`, `lifecycle_events`, `review_outcomes`.
 - Notifications: `push_subscriptions`.
 
 The schema intentionally has no installation, plan, todo, feature, standalone review-run, fix-attempt, verification, performance-sample, quality-feedback, certificate, or cache-invalidation tables. Those concepts are either deleted, represented by artifacts and factory execution, or derived as projections.

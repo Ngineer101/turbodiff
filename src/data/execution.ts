@@ -441,14 +441,12 @@ export async function completeAgentRun(input: {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
-  costUsd: number;
 }): Promise<void> {
   await execute(sql`
     UPDATE app.agent_runs SET status = 'succeeded', output_artifact_id = ${input.outputArtifactId},
       log_artifact_id = ${input.logArtifactId ?? null}, input_tokens = ${input.inputTokens},
       output_tokens = ${input.outputTokens}, cache_read_tokens = ${input.cacheReadTokens},
-      cache_write_tokens = ${input.cacheWriteTokens}, cost_usd = ${input.costUsd},
-      completed_at = CURRENT_TIMESTAMP
+      cache_write_tokens = ${input.cacheWriteTokens}, completed_at = CURRENT_TIMESTAMP
     WHERE id = ${input.id} AND status = 'running'
   `);
 }
