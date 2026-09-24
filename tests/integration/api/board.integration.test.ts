@@ -5,7 +5,12 @@ import { createEffectApiHandler } from '../../../src/api/server/handler.ts';
 import { readBoardPage } from '../../../src/data/board.ts';
 import { recordArtifact } from '../../../src/data/artifacts.ts';
 import { upsertChange } from '../../../src/data/changes.ts';
-import { createFactoryRunWithStage, recordLifecycleEvent } from '../../../src/data/execution.ts';
+import {
+  createFactoryRunWithStage,
+  finishStageRun,
+  recordLifecycleEvent,
+  updateFactoryRunStatus,
+} from '../../../src/data/execution.ts';
 import { execute, queryRows } from '../../../src/data/postgres.ts';
 import {
   createWorkItem,
@@ -24,6 +29,49 @@ async function insertItems(organizationId: string, count: number, status: string
 }
 
 describe('bounded factory board projection', () => {
+  it('projects the latest terminal planning error without leaving the card looking active', () =>
+    rollbackAfter(async () => {
+      const tenant = await createTenant();
+      const item = await createWorkItem({
+        organizationId: tenant.organizationId,
+        origin: 'idea',
+        title: 'Retry this plan',
+        description: 'Deployment interrupted planning',
+        repositoryIds: [tenant.repositoryId],
+      });
+      await updateWorkItem(item.id, { status: 'planning' });
+      const run = await createFactoryRunWithStage(
+        {
+          organizationId: tenant.organizationId,
+          flowKey: 'work_item',
+          flowVersion: 1,
+          workItemId: item.id,
+          trigger: 'test',
+          idempotencyKey: crypto.randomUUID(),
+        },
+        { stageKey: 'plan', idempotencyKey: crypto.randomUUID() },
+      );
+      await finishStageRun(run.stageRun.id, 'failed', {
+        code: 'infrastructure_failed',
+        message: 'Sandbox runtime was replaced during deployment',
+      });
+      await updateFactoryRunStatus(run.factoryRun.id, 'failed');
+
+      expect((await readBoardPage([tenant.organizationId])).items[0]).toMatchObject({
+        id: item.id,
+        status: 'planning',
+        planningError: 'Sandbox runtime was replaced during deployment',
+      });
+
+      const handle = createEffectApiHandler(apiDependencies([], async () => tenant.user));
+      const response = await handle(new Request(`https://app.test/api/work-items/${item.id}/view`));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        workItem: { id: item.id, status: 'planning' },
+        planningError: 'Sandbox runtime was replaced during deployment',
+      });
+    }));
+
   it('pages active work and completed history independently without leaking tenants or dropping older cards', () =>
     rollbackAfter(async () => {
       const owner = await createTenant();

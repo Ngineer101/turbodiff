@@ -144,6 +144,24 @@ export async function listFactoryRuns(input: {
   `);
 }
 
+export async function latestPlanningFailureForWorkItem(workItemId: number): Promise<string | null> {
+  const row = await queryOne<{ error_message: string | null }>(sql`
+    SELECT CASE WHEN factory.status = 'failed' THEN stage.error_message ELSE NULL END AS error_message
+    FROM app.factory_runs factory
+    LEFT JOIN LATERAL (
+      SELECT error_message
+      FROM app.stage_runs
+      WHERE factory_run_id = factory.id AND organization_id = factory.organization_id
+      ORDER BY id DESC
+      LIMIT 1
+    ) stage ON true
+    WHERE factory.work_item_id = ${workItemId} AND factory.flow_key = 'work_item'
+    ORDER BY factory.created_at DESC, factory.id DESC
+    LIMIT 1
+  `);
+  return row?.error_message ?? null;
+}
+
 export async function updateFactoryRunStatus(id: number, status: FactoryRunStatus): Promise<void> {
   await execute(sql`
     UPDATE app.factory_runs SET status = ${status},

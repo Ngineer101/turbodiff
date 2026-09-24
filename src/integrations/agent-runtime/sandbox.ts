@@ -1,5 +1,8 @@
 import { getSandbox, type Sandbox, type SandboxOptions } from '@cloudflare/sandbox';
 import { env } from 'cloudflare:workers';
+import { sandboxRetryDisposition } from './sandbox-retry.ts';
+
+export { retrySandboxOperation } from './sandbox-retry.ts';
 
 export function runnerSandbox(id: string, options?: SandboxOptions): Sandbox {
   // SAFETY: wrangler.jsonc binds this namespace to @cloudflare/sandbox's
@@ -8,13 +11,10 @@ export function runnerSandbox(id: string, options?: SandboxOptions): Sandbox {
   return getSandbox(namespace, id, options);
 }
 
-// The @cloudflare/sandbox client surfaces container-layer failures (instance
-// scheduling, rollout kills, transient platform errors) as bare
-// "HTTP error! status: 5xx" — infrastructure weather, not business outcomes.
-// Callers running inside a Workflow step rethrow these so the step's
-// configured retry engages instead of recording a permanent failure.
-export function isSandboxTransportError<T>(err: T): boolean {
-  return err instanceof Error && /HTTP error! status: 5\d\d/.test(err.message);
+// Callers running inside a Workflow step rethrow retryable infrastructure
+// failures instead of recording them as business outcomes.
+export function isSandboxTransportError<Failure>(failure: Failure): boolean {
+  return sandboxRetryDisposition(failure) !== 'none';
 }
 
 // The shared per-repo factory container: generation, verification, the CR
