@@ -451,6 +451,19 @@ export async function claimAgentRun(id: number): Promise<boolean> {
   return row !== null;
 }
 
+export async function replaySucceededAgentRun(id: number): Promise<boolean> {
+  const row = await queryOne<{ id: number }>(sql`
+    UPDATE app.agent_runs SET status = 'running', output_artifact_id = NULL,
+      log_artifact_id = NULL, input_tokens = 0, output_tokens = 0,
+      cache_read_tokens = 0, cache_write_tokens = 0, cost_usd = 0,
+      error_code = NULL, error_message = NULL, started_at = CURRENT_TIMESTAMP,
+      completed_at = NULL
+    WHERE id = ${id} AND status = 'succeeded'
+    RETURNING id
+  `);
+  return row !== null;
+}
+
 export async function completeAgentRun(input: {
   id: number;
   outputArtifactId: number;

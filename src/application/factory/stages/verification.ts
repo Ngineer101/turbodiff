@@ -14,6 +14,7 @@ import { repositoryPolicy } from '../../../domain/repository-policy.ts';
 import { runCheckCommand } from '../../../integrations/agent-runtime/check-command.ts';
 import { runStructuredAgent } from '../../../integrations/agent-runtime/structured-agent.ts';
 import { redactSecrets } from '../../../integrations/agent-runtime/redaction.ts';
+import { retrySandboxOperation } from '../../../integrations/agent-runtime/sandbox.ts';
 import { loadJsonArtifact, persistJsonArtifact } from '../../artifacts.ts';
 import { runTrackedAgent } from '../agent-run.ts';
 import { resolveRunnerAuth } from '../runner-auth.ts';
@@ -98,8 +99,8 @@ export async function executeVerification(
     const checked = command
       ? await runCheckCommand(sandbox, workDir, command, scrub, 8 * 60_000)
       : null;
-    const clean = await sandbox.exec(
-      `git -C ${workDir} diff --quiet && git -C ${workDir} diff --cached --quiet`,
+    const clean = await retrySandboxOperation(() =>
+      sandbox.exec(`git -C ${workDir} diff --quiet && git -C ${workDir} diff --cached --quiet`),
     );
     if (!clean.success) throw new Error('Verifier modified tracked repository files');
     const verdict =

@@ -8,6 +8,7 @@ import {
   completeAgentRun,
   createAgentRun,
   failAgentRun,
+  replaySucceededAgentRun,
   type FactoryRunRow,
   type StageRunRow,
 } from '../../data/execution.ts';
@@ -38,6 +39,10 @@ export async function runTrackedAgent<Input, Output>(input: {
   inputKind: string;
   outputKind: string;
   model?: string | null;
+  // Repository-writing stages may need to recreate container-local changes
+  // after a Workflow replay. Their output artifact describes the change but
+  // intentionally does not contain the modified checkout.
+  reexecuteSucceeded?: boolean;
   invoke: (
     request: AgentExecutionRequest,
     output: ZodType<Output>,
@@ -72,17 +77,25 @@ export async function runTrackedAgent<Input, Output>(input: {
     idempotencyKey: `${input.stageRun.id}:${input.agent.id}`,
   });
 
-  if (agentRun.status === 'succeeded' && agentRun.output_artifact_id) {
-    const outputArtifact = await getArtifact(agentRun.output_artifact_id);
-    if (!outputArtifact) throw new Error(`agent run ${agentRun.id} output artifact is missing`);
-    return {
-      artifact: await loadJsonArtifact(
-        outputArtifact,
-        input.definition.output(input.definition.input.parse(input.value)),
-      ),
-      agentRunId: agentRun.id,
-      outputArtifactId: outputArtifact.id,
-    };
+  if (agentRun.status === 'succeeded') {
+    if (!input.reexecuteSucceeded) {
+      if (!agentRun.output_artifact_id) {
+        throw new Error(`agent run ${agentRun.id} output artifact is missing`);
+      }
+      const outputArtifact = await getArtifact(agentRun.output_artifact_id);
+      if (!outputArtifact) throw new Error(`agent run ${agentRun.id} output artifact is missing`);
+      return {
+        artifact: await loadJsonArtifact(
+          outputArtifact,
+          input.definition.output(input.definition.input.parse(input.value)),
+        ),
+        agentRunId: agentRun.id,
+        outputArtifactId: outputArtifact.id,
+      };
+    }
+    if (!(await replaySucceededAgentRun(agentRun.id))) {
+      throw new Error(`agent run ${agentRun.id} could not be replayed`);
+    }
   }
   if (agentRun.status === 'failed' || agentRun.status === 'cancelled') {
     throw new Error(`agent run ${agentRun.id} is ${agentRun.status}`);
