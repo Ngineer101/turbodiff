@@ -11,7 +11,11 @@ import { WorkItemService } from '../work-items/service.ts';
 import { loadFactoryRuns } from '../executions/view.ts';
 import { dataEffect } from '../authorization.ts';
 import { canonicalModelId, resolveModel } from '../../../data/models.ts';
-import { latestPlanArtifactIdForWorkItem, listFactoryRuns } from '../../../data/execution.ts';
+import {
+  latestPlanArtifactIdForWorkItem,
+  latestPlanningFailureForWorkItem,
+  listFactoryRuns,
+} from '../../../data/execution.ts';
 import { listWorkItemDeliveryViews } from '../../../data/work.ts';
 
 // Read projections compose the existing authorized resources in one request.
@@ -35,10 +39,11 @@ export const ViewsHandlers = HttpApiBuilder.group(
         // These are task-page projections, not full delivery/execution
         // resources. Loading the latter made one task fan out into dozens of
         // redundant ownership and history queries.
-        const [runs, deliveryRows] = yield* dataEffect(() =>
+        const [runs, deliveryRows, planningError] = yield* dataEffect(() =>
           Promise.all([
             listFactoryRuns({ workItemId: item.id }),
             listWorkItemDeliveryViews(item.id),
+            latestPlanningFailureForWorkItem(item.id),
           ]),
         );
         return {
@@ -66,6 +71,7 @@ export const ViewsHandlers = HttpApiBuilder.group(
             startedAt: run.started_at,
             completedAt: run.completed_at,
           })),
+          planningError,
           defaultModel,
         };
       });

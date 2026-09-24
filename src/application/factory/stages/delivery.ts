@@ -2,11 +2,18 @@ import { invokeImplementer, runtimeSkills, repositorySettings } from '../invoke-
 import { repositoryPolicy } from '../../../domain/repository-policy.ts';
 import { syncGithubChangeRevision } from '../../changes/github-revision.ts';
 import { implementerAgent, type ImplementerInput } from '../../../agents/implementer.ts';
-import { changeRevisionArtifactSchema } from '../../../artifacts/change.ts';
+import {
+  changeRevisionArtifactSchema,
+  repositoryChangeArtifactSchema,
+  type RepositoryChangeArtifact,
+} from '../../../artifacts/change.ts';
 import { storedPlanArtifactSchema } from '../../../artifacts/plan.ts';
 import { runCheckCommand } from '../../../integrations/agent-runtime/check-command.ts';
 import { redactSecrets } from '../../../integrations/agent-runtime/redaction.ts';
-import { generationSandbox } from '../../../integrations/agent-runtime/sandbox.ts';
+import {
+  generationSandbox,
+  retrySandboxOperation,
+} from '../../../integrations/agent-runtime/sandbox.ts';
 import { mountSkills } from '../../../integrations/agent-runtime/skills.ts';
 import {
   completeWorkItemWhenDelivered,
@@ -22,7 +29,11 @@ import {
   listChangesForDelivery,
   upsertChange,
 } from '../../../data/changes.ts';
-import { type FactoryRunRow, type StageRunRow } from '../../../data/execution.ts';
+import {
+  listAgentRunsForStage,
+  type FactoryRunRow,
+  type StageRunRow,
+} from '../../../data/execution.ts';
 import {
   listAutomationIntegrations,
   listRepositoryIntegrations,
@@ -36,7 +47,12 @@ import {
 import { buildReviewDiffSnapshot } from '../../../domain/review-context.ts';
 import { remoteSourceOf, resolveWorkspaceRemote } from '../../../integrations/git/provider.ts';
 import { authorizesWorkflowFiles, installationToken } from '../../../integrations/github/app.ts';
-import { githubJson } from '../../../integrations/github/client.ts';
+import {
+  publishGithubPullRequest,
+  recoverGithubPullRequest,
+  type PublishedPullRequest,
+  type PullRequestPublicationInput,
+} from '../../../integrations/github/pull-request-publication.ts';
 import { buildSandboxMcpConfig } from '../../integrations/mcp-proxy.ts';
 import { loadJsonArtifact, persistJsonArtifact } from '../../artifacts.ts';
 import { runTrackedAgent } from '../agent-run.ts';
@@ -52,37 +68,68 @@ function branchName(deliveryId: number, title: string): string {
   return `turbodiff/delivery-${deliveryId}-${slug || 'change'}`;
 }
 
-async function openGithubPullRequest(input: {
-  repository: RepositoryRow;
-  branch: string;
-  base: string;
-  title: string;
-  summary: string;
-  notes: string | null;
-}): Promise<{ number: number; html_url: string }> {
-  const installationId = Number(input.repository.source_external_account_id);
+async function githubToken(repository: RepositoryRow): Promise<string> {
+  const installationId = Number(repository.source_external_account_id);
   if (!Number.isSafeInteger(installationId) || installationId <= 0) {
     throw new Error('GitHub repository has no installation');
   }
-  const body =
-    input.summary +
-    (input.notes
-      ? `\n\n<details><summary>Implementation notes</summary>\n\n${input.notes}\n\n</details>`
-      : '') +
-    '\n\n---\n_turbodiff factory_';
-  return githubJson(
-    await installationToken(installationId),
-    `/repos/${input.repository.owner}/${input.repository.name}/pulls`,
-    {
-      method: 'POST',
-      body: JSON.stringify({
-        title: input.title,
-        head: input.branch,
-        base: input.base,
-        body,
-      }),
-    },
+  return installationToken(installationId);
+}
+
+function publicationInput(
+  repository: RepositoryRow,
+  branch: string,
+  base: string,
+  title: string,
+  artifact: Extract<RepositoryChangeArtifact, { kind: 'repository-change' }>,
+): PullRequestPublicationInput {
+  return {
+    owner: repository.owner,
+    name: repository.name,
+    branch,
+    base,
+    title,
+    summary: artifact.summary,
+    notes: artifact.notes,
+  };
+}
+
+async function completedRepositoryChange(
+  stageRunId: number,
+): Promise<RepositoryChangeArtifact | null> {
+  const completed = (await listAgentRunsForStage(stageRunId)).find(
+    (run) => run.status === 'succeeded' && run.output_artifact_id,
   );
+  if (!completed?.output_artifact_id) return null;
+  const artifact = await getArtifact(completed.output_artifact_id);
+  return artifact ? loadJsonArtifact(artifact, repositoryChangeArtifactSchema) : null;
+}
+
+async function recordGithubPublication(input: {
+  factoryRun: FactoryRunRow;
+  repository: RepositoryRow;
+  deliveryId: number;
+  title: string;
+  branch: string;
+  base: string;
+  pullRequest: PublishedPullRequest;
+}) {
+  const change = await upsertChange({
+    organizationId: input.factoryRun.organization_id,
+    repositoryId: input.repository.id,
+    deliveryId: input.deliveryId,
+    providerIntegrationId: input.repository.source_integration_id,
+    providerKey: `pull_request:${input.pullRequest.number}`,
+    number: input.pullRequest.number,
+    title: input.title,
+    sourceRef: input.branch,
+    targetRef: input.base,
+    url: input.pullRequest.url,
+    origin: input.factoryRun.automation_id ? 'automation' : 'factory',
+    status: input.pullRequest.state,
+  });
+  await syncGithubChangeRevision(input.repository, change, input.pullRequest.headSha);
+  return change;
 }
 
 export async function executeDeliveryStage(
@@ -107,6 +154,7 @@ export async function executeDeliveryStage(
     }
     return { changeId: existing.id, outcome: 'change_created' };
   }
+  if (delivery.status === 'completed') return { changeId: null, outcome: 'no_change' };
   const [repository, workItem] = await Promise.all([
     getRepository(delivery.repository_id),
     getWorkItem(delivery.work_item_id),
@@ -120,6 +168,39 @@ export async function executeDeliveryStage(
     throw new Error('approved plan artifact is missing');
   }
   const plan = await loadJsonArtifact(planRow, storedPlanArtifactSchema);
+  const branch = branchName(delivery.id, workItem.title);
+  const base = repository.default_branch ?? 'main';
+
+  if (stageRun.status === 'running') {
+    const previous = await completedRepositoryChange(stageRun.id);
+    if (previous?.kind === 'no-change') {
+      await updateDeliveryStatus(delivery.id, 'completed');
+      await completeWorkItemWhenDelivered(delivery.work_item_id);
+      return { changeId: null, outcome: 'no_change' };
+    }
+    if (previous?.kind === 'repository-change' && repository.source_provider === 'github') {
+      const pullRequest = await recoverGithubPullRequest(
+        await githubToken(repository),
+        publicationInput(repository, branch, base, workItem.title, previous),
+      );
+      if (pullRequest) {
+        const change = await recordGithubPublication({
+          factoryRun,
+          repository,
+          deliveryId: delivery.id,
+          title: workItem.title,
+          branch,
+          base,
+          pullRequest,
+        });
+        if (factoryRun.flow_version < 2 || !repositoryPolicy(repository.settings).verify) {
+          await updateDeliveryStatus(delivery.id, 'completed');
+          await completeWorkItemWhenDelivered(delivery.work_item_id);
+        }
+        return { changeId: change.id, outcome: 'change_created' };
+      }
+    }
+  }
 
   await ensureBuiltinAgents(factoryRun.organization_id);
   const automation = factoryRun.automation_id
@@ -142,8 +223,6 @@ export async function executeDeliveryStage(
   const promptFile = `/workspace/delivery-${delivery.id}.md`;
   const summaryFile = `/workspace/delivery-${delivery.id}-summary.md`;
   const notesFile = `/workspace/delivery-${delivery.id}-notes.md`;
-  const branch = branchName(delivery.id, workItem.title);
-  const base = repository.default_branch ?? 'main';
   const remote = await resolveWorkspaceRemote(remoteSourceOf(repository), 'write', {
     workflows: authorizesWorkflowFiles(plan.plan),
   });
@@ -198,6 +277,7 @@ export async function executeDeliveryStage(
       value: implementerInput,
       inputKind: 'implementer_input',
       outputKind: 'repository_change',
+      reexecuteSucceeded: stageRun.status === 'running',
       invoke: (request, output) =>
         invokeImplementer(
           agent,
@@ -250,11 +330,15 @@ export async function executeDeliveryStage(
     }
 
     const [baseResult, headResult, diffResult] = await Promise.all([
-      sandbox.exec(`git -C ${workDir} rev-parse "$BASE_REF"`, { env: { BASE_REF: base } }),
-      sandbox.exec(`git -C ${workDir} rev-parse HEAD`),
-      sandbox.exec(`git -C ${workDir} diff --no-ext-diff "$BASE_REF"...HEAD`, {
-        env: { BASE_REF: base },
-      }),
+      retrySandboxOperation(() =>
+        sandbox.exec(`git -C ${workDir} rev-parse "$BASE_REF"`, { env: { BASE_REF: base } }),
+      ),
+      retrySandboxOperation(() => sandbox.exec(`git -C ${workDir} rev-parse HEAD`)),
+      retrySandboxOperation(() =>
+        sandbox.exec(`git -C ${workDir} diff --no-ext-diff "$BASE_REF"...HEAD`, {
+          env: { BASE_REF: base },
+        }),
+      ),
     ]);
     if (!baseResult.success || !headResult.success || !diffResult.success) {
       throw new Error('could not create the normalized change revision');
@@ -262,34 +346,35 @@ export async function executeDeliveryStage(
     const baseSha = baseResult.stdout.trim();
     const headSha = headResult.stdout.trim();
     const snapshot = buildReviewDiffSnapshot(diffResult.stdout);
-    const pullRequest =
+    const change =
       repository.source_provider === 'github'
-        ? await openGithubPullRequest({
+        ? await recordGithubPublication({
+            factoryRun,
             repository,
+            deliveryId: delivery.id,
+            title: workItem.title,
             branch,
             base,
-            title: workItem.title,
-            summary: tracked.artifact.summary,
-            notes: tracked.artifact.notes,
+            pullRequest: await publishGithubPullRequest(
+              await githubToken(repository),
+              publicationInput(repository, branch, base, workItem.title, tracked.artifact),
+            ),
           })
-        : null;
-    const change = await upsertChange({
-      organizationId: factoryRun.organization_id,
-      repositoryId: repository.id,
-      deliveryId: delivery.id,
-      providerIntegrationId: repository.source_integration_id,
-      providerKey: pullRequest ? `pull_request:${pullRequest.number}` : `branch:${branch}`,
-      number: pullRequest?.number ?? null,
-      title: workItem.title,
-      sourceRef: branch,
-      targetRef: base,
-      url: pullRequest?.html_url ?? null,
-      origin: factoryRun.automation_id ? 'automation' : 'factory',
-      status: 'open',
-    });
-    if (repository.source_provider === 'github')
-      await syncGithubChangeRevision(repository, change, headSha);
-    else {
+        : await upsertChange({
+            organizationId: factoryRun.organization_id,
+            repositoryId: repository.id,
+            deliveryId: delivery.id,
+            providerIntegrationId: repository.source_integration_id,
+            providerKey: `branch:${branch}`,
+            number: null,
+            title: workItem.title,
+            sourceRef: branch,
+            targetRef: base,
+            url: null,
+            origin: factoryRun.automation_id ? 'automation' : 'factory',
+            status: 'open',
+          });
+    if (repository.source_provider !== 'github') {
       const revisionArtifact = await persistJsonArtifact({
         organizationId: factoryRun.organization_id,
         kind: 'change_revision',

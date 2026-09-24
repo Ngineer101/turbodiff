@@ -13,7 +13,11 @@ import { classifyTaskComplexity } from '../../../integrations/typesafe/task-comp
 import { PLANNING_CONFIG } from '../../../integrations/agent-runtime/planning-session.ts';
 import { redactSecrets } from '../../../integrations/agent-runtime/redaction.ts';
 import { resolveRunnerAuth } from '../runner-auth.ts';
-import { runnerSandbox } from '../../../integrations/agent-runtime/sandbox.ts';
+import {
+  isSandboxTransportError,
+  retrySandboxOperation,
+  runnerSandbox,
+} from '../../../integrations/agent-runtime/sandbox.ts';
 import { mountSkills } from '../../../integrations/agent-runtime/skills.ts';
 import {
   getAgent,
@@ -62,15 +66,16 @@ function runtimeSkills(rows: SkillRow[]) {
 }
 
 async function requiredText(sandbox: Sandbox, path: string): Promise<string> {
-  const value = (await sandbox.readFile(path)).content.trim();
+  const value = (await retrySandboxOperation(() => sandbox.readFile(path))).content.trim();
   if (!value) throw new Error(`planner did not produce ${path}`);
   return value;
 }
 
 async function optionalText(sandbox: Sandbox, path: string): Promise<string | null> {
   try {
-    return (await sandbox.readFile(path)).content.trim() || null;
-  } catch {
+    return (await retrySandboxOperation(() => sandbox.readFile(path))).content.trim() || null;
+  } catch (failure) {
+    if (isSandboxTransportError(failure)) throw failure;
     return null;
   }
 }
@@ -86,7 +91,7 @@ async function mountAttachments(
   if (!parsed.success || parsed.data.attachments.length === 0) return [];
 
   const directory = `${workspaceRoot}/attachments`;
-  await sandbox.exec(`mkdir -p ${directory}`);
+  await retrySandboxOperation(() => sandbox.exec(`mkdir -p ${directory}`));
   const paths: string[] = [];
   for (const [index, input] of parsed.data.attachments.entries()) {
     const artifact = await getArtifact(input.artifactId);
@@ -124,11 +129,15 @@ async function invokePlanner(
   const auth = await resolveRunnerAuth(request.model);
   const sanitize = (value: string) =>
     redactSecrets(value, [...secrets, ...Object.values(auth.vars)]);
-  await sandbox.exec(`rm -rf ${PLANNER_OUTPUT_DIR} && mkdir -p ${PLANNER_OUTPUT_DIR}`);
+  await retrySandboxOperation(() =>
+    sandbox.exec(`rm -rf ${PLANNER_OUTPUT_DIR} && mkdir -p ${PLANNER_OUTPUT_DIR}`),
+  );
   const override = agent.instructions_override?.trim();
-  await sandbox.writeFile(
-    PROMPT_FILE,
-    `${request.prompt}${override ? `\n\n## Organization instructions\n${override}` : ''}`,
+  await retrySandboxOperation(() =>
+    sandbox.writeFile(
+      PROMPT_FILE,
+      `${request.prompt}${override ? `\n\n## Organization instructions\n${override}` : ''}`,
+    ),
   );
   const run = await runCodingAgent(sandbox, auth, {
     promptFile: PROMPT_FILE,
@@ -177,7 +186,9 @@ export async function executePlanningStage(
 
   const sandbox = runnerSandbox(`plan--${factoryRun.id}`, { sleepAfter: '10m' });
   const workspaceRoot = `/workspace/planning-${factoryRun.id}`;
-  await sandbox.exec(`rm -rf ${workspaceRoot} && mkdir -p ${workspaceRoot}`);
+  await retrySandboxOperation(() =>
+    sandbox.exec(`rm -rf ${workspaceRoot} && mkdir -p ${workspaceRoot}`),
+  );
   const repositories: PlannerDraftInput['repositories'] = [];
   const secrets: string[] = [];
   const mcpBindings: SandboxMcpBinding[] = [];

@@ -1,11 +1,18 @@
-import type { Sandbox } from '@cloudflare/sandbox';
+import type { ExecOptions, ExecResult } from '@cloudflare/sandbox';
 import { z, type ZodType } from 'zod';
 import type { AgentExecutionRequest } from '../../agents/types.ts';
 import { runCodingAgent, type CodingAgentRun } from './coding-agent.ts';
 import type { RunnerAuth } from './runner-config.ts';
+import { retrySandboxOperation, sandboxRetryDisposition } from './sandbox-retry.ts';
+
+export interface StructuredAgentSandbox {
+  exec(command: string, options?: ExecOptions): Promise<ExecResult>;
+  writeFile(path: string, content: string): Promise<{ success: boolean }>;
+  readFile(path: string): Promise<{ content: string }>;
+}
 
 export interface StructuredAgentOptions<Output> {
-  sandbox: Sandbox;
+  sandbox: StructuredAgentSandbox;
   auth: RunnerAuth;
   request: AgentExecutionRequest;
   output: ZodType<Output>;
@@ -39,14 +46,16 @@ ${JSON.stringify(z.toJSONSchema(output), null, 2)}
 export async function runStructuredAgent<Output>(
   options: StructuredAgentOptions<Output>,
 ): Promise<{ artifact: Output; run: CodingAgentRun }> {
-  await options.sandbox.exec(`rm -f ${options.artifactFile}`);
-  await options.sandbox.writeFile(
-    options.promptFile,
-    structuredAgentPrompt(
-      options.request,
-      options.output,
-      options.artifactFile,
-      options.runtimeContext,
+  await retrySandboxOperation(() => options.sandbox.exec(`rm -f ${options.artifactFile}`));
+  await retrySandboxOperation(() =>
+    options.sandbox.writeFile(
+      options.promptFile,
+      structuredAgentPrompt(
+        options.request,
+        options.output,
+        options.artifactFile,
+        options.runtimeContext,
+      ),
     ),
   );
   const run = await runCodingAgent(options.sandbox, options.auth, {
@@ -63,8 +72,10 @@ export async function runStructuredAgent<Output>(
 
   let raw: string;
   try {
-    raw = (await options.sandbox.readFile(options.artifactFile)).content;
-  } catch {
+    raw = (await retrySandboxOperation(() => options.sandbox.readFile(options.artifactFile)))
+      .content;
+  } catch (failure) {
+    if (sandboxRetryDisposition(failure) !== 'none') throw failure;
     throw new Error(`agent did not produce ${options.artifactFile}`);
   }
 
