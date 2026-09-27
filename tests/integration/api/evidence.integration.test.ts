@@ -162,7 +162,6 @@ describe('delivery evidence and settings', () => {
         outputTokens: 0,
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
-        costUsd: 0,
       });
       await recordReviewOutcome({
         organizationId: tenant.organizationId,

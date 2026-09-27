@@ -7,7 +7,6 @@ import {
   type PlannerArtifact,
   type PlannerDraftInput,
 } from '../../../agents/planner.ts';
-import type { AgentExecutionRequest } from '../../../agents/types.ts';
 import { runCodingAgent } from '../../../integrations/agent-runtime/coding-agent.ts';
 import { readPlannerOutputWithCorrection } from '../../../integrations/agent-runtime/planner-output.ts';
 import { classifyTaskComplexity } from '../../../integrations/typesafe/task-complexity.ts';
@@ -46,7 +45,11 @@ import { getArtifact } from '../../../data/artifacts.ts';
 import { remoteSourceOf, resolveWorkspaceRemote } from '../../../integrations/git/provider.ts';
 import { buildSandboxMcpConfig, type SandboxMcpBinding } from '../../integrations/mcp-proxy.ts';
 import { signArtifactKey } from '../../../integrations/security/crypto.ts';
-import { runTrackedAgent, type AgentInvocation } from '../agent-run.ts';
+import {
+  runTrackedAgent,
+  type AgentInvocation,
+  type TrackedAgentExecutionRequest,
+} from '../agent-run.ts';
 
 const PROMPT_FILE = `${PLANNER_OUTPUT_DIR}/task.md`;
 const AGENT_TIMEOUT_MS = 25 * 60_000;
@@ -106,13 +109,13 @@ async function invokePlanner(
   sandbox: Sandbox,
   agent: AgentRow,
   secrets: string[],
-  request: AgentExecutionRequest,
+  request: TrackedAgentExecutionRequest,
   output: ZodType<PlannerArtifact>,
   tier: PlannerDraftInput['tier'],
   configExtensionJson?: string,
 ): Promise<AgentInvocation<PlannerArtifact>> {
   if (request.repositoryAccess !== 'read') throw new Error('planner must be read-only');
-  const auth = await resolveRunnerAuth(request.model);
+  const auth = await resolveRunnerAuth(request.model, request.usage);
   const sanitize = (value: string) =>
     redactSecrets(value, [...secrets, ...Object.values(auth.vars)]);
   await retrySandboxOperation(() =>

@@ -355,7 +355,6 @@ describe('WorkItemService with PostgreSQL', () => {
         outputTokens: 1,
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
-        costUsd: 0,
       });
       await queryOne(sql`
         UPDATE app.stage_runs SET status = 'waiting'

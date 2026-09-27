@@ -26,6 +26,13 @@ export interface AgentInvocation<Output> {
   sanitize?: (value: string) => string;
 }
 
+export interface TrackedAgentExecutionRequest extends AgentExecutionRequest {
+  usage: {
+    organizationId: string;
+    agentRunId: number;
+  };
+}
+
 function completedInvocation<Output>(
   invocation: AgentInvocation<Output> | null,
 ): AgentInvocation<Output> {
@@ -47,7 +54,7 @@ export async function runTrackedAgent<Input, Output>(input: {
   // intentionally does not contain the modified checkout.
   reexecuteSucceeded?: boolean;
   invoke: (
-    request: AgentExecutionRequest,
+    request: TrackedAgentExecutionRequest,
     output: ZodType<Output>,
   ) => Promise<AgentInvocation<Output>>;
 }): Promise<{ artifact: Output; agentRunId: number; outputArtifactId: number }> {
@@ -112,7 +119,16 @@ export async function runTrackedAgent<Input, Output>(input: {
     const artifact = await runAgent(input.definition, input.value, {
       model: canonicalModelId(model),
       execute: async (request, output) => {
-        invocation = await input.invoke(request, output);
+        invocation = await input.invoke(
+          {
+            ...request,
+            usage: {
+              organizationId: input.factoryRun.organization_id,
+              agentRunId: agentRun.id,
+            },
+          },
+          output,
+        );
         return invocation.artifact;
       },
     });
@@ -141,7 +157,6 @@ export async function runTrackedAgent<Input, Output>(input: {
       outputTokens: usage?.outputTokens ?? 0,
       cacheReadTokens: usage?.cacheReadTokens ?? 0,
       cacheWriteTokens: usage?.cacheWriteTokens ?? 0,
-      costUsd: usage?.costUsd ?? 0,
     });
     return { artifact, agentRunId: agentRun.id, outputArtifactId: outputArtifact.id };
   } catch (failure) {

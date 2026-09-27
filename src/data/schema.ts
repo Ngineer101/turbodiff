@@ -924,6 +924,42 @@ export const agentRuns = appSchema.table(
   ],
 );
 
+// One row per Cloudflare AI Gateway request. Cloudflare owns pricing; these
+// immutable log identifiers let the scheduled reconciler import its computed
+// cost without copying a provider price table into Turbodiff.
+export const aiGatewayUsage = appSchema.table(
+  'ai_gateway_usage',
+  {
+    logId: text('log_id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    agentRunId: bigint('agent_run_id', { mode: 'number' }).notNull(),
+    tokensIn: bigint('tokens_in', { mode: 'number' }).default(0).notNull(),
+    tokensOut: bigint('tokens_out', { mode: 'number' }).default(0).notNull(),
+    costUsd: numeric('cost_usd', { precision: 20, scale: 10, mode: 'number' }),
+    attempts: integer().default(0).notNull(),
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    lastError: text('last_error'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    reconciledAt: timestamp('reconciled_at', { withTimezone: true, mode: 'string' }),
+  },
+  (table) => [
+    index('ai_gateway_usage_pending_idx').on(table.reconciledAt, table.nextAttemptAt),
+    index('ai_gateway_usage_agent_run_idx').on(table.agentRunId),
+    foreignKey({
+      columns: [table.agentRunId, table.organizationId],
+      foreignColumns: [agentRuns.id, agentRuns.organizationId],
+    }).onDelete('cascade'),
+    check(
+      'ai_gateway_usage_values_check',
+      sql`tokens_in >= 0 AND tokens_out >= 0 AND (cost_usd IS NULL OR cost_usd >= 0) AND attempts >= 0`,
+    ),
+  ],
+);
+
 export const lifecycleEvents = appSchema.table(
   'lifecycle_events',
   {

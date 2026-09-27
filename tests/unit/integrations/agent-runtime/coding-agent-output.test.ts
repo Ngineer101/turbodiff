@@ -58,7 +58,6 @@ describe('OpenCode JSON event output', () => {
       outputTokens: 28,
       cacheReadTokens: 90,
       cacheWriteTokens: 6,
-      costUsd: 0.15,
       model: 'openai/gpt-5.5',
     });
   });
@@ -77,7 +76,6 @@ describe('OpenCode JSON event output', () => {
           outputTokens: 2,
           cacheReadTokens: 4,
           cacheWriteTokens: 1,
-          costUsd: 0.1,
           model: 'anthropic/claude-sonnet-5',
         },
         {
@@ -85,7 +83,6 @@ describe('OpenCode JSON event output', () => {
           outputTokens: 3,
           cacheReadTokens: 2,
           cacheWriteTokens: 0,
-          costUsd: 0.04,
           model: 'anthropic/claude-sonnet-5',
         },
       ),
@@ -94,7 +91,6 @@ describe('OpenCode JSON event output', () => {
       outputTokens: 5,
       cacheReadTokens: 6,
       cacheWriteTokens: 1,
-      costUsd: 0.14,
       model: 'anthropic/claude-sonnet-5',
     });
   });

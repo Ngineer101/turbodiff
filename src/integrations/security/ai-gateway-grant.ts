@@ -1,10 +1,20 @@
 import { isJsonObject, isNumber, isString, parseJson } from '../../shared/json.ts';
 
-interface AiGatewayGrant {
+export interface AiGatewayGrantV1 {
   v: 1;
   model: string;
   exp: number;
 }
+
+export interface AiGatewayGrantV2 {
+  v: 2;
+  model: string;
+  organizationId: string;
+  agentRunId: number;
+  exp: number;
+}
+
+export type AiGatewayGrant = AiGatewayGrantV1 | AiGatewayGrantV2;
 
 // Long enough for a complete sandbox step (including a repair turn), but far
 // shorter-lived and dramatically narrower than the account API token it
@@ -43,11 +53,19 @@ async function hmacKey(secret: string, usage: 'sign' | 'verify'): Promise<Crypto
 export async function createAiGatewayGrant(
   secret: string,
   model: string,
+  organizationId: string,
+  agentRunId: number,
   expiresAt: number,
 ): Promise<string> {
   const encodedPayload = base64Url(
     new TextEncoder().encode(
-      JSON.stringify({ v: 1, model, exp: expiresAt } satisfies AiGatewayGrant),
+      JSON.stringify({
+        v: 2,
+        model,
+        organizationId,
+        agentRunId,
+        exp: expiresAt,
+      } satisfies AiGatewayGrantV2),
     ),
   );
   const signature = await crypto.subtle.sign(
@@ -76,7 +94,6 @@ export async function verifyAiGatewayGrantWithSecret(
     const payload = parseJson(new TextDecoder().decode(base64UrlDecode(encodedPayload)));
     if (
       !isJsonObject(payload) ||
-      payload.v !== 1 ||
       !isString(payload.model) ||
       !payload.model ||
       !isNumber(payload.exp) ||
@@ -84,7 +101,29 @@ export async function verifyAiGatewayGrantWithSecret(
     ) {
       return null;
     }
-    return { v: 1, model: payload.model, exp: payload.exp };
+    // v1 grants were minted for at most two hours by the immediately previous
+    // deployment. Accept them until their signed expiry so rolling out v2 does
+    // not interrupt an in-flight agent, but never mint another one.
+    if (payload.v === 1) {
+      return { v: 1, model: payload.model, exp: payload.exp };
+    }
+    if (
+      payload.v !== 2 ||
+      !isString(payload.organizationId) ||
+      !payload.organizationId ||
+      !isNumber(payload.agentRunId) ||
+      !Number.isSafeInteger(payload.agentRunId) ||
+      payload.agentRunId <= 0
+    ) {
+      return null;
+    }
+    return {
+      v: 2,
+      model: payload.model,
+      organizationId: payload.organizationId,
+      agentRunId: payload.agentRunId,
+      exp: payload.exp,
+    };
   } catch {
     return null;
   }
