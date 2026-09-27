@@ -6,6 +6,7 @@ import { runTrackedAgent } from '../../../src/application/factory/agent-run.ts';
 import { getAgent } from '../../../src/data/agents.ts';
 import { getArtifact } from '../../../src/data/artifacts.ts';
 import { createFactoryRunWithStage, listAgentRunsForStage } from '../../../src/data/execution.ts';
+import { createWorkItem } from '../../../src/data/work.ts';
 import {
   CodingAgentRunFailure,
   type CodingAgentRun,
@@ -48,11 +49,19 @@ describe('tracked agent failures', () => {
       const tenant = await createTenant();
       const agent = await getAgent(tenant.agentId);
       if (!agent) throw new Error('agent fixture is missing');
+      const workItem = await createWorkItem({
+        organizationId: tenant.organizationId,
+        title: 'Failed output accounting',
+        description: 'Preserve completed model usage when validation fails.',
+        origin: 'idea',
+        repositoryIds: [tenant.repositoryId],
+      });
       const { factoryRun, stageRun } = await createFactoryRunWithStage(
         {
           organizationId: tenant.organizationId,
           flowKey: 'work_item',
           flowVersion: 1,
+          workItemId: workItem.id,
           trigger: 'test',
           idempotencyKey: crypto.randomUUID(),
         },
