@@ -1,4 +1,5 @@
 import type { ZodType } from 'zod';
+import { retrySandboxOperation, sandboxRetryDisposition } from './sandbox-retry.ts';
 
 type RepositoryChangeRuntime = {
   exec(command: string): Promise<{ success: boolean; stdout: string; stderr: string }>;
@@ -15,8 +16,9 @@ async function readOptionalText(
   path: string,
 ): Promise<string | null> {
   try {
-    return (await runtime.readFile(path)).content.trim() || null;
-  } catch {
+    return (await retrySandboxOperation(() => runtime.readFile(path))).content.trim() || null;
+  } catch (failure) {
+    if (sandboxRetryDisposition(failure) !== 'none') throw failure;
     return null;
   }
 }
@@ -31,7 +33,9 @@ export async function readRepositoryChangeArtifact<Output>(
   outputFiles: RepositoryChangeOutputFiles,
   fallbackSummary?: string,
 ): Promise<Output> {
-  const status = await runtime.exec(`git -C ${workDirectory} status --porcelain`);
+  const status = await retrySandboxOperation(() =>
+    runtime.exec(`git -C ${workDirectory} status --porcelain`),
+  );
   if (!status.success) {
     throw new Error(`git status failed: ${status.stderr.trim().slice(-500) || 'unknown error'}`);
   }

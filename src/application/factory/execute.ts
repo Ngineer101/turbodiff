@@ -188,13 +188,15 @@ export async function executeFactoryStage(
   if (!(await claimStageRun(stage.id)) && stage.status !== 'running') return;
 
   await updateFactoryRunStatus(run.id, 'running');
-  await recordLifecycleEvent({
-    organizationId: run.organization_id,
-    factoryRunId: run.id,
-    stageRunId: stage.id,
-    kind: 'stage_started',
-    payload: { stageKey: stage.stage_key },
-  });
+  if (stage.status === 'queued') {
+    await recordLifecycleEvent({
+      organizationId: run.organization_id,
+      factoryRunId: run.id,
+      stageRunId: stage.id,
+      kind: 'stage_started',
+      payload: { stageKey: stage.stage_key },
+    });
+  }
 
   try {
     // An interrupted chat may already have pushed a commit. Never replay its

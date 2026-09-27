@@ -8,7 +8,10 @@ import type { RepositoryRow } from '../../data/repositories.ts';
 import { runCodingAgent } from '../../integrations/agent-runtime/coding-agent.ts';
 import { readRepositoryChangeArtifact } from '../../integrations/agent-runtime/repository-change-artifact.ts';
 import { redactSecrets } from '../../integrations/agent-runtime/redaction.ts';
-import { generationSandbox } from '../../integrations/agent-runtime/sandbox.ts';
+import {
+  generationSandbox,
+  retrySandboxOperation,
+} from '../../integrations/agent-runtime/sandbox.ts';
 import { NPM_CACHE_ENV } from '../../integrations/agent-runtime/sandbox-deps.ts';
 import type { buildSandboxMcpConfig } from '../integrations/mcp-proxy.ts';
 import type { AgentInvocation } from './agent-run.ts';
@@ -34,11 +37,14 @@ export async function invokeImplementer(
   const sanitize = (value: string) =>
     redactSecrets(value, [...Object.values(auth.vars), ...(mcp?.secrets ?? []), ...secrets]);
   const override = agent.instructions_override?.trim();
-  await generationSandbox(repository).writeFile(
-    promptFile,
-    `${request.prompt}${override ? `\n\n## Organization instructions\n${override}` : ''}`,
+  const sandbox = generationSandbox(repository);
+  await retrySandboxOperation(() =>
+    sandbox.writeFile(
+      promptFile,
+      `${request.prompt}${override ? `\n\n## Organization instructions\n${override}` : ''}`,
+    ),
   );
-  const run = await runCodingAgent(generationSandbox(repository), auth, {
+  const run = await runCodingAgent(sandbox, auth, {
     promptFile,
     cwd: workDir,
     timeout: AGENT_TIMEOUT_MS,
@@ -52,7 +58,7 @@ export async function invokeImplementer(
   }
   return {
     artifact: await readRepositoryChangeArtifact(
-      generationSandbox(repository),
+      sandbox,
       workDir,
       output,
       {

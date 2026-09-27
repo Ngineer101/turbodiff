@@ -10,7 +10,10 @@ export class FactoryStageWorkflow extends WorkflowEntrypoint<unknown, RunFactory
     try {
       await step.do(
         `execute factory stage ${message.stageRunId}`,
-        { retries: { limit: 2, delay: '1 minute', backoff: 'exponential' }, timeout: '35 minutes' },
+        {
+          retries: { limit: 4, delay: '15 seconds', backoff: 'exponential' },
+          timeout: '35 minutes',
+        },
         () => withDatabaseScope(() => executeFactoryStage(message)),
       );
       return 'complete';

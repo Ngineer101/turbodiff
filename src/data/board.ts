@@ -11,6 +11,7 @@ interface BoardItemRow {
   title: string;
   notes: string | null;
   status: WorkItemStatus;
+  planning_error: string | null;
   created_at: string;
   cursor: string;
   board_column: 'in_progress' | 'done';
@@ -47,7 +48,10 @@ export async function readBoardPage(
     WITH visible AS NOT MATERIALIZED (
       SELECT wi.id, wi.organization_id, wi.title,
         CASE WHEN wi.status = 'open' THEN NULLIF(wi.description, wi.title) ELSE NULL END AS notes,
-        wi.status, wi.created_at,
+        wi.status,
+        CASE WHEN wi.status = 'planning' AND planning.status = 'failed'
+          THEN planning.error_message ELSE NULL END AS planning_error,
+        wi.created_at,
         to_char(wi.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') || '|' || wi.id AS cursor,
         CASE WHEN (
           EXISTS (SELECT 1 FROM app.work_item_targets t
@@ -66,6 +70,22 @@ export async function readBoardPage(
           )
         ) THEN 'done' ELSE 'in_progress' END AS board_column
       FROM app.work_items wi
+      LEFT JOIN LATERAL (
+        SELECT factory.status, stage.error_message
+        FROM app.factory_runs factory
+        LEFT JOIN LATERAL (
+          SELECT error_message
+          FROM app.stage_runs
+          WHERE factory_run_id = factory.id AND organization_id = factory.organization_id
+          ORDER BY id DESC
+          LIMIT 1
+        ) stage ON true
+        WHERE factory.work_item_id = wi.id
+          AND factory.organization_id = wi.organization_id
+          AND factory.flow_key = 'work_item'
+        ORDER BY factory.created_at DESC, factory.id DESC
+        LIMIT 1
+      ) planning ON true
       WHERE wi.organization_id IN (${organizations}) AND wi.status <> 'cancelled' AND wi.archived_at IS NULL
     )
     (SELECT * FROM visible WHERE board_column = 'in_progress'
@@ -113,6 +133,7 @@ export async function readBoardPage(
       title: item.title,
       notes: item.notes,
       status: item.status,
+      planningError: item.planning_error,
       column: item.board_column,
       createdAt: item.cursor.split('|')[0]!,
       targets: (byItem.get(item.id) ?? []).map((target) => ({

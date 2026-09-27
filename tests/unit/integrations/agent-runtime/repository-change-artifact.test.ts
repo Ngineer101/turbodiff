@@ -103,6 +103,30 @@ describe('repository change artifact runtime adapter', () => {
     });
   });
 
+  it('preserves deployment interruptions instead of treating them as missing optional output', async () => {
+    const interrupted = new Error(
+      'Sandbox operation sandbox.readFile was interrupted while the platform was updating the sandbox runtime',
+    );
+    const interruptedRuntime = {
+      async exec() {
+        return { success: true, stdout: ' M src/index.ts\n', stderr: '' };
+      },
+      async readFile() {
+        throw interrupted;
+      },
+    };
+
+    await expect(
+      readRepositoryChangeArtifact(
+        interruptedRuntime,
+        '/workspace/repo',
+        repositoryChangeArtifactSchema,
+        outputFiles,
+        'Fallback summary',
+      ),
+    ).rejects.toBe(interrupted);
+  });
+
   it('validates changed output with the caller-supplied Zod schema', async () => {
     const constrainedOutput = repositoryChangeArtifactSchema.refine(
       (artifact) => artifact.kind === 'no-change' || artifact.summary.startsWith('- '),

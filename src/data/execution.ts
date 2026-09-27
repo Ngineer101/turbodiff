@@ -144,6 +144,24 @@ export async function listFactoryRuns(input: {
   `);
 }
 
+export async function latestPlanningFailureForWorkItem(workItemId: number): Promise<string | null> {
+  const row = await queryOne<{ error_message: string | null }>(sql`
+    SELECT CASE WHEN factory.status = 'failed' THEN stage.error_message ELSE NULL END AS error_message
+    FROM app.factory_runs factory
+    LEFT JOIN LATERAL (
+      SELECT error_message
+      FROM app.stage_runs
+      WHERE factory_run_id = factory.id AND organization_id = factory.organization_id
+      ORDER BY id DESC
+      LIMIT 1
+    ) stage ON true
+    WHERE factory.work_item_id = ${workItemId} AND factory.flow_key = 'work_item'
+    ORDER BY factory.created_at DESC, factory.id DESC
+    LIMIT 1
+  `);
+  return row?.error_message ?? null;
+}
+
 export async function updateFactoryRunStatus(id: number, status: FactoryRunStatus): Promise<void> {
   await execute(sql`
     UPDATE app.factory_runs SET status = ${status},
@@ -428,6 +446,19 @@ export async function claimAgentRun(id: number): Promise<boolean> {
   const row = await queryOne<{ id: number }>(sql`
     UPDATE app.agent_runs SET status = 'running', started_at = CURRENT_TIMESTAMP
     WHERE id = ${id} AND status = 'queued'
+    RETURNING id
+  `);
+  return row !== null;
+}
+
+export async function replaySucceededAgentRun(id: number): Promise<boolean> {
+  const row = await queryOne<{ id: number }>(sql`
+    UPDATE app.agent_runs SET status = 'running', output_artifact_id = NULL,
+      log_artifact_id = NULL, input_tokens = 0, output_tokens = 0,
+      cache_read_tokens = 0, cache_write_tokens = 0, cost_usd = 0,
+      error_code = NULL, error_message = NULL, started_at = CURRENT_TIMESTAMP,
+      completed_at = NULL
+    WHERE id = ${id} AND status = 'succeeded'
     RETURNING id
   `);
   return row !== null;

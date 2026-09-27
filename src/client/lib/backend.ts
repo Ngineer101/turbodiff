@@ -126,8 +126,10 @@ async function workItemPlan(
   const defaultModel = loaded.defaultModel;
   const selectedModel = window.localStorage.getItem(`turbodiff.workItemModel.${workItem.id}`);
   const artifactPlan = asPlan(artifact?.value);
-  const status =
-    workItem.status === 'planning'
+  const planningError = workItem.status === 'planning' ? loaded.planningError : null;
+  const status = planningError
+    ? 'failed'
+    : workItem.status === 'planning'
       ? 'analyzing'
       : workItem.status === 'awaiting_approval'
         ? 'plan_ready'
@@ -140,7 +142,7 @@ async function workItemPlan(
     id: workItem.id,
     title: workItem.title,
     status,
-    error: null,
+    error: planningError,
     created_at: workItem.createdAt,
     questions: [],
     acceptance: artifactPlan.acceptance,
@@ -212,16 +214,18 @@ export async function getBoard(page: BoardPage = {}): Promise<ApiBoard> {
         id: item.id,
         title: item.title,
         created_at: item.createdAt,
-        error: null,
+        error: item.status === 'planning' ? item.planningError : null,
         archived: false,
         status:
-          item.column === 'done'
-            ? 'completed'
-            : item.status === 'planning'
-              ? 'analyzing'
-              : item.status === 'awaiting_approval'
-                ? 'plan_ready'
-                : 'approved',
+          item.status === 'planning' && item.planningError
+            ? 'failed'
+            : item.column === 'done'
+              ? 'completed'
+              : item.status === 'planning'
+                ? 'analyzing'
+                : item.status === 'awaiting_approval'
+                  ? 'plan_ready'
+                  : 'approved',
         repos: item.targets.map((target) => ({
           repository_id: target.repositoryId,
           owner: target.owner,

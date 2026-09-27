@@ -30,6 +30,7 @@ export const WorkItemView = Schema.Struct({
   deliveries: Schema.Array(WorkItemDeliveryView),
   plan: Schema.NullOr(Artifact),
   factoryRuns: Schema.Array(FactoryRunSummary),
+  planningError: Schema.NullOr(Schema.String),
   defaultModel: Schema.String,
 });
 export type WorkItemView = typeof WorkItemView.Type;
@@ -76,6 +77,7 @@ export const BoardView = Schema.Struct({
         'completed',
         'cancelled',
       ),
+      planningError: Schema.NullOr(Schema.String),
       column: Schema.Literal('in_progress', 'done'),
       createdAt: Schema.String,
       targets: Schema.Array(
