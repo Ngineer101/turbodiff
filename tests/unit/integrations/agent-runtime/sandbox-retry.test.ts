@@ -64,6 +64,28 @@ describe('sandbox retry policy', () => {
     expect(attempts).toBe(3);
   });
 
+  it('uses the Effect schedule for structured container startup failures', async () => {
+    let attempts = 0;
+    const failure = {
+      code: 'CONTAINER_UNAVAILABLE',
+      message: 'Container is starting. Please retry in a moment.',
+      context: { reason: 'container_starting', retryable: true, retryAfterMs: 3_000 },
+      httpStatus: 503,
+    };
+    const operation = () => {
+      attempts += 1;
+      return attempts < 3 ? Promise.reject(failure) : Promise.resolve('ready');
+    };
+    const program = Effect.gen(function* () {
+      const fiber = yield* Effect.fork(retrySandboxOperationEffect(operation));
+      yield* TestClock.adjust('20 seconds');
+      return yield* Fiber.join(fiber);
+    }).pipe(Effect.provide(TestContext.TestContext));
+
+    await expect(Effect.runPromise(program)).resolves.toBe('ready');
+    expect(attempts).toBe(3);
+  });
+
   it('does not retry a deployment interruption in the superseded invocation', async () => {
     let attempts = 0;
     const failure = new Error(
@@ -77,5 +99,23 @@ describe('sandbox retry policy', () => {
       }),
     ).rejects.toBe(failure);
     expect(attempts).toBe(1);
+  });
+
+  it('preserves a structured deployment interruption for the Workflow classifier', async () => {
+    let attempts = 0;
+    const failure = {
+      code: 'OPERATION_INTERRUPTED',
+      message: 'The sandbox runtime was replaced during the operation.',
+      context: { reason: 'runtime_replaced', retryable: false },
+    };
+
+    await expect(
+      retrySandboxOperation(() => {
+        attempts += 1;
+        return Promise.reject(failure);
+      }),
+    ).rejects.toBe(failure);
+    expect(attempts).toBe(1);
+    expect(sandboxRetryDisposition(failure)).toBe('workflow');
   });
 });

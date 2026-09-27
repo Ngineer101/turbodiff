@@ -3,17 +3,15 @@ import { isBoolean, isJsonObject, isString } from '../../shared/json.ts';
 
 export type SandboxRetryDisposition = 'local' | 'workflow' | 'none';
 
-class SandboxOperationFailure {
+// Sandbox SDK failures may be structured values rather than Error instances.
+// Keep the original value intact so both retry boundaries can inspect code/context.
+class SandboxOperationFailure<Failure> {
   readonly _tag = 'SandboxOperationFailure';
 
-  constructor(readonly error: Error) {}
+  constructor(readonly failure: Failure) {}
 }
 
 const localSandboxRetrySchedule = Schedule.exponential('1 second').pipe(Schedule.jittered);
-
-function errorOf<Failure>(failure: Failure): Error {
-  return failure instanceof Error ? failure : new Error('Sandbox operation failed');
-}
 
 function sandboxErrorCode<Failure>(failure: Failure): string | null {
   if (!isJsonObject(failure)) return null;
@@ -60,15 +58,15 @@ export function sandboxRetryDisposition<Failure>(failure: Failure): SandboxRetry
 
 export function retrySandboxOperationEffect<Value>(
   operation: () => Promise<Value>,
-): Effect.Effect<Value, SandboxOperationFailure> {
+): Effect.Effect<Value, SandboxOperationFailure<unknown>> {
   return Effect.tryPromise({
     try: operation,
-    catch: (failure) => new SandboxOperationFailure(errorOf(failure)),
+    catch: (failure) => new SandboxOperationFailure(failure),
   }).pipe(
     Effect.retry({
       times: 3,
       schedule: localSandboxRetrySchedule,
-      while: (failure) => sandboxRetryDisposition(failure.error) === 'local',
+      while: (failure) => sandboxRetryDisposition(failure.failure) === 'local',
     }),
   );
 }
@@ -78,6 +76,6 @@ export async function retrySandboxOperation<Value>(
   operation: () => Promise<Value>,
 ): Promise<Value> {
   const outcome = await Effect.runPromise(Effect.either(retrySandboxOperationEffect(operation)));
-  if (Either.isLeft(outcome)) throw outcome.left.error;
+  if (Either.isLeft(outcome)) throw outcome.left.failure;
   return outcome.right;
 }
