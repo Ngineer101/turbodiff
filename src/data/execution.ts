@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { execute, queryOne, queryRows, sqlValueList, withTransaction } from './postgres.ts';
+import type { CliUsage } from '../shared/usage.ts';
 
 export type FactoryRunStatus =
   | 'queued'
@@ -486,11 +487,17 @@ export async function completeAgentRun(input: {
 
 export async function failAgentRun(
   id: number,
-  error: { code: string; message: string; logArtifactId?: number },
+  error: { code: string; message: string; logArtifactId?: number; usage?: CliUsage | null },
 ): Promise<void> {
   await execute(sql`
     UPDATE app.agent_runs SET status = 'failed', error_code = ${error.code},
-      error_message = ${error.message}, log_artifact_id = ${error.logArtifactId ?? null},
+      error_message = ${error.message},
+      log_artifact_id = COALESCE(${error.logArtifactId ?? null}, log_artifact_id),
+      input_tokens = COALESCE(${error.usage?.inputTokens ?? null}, input_tokens),
+      output_tokens = COALESCE(${error.usage?.outputTokens ?? null}, output_tokens),
+      cache_read_tokens = COALESCE(${error.usage?.cacheReadTokens ?? null}, cache_read_tokens),
+      cache_write_tokens = COALESCE(${error.usage?.cacheWriteTokens ?? null}, cache_write_tokens),
+      cost_usd = COALESCE(${error.usage?.costUsd ?? null}, cost_usd),
       completed_at = CURRENT_TIMESTAMP
     WHERE id = ${id} AND status IN ('queued', 'running')
   `);

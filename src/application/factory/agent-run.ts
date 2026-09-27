@@ -1,7 +1,10 @@
 import type { ZodType } from 'zod';
 import { runAgent } from '../../agents/run.ts';
 import type { AgentDefinition, AgentExecutionRequest } from '../../agents/types.ts';
-import type { CodingAgentRun } from '../../integrations/agent-runtime/coding-agent.ts';
+import {
+  CodingAgentRunFailure,
+  type CodingAgentRun,
+} from '../../integrations/agent-runtime/coding-agent.ts';
 import { isSandboxTransportError } from '../../integrations/agent-runtime/sandbox.ts';
 import {
   claimAgentRun,
@@ -143,9 +146,24 @@ export async function runTrackedAgent<Input, Output>(input: {
     return { artifact, agentRunId: agentRun.id, outputArtifactId: outputArtifact.id };
   } catch (failure) {
     if (isSandboxTransportError(failure)) throw failure;
+    const completed = failure instanceof CodingAgentRunFailure ? failure : null;
+    let logArtifactId: number | undefined;
+    if (completed) {
+      const sanitize = completed.sanitize ?? ((value: string) => value);
+      const logArtifact = await persistArtifactBody({
+        organizationId: input.factoryRun.organization_id,
+        kind: 'agent_log',
+        storageKey: `${prefix}/run-${crypto.randomUUID()}.log`,
+        contentType: 'text/plain; charset=utf-8',
+        body: sanitize(`${completed.run.resultText}\n${completed.run.stderr}`.trim()),
+      });
+      logArtifactId = logArtifact.id;
+    }
     await failAgentRun(agentRun.id, {
       code: 'agent_failed',
       message: failure instanceof Error ? failure.message.slice(0, 1_000) : 'Agent failed',
+      logArtifactId,
+      usage: completed?.run.usage,
     });
     throw failure;
   }

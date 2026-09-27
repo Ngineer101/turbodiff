@@ -159,7 +159,7 @@ ${trivial ? 'This request is classified TRIVIAL. Keep the plan small and proport
 Produce an implementation plan grounded in the real code${single ? '' : ' across ALL repositories above'}, then write these files:
 
 1. ${PLANNER_OUTPUT_DIR}/plan.md — ${planDescription} Do not copy repository code or write full implementations; name the relevant files and functions and describe what changes.
-2. ${PLANNER_OUTPUT_DIR}/acceptance.json — a JSON array of at most ${trivial ? 4 : 8} unique, machine-checkable acceptance criteria about observable behavior. Never include build/typecheck/test-suite-passes criteria or claims that unrelated files remain unchanged.
+2. ${PLANNER_OUTPUT_DIR}/acceptance.json — valid JSON containing an array of at most ${trivial ? 4 : 8} unique strings, where each string is one machine-checkable acceptance criterion about observable behavior. Every array item MUST be a plain JSON string, never an object or array. Example: ["The new option appears in the model picker.", "Selecting it sends the configured gateway model ID."]. Never include build/typecheck/test-suite-passes criteria or claims that unrelated files remain unchanged.
 ${trivial ? '' : `3. ${PLANNER_OUTPUT_DIR}/summary.md — a short reviewer-facing summary. Lead with 2-4 sentences describing what will be built, followed by a few bullets naming the files or areas that change.\n`}
 ${UNTRUSTED_CONTENT_RULES}
 
