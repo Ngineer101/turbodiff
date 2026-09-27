@@ -9,12 +9,12 @@ import {
 } from '../../../agents/planner.ts';
 import type { AgentExecutionRequest } from '../../../agents/types.ts';
 import { runCodingAgent } from '../../../integrations/agent-runtime/coding-agent.ts';
+import { readPlannerOutputWithCorrection } from '../../../integrations/agent-runtime/planner-output.ts';
 import { classifyTaskComplexity } from '../../../integrations/typesafe/task-complexity.ts';
 import { PLANNING_CONFIG } from '../../../integrations/agent-runtime/planning-session.ts';
 import { redactSecrets } from '../../../integrations/agent-runtime/redaction.ts';
 import { resolveRunnerAuth } from '../runner-auth.ts';
 import {
-  isSandboxTransportError,
   retrySandboxOperation,
   runnerSandbox,
 } from '../../../integrations/agent-runtime/sandbox.ts';
@@ -65,21 +65,6 @@ function runtimeSkills(rows: SkillRow[]) {
   }));
 }
 
-async function requiredText(sandbox: Sandbox, path: string): Promise<string> {
-  const value = (await retrySandboxOperation(() => sandbox.readFile(path))).content.trim();
-  if (!value) throw new Error(`planner did not produce ${path}`);
-  return value;
-}
-
-async function optionalText(sandbox: Sandbox, path: string): Promise<string | null> {
-  try {
-    return (await retrySandboxOperation(() => sandbox.readFile(path))).content.trim() || null;
-  } catch (failure) {
-    if (isSandboxTransportError(failure)) throw failure;
-    return null;
-  }
-}
-
 async function mountAttachments(
   sandbox: Sandbox,
   factoryRun: FactoryRunRow,
@@ -123,6 +108,7 @@ async function invokePlanner(
   secrets: string[],
   request: AgentExecutionRequest,
   output: ZodType<PlannerArtifact>,
+  tier: PlannerDraftInput['tier'],
   configExtensionJson?: string,
 ): Promise<AgentInvocation<PlannerArtifact>> {
   if (request.repositoryAccess !== 'read') throw new Error('planner must be read-only');
@@ -133,12 +119,8 @@ async function invokePlanner(
     sandbox.exec(`rm -rf ${PLANNER_OUTPUT_DIR} && mkdir -p ${PLANNER_OUTPUT_DIR}`),
   );
   const override = agent.instructions_override?.trim();
-  await retrySandboxOperation(() =>
-    sandbox.writeFile(
-      PROMPT_FILE,
-      `${request.prompt}${override ? `\n\n## Organization instructions\n${override}` : ''}`,
-    ),
-  );
+  const plannerPrompt = `${request.prompt}${override ? `\n\n## Organization instructions\n${override}` : ''}`;
+  await retrySandboxOperation(() => sandbox.writeFile(PROMPT_FILE, plannerPrompt));
   const run = await runCodingAgent(sandbox, auth, {
     promptFile: PROMPT_FILE,
     cwd: '/workspace',
@@ -150,13 +132,33 @@ async function invokePlanner(
       `planning agent exited ${run.exitCode}: ${sanitize(`${run.resultText}\n${run.stderr}`).slice(-1_000)}`,
     );
   }
-  const artifact = output.parse({
-    kind: 'plan',
-    plan: await requiredText(sandbox, `${PLANNER_OUTPUT_DIR}/plan.md`),
-    summary: await optionalText(sandbox, `${PLANNER_OUTPUT_DIR}/summary.md`),
-    acceptance: JSON.parse(await requiredText(sandbox, `${PLANNER_OUTPUT_DIR}/acceptance.json`)),
+  const corrected = await readPlannerOutputWithCorrection({
+    sandbox,
+    output,
+    directory: PLANNER_OUTPUT_DIR,
+    tier,
+    initialRun: run,
+    correct: async (prompt, sessionId) => {
+      const correctionPrompt = sessionId
+        ? prompt
+        : `${plannerPrompt}\n\n## Output correction\n${prompt}`;
+      await retrySandboxOperation(() => sandbox.writeFile(PROMPT_FILE, correctionPrompt));
+      const correction = await runCodingAgent(sandbox, auth, {
+        promptFile: PROMPT_FILE,
+        cwd: '/workspace',
+        timeout: AGENT_TIMEOUT_MS,
+        sessionId,
+        configExtensionJson: configExtensionJson ?? PLANNING_CONFIG,
+      });
+      if (!correction.success) {
+        throw new Error(
+          `planning output correction exited ${correction.exitCode}: ${sanitize(`${correction.resultText}\n${correction.stderr}`).slice(-1_000)}`,
+        );
+      }
+      return correction;
+    },
   });
-  return { artifact, run, sanitize };
+  return { ...corrected, sanitize };
 }
 
 export async function executePlanningStage(
@@ -283,6 +285,7 @@ export async function executePlanningStage(
           secrets,
           request,
           output,
+          plannerInput.tier,
           mcp
             ? JSON.stringify({
                 ...JSON.parse(PLANNING_CONFIG),
