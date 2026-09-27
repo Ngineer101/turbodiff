@@ -138,24 +138,19 @@ async function invokePlanner(
     directory: PLANNER_OUTPUT_DIR,
     tier,
     initialRun: run,
+    sanitize,
     correct: async (prompt, sessionId) => {
       const correctionPrompt = sessionId
         ? prompt
         : `${plannerPrompt}\n\n## Output correction\n${prompt}`;
       await retrySandboxOperation(() => sandbox.writeFile(PROMPT_FILE, correctionPrompt));
-      const correction = await runCodingAgent(sandbox, auth, {
+      return runCodingAgent(sandbox, auth, {
         promptFile: PROMPT_FILE,
         cwd: '/workspace',
         timeout: AGENT_TIMEOUT_MS,
         sessionId,
         configExtensionJson: configExtensionJson ?? PLANNING_CONFIG,
       });
-      if (!correction.success) {
-        throw new Error(
-          `planning output correction exited ${correction.exitCode}: ${sanitize(`${correction.resultText}\n${correction.stderr}`).slice(-1_000)}`,
-        );
-      }
-      return correction;
     },
   });
   return { ...corrected, sanitize };

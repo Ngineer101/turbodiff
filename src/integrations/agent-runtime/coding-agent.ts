@@ -20,6 +20,19 @@ export interface CodingAgentRun extends ExecResult {
   usage: CliUsage | null;
 }
 
+/** A paid coding-agent call completed, but its output could not be accepted. */
+export class CodingAgentRunFailure extends Error {
+  override readonly name = 'CodingAgentRunFailure';
+  readonly run: CodingAgentRun;
+  readonly sanitize?: (value: string) => string;
+
+  constructor(message: string, run: CodingAgentRun, sanitize?: (value: string) => string) {
+    super(message);
+    this.run = run;
+    this.sanitize = sanitize;
+  }
+}
+
 interface RunCodingAgentOptions {
   promptFile: string;
   cwd: string;

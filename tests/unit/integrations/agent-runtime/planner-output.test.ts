@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vite-plus/test';
 import { planArtifactSchema } from '../../../../src/artifacts/plan.ts';
-import type { CodingAgentRun } from '../../../../src/integrations/agent-runtime/coding-agent.ts';
+import {
+  CodingAgentRunFailure,
+  type CodingAgentRun,
+} from '../../../../src/integrations/agent-runtime/coding-agent.ts';
 import { readPlannerOutputWithCorrection } from '../../../../src/integrations/agent-runtime/planner-output.ts';
 
 const directory = '/workspace/plan-out';
@@ -132,20 +135,29 @@ describe('planner output correction', () => {
     const files = validFiles();
     files.set(`${directory}/acceptance.json`, '{not valid json');
     let corrections = 0;
+    let failure: unknown;
 
-    await expect(
-      readPlannerOutputWithCorrection({
+    try {
+      await readPlannerOutputWithCorrection({
         sandbox: outputSandbox(files),
         output: planArtifactSchema('standard'),
         directory,
         tier: 'standard',
-        initialRun: codingRun('initial'),
+        initialRun: codingRun('initial', { inputTokens: 100, outputTokens: 20 }),
         correct: async () => {
           corrections += 1;
-          return codingRun('correction');
+          return codingRun('correction', { inputTokens: 30, outputTokens: 10 });
         },
-      }),
-    ).rejects.toThrow();
+      });
+    } catch (caught) {
+      failure = caught;
+    }
+
+    expect(failure).toBeInstanceOf(CodingAgentRunFailure);
+    if (!(failure instanceof CodingAgentRunFailure)) throw failure;
+    expect(failure.run.usage).toMatchObject({ inputTokens: 130, outputTokens: 30 });
+    expect(failure.run.resultText).toContain('initial result');
+    expect(failure.run.resultText).toContain('correction result');
     expect(corrections).toBe(1);
   });
 

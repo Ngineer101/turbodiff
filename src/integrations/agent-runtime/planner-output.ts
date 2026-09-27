@@ -1,6 +1,6 @@
 import type { ZodType } from 'zod';
 import type { PlanningTier } from '../../artifacts/plan.ts';
-import { addCliUsage, type CodingAgentRun } from './coding-agent.ts';
+import { addCliUsage, CodingAgentRunFailure, type CodingAgentRun } from './coding-agent.ts';
 import { retrySandboxOperation, sandboxRetryDisposition } from './sandbox-retry.ts';
 
 export interface PlannerOutputSandbox {
@@ -66,6 +66,15 @@ function combineRuns(initial: CodingAgentRun, correction: CodingAgentRun): Codin
   };
 }
 
+function failedRun<Failure>(
+  failure: Failure,
+  run: CodingAgentRun,
+  sanitize?: (value: string) => string,
+): CodingAgentRunFailure {
+  const detail = failure instanceof Error ? failure.message : 'Planner output correction failed';
+  return new CodingAgentRunFailure(sanitize?.(detail) ?? detail, run, sanitize);
+}
+
 /** Validate planner files, allowing exactly one model correction for malformed output. */
 export async function readPlannerOutputWithCorrection<Output>(input: {
   sandbox: PlannerOutputSandbox;
@@ -74,6 +83,7 @@ export async function readPlannerOutputWithCorrection<Output>(input: {
   tier: PlanningTier;
   initialRun: CodingAgentRun;
   correct: (prompt: string, sessionId: string | null) => Promise<CodingAgentRun>;
+  sanitize?: (value: string) => string;
 }): Promise<{ artifact: Output; run: CodingAgentRun }> {
   const files = { directory: input.directory, tier: input.tier };
   try {
@@ -83,13 +93,33 @@ export async function readPlannerOutputWithCorrection<Output>(input: {
     };
   } catch (failure) {
     if (sandboxRetryDisposition(failure) !== 'none') throw failure;
-    const correction = await input.correct(
-      correctionPrompt(files, failure),
-      input.initialRun.codingSessionId,
-    );
-    return {
-      artifact: await readPlannerOutput(input.sandbox, input.output, files),
-      run: combineRuns(input.initialRun, correction),
-    };
+    let correction: CodingAgentRun;
+    try {
+      correction = await input.correct(
+        correctionPrompt(files, failure),
+        input.initialRun.codingSessionId,
+      );
+    } catch (correctionFailure) {
+      if (sandboxRetryDisposition(correctionFailure) !== 'none') throw correctionFailure;
+      throw failedRun(correctionFailure, input.initialRun, input.sanitize);
+    }
+    const combinedRun = combineRuns(input.initialRun, correction);
+    if (!correction.success) {
+      const detail = `${correction.resultText}\n${correction.stderr}`.trim().slice(-1_000);
+      throw failedRun(
+        new Error(`planning output correction exited ${correction.exitCode}: ${detail}`),
+        combinedRun,
+        input.sanitize,
+      );
+    }
+    try {
+      return {
+        artifact: await readPlannerOutput(input.sandbox, input.output, files),
+        run: combinedRun,
+      };
+    } catch (correctionFailure) {
+      if (sandboxRetryDisposition(correctionFailure) !== 'none') throw correctionFailure;
+      throw failedRun(correctionFailure, combinedRun, input.sanitize);
+    }
   }
 }
