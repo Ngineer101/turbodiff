@@ -3,6 +3,7 @@ import { githubWorkspaceRemote } from '../../../../src/integrations/agent-runtim
 import {
   assertRepositorySearchPath,
   assertReviewHeadSha,
+  reviewStageFiles,
   reviewWorkspacePath,
   reviewWorkspaceSyncCommand,
 } from '../../../../src/integrations/agent-runtime/review-workspace-policy.ts';
@@ -27,5 +28,22 @@ describe('review workspace', () => {
     expect(assertRepositorySearchPath('src/ai')).toBe('src/ai');
     expect(() => assertRepositorySearchPath('../secret')).toThrow(/inside the repository/);
     expect(() => assertRepositorySearchPath('-n')).toThrow(/inside the repository/);
+  });
+
+  it('keeps concurrent reviews by the same agent in disjoint files', () => {
+    const agentId = 7;
+    const paths = (stageRunId: number) => {
+      const files = reviewStageFiles(stageRunId);
+      return [files.patch, files.prompt(agentId), files.artifact(agentId)];
+    };
+    const first = paths(34);
+    const second = paths(35);
+
+    expect(new Set([...first, ...second]).size).toBe(6);
+    const cleanup = reviewStageFiles(34).cleanup.split(' ');
+    for (const path of first)
+      expect(cleanup.some((pattern) => path.startsWith(pattern.replace(/\*$/, '')))).toBe(true);
+    for (const path of second)
+      expect(cleanup.some((pattern) => path.startsWith(pattern.replace(/\*$/, '')))).toBe(false);
   });
 });
