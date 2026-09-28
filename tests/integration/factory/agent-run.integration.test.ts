@@ -37,7 +37,6 @@ function completedRun(): CodingAgentRun {
       outputTokens: 30,
       cacheReadTokens: 11,
       cacheWriteTokens: 7,
-      costUsd: 0.42,
       model: 'openai/test',
     },
   };
@@ -94,7 +93,6 @@ describe('tracked agent failures', () => {
         output_tokens: 30,
         cache_read_tokens: 11,
         cache_write_tokens: 7,
-        cost_usd: 0.42,
         error_code: 'agent_failed',
         error_message: 'corrected planner artifact is invalid',
         log_artifact_id: expect.any(Number),

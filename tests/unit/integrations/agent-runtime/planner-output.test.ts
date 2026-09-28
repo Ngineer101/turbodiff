@@ -27,7 +27,6 @@ function codingRun(
       outputTokens: options.outputTokens ?? 5,
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
-      costUsd: 0,
       model: 'openai/test',
     },
   };
