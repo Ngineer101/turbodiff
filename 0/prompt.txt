@@ -1,0 +1,12 @@
+help me explain these feature states:
+
+* https://turbodiff.dev/factory/features/2
+* https://turbodiff.dev/factory/features/3
+* https://turbodiff.dev/factory/features/4
+
+
+all 3 PR ci pipelines succeeded, but for some reason the build/review shows red for all. and all the pr changes look good and reasonable
+
+---
+
+yes, fix the review file collision and read the db for whatever data you need, you have access via planetscale mcp
