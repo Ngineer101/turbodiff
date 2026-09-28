@@ -9,9 +9,9 @@ const directory = path.resolve('db/migrations');
 const files = (await readdir(directory)).filter((file) => file.endsWith('.sql')).sort();
 const journal = JSON.parse(await readFile(path.join(directory, 'meta', '_journal.json'), 'utf8'));
 
-if (files.length !== 6 || journal.entries.length !== 6) {
+if (files.length !== 7 || journal.entries.length !== 7) {
   throw new Error(
-    `Expected the complete six-migration schema history, found ${files.length} files and ${journal.entries.length} journal entries`,
+    `Expected the complete seven-migration schema history, found ${files.length} files and ${journal.entries.length} journal entries`,
   );
 }
 
@@ -109,6 +109,7 @@ const expectedModels = new Set([
   'anthropic/claude-opus-4.7',
   'anthropic/claude-opus-4.8',
   'anthropic/claude-opus-5',
+  'anthropic/claude-opus-5.5',
   'anthropic/claude-sonnet-4.5',
   'anthropic/claude-sonnet-4.6',
   'anthropic/claude-sonnet-5',

@@ -43,6 +43,13 @@
       "when": 1789855704163,
       "tag": "0005_ai_gateway_usage",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790620733705,
+      "tag": "0006_add_claude_opus_5_5",
+      "breakpoints": true
     }
   ]
 }
