@@ -148,7 +148,10 @@ export function ModelCombobox({
             placeholder={searchPlaceholder}
             aria-label="Search models"
           />
-          <CommandList id={listId}>
+          <CommandList
+            id={listId}
+            className="max-h-[min(22rem,calc(var(--radix-popover-content-available-height)-2.75rem))] touch-pan-y overscroll-contain"
+          >
             <CommandEmpty>No matching models.</CommandEmpty>
             {defaultLabel &&
             (!query || 'default deployment'.includes(query.trim().toLowerCase())) ? (
