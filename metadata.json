@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.10.6",
+  "checkpoint_id": "01M3MN1343ZJV2YAHSBCS1BAFK",
+  "strategy": "manual-commit",
+  "branch": "fix/failed-agent-run-cost-authority",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/data/execution.ts",
+    "tests/integration/factory/agent-run.integration.test.ts",
+    "tests/unit/integrations/agent-runtime/planner-output.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 40,
+    "cache_creation_tokens": 51125,
+    "cache_read_tokens": 1563171,
+    "output_tokens": 6088,
+    "api_call_count": 20
+  }
+}
