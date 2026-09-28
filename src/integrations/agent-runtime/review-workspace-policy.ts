@@ -18,6 +18,20 @@ export function reviewWorkspacePath(agentInstanceId: string): string {
   return `/workspace/reviews/${key}`;
 }
 
+// Every review in a repository shares one sandbox, so per-run files are keyed
+// by stage run: two PRs reviewed concurrently by the same reviewer agent once
+// overwrote each other's prompt and artifact, publishing one PR's review on
+// both (deliveries 2 and 3).
+export function reviewStageFiles(stageRunId: number) {
+  const prefix = `/workspace/review-stage-${stageRunId}`;
+  return {
+    patch: `${prefix}.patch`,
+    prompt: (agentId: number) => `${prefix}-agent-${agentId}.md`,
+    artifact: (agentId: number) => `${prefix}-agent-${agentId}.json`,
+    cleanup: `${prefix}.patch ${prefix}-agent-*`,
+  };
+}
+
 export function assertReviewHeadSha(headSha: string): string {
   if (!HEAD_SHA.test(headSha)) throw new Error(`invalid review head SHA: ${headSha}`);
   return headSha.toLowerCase();

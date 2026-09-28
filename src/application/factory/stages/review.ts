@@ -10,7 +10,10 @@ import { reviewSandbox } from '../../../integrations/agent-runtime/sandbox.ts';
 import { mountSkills } from '../../../integrations/agent-runtime/skills.ts';
 import { runStructuredAgent } from '../../../integrations/agent-runtime/structured-agent.ts';
 import { prepareReviewWorkspace } from '../../../integrations/agent-runtime/review-workspace.ts';
-import { reviewWorkspacePath } from '../../../integrations/agent-runtime/review-workspace-policy.ts';
+import {
+  reviewStageFiles,
+  reviewWorkspacePath,
+} from '../../../integrations/agent-runtime/review-workspace-policy.ts';
 import {
   ensureBuiltinAgents,
   getAgentBySlug,
@@ -70,7 +73,7 @@ async function selectedReviewers(organizationId: string, repositoryId: number) {
 async function invokeReviewer(input: {
   sandbox: Sandbox;
   workDir: string;
-  patchFile: string;
+  files: ReturnType<typeof reviewStageFiles>;
   agent: AgentRow;
   repositoryId: number;
   request: TrackedAgentExecutionRequest;
@@ -94,14 +97,14 @@ async function invokeReviewer(input: {
     request: input.request,
     output: input.output,
     cwd: input.workDir,
-    promptFile: `/workspace/review-${input.agent.id}.md`,
-    artifactFile: `/workspace/review-${input.agent.id}.json`,
+    promptFile: input.files.prompt(input.agent.id),
+    artifactFile: input.files.artifact(input.agent.id),
     timeout: AGENT_TIMEOUT_MS,
     configExtensionJson: mcp?.configJson,
     sanitize,
     runtimeContext:
       `The checkout is at the exact revision under review. The normalized patch is at ` +
-      `${input.patchFile}. Inspect and search the checkout, but do not modify it.`,
+      `${input.files.patch}. Inspect and search the checkout, but do not modify it.`,
   });
   const clean = await input.sandbox.exec(
     `git -C ${input.workDir} diff --quiet && git -C ${input.workDir} diff --cached --quiet`,
@@ -169,8 +172,8 @@ export async function executeReviewStage(
   const actualHead = await sandbox.exec(`git -C ${workDir} rev-parse HEAD`);
   if (!actualHead.success || actualHead.stdout.trim() !== revision.head_sha)
     throw new Error('Review checkout does not match its immutable revision');
-  const patchFile = `/workspace/review-stage-${stageRun.id}.patch`;
-  await sandbox.writeFile(patchFile, revisionArtifact.patch);
+  const files = reviewStageFiles(stageRun.id);
+  await sandbox.writeFile(files.patch, revisionArtifact.patch);
 
   const agentRunIds: number[] = [];
   try {
@@ -208,7 +211,7 @@ export async function executeReviewStage(
           invokeReviewer({
             sandbox,
             workDir,
-            patchFile,
+            files,
             agent,
             repositoryId: repository.id,
             request,
@@ -247,8 +250,6 @@ export async function executeReviewStage(
     }
     return { revisionId: revision.id, agentRunIds };
   } finally {
-    await sandbox
-      .exec(`rm -rf ${workDir} ${patchFile} /workspace/review-${stageRun.id}-*.json`)
-      .catch(() => undefined);
+    await sandbox.exec(`rm -rf ${workDir} ${files.cleanup}`).catch(() => undefined);
   }
 }
