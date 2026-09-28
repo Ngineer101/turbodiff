@@ -909,7 +909,7 @@ export function ChatRail(props: ChatRailProps) {
     props;
   const isWide = useIsWide();
   // Rail preference (lg+), shadcn-style like the left sidebar: persisted.
-  const [open, setOpen] = useState(() => localStorage.getItem(RAIL_OPEN_KEY) !== 'closed');
+  const [open, setOpen] = useState(() => localStorage.getItem(RAIL_OPEN_KEY) === 'open');
   const toggleOpen = useCallback(() => {
     setOpen((prev) => {
       localStorage.setItem(RAIL_OPEN_KEY, prev ? 'closed' : 'open');

@@ -59,13 +59,13 @@ import { runTrackedAgent } from '../agent-run.ts';
 
 const CHECK_TIMEOUT_MS = 12 * 60_000;
 
-function branchName(deliveryId: number, title: string): string {
+function branchName(title: string): string {
   const slug = title
     .toLowerCase()
     .replaceAll(/[^a-z0-9]+/g, '-')
     .replaceAll(/^-+|-+$/g, '')
     .slice(0, 40);
-  return `turbodiff/delivery-${deliveryId}-${slug || 'change'}`;
+  return `turbodiff/${slug || 'change'}`;
 }
 
 async function githubToken(repository: RepositoryRow): Promise<string> {
@@ -168,7 +168,7 @@ export async function executeDeliveryStage(
     throw new Error('approved plan artifact is missing');
   }
   const plan = await loadJsonArtifact(planRow, storedPlanArtifactSchema);
-  const branch = branchName(delivery.id, workItem.title);
+  const branch = branchName(workItem.title);
   const base = repository.default_branch ?? 'main';
 
   if (stageRun.status === 'running') {
