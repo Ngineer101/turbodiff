@@ -495,7 +495,6 @@ export async function failAgentRun(
       output_tokens = COALESCE(${error.usage?.outputTokens ?? null}, output_tokens),
       cache_read_tokens = COALESCE(${error.usage?.cacheReadTokens ?? null}, cache_read_tokens),
       cache_write_tokens = COALESCE(${error.usage?.cacheWriteTokens ?? null}, cache_write_tokens),
-      cost_usd = COALESCE(${error.usage?.costUsd ?? null}, cost_usd),
       completed_at = CURRENT_TIMESTAMP
     WHERE id = ${id} AND status IN ('queued', 'running')
   `);
